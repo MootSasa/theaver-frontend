@@ -112,6 +112,7 @@ class MiniAppLaunchData {
   final String botUsername;
   final String botDisplayName;
   final String botAvatarUrl;
+  final bool botIsVerified;
 
   const MiniAppLaunchData({
     required this.url,
@@ -123,6 +124,7 @@ class MiniAppLaunchData {
     this.botUsername = '',
     this.botDisplayName = '',
     this.botAvatarUrl = '',
+    this.botIsVerified = false,
   });
 
   factory MiniAppLaunchData.fromJson(Map<String, dynamic> json) {
@@ -142,6 +144,7 @@ class MiniAppLaunchData {
       botUsername: (bot['username'] ?? '').toString(),
       botDisplayName: (bot['display_name'] ?? '').toString(),
       botAvatarUrl: (bot['avatar_url'] ?? '').toString(),
+      botIsVerified: bot['is_verified'] == true,
     );
   }
 }

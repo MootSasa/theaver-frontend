@@ -577,7 +577,7 @@ void main() {
       });
 
       testWidgets(
-          'MiniAppWebViewSheet renders inside TheavSheetSurface with LiquidGlassLens in glass mode',
+          'MiniAppWebViewSheet matches Telegram full-screen chrome and applies LiquidGlassLens only on overflow menu',
           (tester) async {
         final bool expectGlass =
             mode == GlassMode.lite || mode == GlassMode.full;
@@ -588,6 +588,7 @@ void main() {
           botId: '1',
           botUsername: 'BotMother',
           botDisplayName: 'BotMother',
+          botIsVerified: true,
         );
 
         await tester.pumpWidget(
@@ -600,11 +601,13 @@ void main() {
                     showTheavModalSheet<void>(
                       context: context,
                       enableDrag: false,
+                      useRootNavigator: true,
                       builder: (_) => const SizedBox.shrink(),
                       customSheetBuilder: (_) => const MiniAppWebViewSheet(
                         launchData: launchData,
                         botName: 'BotMother',
                         botUsername: 'BotMother',
+                        isVerified: true,
                       ),
                     );
                   },
@@ -618,21 +621,115 @@ void main() {
         await tester.tap(find.text('OpenMiniApp'));
         await tester.pumpAndSettle();
 
-        expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
-        expect(find.byType(TheavSheetSurface), findsOneWidget);
+        final sheetFinder = find.byType(MiniAppWebViewSheet);
+        expect(sheetFinder, findsOneWidget);
+
+        final double screenHeight =
+            tester.view.physicalSize.height / tester.view.devicePixelRatio;
+        expect(
+          tester.getSize(sheetFinder).height,
+          moreOrLessEquals(screenHeight, epsilon: 0.5),
+        );
+
+        expect(find.text('BotMother'), findsWidgets);
+        expect(
+          find.byKey(const ValueKey('mini_app_verified_seal')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('mini_app_close_or_back_button')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('mini_app_collapse_expand_button')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('mini_app_more_menu_button')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('mini_app_grid_loader')),
+          findsOneWidget,
+        );
+        expect(find.byType(MiniAppGridPlaceholder), findsOneWidget);
+
+        // Resting state must not wrap the Mini App viewport in glass shaders or blur.
         expect(
           find.descendant(
-            of: find.byType(MiniAppWebViewSheet),
+            of: sheetFinder,
+            matching: find.byType(TheavSheetSurface),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: sheetFinder,
             matching: find.byType(BackdropFilter),
           ),
           findsNothing,
         );
+        expect(
+          find.descendant(
+            of: sheetFinder,
+            matching: find.byType(LiquidGlassLens),
+          ),
+          findsNothing,
+        );
 
-        final lensFinder = find.descendant(
-          of: find.byType(TheavSheetSurface),
+        // Opening overflow menu surfaces targeted LiquidGlassLens when glass is enabled.
+        await tester.tap(
+          find.byKey(const ValueKey('mini_app_more_menu_button')),
+        );
+        await tester.pumpAndSettle();
+
+        final menuFinder = find.byKey(const ValueKey('mini_app_overflow_menu'));
+        expect(menuFinder, findsOneWidget);
+
+        final menuLensFinder = find.descendant(
+          of: sheetFinder,
           matching: find.byType(LiquidGlassLens),
         );
-        expect(lensFinder, expectGlass ? findsOneWidget : findsNothing);
+        if (expectGlass) {
+          expect(menuLensFinder, findsOneWidget);
+          expect(
+            find.ancestor(
+              of: menuLensFinder,
+              matching: find.descendant(
+                of: sheetFinder,
+                matching: find.byWidgetPredicate(
+                  (w) => w is Opacity || w is FadeTransition,
+                ),
+              ),
+            ),
+            findsNothing,
+          );
+        } else {
+          expect(menuLensFinder, findsNothing);
+        }
+
+        // Dismiss overflow menu before toggling collapse/expand height.
+        await tester.tapAt(tester.getCenter(sheetFinder));
+        await tester.pumpAndSettle();
+        expect(menuFinder, findsNothing);
+
+        await tester.tap(
+          find.byKey(const ValueKey('mini_app_collapse_expand_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester.getSize(sheetFinder).height,
+          lessThan(screenHeight * 0.85),
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('mini_app_collapse_expand_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester.getSize(sheetFinder).height,
+          moreOrLessEquals(screenHeight, epsilon: 0.5),
+        );
       });
     });
   }

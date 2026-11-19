@@ -40,12 +40,23 @@ class MiniAppJsBridge {
     return null;
   }
 
-  /// Maps current [ThemeData] & [TheavThemeExtension] colors to Telegram `ThemeParams`.
+  /// Maps current [ThemeData] & [TheavThemeExtension] colors to opaque Telegram `ThemeParams`.
   static Map<String, String> buildThemeParams(ThemeData theme) {
     final ext = theme.extension<TheavThemeExtension>();
     final cs = theme.colorScheme;
-    final bg = ext?.glassSurfaceColor ?? cs.surface;
-    final secBg = cs.surfaceContainerLow;
+    final bool isDark = theme.brightness == Brightness.dark;
+    final Color bg = isDark
+        ? Color.alphaBlend(
+            cs.surface.withValues(alpha: 0.28),
+            const Color(0xFF181E25),
+          )
+        : cs.surface;
+    final Color headerBg = isDark
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.045), bg)
+        : Colors.white;
+    final Color secBg = isDark
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.055), bg)
+        : cs.surfaceContainerLow;
     final text = cs.onSurface;
     final hint = cs.onSurfaceVariant;
     final primary = ext?.palette.primary ?? cs.primary;
@@ -60,8 +71,8 @@ class MiniAppJsBridge {
       'link_color': colorToHex(primary),
       'button_color': colorToHex(primary),
       'button_text_color': colorToHex(onPrimary),
-      'header_bg_color': colorToHex(secBg),
-      'bottom_bar_bg_color': colorToHex(secBg),
+      'header_bg_color': colorToHex(headerBg),
+      'bottom_bar_bg_color': colorToHex(headerBg),
       'accent_text_color': colorToHex(primary),
       'section_bg_color': colorToHex(bg),
       'section_header_text_color': colorToHex(primary),
@@ -181,6 +192,32 @@ class MiniAppJsBridge {
     }
   }
 
+  function _applyThemeCssVars(tp, scheme, vpH, vpStableH) {
+    try {
+      if (typeof document === 'undefined' || !document.documentElement) return;
+      var rootStyle = document.documentElement.style;
+      if (scheme) rootStyle.setProperty('--tg-color-scheme', String(scheme));
+      if (typeof vpH === 'number' && vpH > 0) {
+        rootStyle.setProperty('--tg-viewport-height', Math.round(vpH) + 'px');
+      }
+      if (typeof vpStableH === 'number' && vpStableH > 0) {
+        rootStyle.setProperty('--tg-viewport-stable-height', Math.round(vpStableH) + 'px');
+      }
+      if (tp && typeof tp === 'object') {
+        var keys = Object.keys(tp);
+        for (var i = 0; i < keys.length; i++) {
+          var k = keys[i];
+          if (tp[k] != null && tp[k] !== '') {
+            var cssVar = '--tg-theme-' + String(k).replace(/_/g, '-');
+            rootStyle.setProperty(cssVar, String(tp[k]));
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  _applyThemeCssVars(_theme, $colorSchemeJson, $vpHeight, $vpHeight);
+
   window.__theaverWebAppReceive = function(eventType, eventData, reqId) {
     if (reqId && _pendingCallbacks[reqId]) {
       var pending = _pendingCallbacks[reqId];
@@ -190,12 +227,14 @@ class MiniAppJsBridge {
     if (eventType === 'theme_changed' && eventData && eventData.theme_params) {
       webApp.themeParams = eventData.theme_params;
       if (eventData.color_scheme) webApp.colorScheme = eventData.color_scheme;
+      _applyThemeCssVars(webApp.themeParams, webApp.colorScheme, webApp.viewportHeight, webApp.viewportStableHeight);
     } else if (eventType === 'viewport_changed' && eventData) {
       if (typeof eventData.height === 'number') webApp.viewportHeight = eventData.height;
       if (eventData.is_state_stable && typeof eventData.height === 'number') {
         webApp.viewportStableHeight = eventData.height;
       }
       if (typeof eventData.is_expanded === 'boolean') webApp.isExpanded = eventData.is_expanded;
+      _applyThemeCssVars(webApp.themeParams, webApp.colorScheme, webApp.viewportHeight, webApp.viewportStableHeight);
     }
     _emit(eventType, eventData);
     var camelMap = {
@@ -433,7 +472,7 @@ class MiniAppJsBridge {
     },
     setHeaderColor: function(color) { webApp.headerColor = String(color || ''); _postToNative('web_app_set_header_color', { color: webApp.headerColor }, ''); },
     setBackgroundColor: function(color) { webApp.backgroundColor = String(color || ''); _postToNative('web_app_set_background_color', { color: webApp.backgroundColor }, ''); },
-    setBottomBarColor: function(color) { webApp.bottomBarColor = String(color || ''); },
+    setBottomBarColor: function(color) { webApp.bottomBarColor = String(color || ''); _postToNative('web_app_set_bottom_bar_color', { color: webApp.bottomBarColor }, ''); },
     enableClosingConfirmation: function() { webApp.isClosingConfirmationEnabled = true; _postToNative('web_app_setup_closing_behavior', { need_confirmation: true }, ''); },
     disableClosingConfirmation: function() { webApp.isClosingConfirmationEnabled = false; _postToNative('web_app_setup_closing_behavior', { need_confirmation: false }, ''); },
     enableVerticalSwipes: function() { webApp.isVerticalSwipesEnabled = true; _postToNative('web_app_setup_swipe_behavior', { allow_vertical_swipe: true }, ''); },

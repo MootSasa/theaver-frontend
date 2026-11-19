@@ -5516,6 +5516,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       botId: targetBot,
       botName: _chatName,
       botUsername: _otherUsername,
+      isVerified: _isVerified,
       url: url,
       appShortName: appShortName,
       chatId: widget.chatId,

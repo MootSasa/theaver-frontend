@@ -130,6 +130,7 @@ class _BotsAndMiniAppsScreenState extends State<BotsAndMiniAppsScreen> {
       botId: bot.userId,
       botName: bot.displayName,
       botUsername: bot.username,
+      isVerified: bot.isVerified,
       url: url ?? bot.effectiveWebAppUrl,
       appShortName: shortName,
       mode: mode,
