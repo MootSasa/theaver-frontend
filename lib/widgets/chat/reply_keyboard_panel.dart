@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -12,6 +13,7 @@ import '../../utils/blur_utils.dart';
 class ReplyKeyboardPanel extends StatefulWidget {
   final List<List<Map<String, dynamic>>> rows;
   final ValueChanged<String> onButtonPressed;
+  final ValueChanged<Map<String, dynamic>>? onButtonAction;
   final bool resizeKeyboard;
   final bool isOpen;
 
@@ -19,6 +21,7 @@ class ReplyKeyboardPanel extends StatefulWidget {
     super.key,
     required this.rows,
     required this.onButtonPressed,
+    this.onButtonAction,
     this.resizeKeyboard = true,
     this.isOpen = true,
   });
@@ -201,6 +204,40 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
     ColorScheme colorScheme,
   ) {
     final text = button['text']?.toString() ?? '';
+    final isWebApp = button['web_app'] is Map &&
+        (button['web_app']['url']?.toString().isNotEmpty ?? false);
+    final isLocation = button['request_location'] == true;
+    final isContact = button['request_contact'] == true;
+    final isPoll = button['request_poll'] != null;
+    final hasSpecialAction = isWebApp || isLocation || isContact || isPoll;
+
+    Widget? leadingIcon;
+    if (isWebApp) {
+      leadingIcon = iconoir.AppWindow(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    } else if (isLocation) {
+      leadingIcon = iconoir.MapPin(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    } else if (isContact) {
+      leadingIcon = iconoir.Phone(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    } else if (isPoll) {
+      leadingIcon = iconoir.StatsReport(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    }
+
     return SizedBox(
       height: 42,
       child: Material(
@@ -208,7 +245,15 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: text.isEmpty ? null : () => widget.onButtonPressed(text),
+          onTap: text.isEmpty
+              ? null
+              : () {
+                  if (hasSpecialAction && widget.onButtonAction != null) {
+                    widget.onButtonAction!(button);
+                  } else {
+                    widget.onButtonPressed(text);
+                  }
+                },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             alignment: Alignment.center,
@@ -220,14 +265,26 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
                 width: 0.8,
               ),
             ),
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: colorScheme.onSurface,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (leadingIcon != null) ...[
+                  leadingIcon,
+                  const SizedBox(width: 6),
+                ],
+                Flexible(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

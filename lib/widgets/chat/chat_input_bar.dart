@@ -72,6 +72,8 @@ class ChatInputBar extends StatefulWidget {
   final bool showBotCommandsButton;
   final bool isBotCommandsOpen;
   final VoidCallback? onToggleBotCommands;
+  final String? botMenuWebAppLabel;
+  final VoidCallback? onOpenBotMenuWebApp;
   final bool hasReplyKeyboard;
   final bool isReplyKeyboardOpen;
   final VoidCallback? onToggleReplyKeyboard;
@@ -138,6 +140,8 @@ class ChatInputBar extends StatefulWidget {
     this.showBotCommandsButton = false,
     this.isBotCommandsOpen = false,
     this.onToggleBotCommands,
+    this.botMenuWebAppLabel,
+    this.onOpenBotMenuWebApp,
     this.hasReplyKeyboard = false,
     this.isReplyKeyboardOpen = false,
     this.onToggleReplyKeyboard,
@@ -907,6 +911,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 showBotCommandsButton: widget.showBotCommandsButton,
                 isBotCommandsOpen: widget.isBotCommandsOpen,
                 onToggleBotCommands: widget.onToggleBotCommands,
+                botMenuWebAppLabel: widget.botMenuWebAppLabel,
+                onOpenBotMenuWebApp: widget.onOpenBotMenuWebApp,
                 hasReplyKeyboard: widget.hasReplyKeyboard,
                 isReplyKeyboardOpen: widget.isReplyKeyboardOpen,
                 onToggleReplyKeyboard: widget.onToggleReplyKeyboard,

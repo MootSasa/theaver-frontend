@@ -734,6 +734,7 @@ class MessageBubble extends StatelessWidget {
   final void Function(String userId)? onOpenContactUser;
   final void Function(String tag)? onSavedTagTap;
   final VoidCallback? onEffectTap;
+  final ValueChanged<String>? onInsertInlineQuery;
 
   const MessageBubble({
     Key? key,
@@ -768,6 +769,7 @@ class MessageBubble extends StatelessWidget {
     this.onOpenContactUser,
     this.onSavedTagTap,
     this.onEffectTap,
+    this.onInsertInlineQuery,
   }) : super(key: key);
 
   MessageBubble copyWithKey(Key? newKey) {
@@ -804,6 +806,7 @@ class MessageBubble extends StatelessWidget {
       onOpenContactUser: onOpenContactUser,
       onSavedTagTap: onSavedTagTap,
       onEffectTap: onEffectTap,
+      onInsertInlineQuery: onInsertInlineQuery,
     );
   }
 
@@ -1465,6 +1468,46 @@ class MessageBubble extends StatelessWidget {
             );
     }
 
+    if (message.isViaBot &&
+        message.viaBotUsername != null &&
+        message.viaBotUsername!.isNotEmpty) {
+      final Color viaColor = isMe
+          ? bubbleSubtextColor
+          : effectivePreset.primaryColor;
+      final Widget viaTag = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onInsertInlineQuery != null
+            ? () => onInsertInlineQuery!('@${message.viaBotUsername} ')
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 3.0),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'через @${message.viaBotUsername}',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: viaColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      replyWidget = replyWidget == null
+          ? viaTag
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                viaTag,
+                replyWidget,
+              ],
+            );
+    }
+
     Widget? senderNameWidget;
     const double senderNameWidthEstimate = 0.0;
     final bool hasSenderInBubble = !isMe &&
@@ -2053,6 +2096,10 @@ class MessageBubble extends StatelessWidget {
                 messageId: message.id,
                 rows: message.inlineKeyboard,
                 maxWidth: maxOuterBubbleWidth,
+                botId: message.viaBotId ?? message.senderId,
+                botUsername: message.viaBotUsername,
+                onInsertText: onInsertInlineQuery,
+                onSwitchInlineQuery: onInsertInlineQuery,
               ),
             ),
         ],

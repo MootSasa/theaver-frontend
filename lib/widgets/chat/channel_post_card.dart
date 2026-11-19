@@ -83,6 +83,7 @@ class ChannelPostCard extends StatelessWidget {
   final VoidCallback? onBodyTap;
   final VoidCallback? onDoubleTap;
   final bool hasProtectedContent;
+  final ValueChanged<String>? onInsertInlineQuery;
 
   const ChannelPostCard({
     super.key,
@@ -113,6 +114,7 @@ class ChannelPostCard extends StatelessWidget {
     this.onBodyTap,
     this.onDoubleTap,
     this.hasProtectedContent = false,
+    this.onInsertInlineQuery,
   }) : assert(
          message != null || album != null,
          'Either message or album must be provided to ChannelPostCard',
@@ -568,6 +570,10 @@ class ChannelPostCard extends StatelessWidget {
                     messageId: msg.id,
                     rows: msg.inlineKeyboard,
                     maxWidth: cardWidth,
+                    botId: msg.viaBotId ?? msg.senderId,
+                    botUsername: msg.viaBotUsername,
+                    onInsertText: onInsertInlineQuery,
+                    onSwitchInlineQuery: onInsertInlineQuery,
                   ),
                 ),
             ],

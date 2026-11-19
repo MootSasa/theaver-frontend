@@ -82,6 +82,8 @@ class LiquidGlassInputField extends StatefulWidget {
   final bool showBotCommandsButton;
   final bool isBotCommandsOpen;
   final VoidCallback? onToggleBotCommands;
+  final String? botMenuWebAppLabel;
+  final VoidCallback? onOpenBotMenuWebApp;
   final bool hasReplyKeyboard;
   final bool isReplyKeyboardOpen;
   final VoidCallback? onToggleReplyKeyboard;
@@ -118,6 +120,8 @@ class LiquidGlassInputField extends StatefulWidget {
     this.showBotCommandsButton = false,
     this.isBotCommandsOpen = false,
     this.onToggleBotCommands,
+    this.botMenuWebAppLabel,
+    this.onOpenBotMenuWebApp,
     this.hasReplyKeyboard = false,
     this.isReplyKeyboardOpen = false,
     this.onToggleReplyKeyboard,
@@ -625,6 +629,54 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
           duration: const Duration(milliseconds: 220),
           curve: Curves.easeOutCubic,
           alignment: Alignment.centerLeft,
+          child: (widget.botMenuWebAppLabel != null &&
+                  widget.botMenuWebAppLabel!.isNotEmpty &&
+                  widget.onOpenBotMenuWebApp != null)
+              ? Padding(
+                  padding: const EdgeInsets.only(left: 2, right: 4, bottom: 8, top: 8),
+                  child: GestureDetector(
+                    onTap: widget.onOpenBotMenuWebApp,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      height: 30,
+                      constraints: const BoxConstraints(maxWidth: 108),
+                      padding: const EdgeInsets.symmetric(horizontal: 9),
+                      decoration: BoxDecoration(
+                        color: rightButtonBg,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const iconoir.AppWindow(
+                            width: 14,
+                            height: 14,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 5),
+                          Flexible(
+                            child: Text(
+                              widget.botMenuWebAppLabel!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerLeft,
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 200),
             switchInCurve: Curves.easeOutBack,
@@ -687,7 +739,10 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 : const SizedBox.shrink(key: ValueKey('bot_cmd_empty')),
           ),
         ),
-        if (widget.onEmoji != null || widget.showBotCommandsButton)
+        if (widget.onEmoji != null ||
+            widget.showBotCommandsButton ||
+            (widget.botMenuWebAppLabel != null &&
+                widget.botMenuWebAppLabel!.isNotEmpty))
           const SizedBox(width: 4),
         Expanded(
           child: _buildTextField(context),

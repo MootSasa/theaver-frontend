@@ -99,6 +99,11 @@ import '../../services/proximity_audio_service.dart';
 import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../call/group_call_screen.dart';
+import '../../services/bot_service.dart';
+import '../../widgets/chat/bot_commands_popup.dart';
+import '../../widgets/chat/reply_keyboard_panel.dart';
+import '../../widgets/bot/inline_results_popup.dart';
+import '../../widgets/bot/mini_app_webview_sheet.dart';
 
 class GroupChatScreen extends StatefulWidget {
   static const String routeName = '/group_chat';
@@ -196,6 +201,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   String? _selectedSendAsChatId;
   int _unreadMentionsCount = 0;
   int _unreadReactionsCount = 0;
+
+  // Wave 4B bots & mini apps state
+  List<BotCommand> _groupBotCommands = const [];
+  bool _isBotCommandsOpen = false;
+  bool _isReplyKeyboardOpen = true;
+  final InlineQueryController _inlineQueryController = InlineQueryController();
 
   String get _screenProtectionKey => 'group_chat_${widget.chatId}';
 
@@ -1438,6 +1449,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (chat.slowModeWaitSeconds > 0 && !chat.isAdmin) {
       _startSlowmodeCountdown(chat.slowModeWaitSeconds);
     }
+    unawaited(_refreshGroupBotCommands(chat.participants));
+  }
+
+  Future<void> _refreshGroupBotCommands(List<ChatParticipant> participants) async {
+    final bots = participants
+        .where(
+          (p) => p.isBot || p.username.toLowerCase().endsWith('bot'),
+        )
+        .take(5)
+        .toList();
+    if (bots.isEmpty) {
+      if (_groupBotCommands.isNotEmpty && mounted) {
+        setState(() => _groupBotCommands = const []);
+      }
+      return;
+    }
+
+    final collected = <BotCommand>[];
+    final seen = <String>{};
+    for (final bot in bots) {
+      final info = await BotService.getBotInfo(bot.id, chatId: widget.chatId);
+      if (info == null) continue;
+      for (final cmd in info.commands) {
+        final key = '${cmd.command.toLowerCase()}_${bot.username.toLowerCase()}';
+        if (seen.add(key)) {
+          final desc = bot.username.isNotEmpty && cmd.description.isNotEmpty
+              ? '${cmd.description} (@${bot.username})'
+              : cmd.description;
+          collected.add(BotCommand(command: cmd.command, description: desc));
+        }
+      }
+    }
+    if (mounted) {
+      setState(() => _groupBotCommands = collected);
+    }
   }
 
   void _syncScreenProtection(bool protect) {
@@ -2356,6 +2402,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         isQuote: _isQuote,
       );
     }
+
+    if (_groupBotCommands.isNotEmpty) {
+      final shouldShowCommands =
+          text.startsWith('/') && !text.contains(' ') && !text.contains('\n');
+      if (_isBotCommandsOpen != shouldShowCommands) {
+        setState(() => _isBotCommandsOpen = shouldShowCommands);
+      }
+    }
+
+    _inlineQueryController.onTextChanged(
+      text,
+      chatId: widget.chatId,
+      chatType: 'group',
+    );
 
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
@@ -4797,6 +4857,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _stopMyTyping();
     _stopRecordingActionBroadcast();
     _messageController.dispose();
+    _inlineQueryController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
     _chatSubscription?.cancel();
@@ -6394,6 +6455,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onFileTap: (url, name, type) => _openFile(url, name, type),
       formatTime: _formatTime,
       hasProtectedContent: _hasProtectedContent,
+      onInsertInlineQuery: _insertInlineQueryText,
     );
 
     if (showGroupSenderAvatar) {
@@ -6850,77 +6912,247 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     );
   }
 
+  void _insertInlineQueryText(String text) {
+    if (_isBotCommandsOpen) {
+      setState(() => _isBotCommandsOpen = false);
+    }
+    _messageController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _inputFocusNode.requestFocus();
+    _inlineQueryController.onTextChanged(
+      text,
+      chatId: widget.chatId,
+      chatType: 'group',
+    );
+  }
+
+  ({
+    List<List<Map<String, dynamic>>> rows,
+    bool oneTime,
+    String? botId,
+  }) get _activeGroupReplyKeyboard {
+    for (final msg in _messages) {
+      if (msg.senderId == _currentUserId) continue;
+      if (msg.removeReplyKeyboard) {
+        return (rows: const [], oneTime: false, botId: null);
+      }
+      if (msg.replyKeyboard.isNotEmpty) {
+        return (
+          rows: msg.replyKeyboard,
+          oneTime: msg.oneTimeReplyKeyboard,
+          botId: msg.viaBotId ?? msg.senderId,
+        );
+      }
+    }
+    return (rows: const [], oneTime: false, botId: null);
+  }
+
   Widget _buildMessageInput() {
     final perms = _effectivePermissions;
-    return ChatInputBar(
-      controller: _messageController,
-      focusNode: _inputFocusNode,
-      isEditing: _isEditing,
-      onCancelEditing: _cancelEditing,
-      onEditLastMessage: _editLastOwnMessage,
-      isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
-      onTapInputWhenEmojiOpen: _onEmojiToggle,
-      replyToMessage: _replyToMessage,
-      isQuote: _isQuote,
-      quoteText: _quoteText,
-      quoteOffset: _quoteOffset,
-      quoteLength: _quoteLength,
-      onCancelReply: _cancelReply,
-      onTapReply: _replyToMessage != null
-          ? () => _scrollToMessage(_replyToMessage!.id)
-          : null,
-      attachedFiles: _attachedFiles,
-      attachedFileNames: _attachedFileNames,
-      onRemoveAttachment: _removeAttachedFile,
-      isUploading: _isUploading,
-      uploadProgress: _uploadProgress,
-      uploadProgressNotifier: _uploadProgressNotifier,
-      onAttach: _showAttachmentPicker,
-      onEmoji: _onEmojiToggle,
-      forwardPreviewBanner: _stagedForward != null
-          ? ForwardPreviewBar(
-              payload: _stagedForward!,
-              onTapOptions: _openStagedForwardOptions,
-              onCancel: () => setState(() => _stagedForward = null),
-            )
-          : null,
-      scheduledCount: _scheduledCount,
-      onOpenScheduled: _openScheduledMessages,
-      onSendLongPress: _handleSendLongPress,
-      onChanged: _onInputTextChanged,
-      onSend: _sendMessage,
-      onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
-        _sendMessage(
-          cleanText: cleanText,
-          entities: entities,
-          linkPreviewOptions: linkPreviewOptions,
-          invertMedia: invertMedia,
-        );
-      },
-      onStartVideoRecord: _onStartVideoRecord,
-      onVideoRecordMove: _onVideoRecordMove,
-      onVideoRecordEnd: _onVideoRecordEnd,
-      onVideoRecordCancel: _onVideoRecordCancel,
-      onStartVoiceRecord: _onStartVoiceRecord,
-      onVoiceRecordMove: _onVoiceRecordMove,
-      onVoiceRecordEnd: _onVoiceRecordEnd,
-      onVoiceRecordCancel: _onVoiceRecordCancel,
-      currentUserId: _currentUserId,
-      isSending: _isSending,
-      slowmodeRemainingSeconds: _slowmodeRemainingSeconds,
-      canSendMedia: perms.canSendMedia,
-      canSendStickersGifs: perms.canSendStickersGifs,
-      canSendPolls: perms.canSendPolls,
-      isAnonymousAdmin: _isAnonymousAdminActive,
-      anonymousGroupAvatarUrl: widget.groupAvatar ?? _groupAvatar,
-      sendAsLeadingWidget: _sendAsPeers.length > 1
-          ? SendAsPeerSelectorPill(
-              peers: _sendAsPeers,
-              selectedPeer: _activeSendAsPeer,
-              onTap: _openSendAsPicker,
-            )
-          : null,
-      trailing: _buildPollOnlyTrailingButton(context),
+    final replyKbInfo = _activeGroupReplyKeyboard;
+    final hasReplyKb = replyKbInfo.rows.isNotEmpty;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListenableBuilder(
+          listenable: _inlineQueryController,
+          builder: (ctx, _) {
+            if (!_inlineQueryController.isActive) {
+              return const SizedBox.shrink();
+            }
+            return InlineResultsPopup(
+              botUsername: _inlineQueryController.activeBotUsername ?? '',
+              query: _inlineQueryController.query,
+              response: _inlineQueryController.response,
+              isLoading: _inlineQueryController.isLoading,
+              isLoadingMore: _inlineQueryController.isLoadingMore,
+              onClose: _inlineQueryController.clear,
+              onLoadMore: () => _inlineQueryController.loadMore(
+                chatId: widget.chatId,
+                chatType: 'group',
+              ),
+              onTapHeaderButton: (btn) async {
+                final botId = _inlineQueryController.activeBotUsername ?? '';
+                if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+                  await openMiniAppSheet(
+                    ctx,
+                    botId: botId,
+                    botUsername: botId,
+                    url: btn.webAppUrl,
+                    chatId: widget.chatId,
+                    mode: 'inline',
+                    onSwitchInlineQuery: _insertInlineQueryText,
+                  );
+                }
+              },
+              onSelectResult: (item) async {
+                final ok = await _inlineQueryController.sendSelectedResult(
+                  chatId: widget.chatId,
+                  result: item,
+                  replyToMessageId: _replyToMessage?.id,
+                  topicId: _activeTopicId,
+                );
+                if (!ctx.mounted) return;
+                if (ok) {
+                  _messageController.clear();
+                  _inlineQueryController.clear();
+                  if (_replyToMessage != null) _cancelReply();
+                } else {
+                  GlassToastService().show(
+                    ctx,
+                    'Не удалось отправить результат',
+                  );
+                }
+              },
+            );
+          },
+        ),
+        if (_groupBotCommands.isNotEmpty)
+          BotCommandsPopup(
+            isOpen: _isBotCommandsOpen,
+            commands: _groupBotCommands,
+            filterQuery: _messageController.text,
+            onClose: () => setState(() => _isBotCommandsOpen = false),
+            onSelectCommand: (cmd) {
+              setState(() => _isBotCommandsOpen = false);
+              _messageController.text = cmd.normalizedCommand;
+              _sendMessage(cleanText: cmd.normalizedCommand);
+            },
+          ),
+        ChatInputBar(
+          controller: _messageController,
+          focusNode: _inputFocusNode,
+          isEditing: _isEditing,
+          onCancelEditing: _cancelEditing,
+          onEditLastMessage: _editLastOwnMessage,
+          isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
+          onTapInputWhenEmojiOpen: _onEmojiToggle,
+          replyToMessage: _replyToMessage,
+          isQuote: _isQuote,
+          quoteText: _quoteText,
+          quoteOffset: _quoteOffset,
+          quoteLength: _quoteLength,
+          onCancelReply: _cancelReply,
+          onTapReply: _replyToMessage != null
+              ? () => _scrollToMessage(_replyToMessage!.id)
+              : null,
+          attachedFiles: _attachedFiles,
+          attachedFileNames: _attachedFileNames,
+          onRemoveAttachment: _removeAttachedFile,
+          isUploading: _isUploading,
+          uploadProgress: _uploadProgress,
+          uploadProgressNotifier: _uploadProgressNotifier,
+          onAttach: _showAttachmentPicker,
+          onEmoji: _onEmojiToggle,
+          forwardPreviewBanner: _stagedForward != null
+              ? ForwardPreviewBar(
+                  payload: _stagedForward!,
+                  onTapOptions: _openStagedForwardOptions,
+                  onCancel: () => setState(() => _stagedForward = null),
+                )
+              : null,
+          scheduledCount: _scheduledCount,
+          onOpenScheduled: _openScheduledMessages,
+          onSendLongPress: _handleSendLongPress,
+          onChanged: _onInputTextChanged,
+          onSend: _sendMessage,
+          onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
+            _sendMessage(
+              cleanText: cleanText,
+              entities: entities,
+              linkPreviewOptions: linkPreviewOptions,
+              invertMedia: invertMedia,
+            );
+          },
+          onStartVideoRecord: _onStartVideoRecord,
+          onVideoRecordMove: _onVideoRecordMove,
+          onVideoRecordEnd: _onVideoRecordEnd,
+          onVideoRecordCancel: _onVideoRecordCancel,
+          onStartVoiceRecord: _onStartVoiceRecord,
+          onVoiceRecordMove: _onVoiceRecordMove,
+          onVoiceRecordEnd: _onVoiceRecordEnd,
+          onVoiceRecordCancel: _onVoiceRecordCancel,
+          currentUserId: _currentUserId,
+          isSending: _isSending,
+          slowmodeRemainingSeconds: _slowmodeRemainingSeconds,
+          canSendMedia: perms.canSendMedia,
+          canSendStickersGifs: perms.canSendStickersGifs,
+          canSendPolls: perms.canSendPolls,
+          isAnonymousAdmin: _isAnonymousAdminActive,
+          anonymousGroupAvatarUrl: widget.groupAvatar ?? _groupAvatar,
+          showBotCommandsButton: _groupBotCommands.isNotEmpty,
+          isBotCommandsOpen: _isBotCommandsOpen,
+          onToggleBotCommands: () {
+            setState(() => _isBotCommandsOpen = !_isBotCommandsOpen);
+          },
+          hasReplyKeyboard: hasReplyKb,
+          isReplyKeyboardOpen: _isReplyKeyboardOpen,
+          onToggleReplyKeyboard: () {
+            setState(() => _isReplyKeyboardOpen = !_isReplyKeyboardOpen);
+          },
+          sendAsLeadingWidget: _sendAsPeers.length > 1
+              ? SendAsPeerSelectorPill(
+                  peers: _sendAsPeers,
+                  selectedPeer: _activeSendAsPeer,
+                  onTap: _openSendAsPicker,
+                )
+              : null,
+          trailing: _buildPollOnlyTrailingButton(context),
+        ),
+        if (hasReplyKb)
+          ReplyKeyboardPanel(
+            isOpen: _isReplyKeyboardOpen,
+            rows: replyKbInfo.rows,
+            onButtonPressed: (btnText) {
+              if (replyKbInfo.oneTime) {
+                setState(() => _isReplyKeyboardOpen = false);
+              }
+              _messageController.text = btnText;
+              _sendMessage(cleanText: btnText);
+            },
+            onButtonAction: (btn) {
+              if (replyKbInfo.oneTime) {
+                setState(() => _isReplyKeyboardOpen = false);
+              }
+              final wa = btn['web_app'];
+              final waUrl = wa is Map ? wa['url']?.toString() : null;
+              if (waUrl != null &&
+                  waUrl.isNotEmpty &&
+                  replyKbInfo.botId != null &&
+                  replyKbInfo.botId!.isNotEmpty) {
+                openMiniAppSheet(
+                  context,
+                  botId: replyKbInfo.botId!,
+                  url: waUrl,
+                  chatId: widget.chatId,
+                  mode: 'keyboard',
+                  buttonText: (btn['text'] ?? '').toString(),
+                  onSwitchInlineQuery: _insertInlineQueryText,
+                );
+              } else if (btn['request_poll'] != null && perms.canSendPolls) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PollCreateScreen(
+                      chatId: widget.chatId,
+                      topicId: _activeTopicId,
+                      sendAsChatId: _selectedSendAsChatId,
+                    ),
+                  ),
+                );
+              } else {
+                final text = (btn['text'] ?? '').toString();
+                if (text.isNotEmpty) {
+                  _messageController.text = text;
+                  _sendMessage(cleanText: text);
+                }
+              }
+            },
+          ),
+      ],
     );
   }
 

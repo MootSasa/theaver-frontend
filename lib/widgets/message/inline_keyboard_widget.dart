@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../services/bot_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
 
 /// Renders a Telegram-style `inline_keyboard` grid directly beneath a
@@ -14,7 +15,8 @@ import '../design_system/theav_design_system.dart';
 /// Supports:
 /// - `callback_data` buttons (shows a compact loading spinner until the request
 ///   resolves or times out, and displays toast/alert answers)
-/// - `url` buttons (opens external or internal link with a subtle corner icon)
+/// - `web_app` buttons (opens an interactive Mini App WebView sheet with signed initData)
+/// - `url` & `login_url` buttons (opens external or internal link with a subtle corner icon)
 /// - `copy_text` buttons (copies text to clipboard with toast confirmation)
 /// - `switch_inline_query` / `switch_inline_query_current_chat` buttons
 class InlineKeyboardWidget extends StatefulWidget {
@@ -23,6 +25,10 @@ class InlineKeyboardWidget extends StatefulWidget {
   final List<List<Map<String, dynamic>>> rows;
   final double maxWidth;
   final void Function(String text)? onInsertText;
+  final String? botId;
+  final String? botUsername;
+  final void Function(String url, String buttonText)? onOpenWebApp;
+  final void Function(String query)? onSwitchInlineQuery;
 
   const InlineKeyboardWidget({
     super.key,
@@ -31,6 +37,10 @@ class InlineKeyboardWidget extends StatefulWidget {
     required this.rows,
     this.maxWidth = 280,
     this.onInsertText,
+    this.botId,
+    this.botUsername,
+    this.onOpenWebApp,
+    this.onSwitchInlineQuery,
   });
 
   @override
@@ -67,11 +77,74 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
       return;
     }
 
+    final webAppRaw = btn['web_app'];
+    final webAppUrl = webAppRaw is Map
+        ? webAppRaw['url']?.toString()
+        : (webAppRaw is String ? webAppRaw : null);
+    if (webAppUrl != null && webAppUrl.isNotEmpty) {
+      final btnText = (btn['text'] ?? '').toString();
+      if (widget.onOpenWebApp != null) {
+        widget.onOpenWebApp!(webAppUrl, btnText);
+      } else if (widget.botId != null && widget.botId!.isNotEmpty) {
+        await openMiniAppSheet(
+          context,
+          botId: widget.botId!,
+          botUsername: widget.botUsername,
+          url: webAppUrl,
+          chatId: widget.chatId,
+          mode: 'inline',
+          buttonText: btnText,
+          onSwitchInlineQuery: widget.onSwitchInlineQuery ?? widget.onInsertText,
+        );
+      } else {
+        final uri = Uri.tryParse(webAppUrl);
+        if (uri != null) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
+      }
+      return;
+    }
+
+    final loginRaw = btn['login_url'];
+    final loginUrl = loginRaw is Map
+        ? loginRaw['url']?.toString()
+        : (loginRaw is String ? loginRaw : null);
+    if (loginUrl != null && loginUrl.isNotEmpty) {
+      final uri = Uri.tryParse(loginUrl);
+      if (uri != null && mounted) {
+        final confirmed = await showTheavDialog<bool>(
+              context: context,
+              title: 'Авторизация на сайте',
+              message: 'Перейти по ссылке авторизации ${uri.host}?',
+              actions: const [
+                TheavDialogAction<bool>(label: 'Отмена', result: false),
+                TheavDialogAction<bool>(
+                  label: 'Открыть',
+                  result: true,
+                  isPrimary: true,
+                ),
+              ],
+            ) ??
+            false;
+        if (confirmed) {
+          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        }
+      }
+      return;
+    }
+
     final switchInline =
         (btn['switch_inline_query_current_chat'] ?? btn['switch_inline_query'])
             ?.toString();
-    if (switchInline != null && widget.onInsertText != null) {
-      widget.onInsertText!(switchInline);
+    if (switchInline != null) {
+      final handler = widget.onSwitchInlineQuery ?? widget.onInsertText;
+      if (handler != null) {
+        final uname = widget.botUsername?.trim() ?? '';
+        final inserted = (uname.isNotEmpty && !switchInline.startsWith('@'))
+            ? '@$uname $switchInline'
+            : switchInline;
+        handler(inserted);
+      }
       return;
     }
 
@@ -161,7 +234,13 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
                   final btn = row[cIdx];
                   final label = (btn['text'] ?? '').toString();
                   final isUrl =
-                      btn['url'] != null && btn['url'].toString().isNotEmpty;
+                      (btn['url'] != null && btn['url'].toString().isNotEmpty) ||
+                      (btn['login_url'] != null &&
+                          btn['login_url'].toString().isNotEmpty);
+                  final isWebApp = btn['web_app'] is Map
+                      ? (btn['web_app']['url']?.toString().isNotEmpty ?? false)
+                      : (btn['web_app'] is String &&
+                          btn['web_app'].toString().isNotEmpty);
                   final btnKey = '${widget.messageId}_${rIdx}_$cIdx';
                   final isLoading = _loadingKeys.contains(btnKey);
 
@@ -217,7 +296,17 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
                                     ],
                                   ),
                                 ),
-                                if (isUrl)
+                                if (isWebApp)
+                                  Positioned(
+                                    top: 4,
+                                    right: 5,
+                                    child: iconoir.AppWindow(
+                                      width: 10,
+                                      height: 10,
+                                      color: textColor.withValues(alpha: 0.65),
+                                    ),
+                                  )
+                                else if (isUrl)
                                   Positioned(
                                     top: 4,
                                     right: 5,

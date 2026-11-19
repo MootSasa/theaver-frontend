@@ -2430,6 +2430,17 @@ class Message {
   bool get removeReplyKeyboard => replyMarkup?['remove_keyboard'] == true;
   bool get oneTimeReplyKeyboard => replyMarkup?['one_time_keyboard'] == true;
 
+  String? get viaBotId => mediaPayload?['via_bot_id']?.toString();
+  String? get viaBotUsername => mediaPayload?['via_bot_username']?.toString();
+  bool get isViaBot =>
+      (viaBotUsername != null && viaBotUsername!.isNotEmpty) ||
+      (viaBotId != null && viaBotId!.isNotEmpty);
+
+  Map<String, dynamic>? get webAppData => mediaPayload?['web_app_data'] is Map
+      ? Map<String, dynamic>.from(mediaPayload!['web_app_data'] as Map)
+      : null;
+  bool get hasWebAppData => webAppData != null;
+
   factory Message.fromJson(Map<String, dynamic> json) {
     // Parse replyInfo from nested object or flat fields
     ReplyInfo? replyInfo;

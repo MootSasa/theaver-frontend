@@ -12,6 +12,8 @@ class BotWelcomeCard extends StatelessWidget {
   final String? botUsername;
   final BotInfo? botInfo;
   final ValueChanged<String> onCommandTap;
+  final VoidCallback? onOpenMainApp;
+  final String? openAppLabel;
 
   const BotWelcomeCard({
     super.key,
@@ -19,6 +21,8 @@ class BotWelcomeCard extends StatelessWidget {
     this.botUsername,
     this.botInfo,
     required this.onCommandTap,
+    this.onOpenMainApp,
+    this.openAppLabel,
   });
 
   @override
@@ -162,6 +166,27 @@ class BotWelcomeCard extends StatelessWidget {
                     );
                   }),
                 ],
+                if (onOpenMainApp != null) ...[
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 42,
+                    child: FilledButton.tonalIcon(
+                      onPressed: onOpenMainApp,
+                      icon: iconoir.AppWindow(
+                        width: 17,
+                        height: 17,
+                        color: colorScheme.primary,
+                      ),
+                      label: Text(
+                        (openAppLabel != null && openAppLabel!.isNotEmpty)
+                            ? openAppLabel!
+                            : 'Открыть приложение',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -175,11 +200,15 @@ class BotWelcomeCard extends StatelessWidget {
 /// conversation has 0 messages, sending `/start` on tap.
 class BotStartBar extends StatelessWidget {
   final VoidCallback onStartPressed;
+  final VoidCallback? onOpenMainApp;
+  final String? openAppLabel;
   final bool isLoading;
 
   const BotStartBar({
     super.key,
     required this.onStartPressed,
+    this.onOpenMainApp,
+    this.openAppLabel,
     this.isLoading = false,
   });
 
@@ -203,40 +232,70 @@ class BotStartBar extends StatelessWidget {
           ),
         ),
       ),
-      child: SizedBox(
-        width: double.infinity,
-        height: 46,
-        child: FilledButton.icon(
-          onPressed: isLoading ? null : onStartPressed,
-          style: FilledButton.styleFrom(
-            backgroundColor: colorScheme.primary,
-            foregroundColor: colorScheme.onPrimary,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-          icon: isLoading
-              ? SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: colorScheme.onPrimary,
+      child: Row(
+        children: [
+          if (onOpenMainApp != null) ...[
+            SizedBox(
+              height: 46,
+              child: FilledButton.tonalIcon(
+                onPressed: onOpenMainApp,
+                style: FilledButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                )
-              : iconoir.Play(
+                ),
+                icon: iconoir.AppWindow(
                   width: 18,
                   height: 18,
-                  color: colorScheme.onPrimary,
+                  color: colorScheme.primary,
                 ),
-          label: const Text(
-            'ЗАПУСТИТЬ (/start)',
-            style: TextStyle(
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
+                label: Text(
+                  (openAppLabel != null && openAppLabel!.isNotEmpty)
+                      ? openAppLabel!
+                      : 'Приложение',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
+          Expanded(
+            child: SizedBox(
+              height: 46,
+              child: FilledButton.icon(
+                onPressed: isLoading ? null : onStartPressed,
+                style: FilledButton.styleFrom(
+                  backgroundColor: colorScheme.primary,
+                  foregroundColor: colorScheme.onPrimary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                icon: isLoading
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: colorScheme.onPrimary,
+                        ),
+                      )
+                    : iconoir.Play(
+                        width: 18,
+                        height: 18,
+                        color: colorScheme.onPrimary,
+                      ),
+                label: const Text(
+                  'ЗАПУСТИТЬ (/start)',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

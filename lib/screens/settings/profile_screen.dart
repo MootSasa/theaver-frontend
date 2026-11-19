@@ -23,6 +23,7 @@ import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/avatar_sync_service.dart';
+import '../../services/bot_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/chat_service.dart';
 import '../../services/contacts_service.dart';
@@ -44,6 +45,7 @@ import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../../widgets/bot/mini_app_webview_sheet.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/common/sync_banner.dart';
@@ -214,6 +216,7 @@ class ProfileScreenState extends State<ProfileScreen>
   ProfileColorPreset? _peerColorPreset;
   bool _peerIsBot = false;
   bool _peerIsVerified = false;
+  BotInfo? _botInfo;
 
   // Общие материалы из локальной БД Drift и сервера + общие группы
   List<DbMessage> _mediaMessages = [];
@@ -985,10 +988,41 @@ class ProfileScreenState extends State<ProfileScreen>
           ),
         );
         _updateTopLuminance();
+        if (_peerIsBot) {
+          unawaited(_loadBotProfileInfo());
+        }
       }
     } catch (e) {
       debugPrint('[ProfileScreen] Error loading peer user profile: $e');
     }
+  }
+
+  Future<void> _loadBotProfileInfo() async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty) return;
+    final info = await BotService.getBotInfo(uid, chatId: _resolvedChatId);
+    if (mounted && info != null) {
+      setState(() => _botInfo = info);
+    }
+  }
+
+  Future<void> _openBotAppFromProfile({
+    String? url,
+    String? appShortName,
+    String mode = 'app',
+  }) async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty) return;
+    await openMiniAppSheet(
+      context,
+      botId: uid,
+      botName: _nameController.text,
+      botUsername: _usernameController.text,
+      url: url,
+      appShortName: appShortName,
+      chatId: _resolvedChatId,
+      mode: mode,
+    );
   }
 
   Future<void> _loadGroupOrChannelProfile() async {
@@ -1610,6 +1644,43 @@ class ProfileScreenState extends State<ProfileScreen>
     }
 
     if (_isUser) {
+      if (_peerIsBot) {
+        final appUrl = _botInfo?.effectiveWebAppUrl;
+        final isMenuWebApp = _botInfo?.menuButton.isWebApp ?? false;
+        return [
+          ProfileActionButtonItem(
+            iconBuilder: (color, size) =>
+                iconoir.ChatBubble(color: color, width: size, height: size),
+            label: _tr(l10n, 'chat_title', 'Чат'),
+            onTap: _openOrReturnToChat,
+          ),
+          if (appUrl != null && appUrl.isNotEmpty)
+            ProfileActionButtonItem(
+              iconBuilder: (color, size) =>
+                  iconoir.AppWindow(color: color, width: size, height: size),
+              label: (isMenuWebApp && _botInfo!.menuButton.text.isNotEmpty)
+                  ? _botInfo!.menuButton.text
+                  : 'Приложение',
+              onTap: () => _openBotAppFromProfile(
+                url: appUrl,
+                mode: isMenuWebApp ? 'menu' : 'main',
+              ),
+            ),
+          ProfileActionButtonItem(
+            iconBuilder: (color, size) => _isMuted
+                ? iconoir.BellOff(color: color, width: size, height: size)
+                : iconoir.Bell(color: color, width: size, height: size),
+            label: _tr(l10n, _isMuted ? 'chat_unmute' : 'chat_mute', 'Звук'),
+            onTap: _toggleMute,
+          ),
+          ProfileActionButtonItem(
+            iconBuilder: (color, size) =>
+                iconoir.Search(color: color, width: size, height: size),
+            label: _tr(l10n, 'search', 'Поиск'),
+            onTap: _handleSearchInChat,
+          ),
+        ];
+      }
       return [
         ProfileActionButtonItem(
           iconBuilder: (color, size) =>
@@ -6032,6 +6103,43 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 isDark: effectiveIsDark,
                                                 hasColoredTheme:
                                                     hasColoredTheme,
+                                              ),
+                                            ] else if (_isUser &&
+                                                _peerIsBot &&
+                                                (_botInfo?.webApps.isNotEmpty ??
+                                                    false)) ...[
+                                              const SizedBox(height: 12),
+                                              TheavInsetGroup(
+                                                header: 'Мини-приложения',
+                                                margin: EdgeInsets.zero,
+                                                children: [
+                                                  for (final app
+                                                      in _botInfo!.webApps)
+                                                    TheavListRow(
+                                                      leading:
+                                                          iconoir.AppWindow(
+                                                        width: 20,
+                                                        height: 20,
+                                                        color: context
+                                                            .theav.primary,
+                                                      ),
+                                                      title: app.title.isNotEmpty
+                                                          ? app.title
+                                                          : app.shortName,
+                                                      subtitle: app.description
+                                                              .isNotEmpty
+                                                          ? app.description
+                                                          : '@${_usernameController.text}/${app.shortName}',
+                                                      showChevron: true,
+                                                      onTap: () =>
+                                                          _openBotAppFromProfile(
+                                                        appShortName:
+                                                            app.shortName,
+                                                        url: app.url,
+                                                        mode: 'app',
+                                                      ),
+                                                    ),
+                                                ],
                                               ),
                                             ],
                                           ],

@@ -96,6 +96,8 @@ import '../../widgets/chat/forward_chat_picker_sheet.dart';
 import '../../widgets/chat/bot_welcome_card.dart';
 import '../../widgets/chat/bot_commands_popup.dart';
 import '../../widgets/chat/reply_keyboard_panel.dart';
+import '../../widgets/bot/inline_results_popup.dart';
+import '../../widgets/bot/mini_app_webview_sheet.dart';
 
 class PrivateChatScreen extends StatefulWidget {
   final String chatId;
@@ -150,6 +152,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   BotInfo? _botInfo;
   bool _isBotCommandsOpen = false;
   bool _isReplyKeyboardOpen = true;
+  final InlineQueryController _inlineQueryController = InlineQueryController();
   Message? _pinnedMessage;
   List<Message> _pinnedMessages = [];
   int _currentPinnedIndex = 0;
@@ -1966,6 +1969,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     }
 
+    _inlineQueryController.onTextChanged(
+      text,
+      chatId: widget.chatId,
+      chatType: _chatType,
+    );
+
     final bool hasText = text.trim().isNotEmpty;
     if (hasText) {
       if (!_amITyping) {
@@ -3033,11 +3042,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _isVerified = isVerifiedPeer;
           });
           if (isBotPeer && participant.id.isNotEmpty) {
-            unawaited(BotService.getBotInfo(participant.id).then((info) {
-              if (mounted && info != null) {
-                setState(() => _botInfo = info);
-              }
-            }));
+            unawaited(
+              BotService.getBotInfo(participant.id, chatId: widget.chatId).then((info) {
+                if (mounted && info != null) {
+                  setState(() => _botInfo = info);
+                }
+              }),
+            );
           }
           final lastSeenIso = participant.lastSeen?.toIso8601String();
           try {
@@ -4601,6 +4612,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         );
       } else if (_messages.isEmpty) {
         if (_isBot) {
+          final appUrl = _botInfo?.effectiveWebAppUrl;
+          final isMenuWebApp = _botInfo?.menuButton.isWebApp ?? false;
           listContent = KeyedSubtree(
             key: const ValueKey('private_chat_bot_welcome'),
             child: BotWelcomeCard(
@@ -4608,6 +4621,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               botUsername: _otherUsername,
               botInfo: _botInfo,
               onCommandTap: (cmd) => _sendMessage(cleanText: cmd),
+              onOpenMainApp: appUrl != null
+                  ? () => _openBotMiniApp(
+                        url: appUrl,
+                        mode: isMenuWebApp ? 'menu' : 'main',
+                      )
+                  : null,
+              openAppLabel: (isMenuWebApp && _botInfo!.menuButton.text.isNotEmpty)
+                  ? _botInfo!.menuButton.text
+                  : null,
             ),
           );
         } else {
@@ -5175,6 +5197,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onStopLiveLocation: () => _stopLiveLocation(message.id),
       onOpenContactUser: _openUserProfileById,
       onSavedTagTap: _selectSavedTagFilter,
+      onInsertInlineQuery: _insertInlineQueryText,
       onEffectTap: message.effectId != null && message.effectId!.isNotEmpty
           ? () => GlassToastService().show(
                 context,
@@ -5334,6 +5357,62 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     }
     return const [];
+  }
+
+  bool get _activeReplyKeyboardOneTime {
+    if (!_isBot) return false;
+    for (final msg in _messages) {
+      if (msg.senderId != _currentUserId && msg.replyKeyboard.isNotEmpty) {
+        return msg.oneTimeReplyKeyboard;
+      }
+      if (msg.senderId != _currentUserId &&
+          msg.replyMarkup?['remove_keyboard'] == true) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  void _insertInlineQueryText(String text) {
+    if (_isBotCommandsOpen) {
+      setState(() => _isBotCommandsOpen = false);
+    }
+    _textController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _inputFocusNode.requestFocus();
+    _inlineQueryController.onTextChanged(
+      text,
+      chatId: widget.chatId,
+      chatType: _chatType,
+    );
+  }
+
+  Future<void> _openBotMiniApp({
+    String? url,
+    String? appShortName,
+    String mode = 'menu',
+    String buttonText = '',
+  }) async {
+    final targetBot = (_otherUserId != null && _otherUserId!.isNotEmpty)
+        ? _otherUserId!
+        : ((widget.otherUserId != null && widget.otherUserId!.isNotEmpty)
+            ? widget.otherUserId!
+            : (_otherUsername ?? ''));
+    if (targetBot.isEmpty) return;
+    await openMiniAppSheet(
+      context,
+      botId: targetBot,
+      botName: _chatName,
+      botUsername: _otherUsername,
+      url: url,
+      appShortName: appShortName,
+      chatId: widget.chatId,
+      mode: mode,
+      buttonText: buttonText,
+      onSwitchInlineQuery: _insertInlineQueryText,
+    );
   }
 
   void _startSlowmodeCountdown(int seconds) {
@@ -5590,6 +5669,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final commands = _botInfo?.commands ?? const <BotCommand>[];
     final replyKb = _activeReplyKeyboard;
     final hasReplyKb = replyKb.isNotEmpty;
+    final appUrl = _botInfo?.effectiveWebAppUrl;
+    final isMenuWebApp = _botInfo?.menuButton.isWebApp ?? false;
 
     if (_isBot && _messages.isEmpty && !_isLoading) {
       return BotStartBar(
@@ -5598,12 +5679,77 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _textController.text = '/start';
           _sendMessage(cleanText: '/start');
         },
+        onOpenMainApp: appUrl != null
+            ? () => _openBotMiniApp(
+                  url: appUrl,
+                  mode: isMenuWebApp ? 'menu' : 'main',
+                )
+            : null,
+        openAppLabel: (isMenuWebApp && _botInfo!.menuButton.text.isNotEmpty)
+            ? _botInfo!.menuButton.text
+            : null,
       );
     }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        ListenableBuilder(
+          listenable: _inlineQueryController,
+          builder: (ctx, _) {
+            if (!_inlineQueryController.isActive) {
+              return const SizedBox.shrink();
+            }
+            return InlineResultsPopup(
+              botUsername: _inlineQueryController.activeBotUsername ?? '',
+              query: _inlineQueryController.query,
+              response: _inlineQueryController.response,
+              isLoading: _inlineQueryController.isLoading,
+              isLoadingMore: _inlineQueryController.isLoadingMore,
+              onClose: _inlineQueryController.clear,
+              onLoadMore: () => _inlineQueryController.loadMore(
+                chatId: widget.chatId,
+                chatType: _chatType,
+              ),
+              onTapHeaderButton: (btn) async {
+                final botId = _inlineQueryController.activeBotUsername ?? '';
+                if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+                  await openMiniAppSheet(
+                    ctx,
+                    botId: botId,
+                    botUsername: botId,
+                    url: btn.webAppUrl,
+                    chatId: widget.chatId,
+                    mode: 'inline',
+                    onSwitchInlineQuery: _insertInlineQueryText,
+                  );
+                } else if (btn.startParameter != null && _isBot) {
+                  _inlineQueryController.clear();
+                  await _sendMessage(cleanText: '/start ${btn.startParameter}');
+                }
+              },
+              onSelectResult: (item) async {
+                final replyId = _replyToMessage?.id;
+                final ok = await _inlineQueryController.sendSelectedResult(
+                  chatId: widget.chatId,
+                  result: item,
+                  replyToMessageId: replyId,
+                );
+                if (!ctx.mounted) return;
+                if (ok) {
+                  _textController.clear();
+                  _inlineQueryController.clear();
+                  if (_replyToMessage != null) _cancelReply();
+                } else {
+                  GlassToastService().show(
+                    ctx,
+                    'Не удалось отправить результат',
+                  );
+                }
+              },
+            );
+          },
+        ),
         if (_isBot && commands.isNotEmpty)
           BotCommandsPopup(
             isOpen: _isBotCommandsOpen,
@@ -5676,6 +5822,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           onToggleBotCommands: () {
             setState(() => _isBotCommandsOpen = !_isBotCommandsOpen);
           },
+          botMenuWebAppLabel: (_isBot && isMenuWebApp)
+              ? (_botInfo!.menuButton.text.isNotEmpty
+                  ? _botInfo!.menuButton.text
+                  : 'Меню')
+              : null,
+          onOpenBotMenuWebApp: (_isBot && isMenuWebApp)
+              ? () => _openBotMiniApp(
+                    url: _botInfo!.menuButton.webAppUrl,
+                    mode: 'menu',
+                    buttonText: _botInfo!.menuButton.text,
+                  )
+              : null,
           hasReplyKeyboard: hasReplyKb,
           isReplyKeyboardOpen: _isReplyKeyboardOpen,
           onToggleReplyKeyboard: () {
@@ -5688,8 +5846,36 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             isOpen: _isReplyKeyboardOpen,
             rows: replyKb,
             onButtonPressed: (btnText) {
+              if (_activeReplyKeyboardOneTime) {
+                setState(() => _isReplyKeyboardOpen = false);
+              }
               _textController.text = btnText;
               _sendMessage(cleanText: btnText);
+            },
+            onButtonAction: (btn) {
+              if (_activeReplyKeyboardOneTime) {
+                setState(() => _isReplyKeyboardOpen = false);
+              }
+              final wa = btn['web_app'];
+              final waUrl = wa is Map ? wa['url']?.toString() : null;
+              if (waUrl != null && waUrl.isNotEmpty) {
+                _openBotMiniApp(
+                  url: waUrl,
+                  mode: 'keyboard',
+                  buttonText: (btn['text'] ?? '').toString(),
+                );
+              } else if (btn['request_location'] == true) {
+                _sendLocation();
+              } else if (btn['request_contact'] == true) {
+                _sendContact();
+              } else if (btn['request_poll'] != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => PollCreateScreen(chatId: widget.chatId),
+                  ),
+                );
+              }
             },
           ),
       ],
@@ -6932,6 +7118,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
 
     _textController.dispose();
+    _inlineQueryController.dispose();
     _scrollController.dispose();
     _inputFocusNode.dispose();
     _emojiPanelController.dispose();
