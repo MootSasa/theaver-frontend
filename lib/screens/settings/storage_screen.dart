@@ -1,6 +1,6 @@
-import 'dart:ui' show ImageFilter;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
@@ -1193,15 +1193,9 @@ class _StorageScreenState extends State<StorageScreen> {
     bool clearFiles = true;
     bool clearOther = true;
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: glassEnabled ? Colors.transparent : null,
-      shape: glassEnabled
-          ? null
-          : const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            ),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
@@ -1219,30 +1213,11 @@ class _StorageScreenState extends State<StorageScreen> {
                 ? '${l10n.translate('storage_clear')} (${CacheService.formatBytes(selectedBytes)})'
                 : l10n.translate('storage_clear_cache');
 
-            final sheetBody = SingleChildScrollView(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-                left: 20,
-                right: 20,
-                top: 12,
-              ),
+            return SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Handle indicator
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white30 : Colors.black26,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
                   // Header with Select All toggle
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1384,35 +1359,6 @@ class _StorageScreenState extends State<StorageScreen> {
                 ],
               ),
             );
-
-            if (glassEnabled) {
-              return ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color.fromARGB(220, 20, 20, 32)
-                          : const Color.fromARGB(220, 245, 245, 252),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                      border: Border(
-                        top: BorderSide(
-                          color: isDark ? Colors.white24 : Colors.black12,
-                          width: 0.8,
-                        ),
-                      ),
-                    ),
-                    child: Material(
-                      type: MaterialType.transparency,
-                      child: sheetBody,
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            return sheetBody;
           },
         );
       },

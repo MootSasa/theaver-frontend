@@ -12,6 +12,7 @@ import '../../services/name_color_sync_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/profile/color_palette_picker.dart';
 import '../../widgets/profile/name_color_picker.dart';
 import '../../widgets/profile/profile_segmented_control.dart';
@@ -187,125 +188,135 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
     }
 
     if (_tempStripStyle == ReplyStripStyle.dualColor || _tempStripStyle == ReplyStripStyle.segmented) {
-      showModalBottomSheet(
+      showTheavModalSheet<void>(
         context: context,
-        backgroundColor: const Color(0xFF1E2C3A),
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        builder: (bottomSheetContext) {
+        enableDrag: false,
+        builder: (_) => const SizedBox.shrink(),
+        customSheetBuilder: (bottomSheetContext) {
           return StatefulBuilder(
             builder: (context, setSheetState) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Настройка цветов полоски ответа',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        GestureDetector(
-                          onTap: () {
-                            HapticUtils.selection();
-                            _colorPickerController.showIOSCustomColorPicker(
-                              context: context,
-                              startingColor: c1,
-                              onColorChanged: (newColor) {
-                                final opaque = newColor.withValues(alpha: 1.0);
-                                setSheetState(() {
-                                  c1 = opaque;
-                                });
-                                setState(() {
-                                  _tempNameColorPreset = NameColorPreset.fromCustomGradient(c1, c2);
-                                });
-                              },
-                            );
-                          },
-                          child: Column(
+              return Align(
+                alignment: Alignment.bottomCenter,
+                heightFactor: 1.0,
+                child: TheavSheetSurface(
+                  cornerRadius: 24.0,
+                  matteColor: const Color(0xFF1E2C3A),
+                  glassTintOverride: const Color(0xA61E2C3A),
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.white24,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Настройка цветов полоски ответа',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: c1,
-                                  border: Border.all(color: Colors.white38, width: 2),
+                              GestureDetector(
+                                onTap: () {
+                                  HapticUtils.selection();
+                                  _colorPickerController.showIOSCustomColorPicker(
+                                    context: context,
+                                    startingColor: c1,
+                                    onColorChanged: (newColor) {
+                                      final opaque = newColor.withValues(alpha: 1.0);
+                                      setSheetState(() {
+                                        c1 = opaque;
+                                      });
+                                      setState(() {
+                                        _tempNameColorPreset = NameColorPreset.fromCustomGradient(c1, c2);
+                                      });
+                                    },
+                                  );
+                                },
+                                child: Column(
+                                  children: [
+                                    Container(
+                                      width: 48,
+                                      height: 48,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: c1,
+                                        border: Border.all(color: Colors.white38, width: 2),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    const Text('Цвет 1', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 8),
-                              const Text('Цвет 1', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.swap_horiz_rounded, color: Colors.white38, size: 28),
-                        GestureDetector(
-                          onTap: () {
-                            HapticUtils.selection();
-                            _colorPickerController.showIOSCustomColorPicker(
-                              context: context,
-                              startingColor: c2,
-                              onColorChanged: (newColor) {
-                                final opaque = newColor.withValues(alpha: 1.0);
-                                setSheetState(() {
-                                  c2 = opaque;
-                                });
-                                setState(() {
-                                  _tempNameColorPreset = NameColorPreset.fromCustomGradient(c1, c2);
-                                });
-                              },
-                            );
-                          },
-                          child: Column(
-                            children: [
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: c2,
-                                  border: Border.all(color: Colors.white38, width: 2),
+                              const Icon(Icons.swap_horiz_rounded, color: Colors.white38, size: 28),
+                              GestureDetector(
+                                onTap: () {
+                                  HapticUtils.selection();
+                                  _colorPickerController.showIOSCustomColorPicker(
+                                    context: context,
+                                    startingColor: c2,
+                                    onColorChanged: (newColor) {
+                                      final opaque = newColor.withValues(alpha: 1.0);
+                                      setSheetState(() {
+                                        c2 = opaque;
+                                      });
+                                      setState(() {
+                                        _tempNameColorPreset = NameColorPreset.fromCustomGradient(c1, c2);
+                                      });
+                                    },
+                                  );
+                                },
+                                child: Column(
+                                  children: [
+                                    Container(
+                                      width: 48,
+                                      height: 48,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: c2,
+                                        border: Border.all(color: Colors.white38, width: 2),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    const Text('Цвет 2', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 8),
-                              const Text('Цвет 2', style: TextStyle(color: Colors.white70, fontSize: 13)),
                             ],
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2B82C9),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Готово', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF2B82C9),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text('Готово', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                  ],
+                  ),
                 ),
               );
             },
@@ -316,20 +327,27 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
     }
 
     if (_tempStripStyle == ReplyStripStyle.candyCane) {
-      showModalBottomSheet(
+      showTheavModalSheet<void>(
         context: context,
-        backgroundColor: const Color(0xFF1E2C3A),
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        builder: (bottomSheetContext) {
+        enableDrag: false,
+        builder: (_) => const SizedBox.shrink(),
+        customSheetBuilder: (bottomSheetContext) {
           return StatefulBuilder(
             builder: (context, setSheetState) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
+              return Align(
+                alignment: Alignment.bottomCenter,
+                heightFactor: 1.0,
+                child: TheavSheetSurface(
+                  cornerRadius: 24.0,
+                  matteColor: const Color(0xFF1E2C3A),
+                  glassTintOverride: const Color(0xA61E2C3A),
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                     Container(
                       width: 36,
                       height: 4,
@@ -468,11 +486,14 @@ class _ProfileColorScreenState extends State<ProfileColorScreen> {
                     const SizedBox(height: 12),
                   ],
                 ),
-              );
-            },
-          );
-        },
-      );
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  },
+);
     }
   }
 

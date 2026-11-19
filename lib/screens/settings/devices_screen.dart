@@ -22,6 +22,7 @@ import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../config/app_config.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../utils/swipe_back_route.dart';
@@ -429,74 +430,60 @@ class _DevicesScreenState extends State<DevicesScreen> {
       {'days': 365, 'label': l10n.translate('devices_ttl_1_year')},
     ];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: l10n.translate('devices_auto_terminate_title'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: Text(
-                    l10n.translate('devices_auto_terminate_title'),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                  ),
-                ),
-                const Divider(),
-                ...options.map((opt) {
-                  final days = opt['days'] as int;
-                  final label = opt['label'] as String;
-                  final isSelected = _sessionsTTLDays == days;
+        return SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ...options.map((opt) {
+                final days = opt['days'] as int;
+                final label = opt['label'] as String;
+                final isSelected = _sessionsTTLDays == days;
 
-                  return ListTile(
-                    title: Text(label),
-                    trailing: isSelected
-                        ? Check(
-                            width: 20,
-                            height: 20,
-                            color: Theme.of(context).primaryColor,
-                          )
-                        : null,
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      HapticFeedback.lightImpact();
-                      final prevDays = _sessionsTTLDays;
+                return ListTile(
+                  title: Text(label),
+                  trailing: isSelected
+                      ? Check(
+                          width: 20,
+                          height: 20,
+                          color: Theme.of(context).primaryColor,
+                        )
+                      : null,
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    HapticFeedback.lightImpact();
+                    final prevDays = _sessionsTTLDays;
+                    setState(() {
+                      _sessionsTTLDays = days;
+                    });
+                    final success = await AuthService.setSessionsTTL(days);
+                    if (!mounted) return;
+                    if (success) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(l10n.translate('settings_saved')),
+                        ),
+                      );
+                    } else {
                       setState(() {
-                        _sessionsTTLDays = days;
+                        _sessionsTTLDays = prevDays;
                       });
-                      final success = await AuthService.setSessionsTTL(days);
-                      if (!mounted) return;
-                      if (success) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(l10n.translate('settings_saved')),
-                          ),
-                        );
-                      } else {
-                        setState(() {
-                          _sessionsTTLDays = prevDays;
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(l10n.translate('common_error')),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
-                      }
-                    },
-                  );
-                }).toList(),
-              ],
-            ),
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(l10n.translate('common_error')),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  },
+                );
+              }),
+            ],
           ),
         );
       },
@@ -542,12 +529,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   Future<void> _showLinkDeviceSheet() async {
     final l10n = context.l10n;
-    final result = await showModalBottomSheet<String>(
+    final result = await showTheavModalSheet<String>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: l10n.translate('devices_link_desktop_title'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       builder: (_) => const _LinkDeviceBottomSheet(),
     );
     if (!mounted || result == null) return;
@@ -1087,32 +1072,12 @@ class _LinkDeviceBottomSheetState extends State<_LinkDeviceBottomSheet> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
-    return SafeArea(
-      top: false,
-      child: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(20, 16, 20, bottomInset + 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(
-                  color: theme.dividerColor.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            Text(
-              l10n.translate('devices_link_desktop_title'),
-              style: theme.textTheme.titleLarge,
-            ),
-            const SizedBox(height: 12),
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
             SegmentedButton<int>(
               segments: [
                 ButtonSegment<int>(
@@ -1292,7 +1257,6 @@ class _LinkDeviceBottomSheetState extends State<_LinkDeviceBottomSheet> {
               ),
             ],
           ],
-        ),
       ),
     );
   }

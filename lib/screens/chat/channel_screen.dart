@@ -4498,6 +4498,9 @@ class _ChannelScreenState extends State<ChannelScreen>
                       ? (_keyboardHeight + safeBottom)
                       : emojiPanelHeight,
                   child: ClipRect(
+                    clipBehavior: _emojiPanelAnimation.value < 0.999
+                        ? Clip.hardEdge
+                        : Clip.none,
                     child: OverflowBox(
                       alignment: Alignment.topCenter,
                       maxHeight: _keyboardHeight + safeBottom,

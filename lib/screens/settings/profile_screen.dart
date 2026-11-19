@@ -3954,11 +3954,11 @@ class ProfileScreenState extends State<ProfileScreen>
         isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
     final isAdminOrOwner = member.role == 'admin' || member.role == 'owner';
 
-    showModalBottomSheet<void>(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => SettingsAttachedSheet(
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => SettingsAttachedSheet(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [

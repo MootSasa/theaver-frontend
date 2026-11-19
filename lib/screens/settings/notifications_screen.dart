@@ -6,6 +6,7 @@ import '../../services/notification_settings_provider.dart';
 import '../../services/notification_settings_launcher.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
@@ -108,38 +109,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     HapticUtils.tap();
     final options = [0, 5, 10, 30, 60, 120];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'Повтор уведомлений',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-            ),
-            const Divider(height: 1),
-            ...options.map((m) => ListTile(
-                  title: Text(_repeatLabel(m)),
-                  trailing: m == current
-                      ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                      : null,
-                  onTap: () {
-                    HapticUtils.selection();
-                    onChanged(m);
-                    Navigator.pop(ctx);
-                  },
-                )),
-          ],
-        ),
+      title: 'Повтор уведомлений',
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...options.map((m) => ListTile(
+                title: Text(_repeatLabel(m)),
+                trailing: m == current
+                    ? const Icon(Icons.check, color: Color(0xFF0088CC))
+                    : null,
+                onTap: () {
+                  HapticUtils.selection();
+                  onChanged(m);
+                  Navigator.pop(ctx);
+                },
+              )),
+        ],
       ),
     );
   }

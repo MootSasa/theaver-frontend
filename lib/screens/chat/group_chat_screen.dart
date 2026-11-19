@@ -5702,6 +5702,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 bottom: 0,
                 height: (_keyboardHeight + safeBottom) * animVal,
                 child: ClipRect(
+                  clipBehavior:
+                      animVal < 0.999 ? Clip.hardEdge : Clip.none,
                   child: OverflowBox(
                     alignment: Alignment.topCenter,
                     minHeight: _keyboardHeight + safeBottom,

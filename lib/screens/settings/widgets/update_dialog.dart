@@ -11,6 +11,7 @@ import '../../../services/glass_toast_service.dart';
 import '../../../services/update_service.dart';
 import '../../../theme/theav_theme.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 
 /// Attached bottom sheet presenting available app updates, Markdown release
@@ -31,14 +32,12 @@ class UpdateDialog extends StatefulWidget {
     AppUpdateInfo update, {
     bool isManual = false,
   }) {
-    return showModalBottomSheet<void>(
+    return showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      isDismissible: !update.forceUpdate,
-      enableDrag: !update.forceUpdate,
-      useSafeArea: false,
-      builder: (_) => UpdateDialog(
+      barrierDismissible: !update.forceUpdate,
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (_) => UpdateDialog(
         update: update,
         isManual: isManual,
       ),

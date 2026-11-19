@@ -18,6 +18,7 @@ import '../../services/account_manager.dart';
 import '../../services/app_lock_service.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
@@ -520,57 +521,41 @@ class _SecurityScreenState extends State<SecurityScreen> {
       {'months': 24, 'label': l10n.translate('security_account_ttl_2_years')},
     ];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Text(
-                  l10n.translate('security_account_ttl_title'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-              ),
-              const Divider(),
-              ...options.map((opt) {
-                final months = opt['months'] as int;
-                final label = opt['label'] as String;
-                final isSelected = provider.accountTTLMonths == months;
+      title: l10n.translate('security_account_ttl_title'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ...options.map((opt) {
+            final months = opt['months'] as int;
+            final label = opt['label'] as String;
+            final isSelected = provider.accountTTLMonths == months;
 
-                return ListTile(
-                  title: Text(label),
-                  trailing: isSelected
-                      ? Check(
-                          width: 20,
-                          height: 20,
-                          color: Theme.of(context).primaryColor,
-                        )
-                      : null,
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    HapticFeedback.lightImpact();
-                    final success = await provider.saveAccountTTL(months);
-                    if (context.mounted && success) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(l10n.translate('settings_saved'))),
-                      );
-                    }
-                  },
-                );
-              }),
-            ],
-          ),
-        ),
+            return ListTile(
+              title: Text(label),
+              trailing: isSelected
+                  ? Check(
+                      width: 20,
+                      height: 20,
+                      color: Theme.of(context).primaryColor,
+                    )
+                  : null,
+              onTap: () async {
+                Navigator.pop(ctx);
+                HapticFeedback.lightImpact();
+                final success = await provider.saveAccountTTL(months);
+                if (context.mounted && success) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(l10n.translate('settings_saved'))),
+                  );
+                }
+              },
+            );
+          }),
+        ],
       ),
     );
   }
@@ -1028,34 +1013,30 @@ class _SecurityScreenState extends State<SecurityScreen> {
     final provider = context.read<PrivacySettingsProvider>();
     final appLock = AppLockService.instance;
     final options = ['immediately', '1min', '5min', '15min', '1hour'];
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: options.map((opt) {
-            final isSelected = appLock.autoLockTimeout == opt;
-            return ListTile(
-              title: Text(_autoLockLabel(l10n, opt)),
-              trailing: isSelected
-                  ? Check(width: 20, height: 20, color: Theme.of(context).primaryColor)
-                  : null,
-              onTap: () async {
-                HapticFeedback.lightImpact();
-                await appLock.setAutoLockTimeout(opt);
-                await provider.saveAppLock(AppLockSettings(
-                  hasPin: appLock.hasPin,
-                  biometricsEnabled: appLock.biometricsEnabled,
-                  autoLockTimeout: opt,
-                ));
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-            );
-          }).toList(),
-        ),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: options.map((opt) {
+          final isSelected = appLock.autoLockTimeout == opt;
+          return ListTile(
+            title: Text(_autoLockLabel(l10n, opt)),
+            trailing: isSelected
+                ? Check(width: 20, height: 20, color: Theme.of(context).primaryColor)
+                : null,
+            onTap: () async {
+              HapticFeedback.lightImpact();
+              await appLock.setAutoLockTimeout(opt);
+              await provider.saveAppLock(AppLockSettings(
+                hasPin: appLock.hasPin,
+                biometricsEnabled: appLock.biometricsEnabled,
+                autoLockTimeout: opt,
+              ));
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+          );
+        }).toList(),
       ),
     );
   }

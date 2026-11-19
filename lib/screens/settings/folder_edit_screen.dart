@@ -7,6 +7,7 @@ import '../../services/chat_folder_service.dart';
 import '../../services/database/app_database.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 
@@ -129,13 +130,11 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
         Set<String>.from(isIncluded ? _includedChatIds : _excludedChatIds);
     String searchQuery = '';
 
-    final result = await showModalBottomSheet<Set<String>>(
+    final result = await showTheavModalSheet<Set<String>>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetCtx) {
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (sheetCtx) {
         return StatefulBuilder(
           builder: (context, setSheetState) {
             final q = searchQuery.trim().toLowerCase();
@@ -144,120 +143,163 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
               return c.name.toLowerCase().contains(q) ||
                   (c.username?.toLowerCase().contains(q) ?? false);
             }).toList();
+            final media = MediaQuery.of(context);
+            final double sheetHeight = media.size.height * 0.78;
 
-            return DraggableScrollableSheet(
-              initialChildSize: 0.72,
-              minChildSize: 0.45,
-              maxChildSize: 0.92,
-              expand: false,
-              builder: (_, scrollController) {
-                return Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-                      child: Row(
+            return Align(
+              alignment: Alignment.bottomCenter,
+              heightFactor: 1.0,
+              child: SizedBox(
+                height: sheetHeight,
+                child: TheavSheetSurface(
+                  cornerRadius: 24.0,
+                  child: SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+                      child: Column(
                         children: [
-                          Expanded(
-                            child: Text(
-                              isIncluded
-                                  ? l10n.translate('folders_included_chats')
-                                  : l10n.translate('folders_excluded_chats'),
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleMedium
-                                  ?.copyWith(fontWeight: FontWeight.w600),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onVerticalDragEnd: (d) {
+                              if ((d.primaryVelocity ?? 0.0) > 650.0) {
+                                Navigator.pop(sheetCtx);
+                              }
+                            },
+                            child: Container(
+                              width: 112,
+                              padding: const EdgeInsets.only(top: 10, bottom: 4),
+                              alignment: Alignment.center,
+                              child: Container(
+                                width: 36,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withValues(alpha: 0.24),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
                             ),
                           ),
-                          TextButton(
-                            onPressed: () =>
-                                Navigator.pop(sheetCtx, initialSelected),
-                            child: Text(l10n.translate('common_done')),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    isIncluded
+                                        ? l10n.translate('folders_included_chats')
+                                        : l10n.translate('folders_excluded_chats'),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium
+                                        ?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(sheetCtx, initialSelected),
+                                  child: Text(l10n.translate('common_done')),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 4,
+                            ),
+                            child: TextField(
+                              decoration: InputDecoration(
+                                prefixIcon: const Icon(Icons.search),
+                                hintText: l10n.translate('search_hint'),
+                                isDense: true,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onChanged: (v) =>
+                                  setSheetState(() => searchQuery = v),
+                            ),
+                          ),
+                          Expanded(
+                            child: _loadingChats
+                                ? const Center(
+                                    child: CircularProgressIndicator())
+                                : filtered.isEmpty
+                                    ? Center(
+                                        child: Text(
+                                          l10n.translate('chat_no_chats'),
+                                          style: TextStyle(
+                                              color: Colors.grey[600]),
+                                        ),
+                                      )
+                                    : ListView.builder(
+                                        itemCount: filtered.length,
+                                        itemBuilder: (_, idx) {
+                                          final chat = filtered[idx];
+                                          final checked = initialSelected
+                                              .contains(chat.chatId);
+                                          final provider =
+                                              chat.avatarUrl != null &&
+                                                      chat.avatarUrl!.isNotEmpty
+                                                  ? avatarImageProvider(
+                                                      chat.avatarUrl!)
+                                                  : null;
+                                          final title =
+                                              chat.chatType == 'saved'
+                                                  ? l10n.translate(
+                                                      'chat_saved_messages')
+                                                  : chat.name;
+                                          return CheckboxListTile(
+                                            value: checked,
+                                            secondary: CircleAvatar(
+                                              radius: 18,
+                                              backgroundImage: provider,
+                                              child: provider == null
+                                                  ? Text(
+                                                      title.isNotEmpty
+                                                          ? title[0]
+                                                              .toUpperCase()
+                                                          : '?',
+                                                    )
+                                                  : null,
+                                            ),
+                                            title: Text(
+                                              title,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            subtitle: Text(
+                                              chat.chatType,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[500],
+                                              ),
+                                            ),
+                                            onChanged: (val) {
+                                              setSheetState(() {
+                                                if (val == true) {
+                                                  initialSelected
+                                                      .add(chat.chatId);
+                                                } else {
+                                                  initialSelected
+                                                      .remove(chat.chatId);
+                                                }
+                                              });
+                                            },
+                                          );
+                                        },
+                                      ),
                           ),
                         ],
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 4,
-                      ),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          prefixIcon: const Icon(Icons.search),
-                          hintText: l10n.translate('search_hint'),
-                          isDense: true,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        onChanged: (v) => setSheetState(() => searchQuery = v),
-                      ),
-                    ),
-                    Expanded(
-                      child: _loadingChats
-                          ? const Center(child: CircularProgressIndicator())
-                          : filtered.isEmpty
-                              ? Center(
-                                  child: Text(
-                                    l10n.translate('chat_no_chats'),
-                                    style: TextStyle(color: Colors.grey[600]),
-                                  ),
-                                )
-                              : ListView.builder(
-                                  controller: scrollController,
-                                  itemCount: filtered.length,
-                                  itemBuilder: (_, idx) {
-                                    final chat = filtered[idx];
-                                    final checked =
-                                        initialSelected.contains(chat.chatId);
-                                    final provider = chat.avatarUrl != null &&
-                                            chat.avatarUrl!.isNotEmpty
-                                        ? avatarImageProvider(chat.avatarUrl!)
-                                        : null;
-                                    final title = chat.chatType == 'saved'
-                                        ? l10n.translate('chat_saved_messages')
-                                        : chat.name;
-                                    return CheckboxListTile(
-                                      value: checked,
-                                      secondary: CircleAvatar(
-                                        radius: 18,
-                                        backgroundImage: provider,
-                                        child: provider == null
-                                            ? Text(
-                                                title.isNotEmpty
-                                                    ? title[0].toUpperCase()
-                                                    : '?',
-                                              )
-                                            : null,
-                                      ),
-                                      title: Text(
-                                        title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      subtitle: Text(
-                                        chat.chatType,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.grey[500],
-                                        ),
-                                      ),
-                                      onChanged: (val) {
-                                        setSheetState(() {
-                                          if (val == true) {
-                                            initialSelected.add(chat.chatId);
-                                          } else {
-                                            initialSelected.remove(chat.chatId);
-                                          }
-                                        });
-                                      },
-                                    );
-                                  },
-                                ),
-                    ),
-                  ],
-                );
-              },
+                  ),
+                ),
+              ),
             );
           },
         );

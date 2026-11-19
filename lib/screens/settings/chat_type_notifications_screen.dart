@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
@@ -60,24 +61,15 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
     final l10n = context.l10n;
     HapticUtils.tap();
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: l10n.translate('notifications_vibration'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (context) {
-        return SafeArea(
+        return SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  l10n.translate('notifications_vibration'),
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const Divider(height: 1),
               ...VibrationPattern.values.map(
                 (pattern) => ListTile(
                   title: Text(_vibrationLabel(pattern, l10n)),

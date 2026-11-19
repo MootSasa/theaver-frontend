@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/notification_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Диалог запроса разрешений на уведомления при первом входе.
 class NotificationPermissionDialog {
@@ -29,10 +30,9 @@ class NotificationPermissionDialog {
       if (!context.mounted) return;
 
       // Показываем bottom sheet с объяснением необходимости уведомлений
-      await showModalBottomSheet<void>(
+      await showTheavModalSheet<void>(
         context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
+        padding: const EdgeInsets.fromLTRB(24, 6, 24, 16),
         builder: (ctx) => _PermissionBottomSheet(prefs: prefs),
       );
     } catch (e) {
@@ -51,34 +51,11 @@ class _PermissionBottomSheet extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E2633) : Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 20,
-            offset: const Offset(0, -5),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Handle bar
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white24 : Colors.black12,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 20),
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 8),
 
             // Icon
             Container(
@@ -184,7 +161,6 @@ class _PermissionBottomSheet extends StatelessWidget {
             const SizedBox(height: 8),
           ],
         ),
-      ),
     );
   }
 }

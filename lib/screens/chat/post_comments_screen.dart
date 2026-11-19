@@ -1711,6 +1711,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                   bottom: 0,
                   height: (_keyboardHeight + safeBottom) * animVal,
                   child: ClipRect(
+                    clipBehavior:
+                        animVal < 0.999 ? Clip.hardEdge : Clip.none,
                     child: OverflowBox(
                       alignment: Alignment.topCenter,
                       minHeight: _keyboardHeight + safeBottom,

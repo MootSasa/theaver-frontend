@@ -1,9 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../widgets/chat/sticker_item_widget.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 
 class StickerPackDetailSheet extends StatefulWidget {
   final String packIdOrSlug;
@@ -23,18 +26,11 @@ class StickerPackDetailSheet extends StatefulWidget {
     StickerPack? initialPack,
     ValueChanged<StickerItem>? onSelectSticker,
   }) {
-    return showModalBottomSheet<void>(
+    return showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
       enableDrag: false,
-      backgroundColor: Colors.transparent,
-      sheetAnimationStyle: const AnimationStyle(
-        duration: Duration(milliseconds: 280),
-        reverseDuration: Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeInCubic,
-      ),
-      builder: (ctx) => StickerPackDetailSheet(
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => StickerPackDetailSheet(
         packIdOrSlug: packIdOrSlug.toString(),
         initialPack: initialPack,
         onSelectSticker: onSelectSticker,
@@ -57,6 +53,9 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet>
   double _sheetFraction = _initialSheetFraction;
   double _snapFrom = _initialSheetFraction;
   double _snapTo = _initialSheetFraction;
+  double _rawStretchPull = 0.0;
+  double _overscrollStretch = 0.0;
+  double _stretchFrom = 0.0;
   bool _isDismissing = false;
 
   StickerPack? _pack;
@@ -74,6 +73,7 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet>
         final t = Curves.easeOutCubic.transform(_snapController.value);
         setState(() {
           _sheetFraction = _snapFrom + (_snapTo - _snapFrom) * t;
+          _overscrollStretch = _stretchFrom * (1.0 - t);
         });
       });
     _pack = widget.initialPack;
@@ -98,13 +98,32 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet>
   void _onHandleDragUpdate(double deltaY, double screenHeight) {
     if (_isDismissing || screenHeight <= 0) return;
     setState(() {
-      _sheetFraction = (_sheetFraction - deltaY / screenHeight)
-          .clamp(_minSheetFraction, _maxSheetFraction);
+      final double nextFrac = _sheetFraction - deltaY / screenHeight;
+      if (nextFrac > _maxSheetFraction) {
+        _sheetFraction = _maxSheetFraction;
+        final double overflowPx = (nextFrac - _maxSheetFraction) * screenHeight;
+        _rawStretchPull = (_rawStretchPull + overflowPx).clamp(0.0, 240.0);
+        _overscrollStretch = 28.0 * (1.0 - math.exp(-_rawStretchPull / 75.0));
+      } else if (_rawStretchPull > 0 && deltaY > 0) {
+        _rawStretchPull = math.max(0.0, _rawStretchPull - deltaY);
+        _overscrollStretch = _rawStretchPull > 0
+            ? 28.0 * (1.0 - math.exp(-_rawStretchPull / 75.0))
+            : 0.0;
+        if (_rawStretchPull == 0.0) {
+          _sheetFraction =
+              nextFrac.clamp(_minSheetFraction, _maxSheetFraction);
+        }
+      } else {
+        _rawStretchPull = 0.0;
+        _overscrollStretch = 0.0;
+        _sheetFraction = nextFrac.clamp(_minSheetFraction, _maxSheetFraction);
+      }
     });
   }
 
   void _onHandleDragEnd(double velocityY) {
     if (_isDismissing) return;
+    _rawStretchPull = 0.0;
     if (_sheetFraction < 0.45 ||
         (velocityY > 750 && _sheetFraction < 0.78) ||
         velocityY > 1400) {
@@ -119,6 +138,7 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet>
             : _initialSheetFraction;
     _snapFrom = _sheetFraction;
     _snapTo = target;
+    _stretchFrom = _overscrollStretch;
     _snapController.forward(from: 0.0);
   }
 
@@ -198,19 +218,21 @@ class _StickerPackDetailSheetState extends State<StickerPackDetailSheet>
     final count = items.isNotEmpty ? items.length : (pack?.stickerCount ?? 0);
     final double screenHeight = MediaQuery.sizeOf(context).height;
 
+    final double sheetHeight = math.min(
+      screenHeight * 0.97,
+      screenHeight * _sheetFraction + _overscrollStretch,
+    );
+
     return Align(
       alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
       child: SizedBox(
-        height: screenHeight * _sheetFraction,
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.secondaryBg,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-            border: Border.all(
-              color: theme.dividerColor,
-              width: 0.5,
-            ),
-          ),
+        height: sheetHeight,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          stretchPx: _overscrollStretch,
+          maxStretch: 28.0,
+          matteColor: theme.secondaryBg,
           child: Column(
             children: [
               Center(

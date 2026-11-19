@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../services/sound_preview_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 
 class SoundOption {
   final String id;
@@ -81,11 +82,10 @@ class SoundPickerSheet extends StatelessWidget {
     bool isRingtone = false,
   }) {
     HapticUtils.tap();
-    return showModalBottomSheet(
+    return showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: title,
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
       builder: (ctx) => SoundPickerSheet(
         currentSoundId: normalizeSoundId(currentSoundId),
         options: isRingtone ? kAvailableRingtones : kAvailableNotificationSounds,
@@ -98,77 +98,47 @@ class SoundPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final selectedId = currentSoundId ?? '';
 
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.grey[400],
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text(
-              title,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const Divider(height: 1),
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: options.length,
-              itemBuilder: (context, index) {
-                final opt = options[index];
-                final isSelected = opt.id == selectedId;
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: options.length,
+      itemBuilder: (context, index) {
+        final opt = options[index];
+        final isSelected = opt.id == selectedId;
 
-                return ListTile(
-                  title: Text(opt.title),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (opt.id != kSilentSoundId)
-                        IconButton(
-                          icon: const Icon(Icons.volume_up_outlined, size: 20),
-                          tooltip: 'Прослушать',
-                          onPressed: () {
-                            HapticUtils.selection();
-                            SoundPreviewService.instance.preview(
-                              opt.id,
-                              isRingtone: isRingtone,
-                            );
-                          },
-                        ),
-                      if (isSelected)
-                        const Icon(Icons.check, color: Color(0xFF0088CC)),
-                    ],
-                  ),
-                  onTap: () {
+        return ListTile(
+          title: Text(opt.title),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (opt.id != kSilentSoundId)
+                IconButton(
+                  icon: const Icon(Icons.volume_up_outlined, size: 20),
+                  tooltip: 'Прослушать',
+                  onPressed: () {
                     HapticUtils.selection();
                     SoundPreviewService.instance.preview(
                       opt.id,
                       isRingtone: isRingtone,
                     );
-                    onSelected(opt.id);
-                    Navigator.pop(context);
                   },
-                );
-              },
-            ),
+                ),
+              if (isSelected)
+                const Icon(Icons.check, color: Color(0xFF0088CC)),
+            ],
           ),
-          const SizedBox(height: 8),
-        ],
-      ),
+          onTap: () {
+            HapticUtils.selection();
+            SoundPreviewService.instance.preview(
+              opt.id,
+              isRingtone: isRingtone,
+            );
+            onSelected(opt.id);
+            Navigator.pop(context);
+          },
+        );
+      },
     );
   }
 }

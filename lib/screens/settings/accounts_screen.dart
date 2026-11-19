@@ -6,6 +6,7 @@ import '../../services/account_manager.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/tiling/tiling_workspace_scaffold.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../utils/swipe_back_route.dart';
 
@@ -270,33 +271,32 @@ class _AccountsScreenState extends State<AccountsScreen> {
   void _showAccountOptions(Account account) {
     final l10n = context.l10n;
     
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.swap_horiz),
-              title: Text(l10n.translate('accounts_switch')),
-              onTap: () {
-                Navigator.of(context).pop();
-                _switchAccount(account);
-              },
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.swap_horiz),
+            title: Text(l10n.translate('accounts_switch')),
+            onTap: () {
+              Navigator.of(context).pop();
+              _switchAccount(account);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: Text(
+              l10n.translate('accounts_remove'),
+              style: const TextStyle(color: Colors.red),
             ),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: Text(
-                l10n.translate('accounts_remove'),
-                style: const TextStyle(color: Colors.red),
-              ),
-              onTap: () {
-                Navigator.of(context).pop();
-                _removeAccount(account);
-              },
-            ),
-          ],
-        ),
+            onTap: () {
+              Navigator.of(context).pop();
+              _removeAccount(account);
+            },
+          ),
+        ],
       ),
     );
   }

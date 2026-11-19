@@ -6,6 +6,7 @@ import '../../services/notification_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../services/sound_preview_service.dart';
 import '../../l10n/app_localizations.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
@@ -531,22 +532,15 @@ class _ChatNotificationSettingsScreenState
   ) {
     HapticUtils.tap();
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
+      title: l10n.translate('chat_notif_mute'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (context) {
-        return SafeArea(
+        return SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  l10n.translate('chat_notif_mute'),
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.notifications),
                 title: Text(l10n.translate('chat_notif_mute_off')),
@@ -662,96 +656,75 @@ class _ChatNotificationSettingsScreenState
         ? null
         : (currentSound == false ? kSilentSoundId : normalizeSoundId(currentUri));
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: l10n.translate('chat_notif_sound'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (ctx) {
-        return SafeArea(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 440),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text(
-                    l10n.translate('chat_notif_sound'),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 400),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              ListTile(
+                title: Text(l10n.translate('chat_notif_use_global')),
+                trailing: selectedId == null
+                    ? const Icon(Icons.check, color: Color(0xFF0088CC))
+                    : null,
+                onTap: () {
+                  HapticUtils.selection();
+                  _updateChatSetting(
+                    provider,
+                    (existing) => existing.copyWith(
+                      clearSoundEnabled: true,
+                      clearSoundUri: true,
                     ),
-                  ),
-                ),
-                const Divider(height: 1),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
+                  );
+                  Navigator.pop(ctx);
+                },
+              ),
+              ...kAvailableNotificationSounds.map((opt) {
+                final isSelected = selectedId == opt.id;
+                return ListTile(
+                  title: Text(opt.title),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      ListTile(
-                        title: Text(l10n.translate('chat_notif_use_global')),
-                        trailing: selectedId == null
-                            ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                            : null,
-                        onTap: () {
-                          HapticUtils.selection();
-                          _updateChatSetting(
-                            provider,
-                            (existing) => existing.copyWith(
-                              clearSoundEnabled: true,
-                              clearSoundUri: true,
-                            ),
-                          );
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                      ...kAvailableNotificationSounds.map((opt) {
-                        final isSelected = selectedId == opt.id;
-                        return ListTile(
-                          title: Text(opt.title),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (opt.id != kSilentSoundId)
-                                IconButton(
-                                  icon: const Icon(
-                                    Icons.volume_up_outlined,
-                                    size: 20,
-                                  ),
-                                  tooltip: 'Прослушать',
-                                  onPressed: () {
-                                    HapticUtils.selection();
-                                    SoundPreviewService.instance.preview(opt.id);
-                                  },
-                                ),
-                              if (isSelected)
-                                const Icon(
-                                  Icons.check,
-                                  color: Color(0xFF0088CC),
-                                ),
-                            ],
+                      if (opt.id != kSilentSoundId)
+                        IconButton(
+                          icon: const Icon(
+                            Icons.volume_up_outlined,
+                            size: 20,
                           ),
-                          onTap: () {
+                          tooltip: 'Прослушать',
+                          onPressed: () {
                             HapticUtils.selection();
                             SoundPreviewService.instance.preview(opt.id);
-                            final enabled = opt.id != kSilentSoundId;
-                            _updateChatSetting(
-                              provider,
-                              (existing) => existing.copyWith(
-                                soundEnabled: enabled,
-                                soundUri: enabled ? opt.id : '',
-                              ),
-                            );
-                            Navigator.pop(ctx);
                           },
-                        );
-                      }),
+                        ),
+                      if (isSelected)
+                        const Icon(
+                          Icons.check,
+                          color: Color(0xFF0088CC),
+                        ),
                     ],
                   ),
-                ),
-              ],
-            ),
+                  onTap: () {
+                    HapticUtils.selection();
+                    SoundPreviewService.instance.preview(opt.id);
+                    final enabled = opt.id != kSilentSoundId;
+                    _updateChatSetting(
+                      provider,
+                      (existing) => existing.copyWith(
+                        soundEnabled: enabled,
+                        soundUri: enabled ? opt.id : '',
+                      ),
+                    );
+                    Navigator.pop(ctx);
+                  },
+                );
+              }),
+            ],
           ),
         );
       },
@@ -767,22 +740,15 @@ class _ChatNotificationSettingsScreenState
   }) {
     HapticUtils.tap();
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
+      title: l10n.translate('chat_notif_vibration'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (context) {
-        return SafeArea(
+        return SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  l10n.translate('chat_notif_vibration'),
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const Divider(height: 1),
               if (allowUseGlobal)
                 ListTile(
                   title: Text(l10n.translate('chat_notif_use_global')),

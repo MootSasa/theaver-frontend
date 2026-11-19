@@ -4982,6 +4982,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                         child: IgnorePointer(
                           ignoring: !shouldShowPanel,
                           child: ClipRect(
+                            clipBehavior: panelProgress < 0.999
+                                ? Clip.hardEdge
+                                : Clip.none,
                             child: Transform.translate(
                               offset: Offset(
                                 0,

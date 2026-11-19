@@ -106,31 +106,34 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
 
         final Widget gridContent = FadeTransition(
           opacity: _innerFade,
-          child: SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(10, 8, 10, 8 + bottomPadding),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (int r = 0; r < widget.rows.length; r++) ...[
-                  if (r > 0) const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      for (int c = 0; c < widget.rows[r].length; c++) ...[
-                        if (c > 0) const SizedBox(width: 6),
-                        Expanded(
-                          child: _buildReplyButton(
-                            context,
-                            widget.rows[r][c],
-                            theme,
-                            ext,
-                            colorScheme,
+          child: ScrollConfiguration(
+            behavior: const MaterialScrollBehavior().copyWith(overscroll: false),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(10, 8, 10, 8 + bottomPadding),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int r = 0; r < widget.rows.length; r++) ...[
+                    if (r > 0) const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        for (int c = 0; c < widget.rows[r].length; c++) ...[
+                          if (c > 0) const SizedBox(width: 6),
+                          Expanded(
+                            child: _buildReplyButton(
+                              context,
+                              widget.rows[r][c],
+                              theme,
+                              ext,
+                              colorScheme,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
-                  ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         );
@@ -145,7 +148,7 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
             isLiteOverride: isLite,
           );
           panelSurface = Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: widget.resizeKeyboard ? 220 : 260,
@@ -183,6 +186,8 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
         }
 
         return ClipRect(
+          clipBehavior:
+              _controller.value < 0.999 ? Clip.hardEdge : Clip.none,
           child: Align(
             alignment: Alignment.topCenter,
             heightFactor: _heightFactor.value,

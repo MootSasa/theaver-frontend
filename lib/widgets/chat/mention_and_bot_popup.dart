@@ -173,19 +173,22 @@ class MentionAndBotPopup extends StatelessWidget {
     final Widget listContent = SizedBox(
       height: height,
       width: double.infinity,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        itemCount: rows.length,
-        separatorBuilder: (_, __) => Divider(
-          height: 1,
-          indent: 56,
-          endIndent: 14,
-          color: cs.outlineVariant.withValues(alpha: 0.2),
+      child: ScrollConfiguration(
+        behavior: const MaterialScrollBehavior().copyWith(overscroll: false),
+        child: ListView.separated(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          itemCount: rows.length,
+          separatorBuilder: (_, __) => Divider(
+            height: 1,
+            indent: 56,
+            endIndent: 14,
+            color: cs.outlineVariant.withValues(alpha: 0.2),
+          ),
+          itemBuilder: (ctx, idx) {
+            final row = rows[idx];
+            return _buildRow(ctx, cs, row);
+          },
         ),
-        itemBuilder: (ctx, idx) {
-          final row = rows[idx];
-          return _buildRow(ctx, cs, row);
-        },
       ),
     );
 

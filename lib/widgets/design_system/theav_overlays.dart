@@ -1,14 +1,16 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
 
 /// Opens a dual-mode [TheavModalSheet] that can be stretched or dismissed via its
-/// top handle bar while rendering crisp frosted glass blur in `full`/`lite`
-/// modes and an M3 tonal surface when disabled.
+/// top handle bar while rendering a real [LiquidGlassLens] surface in
+/// `full`/`lite` modes and a crisp Material 3 surface when disabled.
 Future<T?> showTheavModalSheet<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -23,10 +25,17 @@ Future<T?> showTheavModalSheet<T>({
   bool barrierDismissible = true,
   bool useRootNavigator = false,
 }) {
-  return Navigator.of(context, rootNavigator: useRootNavigator).push<T>(
+  final NavigatorState navigator =
+      Navigator.of(context, rootNavigator: useRootNavigator);
+  final CapturedThemes capturedThemes = InheritedTheme.capture(
+    from: context,
+    to: navigator.context,
+  );
+  return navigator.push<T>(
     _TheavModalSheetRoute<T>(
       builder: builder,
       customSheetBuilder: customSheetBuilder,
+      capturedThemes: capturedThemes,
       title: title,
       trailing: trailing,
       padding: padding,
@@ -43,9 +52,80 @@ Future<T?> showTheavModalSheet<T>({
   );
 }
 
+class _TheavSheetSlideLayout extends SingleChildLayoutDelegate {
+  final double progress;
+
+  const _TheavSheetSlideLayout({required this.progress});
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      BoxConstraints(
+        minWidth: constraints.maxWidth,
+        maxWidth: constraints.maxWidth,
+        minHeight: 0.0,
+        maxHeight: constraints.maxHeight,
+      );
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    final double dy = childSize.height * (1.0 - progress.clamp(0.0, 1.0));
+    return Offset(0.0, size.height - childSize.height + dy);
+  }
+
+  @override
+  bool shouldRelayout(_TheavSheetSlideLayout oldDelegate) =>
+      oldDelegate.progress != progress;
+}
+
+class _SheetVerticalOffset extends SingleChildRenderObjectWidget {
+  final double offsetY;
+
+  const _SheetVerticalOffset({
+    required this.offsetY,
+    required super.child,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderSheetVerticalOffset(offsetY);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    covariant _RenderSheetVerticalOffset renderObject,
+  ) {
+    renderObject.offsetY = offsetY;
+  }
+}
+
+class _RenderSheetVerticalOffset extends RenderShiftedBox {
+  _RenderSheetVerticalOffset(this._offsetY) : super(null);
+
+  double _offsetY;
+  double get offsetY => _offsetY;
+  set offsetY(double value) {
+    if (_offsetY == value) return;
+    _offsetY = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void performLayout() {
+    final RenderBox? child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    child.layout(constraints, parentUsesSize: true);
+    size = constraints.constrain(child.size);
+    (child.parentData! as BoxParentData).offset = Offset(0.0, _offsetY);
+  }
+}
+
 class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   final WidgetBuilder builder;
   final WidgetBuilder? customSheetBuilder;
+  final CapturedThemes capturedThemes;
   final String? title;
   final Widget? trailing;
   final EdgeInsetsGeometry padding;
@@ -60,6 +140,7 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   _TheavModalSheetRoute({
     required this.builder,
     this.customSheetBuilder,
+    required this.capturedThemes,
     this.title,
     this.trailing,
     required this.padding,
@@ -88,20 +169,18 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     Animation<double> animation,
     Animation<double> secondaryAnimation,
   ) {
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: customSheetBuilder != null
-          ? customSheetBuilder!(context)
-          : TheavModalSheet(
-              title: title,
-              trailing: trailing,
-              padding: padding,
-              showCloseButton: showCloseButton,
-              maxHeightFactor: maxHeightFactor,
-              enableDrag: enableDrag,
-              child: Builder(builder: builder),
-            ),
-    );
+    final Widget page = customSheetBuilder != null
+        ? customSheetBuilder!(context)
+        : TheavModalSheet(
+            title: title,
+            trailing: trailing,
+            padding: padding,
+            showCloseButton: showCloseButton,
+            maxHeightFactor: maxHeightFactor,
+            enableDrag: enableDrag,
+            child: Builder(builder: builder),
+          );
+    return capturedThemes.wrap(page);
   }
 
   @override
@@ -112,19 +191,161 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     Widget child,
   ) {
     final disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    if (disableAnim) return child;
+    if (disableAnim) {
+      return CustomSingleChildLayout(
+        delegate: const _TheavSheetSlideLayout(progress: 1.0),
+        child: child,
+      );
+    }
 
     final curved = CurvedAnimation(
       parent: animation,
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
     );
-    return SlideTransition(
-      position: Tween<Offset>(
-        begin: const Offset(0.0, 1.0),
-        end: Offset.zero,
-      ).animate(curved),
+    return AnimatedBuilder(
+      animation: curved,
+      builder: (context, innerChild) => CustomSingleChildLayout(
+        delegate: _TheavSheetSlideLayout(progress: curved.value),
+        child: innerChild,
+      ),
       child: child,
+    );
+  }
+}
+
+/// Dual-mode bottom sheet surface rendering a real [LiquidGlassLens] in
+/// `full`/`lite` modes (with library-native [LiquidGlassFlexDeform] stretch)
+/// and a crisp Material 3 surface when glass is disabled.
+///
+/// Never wraps [LiquidGlassLens] in `Opacity`, `FadeTransition`, `ClipRRect`,
+/// or `BackdropFilter`, and disables Android stretch overscroll so the lens
+/// shader never turns black or shifts.
+class TheavSheetSurface extends StatelessWidget {
+  final Widget child;
+  final double cornerRadius;
+  final double stretchPx;
+  final double maxStretch;
+  final BoxConstraints? constraints;
+  final Color? matteColor;
+  final Color? glassTintOverride;
+  final bool disableOverscrollStretch;
+  final bool attachedToBottom;
+
+  const TheavSheetSurface({
+    super.key,
+    required this.child,
+    this.cornerRadius = 24.0,
+    this.stretchPx = 0.0,
+    this.maxStretch = 40.0,
+    this.constraints,
+    this.matteColor,
+    this.glassTintOverride,
+    this.disableOverscrollStretch = true,
+    this.attachedToBottom = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final Widget materialChild = Material(
+      type: MaterialType.transparency,
+      child: child,
+    );
+    final Widget wrappedChild = disableOverscrollStretch
+        ? ScrollConfiguration(
+            behavior: const MaterialScrollBehavior().copyWith(overscroll: false),
+            child: materialChild,
+          )
+        : materialChild;
+
+    if (style.isGlass && style.glassProvider != null) {
+      final Color glassTint = glassTintOverride ??
+          (style.isDark
+              ? style.palette.surface.withValues(alpha: 0.56)
+              : style.palette.surface.withValues(alpha: 0.72));
+      final glassStyle = style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: cornerRadius,
+        color: glassTint,
+        refractionIndex: 1.06,
+        refractionWidth: 16.0,
+        borderWidth: 1.15,
+      );
+      final double clampedStretch = stretchPx.clamp(0.0, maxStretch);
+      final double pressProgress =
+          (clampedStretch / math.max(1.0, maxStretch)).clamp(0.0, 1.0);
+
+      return Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            left: 0.0,
+            right: 0.0,
+            top: 0.0,
+            bottom: attachedToBottom ? -cornerRadius : 0.0,
+            child: LayoutBuilder(
+              builder: (context, box) {
+                final Size deformedSize = box.biggest;
+                if (!deformedSize.width.isFinite ||
+                    !deformedSize.height.isFinite ||
+                    deformedSize.isEmpty) {
+                  return LiquidGlassLens(
+                    style: glassStyle,
+                    child: const SizedBox.expand(),
+                  );
+                }
+                final double restHeight =
+                    math.max(1.0, deformedSize.height - clampedStretch);
+                final Size restSize = Size(deformedSize.width, restHeight);
+                final LiquidGlassFlexDeform deform = clampedStretch > 0.01
+                    ? LiquidGlassFlexDeform(
+                        left: 0.0,
+                        right: 0.0,
+                        top: clampedStretch,
+                        bottom: 0.0,
+                        childScaleX: 1.0,
+                        childScaleY: 1.0,
+                        childTranslateX: 0.0,
+                        childTranslateY: 0.0,
+                        pressAmount: pressProgress * 0.45,
+                      )
+                    : LiquidGlassFlexDeform.none;
+
+                return LiquidGlassLens(
+                  style: glassStyle,
+                  deform: deform,
+                  restSize: restSize,
+                  child: const SizedBox.expand(),
+                );
+              },
+            ),
+          ),
+          Container(
+            constraints: constraints,
+            width: double.infinity,
+            child: wrappedChild,
+          ),
+        ],
+      );
+    }
+
+    return Container(
+      constraints: constraints,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: matteColor ?? style.overlayFill,
+        borderRadius: attachedToBottom
+            ? BorderRadius.vertical(top: Radius.circular(cornerRadius))
+            : BorderRadius.circular(cornerRadius),
+        border: Border.all(
+          color: style.hairlineBorder,
+          width: 0.5,
+        ),
+        boxShadow: style.floatingShadow,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: wrappedChild,
     );
   }
 }
@@ -237,7 +458,6 @@ class _TheavModalSheetState extends State<TheavModalSheet>
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
     final mq = MediaQuery.of(context);
-    final blurFilter = style.getBlurFilter(sigma: 26.0);
     final bool hasHeader = (widget.title != null && widget.title!.isNotEmpty) ||
         widget.trailing != null ||
         widget.showCloseButton;
@@ -245,7 +465,7 @@ class _TheavModalSheetState extends State<TheavModalSheet>
         widget.padding.resolve(Directionality.of(context));
 
     // Handle-only rubber-band stretch when pulling up (_dragOffset < 0) vs 1:1 pull down.
-    const double maxStretch = 56.0;
+    const double maxStretch = 40.0;
     final double rawPullUp = _dragOffset < 0 ? -_dragOffset : 0.0;
     final double dampedStretch = rawPullUp > 0
         ? maxStretch * (1.0 - math.exp(-rawPullUp / 95.0))
@@ -257,146 +477,120 @@ class _TheavModalSheetState extends State<TheavModalSheet>
         ? 36.0 + (_dragOffset / 120.0).clamp(0.0, 1.0) * 10.0
         : 36.0 + stretchProgress * 8.0;
 
-    final Color borderColor = style.isGlass
-        ? (style.isDark
-            ? Colors.white.withValues(alpha: 0.16)
-            : Colors.black.withValues(alpha: 0.08))
-        : style.hairlineBorder;
-    final double borderWidth = style.isGlass ? 0.6 : 0.5;
-
     final double baseMaxHeight = mq.size.height * widget.maxHeightFactor;
     final double effectiveMaxHeight =
         math.min(mq.size.height * 0.97, baseMaxHeight + dampedStretch);
 
-    Widget sheet = Container(
+    final Widget sheet = TheavSheetSurface(
+      cornerRadius: 24.0,
+      stretchPx: dampedStretch,
+      maxStretch: maxStretch,
       constraints: BoxConstraints(
         maxHeight: effectiveMaxHeight,
       ),
-      decoration: BoxDecoration(
-        color: style.overlayFill,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border.all(
-          color: borderColor,
-          width: borderWidth,
-        ),
-        boxShadow: style.floatingShadow,
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: SafeArea(
-          top: false,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: mq.viewInsets.bottom + dampedStretch,
+          ),
           child: Padding(
             padding: EdgeInsets.only(
-              bottom: mq.viewInsets.bottom + dampedStretch,
+              left: resolvedPadding.left,
+              right: resolvedPadding.right,
+              bottom: resolvedPadding.bottom,
             ),
-            child: Padding(
-              padding: EdgeInsets.only(
-                left: resolvedPadding.left,
-                right: resolvedPadding.right,
-                bottom: resolvedPadding.bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Center(
-                    child: GestureDetector(
-                      key: const ValueKey('theav_sheet_drag_handle'),
-                      behavior: HitTestBehavior.opaque,
-                      onVerticalDragStart:
-                          widget.enableDrag ? (_) => _onDragStart() : null,
-                      onVerticalDragUpdate: widget.enableDrag
-                          ? (d) => _onDragDelta(d.delta.dy)
-                          : null,
-                      onVerticalDragEnd: widget.enableDrag
-                          ? (d) => _onDragEnd(d.velocity.pixelsPerSecond.dy)
-                          : null,
-                      onVerticalDragCancel:
-                          widget.enableDrag ? () => _onDragEnd(0.0) : null,
-                      child: SizedBox(
-                        width: 112,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            top: math.max(10.0, resolvedPadding.top),
-                            bottom: hasHeader ? 12.0 : 14.0,
-                          ),
-                          child: Center(
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 90),
-                              width: handleWidth,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color:
-                                    palette.onSurface.withValues(alpha: 0.24),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: GestureDetector(
+                    key: const ValueKey('theav_sheet_drag_handle'),
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragStart:
+                        widget.enableDrag ? (_) => _onDragStart() : null,
+                    onVerticalDragUpdate: widget.enableDrag
+                        ? (d) => _onDragDelta(d.delta.dy)
+                        : null,
+                    onVerticalDragEnd: widget.enableDrag
+                        ? (d) => _onDragEnd(d.velocity.pixelsPerSecond.dy)
+                        : null,
+                    onVerticalDragCancel:
+                        widget.enableDrag ? () => _onDragEnd(0.0) : null,
+                    child: SizedBox(
+                      width: 112,
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          top: math.max(10.0, resolvedPadding.top),
+                          bottom: hasHeader ? 12.0 : 14.0,
+                        ),
+                        child: Center(
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 90),
+                            width: handleWidth,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color:
+                                  palette.onSurface.withValues(alpha: 0.24),
+                              borderRadius: BorderRadius.circular(2),
                             ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                  if (hasHeader) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: Row(
-                        children: [
-                          if (widget.showCloseButton) ...[
-                            TheavHeaderIconButton(
-                              size: 36,
-                              icon: iconoir.Xmark(
-                                width: 18,
-                                height: 18,
-                                color: palette.onSurface,
-                              ),
-                              onTap: () => Navigator.of(context).maybePop(),
+                ),
+                if (hasHeader) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Row(
+                      children: [
+                        if (widget.showCloseButton) ...[
+                          TheavHeaderIconButton(
+                            size: 36,
+                            icon: iconoir.Xmark(
+                              width: 18,
+                              height: 18,
+                              color: palette.onSurface,
                             ),
-                            const SizedBox(width: 10),
-                          ],
-                          if (widget.title != null && widget.title!.isNotEmpty)
-                            Expanded(
-                              child: Text(
-                                widget.title!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: palette.onSurface,
-                                  fontSize: 17.5,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: -0.2,
-                                ),
-                              ),
-                            )
-                          else
-                            const Spacer(),
-                          if (widget.trailing != null) widget.trailing!,
+                            onTap: () => Navigator.of(context).maybePop(),
+                          ),
+                          const SizedBox(width: 10),
                         ],
-                      ),
+                        if (widget.title != null && widget.title!.isNotEmpty)
+                          Expanded(
+                            child: Text(
+                              widget.title!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: palette.onSurface,
+                                fontSize: 17.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.2,
+                              ),
+                            ),
+                          )
+                        else
+                          const Spacer(),
+                        if (widget.trailing != null) widget.trailing!,
+                      ],
                     ),
-                  ],
-                  Flexible(
-                    child: widget.child,
                   ),
                 ],
-              ),
+                Flexible(
+                  child: widget.child,
+                ),
+              ],
             ),
           ),
         ),
       ),
     );
 
-    if (blurFilter != null) {
-      sheet = ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: blurFilter,
-          child: sheet,
-        ),
-      );
-    }
-
-    return Transform.translate(
-      offset: Offset(0.0, translateY),
+    return _SheetVerticalOffset(
+      offsetY: translateY,
       child: sheet,
     );
   }

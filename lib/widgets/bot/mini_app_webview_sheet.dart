@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -608,11 +607,15 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet> {
     final heightFactor = _isExpanded ? 0.96 : 0.82;
     final sheetHeight = media.size.height * heightFactor;
 
-    final headerBg = _customHeaderColor ?? style.overlayFill;
+    final Color? explicitHeaderColor = _customHeaderColor;
+    final headerBg = explicitHeaderColor ??
+        (style.isGlass ? Colors.transparent : style.overlayFill);
     final bodyBg = _customBackgroundColor ?? theme.colorScheme.surface;
-    final headerFg = headerBg.computeLuminance() > 0.55
-        ? Colors.black87
-        : Colors.white;
+    final headerFg = explicitHeaderColor != null
+        ? (explicitHeaderColor.computeLuminance() > 0.55
+            ? Colors.black87
+            : Colors.white)
+        : palette.onSurface;
 
     final displayTitle = widget.botName.isNotEmpty
         ? widget.botName
@@ -625,236 +628,239 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet> {
             ? '@${widget.launchData.botUsername}'
             : '');
 
-    Widget sheet = AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      height: sheetHeight,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: bodyBg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-        border: Border.all(color: style.hairlineBorder, width: 0.6),
-        boxShadow: style.floatingShadow,
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
-          children: [
-            // Drag handle + Header Bar (handle-only stretch/dismiss)
-            Container(
-              color: headerBg,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onVerticalDragUpdate: _handleHandleDragUpdate,
-                    onVerticalDragEnd: _handleHandleDragEnd,
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.only(top: 10, bottom: 4),
-                      alignment: Alignment.center,
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        height: sheetHeight,
+        width: double.infinity,
+        child: TheavSheetSurface(
+          cornerRadius: 22.0,
+          constraints: BoxConstraints(
+            minHeight: sheetHeight,
+            maxHeight: sheetHeight,
+          ),
+          matteColor: bodyBg,
+          child: Column(
+            children: [
+              // Drag handle + Header Bar (handle-only expand/dismiss)
+              Container(
+                color: headerBg,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragUpdate: _handleHandleDragUpdate,
+                      onVerticalDragEnd: _handleHandleDragEnd,
                       child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: headerFg.withValues(alpha: 0.28),
-                          borderRadius: BorderRadius.circular(2),
+                        width: double.infinity,
+                        padding: const EdgeInsets.only(top: 10, bottom: 4),
+                        alignment: Alignment.center,
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: headerFg.withValues(alpha: 0.28),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  SizedBox(
-                    height: 44,
-                    child: Row(
-                      children: [
-                        IconButton(
-                          tooltip: _backButtonVisible ? 'Назад' : 'Закрыть',
-                          onPressed: _backButtonVisible
-                              ? () => _dispatchEventToWebView(
-                                  'back_button_pressed')
-                              : () => _attemptClose(),
-                          icon: _backButtonVisible
-                              ? iconoir.NavArrowLeft(
-                                  width: 22,
-                                  height: 22,
-                                  color: headerFg,
-                                )
-                              : iconoir.Xmark(
-                                  width: 20,
-                                  height: 20,
-                                  color: headerFg,
-                                ),
-                        ),
-                        Expanded(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                displayTitle,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                  color: headerFg,
-                                ),
-                              ),
-                              if (displayHandle.isNotEmpty)
+                    SizedBox(
+                      height: 44,
+                      child: Row(
+                        children: [
+                          IconButton(
+                            tooltip: _backButtonVisible ? 'Назад' : 'Закрыть',
+                            onPressed: _backButtonVisible
+                                ? () => _dispatchEventToWebView(
+                                    'back_button_pressed')
+                                : () => _attemptClose(),
+                            icon: _backButtonVisible
+                                ? iconoir.NavArrowLeft(
+                                    width: 22,
+                                    height: 22,
+                                    color: headerFg,
+                                  )
+                                : iconoir.Xmark(
+                                    width: 20,
+                                    height: 20,
+                                    color: headerFg,
+                                  ),
+                          ),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
                                 Text(
-                                  '$displayHandle • mini app',
+                                  displayTitle,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontSize: 11,
-                                    color: headerFg.withValues(alpha: 0.72),
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: headerFg,
                                   ),
                                 ),
+                                if (displayHandle.isNotEmpty)
+                                  Text(
+                                    '$displayHandle • mini app',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: headerFg.withValues(alpha: 0.72),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          PopupMenuButton<String>(
+                            icon: iconoir.MoreVert(
+                              width: 20,
+                              height: 20,
+                              color: headerFg,
+                            ),
+                            onSelected: (action) async {
+                              switch (action) {
+                                case 'reload':
+                                  await _controller?.reload();
+                                  break;
+                                case 'settings':
+                                  await _dispatchEventToWebView(
+                                    'settings_button_pressed',
+                                  );
+                                  break;
+                                case 'browser':
+                                  final u = Uri.tryParse(widget.launchData.url);
+                                  if (u != null) {
+                                    await launchUrl(
+                                      u,
+                                      mode: LaunchMode.externalApplication,
+                                    );
+                                  }
+                                  break;
+                                case 'copy':
+                                  await Clipboard.setData(
+                                    ClipboardData(text: widget.launchData.url),
+                                  );
+                                  if (context.mounted) {
+                                    GlassToastService().show(
+                                      context,
+                                      'Ссылка скопирована',
+                                    );
+                                  }
+                                  break;
+                              }
+                            },
+                            itemBuilder: (ctx) => [
+                              const PopupMenuItem(
+                                value: 'reload',
+                                child: Text('Обновить страницу'),
+                              ),
+                              if (_settingsButtonVisible)
+                                const PopupMenuItem(
+                                  value: 'settings',
+                                  child: Text('Настройки приложения'),
+                                ),
+                              const PopupMenuItem(
+                                value: 'browser',
+                                child: Text('Открыть в браузере'),
+                              ),
+                              const PopupMenuItem(
+                                value: 'copy',
+                                child: Text('Скопировать ссылку'),
+                              ),
                             ],
                           ),
-                        ),
-                        PopupMenuButton<String>(
-                          icon: iconoir.MoreVert(
-                            width: 20,
-                            height: 20,
-                            color: headerFg,
-                          ),
-                          onSelected: (action) async {
-                            switch (action) {
-                              case 'reload':
-                                await _controller?.reload();
-                                break;
-                              case 'settings':
-                                await _dispatchEventToWebView(
-                                  'settings_button_pressed',
-                                );
-                                break;
-                              case 'browser':
-                                final u = Uri.tryParse(widget.launchData.url);
-                                if (u != null) {
-                                  await launchUrl(
-                                    u,
-                                    mode: LaunchMode.externalApplication,
-                                  );
-                                }
-                                break;
-                              case 'copy':
-                                await Clipboard.setData(
-                                  ClipboardData(text: widget.launchData.url),
-                                );
-                                if (context.mounted) {
-                                  GlassToastService().show(
-                                    context,
-                                    'Ссылка скопирована',
-                                  );
-                                }
-                                break;
-                            }
-                          },
-                          itemBuilder: (ctx) => [
-                            const PopupMenuItem(
-                              value: 'reload',
-                              child: Text('Обновить страницу'),
-                            ),
-                            if (_settingsButtonVisible)
-                              const PopupMenuItem(
-                                value: 'settings',
-                                child: Text('Настройки приложения'),
-                              ),
-                            const PopupMenuItem(
-                              value: 'browser',
-                              child: Text('Открыть в браузере'),
-                            ),
-                            const PopupMenuItem(
-                              value: 'copy',
-                              child: Text('Скопировать ссылку'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_hasPlatformWebView &&
-                      _loadProgress > 0 &&
-                      _loadProgress < 1.0)
-                    LinearProgressIndicator(
-                      value: _loadProgress,
-                      minHeight: 2,
-                      color: palette.primary,
-                      backgroundColor: Colors.transparent,
-                    ),
-                ],
-              ),
-            ),
-
-            // WebView Body or Desktop/Test Fallback Card
-            Expanded(
-              child: _hasPlatformWebView && _controller != null
-                  ? WebViewWidget(controller: _controller!)
-                  : _buildDesktopOrTestFallback(context, displayTitle, palette),
-            ),
-
-            // Native MainButton & SecondaryButton Bar
-            if (_mainButton.isVisible || _secondaryButton.isVisible)
-              Container(
-                padding: EdgeInsets.fromLTRB(
-                  14,
-                  10,
-                  14,
-                  10 + media.padding.bottom,
-                ),
-                decoration: BoxDecoration(
-                  color: headerBg,
-                  border: Border(
-                    top: BorderSide(color: style.hairlineBorder, width: 0.6),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    if (_secondaryButton.isVisible)
-                      Expanded(
-                        child: _buildActionButton(
-                          _secondaryButton,
-                          palette.primary.withValues(alpha: 0.14),
-                          palette.primary,
-                          () => _dispatchEventToWebView(
-                            'secondary_button_pressed',
-                          ),
-                        ),
+                        ],
                       ),
-                    if (_secondaryButton.isVisible && _mainButton.isVisible)
-                      const SizedBox(width: 10),
-                    if (_mainButton.isVisible)
-                      Expanded(
-                        child: _buildActionButton(
-                          _mainButton,
-                          palette.primary,
-                          theme.colorScheme.onPrimary,
-                          () => _dispatchEventToWebView('main_button_pressed'),
-                        ),
+                    ),
+                    if (_hasPlatformWebView &&
+                        _loadProgress > 0 &&
+                        _loadProgress < 1.0)
+                      LinearProgressIndicator(
+                        value: _loadProgress,
+                        minHeight: 2,
+                        color: palette.primary,
+                        backgroundColor: Colors.transparent,
                       ),
                   ],
                 ),
-              )
-            else if (media.padding.bottom > 0)
-              SizedBox(height: media.padding.bottom),
-          ],
+              ),
+
+              // WebView Body or Desktop/Test Fallback Card
+              Expanded(
+                child: ColoredBox(
+                  color: _customBackgroundColor ??
+                      (style.isGlass ? Colors.transparent : bodyBg),
+                  child: _hasPlatformWebView && _controller != null
+                      ? ColoredBox(
+                          color: bodyBg,
+                          child: WebViewWidget(controller: _controller!),
+                        )
+                      : _buildDesktopOrTestFallback(
+                          context,
+                          displayTitle,
+                          palette,
+                        ),
+                ),
+              ),
+
+              // Native MainButton & SecondaryButton Bar
+              if (_mainButton.isVisible || _secondaryButton.isVisible)
+                Container(
+                  padding: EdgeInsets.fromLTRB(
+                    14,
+                    10,
+                    14,
+                    10 + media.padding.bottom,
+                  ),
+                  decoration: BoxDecoration(
+                    color: headerBg,
+                    border: Border(
+                      top: BorderSide(color: style.hairlineBorder, width: 0.6),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      if (_secondaryButton.isVisible)
+                        Expanded(
+                          child: _buildActionButton(
+                            _secondaryButton,
+                            palette.primary.withValues(alpha: 0.14),
+                            palette.primary,
+                            () => _dispatchEventToWebView(
+                              'secondary_button_pressed',
+                            ),
+                          ),
+                        ),
+                      if (_secondaryButton.isVisible && _mainButton.isVisible)
+                        const SizedBox(width: 10),
+                      if (_mainButton.isVisible)
+                        Expanded(
+                          child: _buildActionButton(
+                            _mainButton,
+                            palette.primary,
+                            theme.colorScheme.onPrimary,
+                            () => _dispatchEventToWebView(
+                              'main_button_pressed',
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                )
+              else if (media.padding.bottom > 0)
+                SizedBox(height: media.padding.bottom),
+            ],
+          ),
         ),
       ),
     );
-
-    if (style.isGlass) {
-      sheet = ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: sheet,
-        ),
-      );
-    }
-
-    return sheet;
   }
 
   Widget _buildActionButton(

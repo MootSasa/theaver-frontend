@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:draggable_scrollbar/draggable_scrollbar.dart';
 import 'package:flutter/foundation.dart';
@@ -54,19 +53,11 @@ class AttachmentPickerBottomSheet extends StatefulWidget {
     BuildContext context, {
     bool allowPoll = true,
   }) {
-    return showModalBottomSheet<AttachmentPickerResult>(
+    return showTheavModalSheet<AttachmentPickerResult>(
       context: context,
-      isScrollControlled: true,
       enableDrag: false,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black54,
-      sheetAnimationStyle: const AnimationStyle(
-        duration: Duration(milliseconds: 280),
-        reverseDuration: Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeInCubic,
-      ),
-      builder: (ctx) => AttachmentPickerBottomSheet(
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => AttachmentPickerBottomSheet(
         allowPoll: allowPoll,
       ),
     );
@@ -90,6 +81,9 @@ class _AttachmentPickerBottomSheetState
   double _sheetFraction = _initialSheetFraction;
   double _snapFrom = _initialSheetFraction;
   double _snapTo = _initialSheetFraction;
+  double _rawStretchPull = 0.0;
+  double _overscrollStretch = 0.0;
+  double _stretchFrom = 0.0;
   bool _isDismissing = false;
 
   List<AssetPathEntity> _albums = [];
@@ -121,6 +115,7 @@ class _AttachmentPickerBottomSheetState
         final t = Curves.easeOutCubic.transform(_snapController.value);
         setState(() {
           _sheetFraction = _snapFrom + (_snapTo - _snapFrom) * t;
+          _overscrollStretch = _stretchFrom * (1.0 - t);
         });
       });
     _loadAlbumsAndAssets();
@@ -143,13 +138,32 @@ class _AttachmentPickerBottomSheetState
   void _onHandleDragUpdate(double deltaY, double screenHeight) {
     if (_isDismissing || screenHeight <= 0) return;
     setState(() {
-      _sheetFraction = (_sheetFraction - deltaY / screenHeight)
-          .clamp(_minSheetFraction, _maxSheetFraction);
+      final double nextFrac = _sheetFraction - deltaY / screenHeight;
+      if (nextFrac > _maxSheetFraction) {
+        _sheetFraction = _maxSheetFraction;
+        final double overflowPx = (nextFrac - _maxSheetFraction) * screenHeight;
+        _rawStretchPull = (_rawStretchPull + overflowPx).clamp(0.0, 240.0);
+        _overscrollStretch = 28.0 * (1.0 - math.exp(-_rawStretchPull / 75.0));
+      } else if (_rawStretchPull > 0 && deltaY > 0) {
+        _rawStretchPull = math.max(0.0, _rawStretchPull - deltaY);
+        _overscrollStretch = _rawStretchPull > 0
+            ? 28.0 * (1.0 - math.exp(-_rawStretchPull / 75.0))
+            : 0.0;
+        if (_rawStretchPull == 0.0) {
+          _sheetFraction =
+              nextFrac.clamp(_minSheetFraction, _maxSheetFraction);
+        }
+      } else {
+        _rawStretchPull = 0.0;
+        _overscrollStretch = 0.0;
+        _sheetFraction = nextFrac.clamp(_minSheetFraction, _maxSheetFraction);
+      }
     });
   }
 
   void _onHandleDragEnd(double velocityY) {
     if (_isDismissing) return;
+    _rawStretchPull = 0.0;
     if (_sheetFraction < 0.40 ||
         (velocityY > 750 && _sheetFraction < 0.72) ||
         velocityY > 1400) {
@@ -164,6 +178,7 @@ class _AttachmentPickerBottomSheetState
             : _initialSheetFraction;
     _snapFrom = _sheetFraction;
     _snapTo = target;
+    _stretchFrom = _overscrollStretch;
     _snapController.forward(from: 0.0);
   }
 
@@ -529,7 +544,6 @@ class _AttachmentPickerBottomSheetState
     final theme = Theme.of(context);
     final surfaceStyle = TheavSurfaceStyle.of(context);
     final isDark = surfaceStyle.isDark;
-    final blurFilter = surfaceStyle.getBlurFilter(sigma: 24.0);
     final double screenHeight = MediaQuery.sizeOf(context).height;
     final albumTitle = _selectedAlbum != null
         ? (_selectedAlbum!.isAll
@@ -537,169 +551,157 @@ class _AttachmentPickerBottomSheetState
             : _selectedAlbum!.name)
         : context.l10n.translate('chat_recent_photos');
 
-    Widget sheetCard = Container(
-      decoration: BoxDecoration(
-        color: surfaceStyle.overlayFill,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border.all(
-          color: surfaceStyle.hudBorder,
-          width: surfaceStyle.isGlass ? 0.6 : 0.5,
-        ),
-      ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            // Drag Handle Pill (stretches/drags ONLY when pulling the top handle bar)
-            Center(
-              child: GestureDetector(
-                key: const ValueKey('attachment_sheet_drag_handle'),
-                behavior: HitTestBehavior.opaque,
-                onVerticalDragStart: (_) => _onHandleDragStart(),
-                onVerticalDragUpdate: (d) =>
-                    _onHandleDragUpdate(d.delta.dy, screenHeight),
-                onVerticalDragEnd: (d) =>
-                    _onHandleDragEnd(d.velocity.pixelsPerSecond.dy),
-                onVerticalDragCancel: () => _onHandleDragEnd(0.0),
-                child: SizedBox(
-                  width: 112,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Center(
-                      child: Container(
-                        width: 38,
-                        height: 4.5,
-                        decoration: BoxDecoration(
-                          color: isDark ? Colors.white30 : Colors.black26,
-                          borderRadius: BorderRadius.circular(3),
+    final double sheetHeight = math.min(
+      screenHeight * 0.97,
+      screenHeight * _sheetFraction + _overscrollStretch,
+    );
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: SizedBox(
+        height: sheetHeight,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          stretchPx: _overscrollStretch,
+          maxStretch: 28.0,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                // Drag Handle Pill (stretches/drags ONLY when pulling the top handle bar)
+                Center(
+                  child: GestureDetector(
+                    key: const ValueKey('attachment_sheet_drag_handle'),
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragStart: (_) => _onHandleDragStart(),
+                    onVerticalDragUpdate: (d) =>
+                        _onHandleDragUpdate(d.delta.dy, screenHeight),
+                    onVerticalDragEnd: (d) =>
+                        _onHandleDragEnd(d.velocity.pixelsPerSecond.dy),
+                    onVerticalDragCancel: () => _onHandleDragEnd(0.0),
+                    child: SizedBox(
+                      width: 112,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Center(
+                          child: Container(
+                            width: 38,
+                            height: 4.5,
+                            decoration: BoxDecoration(
+                              color: isDark ? Colors.white30 : Colors.black26,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
 
-            // Top Section Bar: Folder/Album Selector + "Галерея" shortcut
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Album / Folder dropdown selector
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _albums.length > 1 ? _showAlbumSelector : null,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? Colors.white.withValues(alpha: 0.08)
-                            : Colors.black.withValues(alpha: 0.05),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            albumTitle,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: theme.textTheme.titleMedium?.color,
-                              letterSpacing: -0.2,
-                            ),
+                // Top Section Bar: Folder/Album Selector + "Галерея" shortcut
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // Album / Folder dropdown selector
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _albums.length > 1 ? _showAlbumSelector : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.black.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(16),
                           ),
-                          if (_albums.length > 1) ...[
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.keyboard_arrow_down_rounded,
-                              size: 18,
-                              color: theme.textTheme.titleMedium?.color?.withValues(alpha: 0.7),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // Quick Gallery Button
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.pop(
-                        context,
-                        const AttachmentPickerResult.action(
-                          AttachmentPickerAction.gallery,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                albumTitle,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.textTheme.titleMedium?.color,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                              if (_albums.length > 1) ...[
+                                const SizedBox(width: 4),
+                                Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  size: 18,
+                                  color: theme.textTheme.titleMedium?.color?.withValues(alpha: 0.7),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                      );
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            context.l10n.translate('chat_gallery'),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF2AABEE),
-                            ),
-                          ),
-                          const SizedBox(width: 2),
-                          const Icon(
-                            Icons.chevron_right_rounded,
-                            size: 18,
-                            color: Color(0xFF2AABEE),
-                          ),
-                        ],
                       ),
-                    ),
+
+                      // Quick Gallery Button
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(
+                            context,
+                            const AttachmentPickerResult.action(
+                              AttachmentPickerAction.gallery,
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                context.l10n.translate('chat_gallery'),
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF2AABEE),
+                                ),
+                              ),
+                              const SizedBox(width: 2),
+                              const Icon(
+                                Icons.chevron_right_rounded,
+                                size: 18,
+                                color: Color(0xFF2AABEE),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
+                ),
+                const SizedBox(height: 8),
 
-            // Media Grid Section with DraggableScrollbar
-            Expanded(
-              child: _buildMediaGrid(_gridScrollController, isDark, theme),
-            ),
+                // Media Grid Section with DraggableScrollbar
+                Expanded(
+                  child: _buildMediaGrid(_gridScrollController, isDark, theme),
+                ),
 
-            // Floating Oval Dock (Action Buttons or Send Bar)
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              child: _selectedAssets.isNotEmpty
-                  ? _buildSendBar(isDark, theme)
-                  : _buildActionsRow(isDark, theme),
+                // Floating Oval Dock (keep LiquidGlassLens persistent, animate inner content only)
+                _wrapWithGlassDock(
+                  context,
+                  isDark: isDark,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    child: _selectedAssets.isNotEmpty
+                        ? _buildSendBarContent(isDark, theme)
+                        : _buildActionsRowContent(isDark, theme),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
-    );
-
-    if (blurFilter != null) {
-      sheetCard = ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: blurFilter,
-          child: sheetCard,
-        ),
-      );
-    } else {
-      sheetCard = ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: sheetCard,
-      );
-    }
-
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: SizedBox(
-        height: screenHeight * _sheetFraction,
-        child: sheetCard,
       ),
     );
   }
@@ -1075,7 +1077,7 @@ class _AttachmentPickerBottomSheetState
     );
   }
 
-  Widget _buildActionsRow(bool isDark, ThemeData theme) {
+  Widget _buildActionsRowContent(bool isDark, ThemeData theme) {
     final iconColor = isDark ? Colors.white : Colors.black87;
 
     final items = [
@@ -1118,134 +1120,126 @@ class _AttachmentPickerBottomSheetState
         ),
     ];
 
-    return _wrapWithGlassDock(
-      context,
-      isDark: isDark,
+    return SingleChildScrollView(
       key: const ValueKey('actions_dock'),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: items.map((item) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: _AnimatedPickerButton(
-                item: item,
-                onTap: () => Navigator.pop(
-                  context,
-                  AttachmentPickerResult.action(item.action),
-                ),
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: items.map((item) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: _AnimatedPickerButton(
+              item: item,
+              onTap: () => Navigator.pop(
+                context,
+                AttachmentPickerResult.action(item.action),
               ),
-            );
-          }).toList(),
-        ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildSendBar(bool isDark, ThemeData theme) {
+  Widget _buildSendBarContent(bool isDark, ThemeData theme) {
     final count = _selectedAssets.length;
 
-    return _wrapWithGlassDock(
-      context,
-      isDark: isDark,
+    return Row(
       key: const ValueKey('send_dock'),
-      child: Row(
-              children: [
-                // "Без сжатия" toggle
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    setState(() => _sendAsDocument = !_sendAsDocument);
-                  },
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(6),
-                          color: _sendAsDocument
-                              ? const Color(0xFF2AABEE)
-                              : Colors.transparent,
-                          border: Border.all(
-                            color: _sendAsDocument
-                                ? const Color(0xFF2AABEE)
-                                : (isDark ? Colors.white38 : Colors.black38),
-                            width: 1.8,
-                          ),
-                        ),
-                        child: _sendAsDocument
-                            ? const Icon(Icons.check, size: 16, color: Colors.white)
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        context.l10n.translate('chat_send_without_compression'),
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: theme.textTheme.bodyMedium?.color,
-                        ),
-                      ),
-                    ],
+      children: [
+        // "Без сжатия" toggle
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            HapticFeedback.selectionClick();
+            setState(() => _sendAsDocument = !_sendAsDocument);
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  color: _sendAsDocument
+                      ? const Color(0xFF2AABEE)
+                      : Colors.transparent,
+                  border: Border.all(
+                    color: _sendAsDocument
+                        ? const Color(0xFF2AABEE)
+                        : (isDark ? Colors.white38 : Colors.black38),
+                    width: 1.8,
                   ),
                 ),
-
-                const Spacer(),
-
-                // Selected count badge
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2AABEE).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: const TextStyle(
-                      color: Color(0xFF2AABEE),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
+                child: _sendAsDocument
+                    ? const Icon(Icons.check, size: 16, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                context.l10n.translate('chat_send_without_compression'),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: theme.textTheme.bodyMedium?.color,
                 ),
-                const SizedBox(width: 10),
+              ),
+            ],
+          ),
+        ),
 
-                // Send Button (flat solid Telegram blue)
-                GestureDetector(
-                  onTap: _isConverting ? null : _sendSelected,
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xFF2AABEE),
-                    ),
-                    child: Center(
-                      child: _isConverting
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            )
-                          : const iconoir.Send(
-                              color: Colors.white,
-                              width: 20,
-                              height: 20,
-                            ),
-                    ),
-                  ),
-                ),
-              ],
+        const Spacer(),
+
+        // Selected count badge
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2AABEE).withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            '$count',
+            style: const TextStyle(
+              color: Color(0xFF2AABEE),
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
             ),
+          ),
+        ),
+        const SizedBox(width: 10),
+
+        // Send Button (flat solid Telegram blue)
+        GestureDetector(
+          onTap: _isConverting ? null : _sendSelected,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF2AABEE),
+            ),
+            child: Center(
+              child: _isConverting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const iconoir.Send(
+                      color: Colors.white,
+                      width: 20,
+                      height: 20,
+                    ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1253,7 +1247,6 @@ class _AttachmentPickerBottomSheetState
     BuildContext context, {
     required Widget child,
     required bool isDark,
-    required Key key,
   }) {
     final glassProvider = LiquidGlassProvider.maybeOf(context);
     final isGlassEnabled = glassProvider?.enabled ?? false;
@@ -1261,35 +1254,28 @@ class _AttachmentPickerBottomSheetState
     if (!isGlassEnabled || glassProvider == null) {
       return Padding(
         padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(36),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              key: key,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xFF24242C).withValues(alpha: 0.92)
-                    : Colors.white.withValues(alpha: 0.94),
-                borderRadius: BorderRadius.circular(36),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.1)
-                      : Colors.black.withValues(alpha: 0.08),
-                  width: 0.8,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: child,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xFF24242C).withValues(alpha: 0.96)
+                : Colors.white.withValues(alpha: 0.98),
+            borderRadius: BorderRadius.circular(36),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.1)
+                  : Colors.black.withValues(alpha: 0.08),
+              width: 0.8,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
+          child: child,
         ),
       );
     }
@@ -1307,7 +1293,6 @@ class _AttachmentPickerBottomSheetState
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
       child: LiquidGlassLens(
-        key: key,
         style: style,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),

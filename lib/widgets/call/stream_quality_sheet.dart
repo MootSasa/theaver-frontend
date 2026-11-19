@@ -1,14 +1,10 @@
 import 'dart:io' show Platform;
-import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/call_models.dart';
-import '../../models/theav_theme.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../common/adaptive_switch.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Bottom sheet for configuring High-FPS Screen Share / Go Live quality
 /// (Smart Presets + Progressive Disclosure for Resolution: 720p/1080p/1440p/4K,
@@ -35,11 +31,11 @@ class StreamQualitySheet extends StatefulWidget {
     bool isUpdatingActiveStream = false,
     VoidCallback? onStopStream,
   }) {
-    return showModalBottomSheet<StreamConfig>(
+    return showTheavModalSheet<StreamConfig>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => StreamQualitySheet(
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (_) => StreamQualitySheet(
         initialConfig: initialConfig,
         isUpdatingActiveStream: isUpdatingActiveStream,
         onStopStream: onStopStream,
@@ -169,32 +165,47 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final primaryColor = theme.colorScheme.primary;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final useGlass = glassProvider.enabled;
-    final isFullGlass = glassProvider.isFull;
     final mq = MediaQuery.of(context);
     final bottomPadding = mq.padding.bottom;
     final activePreset = _activePresetId;
 
-    final bodyContent = ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: mq.size.height * 0.88),
-      child: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottomPadding),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 38,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: p.textTertiary.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: TheavSheetSurface(
+        cornerRadius: 24.0,
+        constraints: BoxConstraints(maxHeight: mq.size.height * 0.88),
+        matteColor: isDark ? p.surfaceElevated : Colors.white,
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottomPadding),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragEnd: (details) {
+                    if ((details.primaryVelocity ?? 0.0) > 650.0) {
+                      Navigator.of(context).maybePop();
+                    }
+                  },
+                  child: Container(
+                    width: 112,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    alignment: Alignment.center,
+                    child: Container(
+                      width: 38,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: p.textTertiary.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 12),
             Row(
               children: [
                 Container(
@@ -660,44 +671,7 @@ class _StreamQualitySheetState extends State<StreamQualitySheet> {
           ],
         ),
       ),
-    );
-
-    if (useGlass) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: LiquidGlassLens(
-          style: glassProvider.createStyle(
-            context: context,
-            cornerRadius: 28,
-            color: isDark
-                ? const Color(0xFF14161C).withValues(alpha: 0.72)
-                : Colors.white.withValues(alpha: 0.84),
-            refractionIndex: isFullGlass ? 1.1 : 1.04,
-            refractionWidth: 24.0,
-          ),
-          child: bodyContent,
-        ),
-      );
-    }
-
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-      child: BackdropFilter.grouped(
-        filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark
-                ? p.surfaceElevated.withValues(alpha: 0.94)
-                : Colors.white.withValues(alpha: 0.96),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border(
-              top: BorderSide(color: p.borderSubtle, width: 0.8),
-            ),
-          ),
-          child: bodyContent,
-        ),
-      ),
+    ),
     );
   }
 
@@ -1029,9 +1003,9 @@ class ViewerQualitySelectorSheet extends StatelessWidget {
     required ViewerSubscriptionQuality currentQuality,
     CallStream? stream,
   }) {
-    return showModalBottomSheet<ViewerSubscriptionQuality>(
+    return showTheavModalSheet<ViewerSubscriptionQuality>(
       context: context,
-      backgroundColor: Colors.transparent,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
       builder: (_) => ViewerQualitySelectorSheet(
         currentQuality: currentQuality,
         stream: stream,
@@ -1043,89 +1017,60 @@ class ViewerQualitySelectorSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.theav;
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final primaryColor = theme.colorScheme.primary;
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
 
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: BackdropFilter.grouped(
-        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 16 + bottomPadding),
-          decoration: BoxDecoration(
-            color: isDark
-                ? p.surfaceElevated.withValues(alpha: 0.94)
-                : Colors.white.withValues(alpha: 0.95),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
             children: [
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: p.textTertiary.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(2),
+              Icon(Icons.hd_rounded, color: primaryColor, size: 22),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  stream != null
+                      ? 'Качество просмотра (${stream!.qualityBadge} • ${stream!.codec})'
+                      : 'Качество просмотра трансляции',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: p.textPrimary,
                   ),
                 ),
               ),
-              const SizedBox(height: 14),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.hd_rounded, color: primaryColor, size: 22),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        stream != null
-                            ? 'Качество просмотра (${stream!.qualityBadge} • ${stream!.codec})'
-                            : 'Качество просмотра трансляции',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: p.textPrimary,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              ...ViewerSubscriptionQuality.values.map((q) {
-                final selected = q == currentQuality;
-                return ListTile(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  leading: Icon(
-                    q == ViewerSubscriptionQuality.audioOnly
-                        ? Icons.headphones_rounded
-                        : Icons.high_quality_rounded,
-                    color: selected ? primaryColor : p.textSecondary,
-                  ),
-                  title: Text(
-                    q.label,
-                    style: TextStyle(
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                      color: selected ? primaryColor : p.textPrimary,
-                    ),
-                  ),
-                  trailing: selected
-                      ? Icon(Icons.check_circle_rounded, color: primaryColor)
-                      : null,
-                  onTap: () => Navigator.of(context).pop(q),
-                );
-              }),
             ],
           ),
         ),
-      ),
+        const SizedBox(height: 8),
+        ...ViewerSubscriptionQuality.values.map((q) {
+          final selected = q == currentQuality;
+          return ListTile(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            leading: Icon(
+              q == ViewerSubscriptionQuality.audioOnly
+                  ? Icons.headphones_rounded
+                  : Icons.high_quality_rounded,
+              color: selected ? primaryColor : p.textSecondary,
+            ),
+            title: Text(
+              q.label,
+              style: TextStyle(
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? primaryColor : p.textPrimary,
+              ),
+            ),
+            trailing: selected
+                ? Icon(Icons.check_circle_rounded, color: primaryColor)
+                : null,
+            onTap: () => Navigator.of(context).pop(q),
+          );
+        }),
+      ],
     );
   }
 }

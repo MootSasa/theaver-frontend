@@ -8,7 +8,6 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
 import '../../models/call_models.dart';
-import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
@@ -16,6 +15,7 @@ import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/whiteboard/interactive_whiteboard.dart';
 
 /// Group Voice/Video Call, Go Live Screen Share Stage, and Community Stage Room Screen.
@@ -334,38 +334,52 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     CallStateProvider provider,
     CallParticipant participant,
   ) {
-    final p = context.theav;
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) {
         int vol = participant.volume;
         return StatefulBuilder(
-          builder: (ctx, setModalState) => Container(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
-            decoration: BoxDecoration(
-              color: const Color(0xFF161A24),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border(
-                top: BorderSide(color: p.borderSubtle, width: 0.8),
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white24,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
+          builder: (ctx, setModalState) => Align(
+            alignment: Alignment.bottomCenter,
+            heightFactor: 1.0,
+            child: TheavSheetSurface(
+              cornerRadius: 24.0,
+              matteColor: const Color(0xFF161A24),
+              glassTintOverride: const Color(0x9E161A24),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onVerticalDragEnd: (d) {
+                            if ((d.primaryVelocity ?? 0.0) > 650.0) {
+                              Navigator.of(ctx).maybePop();
+                            }
+                          },
+                          child: Container(
+                            width: 112,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            alignment: Alignment.center,
+                            child: Container(
+                              width: 36,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: Colors.white24,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                 Row(
                   children: [
                     CircleAvatar(
@@ -539,7 +553,10 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                     },
                   ),
                 ],
-              ],
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -548,50 +565,59 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 
   void _showReactionsSheet(BuildContext context, CallStateProvider provider) {
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-        decoration: const BoxDecoration(
-          color: Color(0xFF161A24),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Отправить реакцию или звук (Soundboard)',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => Align(
+        alignment: Alignment.bottomCenter,
+        heightFactor: 1.0,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          matteColor: const Color(0xFF161A24),
+          glassTintOverride: const Color(0x9E161A24),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Отправить реакцию или звук (Soundboard)',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: _quickReactions.map((emoji) {
+                      return GestureDetector(
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          provider.sendReaction(emoji);
+                          Navigator.of(ctx).pop();
+                        },
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            shape: BoxShape.circle,
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(emoji, style: const TextStyle(fontSize: 24)),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: _quickReactions.map((emoji) {
-                return GestureDetector(
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    provider.sendReaction(emoji);
-                    Navigator.of(ctx).pop();
-                  },
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      shape: BoxShape.circle,
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(emoji, style: const TextStyle(fontSize: 24)),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
+          ),
         ),
       ),
     );

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/emoji_utils.dart';
 import '../../widgets/chat/sticker_item_widget.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import 'sticker_pack_detail_sheet.dart';
 
 class _DraftStickerItem {
@@ -46,24 +48,13 @@ class CreateStickerPackScreen extends StatefulWidget {
     int initialModeIndex = 0,
     String? initialTelegramLink,
   }) {
-    return showModalBottomSheet<StickerPack>(
+    return showTheavModalSheet<StickerPack>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(ctx).viewInsets.bottom,
-        ),
-        child: DraggableScrollableSheet(
-          initialChildSize: 0.85,
-          minChildSize: 0.55,
-          maxChildSize: 0.95,
-          expand: false,
-          builder: (_, scrollController) => CreateStickerPackScreen(
-            initialModeIndex: initialModeIndex,
-            initialTelegramLink: initialTelegramLink,
-          ),
-        ),
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (_) => CreateStickerPackScreen(
+        initialModeIndex: initialModeIndex,
+        initialTelegramLink: initialTelegramLink,
       ),
     );
   }
@@ -317,27 +308,47 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
   Widget build(BuildContext context) {
     final theme = TheavTheme.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final media = MediaQuery.of(context);
+    final double sheetHeight = math.min(
+      media.size.height * 0.92,
+      media.size.height * 0.85,
+    );
 
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.secondaryBg,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        border: Border.all(
-          color: theme.dividerColor,
-          width: 0.5,
-        ),
-      ),
-      child: Column(
-        children: [
-          const SizedBox(height: 10),
-          Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: theme.dividerColor,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: SizedBox(
+        height: sheetHeight,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          matteColor: theme.secondaryBg,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+              child: Column(
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragEnd: (details) {
+                      if ((details.primaryVelocity ?? 0.0) > 650.0) {
+                        Navigator.of(context).maybePop();
+                      }
+                    },
+                    child: Container(
+                      width: 112,
+                      padding: const EdgeInsets.only(top: 10, bottom: 4),
+                      alignment: Alignment.center,
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: theme.dividerColor,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                  ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
             child: Row(
@@ -396,6 +407,10 @@ class _CreateStickerPackScreenState extends State<CreateStickerPackScreen> {
                 : _buildCreateFromScratchView(theme, isDark),
           ),
         ],
+      ),
+            ),
+          ),
+        ),
       ),
     );
   }

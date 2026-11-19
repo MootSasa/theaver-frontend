@@ -147,7 +147,11 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
               ),
             ),
           Expanded(
-            child: _buildBody(context, cs, results, useGrid, errorCode),
+            child: ScrollConfiguration(
+              behavior:
+                  const MaterialScrollBehavior().copyWith(overscroll: false),
+              child: _buildBody(context, cs, results, useGrid, errorCode),
+            ),
           ),
         ],
       ),

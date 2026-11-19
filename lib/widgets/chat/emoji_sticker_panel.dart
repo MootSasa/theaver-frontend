@@ -571,19 +571,22 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
 
     final theavTheme = TheavTheme.of(context);
 
-    final content = Material(
-      type: MaterialType.transparency,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: theavTheme.secondaryBg.withValues(alpha: 1.0),
-          border: Border(
-            top: BorderSide(
-              color: theavTheme.dividerColor,
-              width: 0.5,
+    final content = ScrollConfiguration(
+      behavior: const MaterialScrollBehavior().copyWith(overscroll: false),
+      child: Material(
+        type: MaterialType.transparency,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: theavTheme.secondaryBg.withValues(alpha: 1.0),
+            border: Border(
+              top: BorderSide(
+                color: theavTheme.dividerColor,
+                width: 0.5,
+              ),
             ),
           ),
+          child: _buildPanelContent(false),
         ),
-        child: _buildPanelContent(false),
       ),
     );
 

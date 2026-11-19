@@ -15,6 +15,7 @@ import '../../services/wallpaper_provider.dart';
 import '../../services/emoji_haptic_service.dart';
 import '../../services/settings_service.dart';
 import '../../theme/theme_provider.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
@@ -144,83 +145,70 @@ class ChatSettingsScreen extends StatelessWidget {
 
   void _showThemeOptionsModal(BuildContext context, TheavTheme t) {
     final l10n = context.l10n;
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Theme.of(context).cardColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              child: Text(
-                t.name,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
+      title: t.name,
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const iconoir.EditPencil(width: 22, height: 22),
+            title: Text(l10n.translate('theme_edit')),
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
+              );
+            },
+          ),
+          ListTile(
+            leading: const iconoir.ShareAndroid(width: 22, height: 22),
+            title: Text(l10n.translate('theme_export')),
+            onTap: () {
+              Navigator.pop(ctx);
+              _exportTheme(context, t);
+            },
+          ),
+          ListTile(
+            leading: iconoir.Trash(
+              width: 22,
+              height: 22,
+              color: t.palette.error,
             ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const iconoir.EditPencil(width: 22, height: 22),
-              title: Text(l10n.translate('theme_edit')),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
-                );
-              },
+            title: Text(
+              l10n.translate('theme_delete'),
+              style: TextStyle(color: t.palette.error, fontWeight: FontWeight.w600),
             ),
-            ListTile(
-              leading: const iconoir.ShareAndroid(width: 22, height: 22),
-              title: Text(l10n.translate('theme_export')),
-              onTap: () {
-                Navigator.pop(ctx);
-                _exportTheme(context, t);
-              },
-            ),
-            ListTile(
-              leading: iconoir.Trash(
-                width: 22,
-                height: 22,
-                color: t.palette.error,
-              ),
-              title: Text(
-                l10n.translate('theme_delete'),
-                style: TextStyle(color: t.palette.error, fontWeight: FontWeight.w600),
-              ),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (dCtx) => AlertDialog(
-                    title: Text(l10n.translate('theme_delete')),
-                    content: Text(l10n.translate('theme_delete_confirm')),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dCtx, false),
-                        child: Text(l10n.translate('cancel')),
+            onTap: () async {
+              Navigator.pop(ctx);
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (dCtx) => AlertDialog(
+                  title: Text(l10n.translate('theme_delete')),
+                  content: Text(l10n.translate('theme_delete_confirm')),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dCtx, false),
+                      child: Text(l10n.translate('cancel')),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dCtx, true),
+                      child: Text(
+                        l10n.translate('common_delete'),
+                        style: TextStyle(color: t.palette.error),
                       ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(dCtx, true),
-                        child: Text(
-                          l10n.translate('common_delete'),
-                          style: TextStyle(color: t.palette.error),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirm == true) {
-                  await TheavThemeService().deleteTheme(t.id);
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                await TheavThemeService().deleteTheme(t.id);
+              }
+            },
+          ),
+        ],
       ),
     );
   }

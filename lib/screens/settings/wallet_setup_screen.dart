@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/wallet_security_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 
 class WalletSetupScreen extends StatefulWidget {
@@ -336,16 +337,12 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
 
     if (!mounted) return;
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      isDismissible: false,
+      barrierDismissible: false,
       enableDrag: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
+      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+      builder: (context) => Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(Icons.fingerprint, size: 64, color: Colors.blue),
@@ -391,7 +388,6 @@ class _WalletSetupScreenState extends State<WalletSetupScreen> {
               ],
             ),
           ],
-        ),
       ),
     );
   }

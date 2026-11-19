@@ -520,70 +520,47 @@ class SettingsAttachedSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
-    final blurFilter = style.getBlurFilter(sigma: style.isGlass ? 22.0 : 0.0);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     final maxHeight = MediaQuery.sizeOf(context).height * maxHeightFactor;
 
-    Widget sheetContainer = Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: style.overlayFill,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border(
-          top: BorderSide(color: style.hairlineBorder, width: 0.8),
-          left: BorderSide(color: style.hairlineBorder, width: 0.5),
-          right: BorderSide(color: style.hairlineBorder, width: 0.5),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 10, bottom: 4),
-            child: Container(
-              width: 38,
-              height: 4,
-              decoration: BoxDecoration(
-                color: style.palette.onSurface.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          Flexible(
-            child: Padding(
-              padding: padding ??
-                  EdgeInsets.fromLTRB(
-                    20,
-                    10,
-                    20,
-                    math.max(20.0, bottomInset + 12.0),
-                  ),
-              child: child,
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (blurFilter != null) {
-      sheetContainer = BackdropFilter(
-        filter: blurFilter,
-        child: sheetContainer,
-      );
-    }
-
     return Align(
       alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: maxWidth,
           maxHeight: maxHeight,
         ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            child: sheetContainer,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 10, bottom: 4),
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: style.palette.onSurface.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Flexible(
+                child: Padding(
+                  padding: padding ??
+                      EdgeInsets.fromLTRB(
+                        20,
+                        10,
+                        20,
+                        math.max(20.0, bottomInset + 12.0),
+                      ),
+                  child: child,
+                ),
+              ),
+            ],
           ),
         ),
       ),

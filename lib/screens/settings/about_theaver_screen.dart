@@ -16,6 +16,7 @@ import '../../theme/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import 'service_menu_screen.dart';
@@ -179,12 +180,11 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
     HapticUtils.tap();
     final l10n = context.l10n;
 
-    showModalBottomSheet<void>(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      useSafeArea: false,
-      builder: (sheetCtx) {
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (sheetCtx) {
         final theav = TheavTheme.of(sheetCtx);
         final accent = theav.accent;
         final textPrimary = theav.textPrimary;
@@ -280,12 +280,11 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
     HapticUtils.tap();
     final hasGlassProvider = maybeLiquidGlassProvider(context, listen: false) != null;
 
-    showModalBottomSheet<void>(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      useSafeArea: false,
-      builder: (sheetCtx) {
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (sheetCtx) {
         final l10n = sheetCtx.l10n;
         final theav = TheavTheme.of(sheetCtx);
         final isDark = Theme.of(sheetCtx).brightness == Brightness.dark;

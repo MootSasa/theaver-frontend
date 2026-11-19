@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
+import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
 
@@ -16,6 +18,12 @@ class _TestLiquidGlassProvider extends LiquidGlassProvider {
 
   @override
   bool get enabled => _mode != GlassMode.disabled;
+
+  @override
+  bool get isLite => _mode == GlassMode.lite;
+
+  @override
+  bool get isFull => _mode == GlassMode.full;
 }
 
 Widget _buildHost({
@@ -462,6 +470,169 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.byType(TheavModalSheet), findsNothing);
+      });
+
+      testWidgets(
+          'TheavModalSheet uses LiquidGlassLens without BackdropFilter/Opacity and applies library LiquidGlassFlexDeform on handle stretch',
+          (tester) async {
+        final bool expectGlass =
+            mode == GlassMode.lite || mode == GlassMode.full;
+
+        await tester.pumpWidget(
+          _buildHost(
+            glassMode: mode,
+            child: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    showTheavModalSheet<void>(
+                      context: context,
+                      title: 'Тест стекла',
+                      builder: (_) => const SizedBox(
+                        height: 180,
+                        child: Center(child: Text('Содержимое')),
+                      ),
+                    );
+                  },
+                  child: const Text('OpenGlassSheet'),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await tester.tap(find.text('OpenGlassSheet'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(TheavSheetSurface), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(TheavModalSheet),
+            matching: find.byType(BackdropFilter),
+          ),
+          findsNothing,
+        );
+
+        final lensFinder = find.descendant(
+          of: find.byType(TheavSheetSurface),
+          matching: find.byType(LiquidGlassLens),
+        );
+
+        if (expectGlass) {
+          expect(lensFinder, findsOneWidget);
+          expect(
+            find.ancestor(
+              of: lensFinder,
+              matching: find.byType(Opacity),
+            ),
+            findsNothing,
+          );
+          expect(
+            find.ancestor(
+              of: lensFinder,
+              matching: find.byType(FadeTransition),
+            ),
+            findsNothing,
+          );
+          expect(
+            tester.widget<LiquidGlassLens>(lensFinder).deform,
+            LiquidGlassFlexDeform.none,
+          );
+
+          // Dragging body must not deform lens.
+          final bodyGesture = await tester.startGesture(
+            tester.getCenter(find.text('Содержимое')),
+          );
+          await bodyGesture.moveBy(const Offset(0, -60));
+          await tester.pump();
+          expect(
+            tester.widget<LiquidGlassLens>(lensFinder).deform,
+            LiquidGlassFlexDeform.none,
+          );
+          await bodyGesture.up();
+          await tester.pumpAndSettle();
+
+          // Dragging handle bar upward drives library-native LiquidGlassFlexDeform.
+          final handleFinder =
+              find.byKey(const ValueKey('theav_sheet_drag_handle'));
+          final handleGesture = await tester.startGesture(
+            tester.getCenter(handleFinder),
+          );
+          await handleGesture.moveBy(const Offset(0, -80));
+          await tester.pump();
+          final LiquidGlassFlexDeform? deform =
+              tester.widget<LiquidGlassLens>(lensFinder).deform;
+          expect(deform, isNotNull);
+          expect(deform!.top, greaterThan(0.0));
+          expect(deform.top, lessThanOrEqualTo(40.0));
+          await handleGesture.up();
+          await tester.pumpAndSettle();
+          expect(
+            tester.widget<LiquidGlassLens>(lensFinder).deform,
+            LiquidGlassFlexDeform.none,
+          );
+        } else {
+          expect(lensFinder, findsNothing);
+        }
+      });
+
+      testWidgets(
+          'MiniAppWebViewSheet renders inside TheavSheetSurface with LiquidGlassLens in glass mode',
+          (tester) async {
+        final bool expectGlass =
+            mode == GlassMode.lite || mode == GlassMode.full;
+
+        const launchData = MiniAppLaunchData(
+          url: 'https://api.theaver.app/api/miniapps/studio',
+          initData: 'user=%7B%7D&hash=abc',
+          botId: '1',
+          botUsername: 'BotMother',
+          botDisplayName: 'BotMother',
+        );
+
+        await tester.pumpWidget(
+          _buildHost(
+            glassMode: mode,
+            child: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    showTheavModalSheet<void>(
+                      context: context,
+                      enableDrag: false,
+                      builder: (_) => const SizedBox.shrink(),
+                      customSheetBuilder: (_) => const MiniAppWebViewSheet(
+                        launchData: launchData,
+                        botName: 'BotMother',
+                        botUsername: 'BotMother',
+                      ),
+                    );
+                  },
+                  child: const Text('OpenMiniApp'),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await tester.tap(find.text('OpenMiniApp'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+        expect(find.byType(TheavSheetSurface), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byType(MiniAppWebViewSheet),
+            matching: find.byType(BackdropFilter),
+          ),
+          findsNothing,
+        );
+
+        final lensFinder = find.descendant(
+          of: find.byType(TheavSheetSurface),
+          matching: find.byType(LiquidGlassLens),
+        );
+        expect(lensFinder, expectGlass ? findsOneWidget : findsNothing);
       });
     });
   }
