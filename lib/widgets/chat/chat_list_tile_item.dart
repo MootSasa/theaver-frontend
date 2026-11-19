@@ -418,7 +418,7 @@ class ChatListTileItem extends StatelessWidget {
               Expanded(
                 child: Row(
                   children: [
-                    if (isChannel || isGroup)
+                    if (isChannel || isGroup || isCommunity)
                       Padding(
                         padding: const EdgeInsets.only(right: 4),
                         child: isChannel
@@ -427,17 +427,23 @@ class ChatListTileItem extends StatelessWidget {
                                 height: 15,
                                 color: typeIconColor,
                               )
-                            : (chat.isForum
-                                  ? iconoir.ChatLines(
-                                      width: 15,
-                                      height: 15,
-                                      color: typeIconColor,
-                                    )
-                                  : iconoir.Group(
-                                      width: 15,
-                                      height: 15,
-                                      color: typeIconColor,
-                                    )),
+                            : isCommunity
+                                ? iconoir.Community(
+                                    width: 15,
+                                    height: 15,
+                                    color: typeIconColor,
+                                  )
+                                : (chat.isForum
+                                      ? iconoir.ChatLines(
+                                          width: 15,
+                                          height: 15,
+                                          color: typeIconColor,
+                                        )
+                                      : iconoir.Group(
+                                          width: 15,
+                                          height: 15,
+                                          color: typeIconColor,
+                                        )),
                       ),
                     Flexible(
                       child: Text(

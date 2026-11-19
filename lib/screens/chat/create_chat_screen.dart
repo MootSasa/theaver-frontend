@@ -78,14 +78,14 @@ List<CreateChatOptionSpec> buildCreateChatOptions(BuildContext context) {
       subtitle: 'Категории, комнаты и стримы до 144 FPS',
       accentColor: const Color(0xFFF59E0B),
       isSquircleBadge: true,
-      iconBuilder: (c, s) => Icon(Icons.hub_rounded, color: c, size: s),
+      iconBuilder: (c, s) => iconoir.Community(color: c, width: s, height: s),
     ),
     CreateChatOptionSpec(
       type: CreateChatOptionType.joinByCode,
       title: 'Войти по коду / ссылке',
       subtitle: 'Присоединиться к сообществу, группе или каналу',
       accentColor: const Color(0xFFEC4899),
-      iconBuilder: (c, s) => Icon(Icons.link_rounded, color: c, size: s),
+      iconBuilder: (c, s) => iconoir.Link(color: c, width: s, height: s),
     ),
     CreateChatOptionSpec(
       type: CreateChatOptionType.contacts,

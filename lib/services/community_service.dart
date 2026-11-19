@@ -234,13 +234,14 @@ class CommunityService {
           ? '🔊 $activeVoice в голосовом • ${c.memberCount} участн.'
           : (c.description.isNotEmpty
               ? c.description
-              : '${c.memberCount} участн. • Сообщество');
+              : '${c.memberCount} участн. • ${c.channels.length} кан.');
       await db.saveChats([
         ChatsCompanion(
           chatId: Value('community_${c.id}'),
           chatType: const Value('community'),
           name: Value(c.name),
           avatarUrl: Value(c.avatarUrl),
+          hasActiveCall: Value(activeVoice > 0),
           lastMessage: Value(subtitle),
           lastMessageTime: Value(c.createdAt.toIso8601String()),
           lastMessageType: const Value('text'),
@@ -680,7 +681,10 @@ class CommunityService {
     String? name,
     String? topic,
     String? categoryId,
+    bool clearCategory = false,
+    String? channelType,
     int? position,
+    int? slowModeSeconds,
     int? voiceBitrateKbps,
     int? voiceUserLimit,
   }) async {
@@ -696,8 +700,13 @@ class CommunityService {
             'topic': topic,
             'description': topic,
           },
-          if (parsedCatId != null) 'category_id': parsedCatId,
+          if (clearCategory)
+            'category_id': 0
+          else if (parsedCatId != null)
+            'category_id': parsedCatId,
+          if (channelType != null) 'channel_kind': channelType,
           if (position != null) 'position': position,
+          if (slowModeSeconds != null) 'slow_mode_seconds': slowModeSeconds,
           if (voiceBitrateKbps != null) 'voice_bitrate_kbps': voiceBitrateKbps,
           if (voiceUserLimit != null) 'voice_user_limit': voiceUserLimit,
         }),
@@ -715,6 +724,37 @@ class CommunityService {
       debugPrint('[CommunityService] updateChannel error: $e');
     }
     return null;
+  }
+
+  /// Reorders channels inside a community (`PATCH /api/communities/:communityId/channels/reorder`).
+  static Future<bool> reorderChannels(
+    String communityId,
+    List<({String chatId, String? categoryId, int position})> items,
+  ) async {
+    try {
+      final payload = items
+          .map(
+            (e) => {
+              'chat_id': int.tryParse(e.chatId) ?? 0,
+              'category_id':
+                  e.categoryId != null ? int.tryParse(e.categoryId!) : null,
+              'position': e.position,
+            },
+          )
+          .where((e) => (e['chat_id'] as int) > 0)
+          .toList();
+      final response = await http.patch(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/channels/reorder',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({'channels': payload}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] reorderChannels error: $e');
+      return false;
+    }
   }
 
   /// Deletes a channel inside a community (`DELETE /api/communities/:communityId/channels/:chatId`).
@@ -758,7 +798,10 @@ class CommunityService {
     String communityId, {
     required String name,
     String colorHex = '#5C6BC0',
+    int position = 1,
     int permissions = 0,
+    bool isHoisted = false,
+    bool isMentionable = true,
   }) async {
     try {
       final response = await http.post(
@@ -767,7 +810,10 @@ class CommunityService {
         body: jsonEncode({
           'name': name,
           'color': colorHex,
+          'position': position,
           'permissions': permissions,
+          'is_hoisted': isHoisted,
+          'is_mentionable': isMentionable,
         }),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
@@ -791,7 +837,10 @@ class CommunityService {
     String roleId, {
     String? name,
     String? colorHex,
+    int? position,
     int? permissions,
+    bool? isHoisted,
+    bool? isMentionable,
   }) async {
     try {
       final response = await http.patch(
@@ -802,7 +851,10 @@ class CommunityService {
         body: jsonEncode({
           if (name != null) 'name': name,
           if (colorHex != null) 'color': colorHex,
+          if (position != null) 'position': position,
           if (permissions != null) 'permissions': permissions,
+          if (isHoisted != null) 'is_hoisted': isHoisted,
+          if (isMentionable != null) 'is_mentionable': isMentionable,
         }),
       );
       if (response.statusCode == 200) {
@@ -966,5 +1018,248 @@ class CommunityService {
       debugPrint('[CommunityService] getSoundboardSounds error: $e');
     }
     return [];
+  }
+
+  /// Creates a custom soundboard clip (`POST /api/communities/:communityId/soundboard`).
+  static Future<SoundboardItem?> createSoundboardSound(
+    String communityId, {
+    required String name,
+    required String fileUrl,
+    String emoji = '🔊',
+    int durationMs = 2000,
+    double volume = 1.0,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/soundboard'),
+        headers: await _headers(),
+        body: jsonEncode({
+          'name': name,
+          'emoji': emoji,
+          'file_url': fileUrl,
+          'duration_ms': durationMs,
+          'volume': volume,
+        }),
+      );
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          final map = data['sound'] is Map
+              ? Map<String, dynamic>.from(data['sound'] as Map)
+              : data;
+          return SoundboardItem.fromJson(map);
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] createSoundboardSound error: $e');
+    }
+    return null;
+  }
+
+  /// Deletes a custom soundboard clip (`DELETE /api/communities/:communityId/soundboard/:soundId`).
+  static Future<bool> deleteSoundboardSound(
+    String communityId,
+    String soundId,
+  ) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/soundboard/$soundId',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] deleteSoundboardSound error: $e');
+      return false;
+    }
+  }
+
+  /// Fetches channel permission overwrites (`GET /api/communities/:communityId/channels/:chatId/overwrites`).
+  static Future<List<CommunityPermissionOverwrite>> getChannelOverwrites(
+    String communityId,
+    String chatId,
+  ) async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/channels/$chatId/overwrites',
+        ),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['overwrites'] is List) {
+          return (data['overwrites'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityPermissionOverwrite.fromJson(
+                  Map<String, dynamic>.from(m),
+                ),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getChannelOverwrites error: $e');
+    }
+    return const [];
+  }
+
+  /// Replaces channel permission overwrites (`PUT /api/communities/:communityId/channels/:chatId/overwrites`).
+  static Future<bool> setChannelOverwrites(
+    String communityId,
+    String chatId,
+    List<CommunityPermissionOverwrite> overwrites,
+  ) async {
+    try {
+      final response = await http.put(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/channels/$chatId/overwrites',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({
+          'overwrites': overwrites.map((o) => o.toJson()).toList(),
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] setChannelOverwrites error: $e');
+      return false;
+    }
+  }
+
+  /// Fetches category permission overwrites (`GET /api/communities/:communityId/categories/:categoryId/overwrites`).
+  static Future<List<CommunityPermissionOverwrite>> getCategoryOverwrites(
+    String communityId,
+    String categoryId,
+  ) async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/categories/$categoryId/overwrites',
+        ),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['overwrites'] is List) {
+          return (data['overwrites'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityPermissionOverwrite.fromJson(
+                  Map<String, dynamic>.from(m),
+                ),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getCategoryOverwrites error: $e');
+    }
+    return const [];
+  }
+
+  /// Replaces category permission overwrites (`PUT /api/communities/:communityId/categories/:categoryId/overwrites`).
+  static Future<bool> setCategoryOverwrites(
+    String communityId,
+    String categoryId,
+    List<CommunityPermissionOverwrite> overwrites,
+  ) async {
+    try {
+      final response = await http.put(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/categories/$categoryId/overwrites',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({
+          'overwrites': overwrites.map((o) => o.toJson()).toList(),
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] setCategoryOverwrites error: $e');
+      return false;
+    }
+  }
+
+  /// Lists banned community members (`GET /api/communities/:communityId/bans`).
+  static Future<List<CommunityBan>> getBans(String communityId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/bans'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['bans'] is List) {
+          return (data['bans'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityBan.fromJson(Map<String, dynamic>.from(m)),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getBans error: $e');
+    }
+    return const [];
+  }
+
+  /// Unbans a user from the community (`DELETE /api/communities/:communityId/members/:userId/ban`).
+  static Future<bool> unbanMember(String communityId, String userId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/members/$userId/ban',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] unbanMember error: $e');
+      return false;
+    }
+  }
+
+  /// Lists invites for a community (`GET /api/communities/:communityId/invites`).
+  static Future<List<CommunityInvite>> listInvites(String communityId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/invites'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['invites'] is List) {
+          return (data['invites'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityInvite.fromJson(Map<String, dynamic>.from(m)),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] listInvites error: $e');
+    }
+    return const [];
+  }
+
+  /// Revokes an invite (`DELETE /api/communities/:communityId/invites/:inviteId`).
+  static Future<bool> deleteInvite(String communityId, String inviteId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/invites/$inviteId',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] deleteInvite error: $e');
+      return false;
+    }
   }
 }

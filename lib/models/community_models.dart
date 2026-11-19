@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart' show Color;
+
 import 'call_models.dart';
 import 'profile_customization.dart';
 import '../services/peer_customization_cache.dart';
@@ -140,13 +142,31 @@ class CommunityCategory {
   final String communityId;
   final String name;
   final int position;
+  final bool isPrivate;
 
   const CommunityCategory({
     required this.id,
     required this.communityId,
     required this.name,
     this.position = 0,
+    this.isPrivate = false,
   });
+
+  CommunityCategory copyWith({
+    String? id,
+    String? communityId,
+    String? name,
+    int? position,
+    bool? isPrivate,
+  }) {
+    return CommunityCategory(
+      id: id ?? this.id,
+      communityId: communityId ?? this.communityId,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      isPrivate: isPrivate ?? this.isPrivate,
+    );
+  }
 
   factory CommunityCategory.fromJson(Map<String, dynamic> json) {
     return CommunityCategory(
@@ -154,6 +174,7 @@ class CommunityCategory {
       communityId: (json['community_id'] ?? '').toString(),
       name: (json['name'] ?? 'Категория').toString(),
       position: (json['position'] as num?)?.toInt() ?? 0,
+      isPrivate: json['is_private'] == true,
     );
   }
 
@@ -162,6 +183,7 @@ class CommunityCategory {
         'community_id': communityId,
         'name': name,
         'position': position,
+        'is_private': isPrivate,
       };
 }
 
@@ -171,8 +193,11 @@ class CommunityChannel {
   final String? categoryId;
   final String name;
   final String topic;
-  final String channelType; // 'text' | 'voice' | 'stage' | 'announcement' | 'forum'
+  final String channelType; // 'text' | 'voice' | 'stage' | 'announcement' | 'forum' | 'whiteboard'
   final int position;
+  final int slowModeSeconds;
+  final int voiceBitrateKbps;
+  final int voiceUserLimit;
   final int unreadCount;
   final List<CallParticipant> activeVoiceParticipants;
 
@@ -184,6 +209,9 @@ class CommunityChannel {
     this.topic = '',
     this.channelType = 'text',
     this.position = 0,
+    this.slowModeSeconds = 0,
+    this.voiceBitrateKbps = 64,
+    this.voiceUserLimit = 0,
     this.unreadCount = 0,
     this.activeVoiceParticipants = const [],
   });
@@ -193,26 +221,34 @@ class CommunityChannel {
   bool get isAudioRoom => isVoice || isStage;
   bool get isAnnouncement => channelType == 'announcement';
   bool get isWhiteboard => channelType == 'whiteboard';
+  bool get isForum => channelType == 'forum';
 
   CommunityChannel copyWith({
     String? id,
     String? communityId,
     String? categoryId,
+    bool clearCategory = false,
     String? name,
     String? topic,
     String? channelType,
     int? position,
+    int? slowModeSeconds,
+    int? voiceBitrateKbps,
+    int? voiceUserLimit,
     int? unreadCount,
     List<CallParticipant>? activeVoiceParticipants,
   }) {
     return CommunityChannel(
       id: id ?? this.id,
       communityId: communityId ?? this.communityId,
-      categoryId: categoryId ?? this.categoryId,
+      categoryId: clearCategory ? null : (categoryId ?? this.categoryId),
       name: name ?? this.name,
       topic: topic ?? this.topic,
       channelType: channelType ?? this.channelType,
       position: position ?? this.position,
+      slowModeSeconds: slowModeSeconds ?? this.slowModeSeconds,
+      voiceBitrateKbps: voiceBitrateKbps ?? this.voiceBitrateKbps,
+      voiceUserLimit: voiceUserLimit ?? this.voiceUserLimit,
       unreadCount: unreadCount ?? this.unreadCount,
       activeVoiceParticipants:
           activeVoiceParticipants ?? this.activeVoiceParticipants,
@@ -247,6 +283,9 @@ class CommunityChannel {
               'text')
           .toString(),
       position: (json['position'] as num?)?.toInt() ?? 0,
+      slowModeSeconds: (json['slow_mode_seconds'] as num?)?.toInt() ?? 0,
+      voiceBitrateKbps: (json['voice_bitrate_kbps'] as num?)?.toInt() ?? 64,
+      voiceUserLimit: (json['voice_user_limit'] as num?)?.toInt() ?? 0,
       unreadCount: (json['unread_count'] as num?)?.toInt() ?? 0,
       activeVoiceParticipants: voiceList,
     );
@@ -262,6 +301,9 @@ class CommunityChannel {
         'channel_type': channelType,
         'channel_kind': channelType,
         'position': position,
+        'slow_mode_seconds': slowModeSeconds,
+        'voice_bitrate_kbps': voiceBitrateKbps,
+        'voice_user_limit': voiceUserLimit,
         'unread_count': unreadCount,
       };
 }
@@ -289,9 +331,20 @@ class CommunityRole {
     this.isEveryone = false,
   });
 
+  Color? get parsedColor {
+    final cleaned = colorHex.trim().replaceFirst('#', '').toLowerCase();
+    if (cleaned.isEmpty || cleaned == '99aab5') return null;
+    final hex = cleaned.length == 6 ? 'ff$cleaned' : cleaned;
+    if (hex.length != 8) return null;
+    final value = int.tryParse(hex, radix: 16);
+    if (value == null) return null;
+    return Color(value);
+  }
+
   CommunityRole copyWith({
     String? name,
     String? colorHex,
+    int? position,
     int? permissions,
     bool? isHoisted,
     bool? isMentionable,
@@ -302,7 +355,7 @@ class CommunityRole {
       communityId: communityId,
       name: name ?? this.name,
       colorHex: colorHex ?? this.colorHex,
-      position: position,
+      position: position ?? this.position,
       permissions: permissions ?? this.permissions,
       isHoisted: isHoisted ?? this.isHoisted,
       isMentionable: isMentionable ?? this.isMentionable,
@@ -560,4 +613,254 @@ class Community {
         'roles': roles.map((r) => r.toJson()).toList(),
         'created_at': createdAt.toIso8601String(),
       };
+}
+
+enum PermissionOverwriteState { deny, inherit, allow }
+
+class CommunityPermissionOverwrite {
+  final String targetType; // 'role' | 'member'
+  final String targetId;
+  final int allowBits;
+  final int denyBits;
+
+  const CommunityPermissionOverwrite({
+    required this.targetType,
+    required this.targetId,
+    this.allowBits = 0,
+    this.denyBits = 0,
+  });
+
+  bool get isEmpty => allowBits == 0 && denyBits == 0;
+
+  PermissionOverwriteState stateForBit(int bit) {
+    if ((allowBits & bit) != 0) return PermissionOverwriteState.allow;
+    if ((denyBits & bit) != 0) return PermissionOverwriteState.deny;
+    return PermissionOverwriteState.inherit;
+  }
+
+  CommunityPermissionOverwrite withBitState(
+    int bit,
+    PermissionOverwriteState state,
+  ) {
+    var nextAllow = allowBits & ~bit;
+    var nextDeny = denyBits & ~bit;
+    if (state == PermissionOverwriteState.allow) {
+      nextAllow |= bit;
+    } else if (state == PermissionOverwriteState.deny) {
+      nextDeny |= bit;
+    }
+    return CommunityPermissionOverwrite(
+      targetType: targetType,
+      targetId: targetId,
+      allowBits: nextAllow,
+      denyBits: nextDeny,
+    );
+  }
+
+  factory CommunityPermissionOverwrite.fromJson(Map<String, dynamic> json) {
+    return CommunityPermissionOverwrite(
+      targetType: (json['target_type'] ?? 'role').toString(),
+      targetId: (json['target_id'] ?? '').toString(),
+      allowBits: (json['allow_bits'] as num?)?.toInt() ?? 0,
+      denyBits: (json['deny_bits'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'target_type': targetType,
+        'target_id': int.tryParse(targetId) ?? 0,
+        'allow_bits': allowBits,
+        'deny_bits': denyBits,
+      };
+}
+
+class CommunityBan {
+  final String userId;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final String reason;
+  final String? bannedBy;
+  final DateTime createdAt;
+
+  const CommunityBan({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    this.avatarUrl,
+    this.reason = '',
+    this.bannedBy,
+    required this.createdAt,
+  });
+
+  factory CommunityBan.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = json['avatar_url']?.toString().trim();
+    return CommunityBan(
+      userId: (json['user_id'] ?? '').toString(),
+      username: (json['username'] ?? '').toString(),
+      displayName:
+          (json['display_name'] ?? json['username'] ?? 'Пользователь').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      reason: (json['reason'] ?? '').toString(),
+      bannedBy: json['banned_by']?.toString(),
+      createdAt: json['created_at'] != null
+          ? (DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now())
+          : DateTime.now(),
+    );
+  }
+}
+
+class CommunityInvite {
+  final String id;
+  final String communityId;
+  final String? creatorId;
+  final String code;
+  final int maxUses;
+  final int uses;
+  final DateTime? expiresAt;
+  final DateTime createdAt;
+
+  const CommunityInvite({
+    required this.id,
+    required this.communityId,
+    this.creatorId,
+    required this.code,
+    this.maxUses = 0,
+    this.uses = 0,
+    this.expiresAt,
+    required this.createdAt,
+  });
+
+  bool get isExpired =>
+      expiresAt != null && DateTime.now().isAfter(expiresAt!);
+
+  factory CommunityInvite.fromJson(Map<String, dynamic> json) {
+    return CommunityInvite(
+      id: (json['id'] ?? '').toString(),
+      communityId: (json['community_id'] ?? '').toString(),
+      creatorId: json['creator_id']?.toString(),
+      code: (json['code'] ?? json['invite_code'] ?? '').toString(),
+      maxUses: (json['max_uses'] as num?)?.toInt() ?? 0,
+      uses: (json['uses'] as num?)?.toInt() ?? 0,
+      expiresAt: json['expires_at'] != null
+          ? DateTime.tryParse(json['expires_at'].toString())
+          : null,
+      createdAt: json['created_at'] != null
+          ? (DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now())
+          : DateTime.now(),
+    );
+  }
+}
+
+class CommunityMemberSection {
+  final String id;
+  final String title;
+  final Color? color;
+  final List<CommunityMember> members;
+
+  const CommunityMemberSection({
+    required this.id,
+    required this.title,
+    this.color,
+    required this.members,
+  });
+}
+
+CommunityRole? highestColoredRoleForMember(
+  CommunityMember member,
+  List<CommunityRole> roles,
+) {
+  final matched = roles
+      .where(
+        (r) =>
+            !r.isEveryone &&
+            member.roleIds.contains(r.id) &&
+            r.parsedColor != null,
+      )
+      .toList()
+    ..sort((a, b) => b.position.compareTo(a.position));
+  return matched.isNotEmpty ? matched.first : null;
+}
+
+CommunityRole? highestHoistedRoleForMember(
+  CommunityMember member,
+  List<CommunityRole> roles,
+) {
+  final matched = roles
+      .where(
+        (r) => !r.isEveryone && r.isHoisted && member.roleIds.contains(r.id),
+      )
+      .toList()
+    ..sort((a, b) => b.position.compareTo(a.position));
+  return matched.isNotEmpty ? matched.first : null;
+}
+
+List<CommunityMemberSection> groupMembersByHoistedRoles(
+  List<CommunityMember> members,
+  List<CommunityRole> roles,
+) {
+  final hoistedRoles = roles
+      .where((r) => !r.isEveryone && r.isHoisted)
+      .toList()
+    ..sort((a, b) => b.position.compareTo(a.position));
+
+  final Map<String, List<CommunityMember>> roleBuckets = {
+    for (final r in hoistedRoles) r.id: <CommunityMember>[],
+  };
+  final List<CommunityMember> onlineGeneral = [];
+  final List<CommunityMember> offline = [];
+
+  final sorted = List<CommunityMember>.from(members)
+    ..sort((a, b) {
+      final aName = a.displayName.isNotEmpty ? a.displayName : a.username;
+      final bName = b.displayName.isNotEmpty ? b.displayName : b.username;
+      return aName.toLowerCase().compareTo(bName.toLowerCase());
+    });
+
+  for (final member in sorted) {
+    if (!member.isOnline) {
+      offline.add(member);
+      continue;
+    }
+    final topHoisted = highestHoistedRoleForMember(member, hoistedRoles);
+    if (topHoisted != null && roleBuckets.containsKey(topHoisted.id)) {
+      roleBuckets[topHoisted.id]!.add(member);
+    } else {
+      onlineGeneral.add(member);
+    }
+  }
+
+  final sections = <CommunityMemberSection>[];
+  for (final role in hoistedRoles) {
+    final bucket = roleBuckets[role.id];
+    if (bucket != null && bucket.isNotEmpty) {
+      sections.add(
+        CommunityMemberSection(
+          id: 'role_${role.id}',
+          title: role.name,
+          color: role.parsedColor,
+          members: bucket,
+        ),
+      );
+    }
+  }
+  if (onlineGeneral.isNotEmpty) {
+    sections.add(
+      CommunityMemberSection(
+        id: 'online',
+        title: 'В сети',
+        members: onlineGeneral,
+      ),
+    );
+  }
+  if (offline.isNotEmpty) {
+    sections.add(
+      CommunityMemberSection(
+        id: 'offline',
+        title: 'Не в сети',
+        members: offline,
+      ),
+    );
+  }
+  return sections;
 }

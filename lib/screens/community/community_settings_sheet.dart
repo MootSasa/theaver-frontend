@@ -1,40 +1,68 @@
-import 'dart:ui' as ui;
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:image_picker/image_picker.dart';
+
 import '../../l10n/app_localizations.dart';
+import '../../models/call_models.dart';
 import '../../models/community_models.dart';
-import '../../models/theav_theme.dart';
+import '../../services/auth_service.dart';
 import '../../services/community_service.dart';
-import '../../widgets/common/adaptive_switch.dart';
+import '../../services/file_service.dart';
+import '../../services/glass_toast_service.dart';
+import '../../utils/haptic_utils.dart';
 import '../../widgets/common/peer_badges_widget.dart';
+import '../../widgets/community/community_channel_icon.dart';
+import '../../widgets/community/community_overwrites_sheet.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 
-/// Community administration bottom sheet for managing Overview, Categories,
-/// Channels (`#text`, `🔊 voice`, `🎙️ stage`), Roles (64-bit bitmask permissions),
-/// and Invite Codes.
+/// Community administration sheet in dual-mode Telegram UI (`showTheavModalSheet`,
+/// `TheavInsetGroup`, `TheavSwitch`, `showTheavDialog`) supporting Overview,
+/// Invites, Categories & Channels (reorder + permission overwrites), Roles (19
+/// bitmask flags + color + hoist/mentionable), Members/Bans, and Soundboard.
 class CommunitySettingsSheet extends StatefulWidget {
   final Community community;
   final ValueChanged<Community> onCommunityUpdated;
+  final int initialTab;
+  final bool autoFetch;
+  final List<CommunityMember>? initialMembers;
+  final List<CommunityBan>? initialBans;
+  final List<CommunityInvite>? initialInvites;
+  final List<SoundboardItem>? initialSounds;
 
   const CommunitySettingsSheet({
     super.key,
     required this.community,
     required this.onCommunityUpdated,
+    this.initialTab = 0,
+    this.autoFetch = true,
+    this.initialMembers,
+    this.initialBans,
+    this.initialInvites,
+    this.initialSounds,
   });
 
   static Future<void> show(
     BuildContext context, {
     required Community community,
     required ValueChanged<Community> onCommunityUpdated,
+    int initialTab = 0,
   }) {
-    return showModalBottomSheet(
+    return showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      title: 'Управление сообществом',
+      showCloseButton: true,
+      maxHeightFactor: 0.92,
+      padding: EdgeInsets.zero,
       builder: (_) => CommunitySettingsSheet(
         community: community,
         onCommunityUpdated: onCommunityUpdated,
+        initialTab: initialTab,
       ),
     );
   }
@@ -43,23 +71,97 @@ class CommunitySettingsSheet extends StatefulWidget {
   State<CommunitySettingsSheet> createState() => _CommunitySettingsSheetState();
 }
 
-class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
+  static const List<String> _kTabTitles = [
+    'Обзор',
+    'Каналы',
+    'Роли',
+    'Участники',
+    'Звуки',
+  ];
+
+  static const List<String> _kRoleColors = [
+    '#3B82F6',
+    '#10B981',
+    '#F59E0B',
+    '#EF4444',
+    '#8B5CF6',
+    '#EC4899',
+    '#06B6D4',
+    '#99AAB5',
+  ];
+
+  static const List<({String header, List<int> bits})> _kPermissionGroups = [
+    (
+      header: 'ОБЩИЕ ПРАВА',
+      bits: [
+        CommunityPermissions.administrator,
+        CommunityPermissions.viewChannel,
+        CommunityPermissions.manageCommunity,
+        CommunityPermissions.manageChannels,
+        CommunityPermissions.manageRoles,
+      ],
+    ),
+    (
+      header: 'ТЕКСТОВЫЕ КАНАЛЫ',
+      bits: [
+        CommunityPermissions.sendMessages,
+      ],
+    ),
+    (
+      header: 'ГОЛОС, ТРИБУНА И СТРИМЫ',
+      bits: [
+        CommunityPermissions.connectVoice,
+        CommunityPermissions.speakVoice,
+        CommunityPermissions.video,
+        CommunityPermissions.streamVideo,
+        CommunityPermissions.screenShareHd,
+        CommunityPermissions.prioritySpeaker,
+        CommunityPermissions.useSoundboard,
+        CommunityPermissions.manageStage,
+      ],
+    ),
+    (
+      header: 'МОДЕРАЦИЯ',
+      bits: [
+        CommunityPermissions.muteMembers,
+        CommunityPermissions.deafenMembers,
+        CommunityPermissions.moveMembers,
+        CommunityPermissions.kickMembers,
+        CommunityPermissions.banMembers,
+      ],
+    ),
+  ];
+
+  late int _activeTab;
   late Community _community;
   late TextEditingController _nameCtrl;
   late TextEditingController _descCtrl;
+  late TextEditingController _roleNameCtrl;
+  final TextEditingController _memberSearchCtrl = TextEditingController();
+
   late bool _isPublic;
-  String? _inviteCode;
+  String? _avatarUrlOverride;
   bool _savingOverview = false;
+  bool _uploadingAvatar = false;
+  String? _currentUserId;
+
   CommunityRole? _selectedRole;
   List<CommunityMember> _members = const [];
+  List<CommunityBan> _bans = const [];
+  List<CommunityInvite> _invites = const [];
+  List<SoundboardItem> _sounds = const [];
+  int _membersSegment = 0; // 0: members, 1: bans
+  String _memberQuery = '';
   bool _loadingMembers = false;
+  bool _loadingBans = false;
+  bool _loadingInvites = false;
+  bool _loadingSounds = false;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _activeTab = widget.initialTab.clamp(0, _kTabTitles.length - 1);
     _community = widget.community;
     _nameCtrl = TextEditingController(text: _community.name);
     _descCtrl = TextEditingController(text: _community.description);
@@ -67,63 +169,179 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     if (_community.roles.isNotEmpty) {
       _selectedRole = _community.roles.first;
     }
-    _loadRolesAndMembers();
+    _roleNameCtrl = TextEditingController(text: _selectedRole?.name ?? '');
+
+    if (widget.initialMembers != null) _members = widget.initialMembers!;
+    if (widget.initialBans != null) _bans = widget.initialBans!;
+    if (widget.initialInvites != null) _invites = widget.initialInvites!;
+    if (widget.initialSounds != null) _sounds = widget.initialSounds!;
+
+    if (widget.autoFetch) {
+      _loadInitialData();
+    }
+  }
+
+  Future<void> _loadInitialData() async {
+    _currentUserId = await AuthService.getUserId();
+    await Future.wait([
+      _loadRolesAndMembers(),
+      _loadInvites(),
+      _loadBans(),
+      _loadSounds(),
+    ]);
   }
 
   Future<void> _loadRolesAndMembers() async {
+    if (!mounted) return;
     setState(() => _loadingMembers = true);
-    final rolesFuture = CommunityService.getRoles(_community.id);
-    final membersFuture = CommunityService.getMembers(_community.id);
-    final roles = await rolesFuture;
-    final members = await membersFuture;
+    final roles = await CommunityService.getRoles(_community.id);
+    final members = await CommunityService.getMembers(_community.id);
     if (!mounted) return;
     setState(() {
       _loadingMembers = false;
       if (roles.isNotEmpty) {
         _community = _community.copyWith(roles: roles);
-        _selectedRole = roles.firstWhere(
-          (r) => r.id == _selectedRole?.id,
-          orElse: () => roles.first,
+        _selectRole(
+          roles.firstWhere(
+            (r) => r.id == _selectedRole?.id,
+            orElse: () => roles.first,
+          ),
         );
       }
-      _members = members;
+      if (members.isNotEmpty) {
+        _members = members;
+      }
     });
     widget.onCommunityUpdated(_community);
   }
 
+  Future<void> _loadInvites() async {
+    if (!mounted) return;
+    setState(() => _loadingInvites = true);
+    final list = await CommunityService.listInvites(_community.id);
+    if (!mounted) return;
+    setState(() {
+      _loadingInvites = false;
+      _invites = list;
+    });
+  }
+
+  Future<void> _loadBans() async {
+    if (!mounted) return;
+    setState(() => _loadingBans = true);
+    final list = await CommunityService.getBans(_community.id);
+    if (!mounted) return;
+    setState(() {
+      _loadingBans = false;
+      _bans = list;
+    });
+  }
+
+  Future<void> _loadSounds() async {
+    if (!mounted) return;
+    setState(() => _loadingSounds = true);
+    final list = await CommunityService.getSoundboardSounds(_community.id);
+    if (!mounted) return;
+    setState(() {
+      _loadingSounds = false;
+      _sounds = list;
+    });
+  }
+
+  void _selectRole(CommunityRole? role) {
+    _selectedRole = role;
+    _roleNameCtrl.text = role?.name ?? '';
+  }
+
   @override
   void dispose() {
-    _tabController.dispose();
     _nameCtrl.dispose();
     _descCtrl.dispose();
+    _roleNameCtrl.dispose();
+    _memberSearchCtrl.dispose();
     super.dispose();
+  }
+
+  String _tr(BuildContext context, String key, String fallback) {
+    final l10n = Localizations.of<AppLocalizations>(context, AppLocalizations);
+    if (l10n != null) {
+      final v = l10n.translate(key);
+      if (v != key && v.isNotEmpty) return v;
+    }
+    return fallback;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Overview & Invites actions
+  // ---------------------------------------------------------------------------
+
+  Future<void> _pickAndUploadAvatar() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 88,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _uploadingAvatar = true);
+    try {
+      final res = await FileService().uploadFile(File(picked.path));
+      if (!mounted) return;
+      if (res.url.isNotEmpty) {
+        final updated = await CommunityService.updateCommunity(
+          _community.id,
+          avatarUrl: res.url,
+        );
+        if (!mounted) return;
+        setState(() {
+          _avatarUrlOverride = res.url;
+          if (updated != null) {
+            _community = updated;
+          } else {
+            _community = _community.copyWith(avatarUrl: res.url);
+          }
+        });
+        widget.onCommunityUpdated(_community);
+        GlassToastService().show(context, 'Аватар сообщества обновлён');
+      }
+    } catch (_) {
+      if (mounted) {
+        GlassToastService().showError(context, 'Не удалось загрузить фото');
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
   }
 
   Future<void> _saveOverview() async {
     final name = _nameCtrl.text.trim();
-    if (name.isEmpty) return;
+    if (name.isEmpty) {
+      GlassToastService().showError(context, 'Введите название сообщества');
+      return;
+    }
     setState(() => _savingOverview = true);
     final updated = await CommunityService.updateCommunity(
       _community.id,
       name: name,
       description: _descCtrl.text.trim(),
+      avatarUrl: _avatarUrlOverride,
       isPublic: _isPublic,
     );
     if (!mounted) return;
     setState(() => _savingOverview = false);
     if (updated == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.translate('common_error')),
-          backgroundColor: Colors.redAccent,
-        ),
+      GlassToastService().showError(
+        context,
+        _tr(context, 'common_error', 'Ошибка сохранения'),
       );
       return;
     }
     setState(() => _community = updated);
     widget.onCommunityUpdated(_community);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.l10n.translate('settings_saved'))),
+    GlassToastService().show(
+      context,
+      _tr(context, 'settings_saved', 'Настройки сохранены'),
     );
   }
 
@@ -131,41 +349,47 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     final code = await CommunityService.createInviteCode(_community.id);
     if (!mounted) return;
     if (code == null || code.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Не удалось создать код приглашения (проверьте права)'),
-        ),
+      GlassToastService().showError(
+        context,
+        'Не удалось создать код приглашения (проверьте права)',
       );
       return;
     }
-    setState(() => _inviteCode = code);
     await Clipboard.setData(ClipboardData(text: code));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Код приглашения скопирован: $code')),
-    );
+    GlassToastService().show(context, 'Код приглашения скопирован: $code');
+    if (widget.autoFetch) {
+      _loadInvites();
+    }
+  }
+
+  Future<void> _revokeInvite(CommunityInvite invite) async {
+    final ok = await CommunityService.deleteInvite(_community.id, invite.id);
+    if (!mounted) return;
+    if (ok) {
+      setState(() {
+        _invites = _invites.where((i) => i.id != invite.id).toList();
+      });
+      GlassToastService().show(context, 'Приглашение отозвано');
+    } else {
+      GlassToastService().showError(context, 'Не удалось отозвать инвайт');
+    }
   }
 
   Future<void> _confirmDeleteCommunity() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTheavDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Удалить сообщество?'),
-        content: Text(
+      title: 'Удалить сообщество?',
+      message:
           'Сообщество «${_community.name}» и все его каналы будут безвозвратно удалены.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Удалить',
+          result: true,
+          isDestructive: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Удалить'),
-          ),
-        ],
-      ),
+      ],
     );
     if (confirmed != true) return;
     final ok = await CommunityService.deleteCommunity(_community.id);
@@ -174,38 +398,51 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
       Navigator.of(context).pop();
       Navigator.of(context).maybePop();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Не удалось удалить сообщество (только владелец)'),
-        ),
+      GlassToastService().showError(
+        context,
+        'Не удалось удалить сообщество (только владелец)',
       );
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Channels & Categories actions
+  // ---------------------------------------------------------------------------
+
   Future<void> _promptCreateCategory() async {
     final ctrl = TextEditingController();
-    final name = await showDialog<String>(
+    final name = await showTheavDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Новая категория'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Например: ГОЛОСОВЫЕ КОМНАТЫ',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-            child: const Text('Создать'),
+      title: 'Новая категория',
+      content: TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavInlineTextField(
+            controller: ctrl,
+            autofocus: true,
+            placeholder: 'Например: ГОЛОСОВЫЕ КОМНАТЫ',
+            onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
           ),
         ],
       ),
+      customActions: [
+        Builder(
+          builder: (ctx) => Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Отмена'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+                child: const Text('Создать'),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
     if (name == null || name.isEmpty) return;
 
@@ -216,10 +453,9 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     );
     if (!mounted) return;
     if (created == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Не удалось создать категорию (проверьте права доступа)'),
-        ),
+      GlassToastService().showError(
+        context,
+        'Не удалось создать категорию (проверьте права доступа)',
       );
       return;
     }
@@ -235,106 +471,188 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     widget.onCommunityUpdated(_community);
   }
 
+  Future<void> _editCategory(CommunityCategory cat) async {
+    final ctrl = TextEditingController(text: cat.name);
+    bool isPrivate = cat.isPrivate;
+
+    final saved = await showTheavModalSheet<bool>(
+      context: context,
+      title: 'Категория',
+      showCloseButton: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TheavInsetGroup(
+                margin: EdgeInsets.zero,
+                children: [
+                  TheavInlineTextField(
+                    controller: ctrl,
+                    label: 'Название',
+                    placeholder: 'Название категории',
+                  ),
+                  TheavListRow(
+                    title: 'Приватная категория',
+                    subtitle: 'Скрыть каналы от @everyone по умолчанию',
+                    trailing: TheavSwitch(
+                      value: isPrivate,
+                      onChanged: (v) => setSheet(() => isPrivate = v),
+                    ),
+                    onTap: () => setSheet(() => isPrivate = !isPrivate),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: TheavFloatingPillButton(
+                  label: 'Сохранить',
+                  isPrimary: true,
+                  onTap: () => Navigator.of(ctx).pop(true),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (saved != true || !mounted) return;
+    final newName = ctrl.text.trim();
+    if (newName.isEmpty) return;
+    final ok = await CommunityService.updateCategory(
+      _community.id,
+      cat.id,
+      name: newName,
+      isPrivate: isPrivate,
+    );
+    if (!mounted) return;
+    if (ok) {
+      setState(() {
+        _community = _community.copyWith(
+          categories: _community.categories
+              .map(
+                (c) => c.id == cat.id
+                    ? c.copyWith(name: newName, isPrivate: isPrivate)
+                    : c,
+              )
+              .toList(),
+        );
+      });
+      widget.onCommunityUpdated(_community);
+    }
+  }
+
   Future<void> _promptCreateChannel() async {
     final nameCtrl = TextEditingController();
+    final topicCtrl = TextEditingController();
     String selectedType = 'text';
     String? selectedCategoryId = _community.categories.isNotEmpty
         ? _community.categories.first.id
         : null;
 
-    final result = await showDialog<bool>(
+    const types = [
+      (id: 'text', label: 'Текстовый (#)'),
+      (id: 'announcement', label: 'Объявления'),
+      (id: 'forum', label: 'Форум (ветки)'),
+      (id: 'voice', label: 'Голосовой (144 FPS)'),
+      (id: 'stage', label: 'Трибуна (Stage)'),
+      (id: 'whiteboard', label: 'Доска (Miro)'),
+    ];
+
+    final createdRequested = await showTheavModalSheet<bool>(
       context: context,
+      title: 'Создать канал',
+      showCloseButton: true,
+      maxHeightFactor: 0.9,
+      padding: EdgeInsets.zero,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Создать канал'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Название канала',
-                  hintText: 'general / gaming-144fps',
-                ),
-              ),
-              const SizedBox(height: 14),
-              const Text(
-                'Тип канала',
-                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(
-                    value: 'text',
-                    icon: Icon(Icons.tag_rounded, size: 15),
-                    label: Text('Текст'),
-                  ),
-                  ButtonSegment(
-                    value: 'announcement',
-                    icon: Icon(Icons.campaign_rounded, size: 15),
-                    label: Text('Анонсы'),
-                  ),
-                  ButtonSegment(
-                    value: 'voice',
-                    icon: Icon(Icons.volume_up_rounded, size: 15),
-                    label: Text('Голос'),
-                  ),
-                  ButtonSegment(
-                    value: 'stage',
-                    icon: Icon(Icons.podcasts_rounded, size: 15),
-                    label: Text('Трибуна'),
-                  ),
-                  ButtonSegment(
-                    value: 'whiteboard',
-                    icon: Icon(Icons.draw_rounded, size: 15),
-                    label: Text('Доска'),
-                  ),
-                ],
-                selected: {selectedType},
-                onSelectionChanged: (s) =>
-                    setDialogState(() => selectedType = s.first),
-              ),
-              if (_community.categories.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                DropdownButtonFormField<String?>(
-                  initialValue: selectedCategoryId,
-                  decoration: const InputDecoration(labelText: 'Категория'),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      value: null,
-                      child: Text('Без категории'),
+        builder: (ctx, setSheet) => SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 6, 0, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TheavInsetGroup(
+                  header: 'ПАРАМЕТРЫ',
+                  children: [
+                    TheavInlineTextField(
+                      controller: nameCtrl,
+                      autofocus: true,
+                      label: 'Название',
+                      placeholder: 'general / gaming-144fps',
                     ),
-                    ..._community.categories.map(
-                      (c) => DropdownMenuItem<String?>(
-                        value: c.id,
-                        child: Text(c.name),
-                      ),
+                    TheavInlineTextField(
+                      controller: topicCtrl,
+                      label: 'Тема (необязательно)',
+                      placeholder: 'О чём этот канал',
                     ),
                   ],
-                  onChanged: (v) =>
-                      setDialogState(() => selectedCategoryId = v),
+                ),
+                TheavInsetGroup(
+                  header: 'ТИП КАНАЛА',
+                  children: types.map((t) {
+                    final selected = t.id == selectedType;
+                    return TheavListRow(
+                      minHeight: 46,
+                      leading: CommunityChannelIcon(
+                        channelType: t.id,
+                        size: 19,
+                        isSelected: selected,
+                      ),
+                      title: t.label,
+                      trailing: TheavCheckCircle(selected: selected),
+                      onTap: () => setSheet(() => selectedType = t.id),
+                    );
+                  }).toList(),
+                ),
+                if (_community.categories.isNotEmpty)
+                  TheavInsetGroup(
+                    header: 'КАТЕГОРИЯ',
+                    children: [
+                      TheavListRow(
+                        title: 'Без категории',
+                        trailing: TheavCheckCircle(
+                          selected: selectedCategoryId == null,
+                        ),
+                        onTap: () =>
+                            setSheet(() => selectedCategoryId = null),
+                      ),
+                      ..._community.categories.map(
+                        (cat) => TheavListRow(
+                          leading: const iconoir.Folder(width: 18, height: 18),
+                          title: cat.name,
+                          trailing: TheavCheckCircle(
+                            selected: selectedCategoryId == cat.id,
+                          ),
+                          onTap: () =>
+                              setSheet(() => selectedCategoryId = cat.id),
+                        ),
+                      ),
+                    ],
+                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: TheavFloatingPillButton(
+                      label: 'Создать канал',
+                      icon: const iconoir.Plus(width: 18, height: 18),
+                      isPrimary: true,
+                      onTap: () => Navigator.of(ctx).pop(true),
+                    ),
+                  ),
                 ),
               ],
-            ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Создать'),
-            ),
-          ],
         ),
       ),
     );
 
-    if (result != true) return;
+    if (createdRequested != true) return;
     final name = nameCtrl.text.trim();
     if (name.isEmpty) return;
 
@@ -343,13 +661,13 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
       name: name,
       channelType: selectedType,
       categoryId: selectedCategoryId,
+      topic: topicCtrl.text.trim(),
     );
     if (!mounted) return;
     if (created == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Не удалось создать канал (проверьте права доступа)'),
-        ),
+      GlassToastService().showError(
+        context,
+        'Не удалось создать канал (проверьте права доступа)',
       );
       return;
     }
@@ -365,83 +683,219 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     widget.onCommunityUpdated(_community);
   }
 
-  Future<void> _toggleRolePermission(int bit) async {
-    final role = _selectedRole;
-    if (role == null || role.id == 'default_member') return;
-    HapticFeedback.selectionClick();
-    final hasBit = (role.permissions & bit) != 0;
-    final newPerms =
-        hasBit ? (role.permissions & ~bit) : (role.permissions | bit);
-    final updatedRole = role.copyWith(permissions: newPerms);
-    setState(() {
-      _selectedRole = updatedRole;
-      final roles = _community.roles
-          .map((r) => r.id == updatedRole.id ? updatedRole : r)
-          .toList();
-      _community = _community.copyWith(roles: roles);
-    });
-    widget.onCommunityUpdated(_community);
-    await CommunityService.updateRole(
-      _community.id,
-      role.id,
-      permissions: newPerms,
-    );
-  }
+  Future<void> _editChannel(CommunityChannel ch) async {
+    final nameCtrl = TextEditingController(text: ch.name);
+    final topicCtrl = TextEditingController(text: ch.topic);
+    String? selectedCatId = ch.categoryId;
+    int slowMode = ch.slowModeSeconds;
+    const slowModeOptions = [0, 5, 15, 60, 300];
 
-  Future<void> _promptCreateRole() async {
-    final ctrl = TextEditingController();
-    final name = await showDialog<String>(
+    final saved = await showTheavModalSheet<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Новая роль'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Например: Модератор'),
+      title: '# ${ch.name}',
+      showCloseButton: true,
+      maxHeightFactor: 0.88,
+      padding: EdgeInsets.zero,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TheavInsetGroup(
+                  header: 'ОСНОВНОЕ',
+                  children: [
+                    TheavInlineTextField(
+                      controller: nameCtrl,
+                      label: 'Название канала',
+                      placeholder: 'Название',
+                    ),
+                    TheavInlineTextField(
+                      controller: topicCtrl,
+                      label: 'Тема / описание',
+                      placeholder: 'Описание канала',
+                      maxLines: 3,
+                    ),
+                  ],
+                ),
+                if (!ch.isAudioRoom && !ch.isWhiteboard)
+                  TheavInsetGroup(
+                    header: 'МЕДЛЕННЫЙ РЕЖИМ',
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: slowModeOptions.map((sec) {
+                            final active = slowMode == sec;
+                            final label = sec == 0
+                                ? 'Выкл'
+                                : (sec >= 60 ? '${sec ~/ 60}м' : '$secс');
+                            return GestureDetector(
+                              onTap: () => setSheet(() => slowMode = sec),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 140),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 7,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: active
+                                      ? context.theav.primary
+                                      : context.theav.onSurface
+                                          .withValues(alpha: 0.06),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  label,
+                                  style: TextStyle(
+                                    color: active
+                                        ? Colors.white
+                                        : context.theav.onSurface,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ],
+                  ),
+                if (_community.categories.isNotEmpty)
+                  TheavInsetGroup(
+                    header: 'КАТЕГОРИЯ',
+                    children: [
+                      TheavListRow(
+                        title: 'Без категории',
+                        trailing: TheavCheckCircle(
+                          selected: selectedCatId == null,
+                        ),
+                        onTap: () => setSheet(() => selectedCatId = null),
+                      ),
+                      ..._community.categories.map(
+                        (cat) => TheavListRow(
+                          title: cat.name,
+                          trailing: TheavCheckCircle(
+                            selected: selectedCatId == cat.id,
+                          ),
+                          onTap: () => setSheet(() => selectedCatId = cat.id),
+                        ),
+                      ),
+                    ],
+                  ),
+                TheavInsetGroup(
+                  header: 'ДОСТУП',
+                  children: [
+                    TheavListRow(
+                      leading: const iconoir.ShieldCheck(width: 20, height: 20),
+                      title: 'Переопределения прав ролей',
+                      subtitle: 'Настроить видимость и права доступа в канале',
+                      showChevron: true,
+                      onTap: () => showCommunityOverwritesSheet(
+                        ctx,
+                        community: _community,
+                        chatId: ch.id,
+                        targetName: ch.name,
+                      ),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: TheavFloatingPillButton(
+                      label: 'Сохранить',
+                      isPrimary: true,
+                      onTap: () => Navigator.of(ctx).pop(true),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-            child: const Text('Создать'),
-          ),
-        ],
       ),
     );
-    if (name == null || name.isEmpty) return;
-    final created = await CommunityService.createRole(
+
+    if (saved != true || !mounted) return;
+    final newName = nameCtrl.text.trim();
+    if (newName.isEmpty) return;
+
+    final updated = await CommunityService.updateChannel(
       _community.id,
-      name: name,
-      permissions: CommunityPermissions.viewChannel |
-          CommunityPermissions.sendMessages |
-          CommunityPermissions.connectVoice |
-          CommunityPermissions.speakVoice,
+      ch.id,
+      name: newName,
+      topic: topicCtrl.text.trim(),
+      categoryId: selectedCatId,
+      clearCategory: selectedCatId == null && ch.categoryId != null,
+      slowModeSeconds: slowMode,
     );
-    if (!mounted || created == null) return;
-    setState(() {
-      _community = _community.copyWith(roles: [..._community.roles, created]);
-      _selectedRole = created;
-    });
-    widget.onCommunityUpdated(_community);
+    if (!mounted) return;
+    if (updated != null) {
+      setState(() {
+        _community = _community.copyWith(
+          channels: _community.channels
+              .map((c) => c.id == ch.id ? updated : c)
+              .toList(),
+        );
+      });
+      widget.onCommunityUpdated(_community);
+      GlassToastService().show(context, 'Канал обновлён');
+    } else {
+      GlassToastService().showError(context, 'Не удалось обновить канал');
+    }
   }
 
-  Future<void> _deleteSelectedRole() async {
-    final role = _selectedRole;
-    if (role == null || role.isEveryone) return;
-    final ok = await CommunityService.deleteRole(_community.id, role.id);
-    if (!mounted || !ok) return;
-    final remaining = _community.roles.where((r) => r.id != role.id).toList();
+  Future<void> _moveChannel(int index, int delta) async {
+    final targetIdx = index + delta;
+    if (targetIdx < 0 || targetIdx >= _community.channels.length) return;
+    HapticUtils.selection();
+    final reordered = List<CommunityChannel>.from(_community.channels);
+    final moved = reordered.removeAt(index);
+    reordered.insert(targetIdx, moved);
+    final updated = [
+      for (int i = 0; i < reordered.length; i++)
+        reordered[i].copyWith(position: i),
+    ];
     setState(() {
-      _community = _community.copyWith(roles: remaining);
-      _selectedRole = remaining.isNotEmpty ? remaining.first : null;
+      _community = _community.copyWith(channels: updated);
     });
     widget.onCommunityUpdated(_community);
+    await CommunityService.reorderChannels(
+      _community.id,
+      updated
+          .map(
+            (c) => (
+              chatId: c.id,
+              categoryId: c.categoryId,
+              position: c.position,
+            ),
+          )
+          .toList(),
+    );
   }
 
   Future<void> _deleteChannel(CommunityChannel ch) async {
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Удалить канал #${ch.name}?',
+      message: 'История сообщений в этом канале будет удалена.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Удалить',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true) return;
     final ok = await CommunityService.deleteChannel(_community.id, ch.id);
     if (!mounted || !ok) return;
     setState(() {
@@ -453,6 +907,20 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
   }
 
   Future<void> _deleteCategory(CommunityCategory cat) async {
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Удалить категорию «${cat.name}»?',
+      message: 'Каналы внутри категории станут общими без категории.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Удалить',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true) return;
     final ok = await CommunityService.deleteCategory(_community.id, cat.id);
     if (!mounted || !ok) return;
     final fresh = await CommunityService.getCommunity(_community.id);
@@ -467,50 +935,184 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     widget.onCommunityUpdated(_community);
   }
 
+  // ---------------------------------------------------------------------------
+  // Roles actions
+  // ---------------------------------------------------------------------------
+
+  Future<void> _updateSelectedRoleField({
+    String? name,
+    String? colorHex,
+    bool? isHoisted,
+    bool? isMentionable,
+    int? permissions,
+  }) async {
+    final role = _selectedRole;
+    if (role == null) return;
+    HapticUtils.selection();
+    final updatedRole = role.copyWith(
+      name: name,
+      colorHex: colorHex,
+      isHoisted: isHoisted,
+      isMentionable: isMentionable,
+      permissions: permissions,
+    );
+    setState(() {
+      _selectRole(updatedRole);
+      _community = _community.copyWith(
+        roles: _community.roles
+            .map((r) => r.id == updatedRole.id ? updatedRole : r)
+            .toList(),
+      );
+    });
+    widget.onCommunityUpdated(_community);
+    await CommunityService.updateRole(
+      _community.id,
+      role.id,
+      name: name,
+      colorHex: colorHex,
+      isHoisted: isHoisted,
+      isMentionable: isMentionable,
+      permissions: permissions,
+    );
+  }
+
+  Future<void> _toggleRolePermission(int bit) async {
+    final role = _selectedRole;
+    if (role == null || role.id == 'default_member') return;
+    final hasBit = (role.permissions & bit) != 0;
+    final newPerms =
+        hasBit ? (role.permissions & ~bit) : (role.permissions | bit);
+    await _updateSelectedRoleField(permissions: newPerms);
+  }
+
+  Future<void> _promptCreateRole() async {
+    final ctrl = TextEditingController();
+    final name = await showTheavDialog<String>(
+      context: context,
+      title: 'Новая роль',
+      content: TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavInlineTextField(
+            controller: ctrl,
+            autofocus: true,
+            placeholder: 'Например: Модератор',
+            onSubmitted: (v) => Navigator.of(context).pop(v.trim()),
+          ),
+        ],
+      ),
+      customActions: [
+        Builder(
+          builder: (ctx) => Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Отмена'),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+                child: const Text('Создать'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (name == null || name.isEmpty) return;
+    final created = await CommunityService.createRole(
+      _community.id,
+      name: name,
+      permissions: CommunityPermissions.viewChannel |
+          CommunityPermissions.sendMessages |
+          CommunityPermissions.connectVoice |
+          CommunityPermissions.speakVoice,
+    );
+    if (!mounted || created == null) return;
+    setState(() {
+      _community = _community.copyWith(roles: [..._community.roles, created]);
+      _selectRole(created);
+    });
+    widget.onCommunityUpdated(_community);
+  }
+
+  Future<void> _deleteSelectedRole() async {
+    final role = _selectedRole;
+    if (role == null || role.isEveryone) return;
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Удалить роль «${role.name}»?',
+      message: 'Участники с этой ролью потеряют её права.',
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Удалить',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true) return;
+    final ok = await CommunityService.deleteRole(_community.id, role.id);
+    if (!mounted || !ok) return;
+    final remaining = _community.roles.where((r) => r.id != role.id).toList();
+    setState(() {
+      _community = _community.copyWith(roles: remaining);
+      _selectRole(remaining.isNotEmpty ? remaining.first : null);
+    });
+    widget.onCommunityUpdated(_community);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Members & Bans actions
+  // ---------------------------------------------------------------------------
+
   Future<void> _showMemberActions(CommunityMember member) async {
     final assignableRoles =
         _community.roles.where((r) => !r.isEveryone).toList();
     final selectedRoleIds = Set<String>.from(member.roleIds);
+    final memberName = member.displayName.isNotEmpty
+        ? member.displayName
+        : member.username;
 
-    await showModalBottomSheet(
+    await showTheavModalSheet<void>(
       context: context,
+      title: memberName,
+      showCloseButton: true,
+      padding: EdgeInsets.zero,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+        builder: (ctx, setSheet) => SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.only(bottom: 16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  member.displayName.isNotEmpty
-                      ? member.displayName
-                      : member.username,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (assignableRoles.isNotEmpty) ...[
-                  const Text(
-                    'Роли участника:',
-                    style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
+                if (assignableRoles.isNotEmpty)
+                  TheavInsetGroup(
+                    header: 'РОЛИ УЧАСТНИКА',
                     children: assignableRoles.map((role) {
                       final hasRole = selectedRoleIds.contains(role.id);
-                      return FilterChip(
-                        label: Text(role.name),
-                        selected: hasRole,
-                        onSelected: (val) async {
-                          setSheetState(() {
-                            if (val) {
-                              selectedRoleIds.add(role.id);
-                            } else {
+                      final roleColor =
+                          role.parsedColor ?? context.theav.primary;
+                      return TheavListRow(
+                        leading: Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: roleColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        title: role.name,
+                        trailing: TheavCheckCircle(selected: hasRole),
+                        onTap: () async {
+                          setSheet(() {
+                            if (hasRole) {
                               selectedRoleIds.remove(role.id);
+                            } else {
+                              selectedRoleIds.add(role.id);
                             }
                           });
                           await CommunityService.setMemberRoles(
@@ -518,46 +1120,45 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
                             member.userId,
                             selectedRoleIds.toList(),
                           );
-                          _loadRolesAndMembers();
+                          if (widget.autoFetch) {
+                            _loadRolesAndMembers();
+                          }
                         },
                       );
                     }).toList(),
                   ),
-                  const Divider(height: 24),
-                ],
-                ListTile(
-                  leading: const Icon(
-                    Icons.person_remove_rounded,
-                    color: Colors.orange,
-                  ),
-                  title: const Text('Исключить (Kick)'),
-                  onTap: () async {
-                    Navigator.of(ctx).pop();
-                    final ok = await CommunityService.kickMember(
-                      _community.id,
-                      member.userId,
-                    );
-                    if (ok && mounted) {
-                      _loadRolesAndMembers();
-                    }
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(
-                    Icons.gavel_rounded,
-                    color: Colors.redAccent,
-                  ),
-                  title: const Text('Заблокировать (Ban)'),
-                  onTap: () async {
-                    Navigator.of(ctx).pop();
-                    final ok = await CommunityService.banMember(
-                      _community.id,
-                      member.userId,
-                    );
-                    if (ok && mounted) {
-                      _loadRolesAndMembers();
-                    }
-                  },
+                TheavInsetGroup(
+                  header: 'МОДЕРАЦИЯ',
+                  children: [
+                    TheavListRow(
+                      leading: const iconoir.UserXmark(width: 20, height: 20),
+                      title: 'Исключить (Kick)',
+                      subtitle: 'Удалить участника с возможностью вернуться',
+                      onTap: () async {
+                        Navigator.of(ctx).pop();
+                        final ok = await CommunityService.kickMember(
+                          _community.id,
+                          member.userId,
+                        );
+                        if (ok && mounted && widget.autoFetch) {
+                          GlassToastService().show(
+                            context,
+                            '$memberName исключён',
+                          );
+                          _loadRolesAndMembers();
+                        }
+                      },
+                    ),
+                    TheavListRow(
+                      leading: const iconoir.Prohibition(width: 20, height: 20),
+                      title: 'Заблокировать (Ban)',
+                      isDestructive: true,
+                      onTap: () async {
+                        Navigator.of(ctx).pop();
+                        await _promptBanMember(member);
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -567,482 +1168,1110 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet>
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final p = context.theav;
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final primaryColor = theme.colorScheme.primary;
-    final mq = MediaQuery.of(context);
-
-    return ClipRRect(
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-      child: BackdropFilter.grouped(
-        filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-        child: Container(
-          height: mq.size.height * 0.82,
-          decoration: BoxDecoration(
-            color: isDark
-                ? p.surfaceElevated.withValues(alpha: 0.95)
-                : Colors.white.withValues(alpha: 0.96),
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border(top: BorderSide(color: p.borderSubtle, width: 0.8)),
+  Future<void> _promptBanMember(CommunityMember member) async {
+    final reasonCtrl = TextEditingController();
+    final name = member.displayName.isNotEmpty
+        ? member.displayName
+        : member.username;
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: 'Заблокировать $name?',
+      content: TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavInlineTextField(
+            controller: reasonCtrl,
+            placeholder: 'Причина блокировки (необязательно)',
           ),
+        ],
+      ),
+      actions: const [
+        TheavDialogAction<bool>(label: 'Отмена', result: false),
+        TheavDialogAction<bool>(
+          label: 'Заблокировать',
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true) return;
+    final ok = await CommunityService.banMember(
+      _community.id,
+      member.userId,
+      reason: reasonCtrl.text.trim(),
+    );
+    if (!mounted) return;
+    if (ok) {
+      GlassToastService().show(context, '$name заблокирован');
+      if (widget.autoFetch) {
+        _loadRolesAndMembers();
+        _loadBans();
+      }
+    } else {
+      GlassToastService().showError(context, 'Не удалось заблокировать');
+    }
+  }
+
+  Future<void> _unbanMember(CommunityBan ban) async {
+    final ok = await CommunityService.unbanMember(_community.id, ban.userId);
+    if (!mounted) return;
+    if (ok) {
+      setState(() {
+        _bans = _bans.where((b) => b.userId != ban.userId).toList();
+      });
+      GlassToastService().show(context, 'Блокировка снята');
+    } else {
+      GlassToastService().showError(context, 'Не удалось снять блокировку');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Soundboard actions
+  // ---------------------------------------------------------------------------
+
+  Future<void> _promptAddSound() async {
+    final nameCtrl = TextEditingController();
+    final urlCtrl = TextEditingController();
+    String emoji = '🔊';
+    bool uploading = false;
+    const emojis = ['🔊', '📢', '🥁', '👏', '🎉', '🔔', '🔥', '🎺'];
+
+    await showTheavModalSheet<void>(
+      context: context,
+      title: 'Добавить звук',
+      showCloseButton: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          top: false,
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 38,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: p.textTertiary.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 16, 4),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.hub_rounded,
-                      color: primaryColor,
-                      size: 24,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Настройки «${_community.name}»',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: p.textPrimary,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.close_rounded, color: p.textSecondary),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
-                  ],
-                ),
-              ),
-              TabBar(
-                controller: _tabController,
-                isScrollable: true,
-                labelColor: primaryColor,
-                unselectedLabelColor: p.textSecondary,
-                indicatorColor: primaryColor,
-                tabs: const [
-                  Tab(text: 'Обзор'),
-                  Tab(text: 'Каналы'),
-                  Tab(text: 'Роли и права'),
-                  Tab(text: 'Участники'),
+              TheavInsetGroup(
+                margin: EdgeInsets.zero,
+                children: [
+                  TheavInlineTextField(
+                    controller: nameCtrl,
+                    label: 'Название клипа',
+                    placeholder: 'Например: Победный горн',
+                  ),
+                  TheavInlineTextField(
+                    controller: urlCtrl,
+                    label: 'URL аудиофайла или загрузите файл',
+                    placeholder: 'https://...',
+                    suffix: uploading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : GestureDetector(
+                            onTap: () async {
+                              final picked = await FilePicker.platform.pickFiles(
+                                type: FileType.audio,
+                              );
+                              if (picked == null ||
+                                  picked.files.single.path == null) {
+                                return;
+                              }
+                              setSheet(() => uploading = true);
+                              try {
+                                final file = File(picked.files.single.path!);
+                                final res = await FileService().uploadFile(file);
+                                if (res.url.isNotEmpty) {
+                                  urlCtrl.text = res.url;
+                                  if (nameCtrl.text.trim().isEmpty) {
+                                    nameCtrl.text = picked.files.single.name
+                                        .split('.')
+                                        .first;
+                                  }
+                                }
+                              } finally {
+                                if (ctx.mounted) {
+                                  setSheet(() => uploading = false);
+                                }
+                              }
+                            },
+                            child: iconoir.CloudUpload(
+                              width: 20,
+                              height: 20,
+                              color: context.theav.primary,
+                            ),
+                          ),
+                  ),
                 ],
               ),
-              Expanded(
-                child: TabBarView(
-                  controller: _tabController,
-                  children: [
-                    // 1. Overview Tab
-                    ListView(
-                      padding: const EdgeInsets.all(20),
-                      children: [
-                        TextField(
-                          controller: _nameCtrl,
-                          decoration: InputDecoration(
-                            labelText: 'Название сообщества',
-                            filled: true,
-                            fillColor:
-                                p.surfaceSecondary.withValues(alpha: 0.5),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                children: emojis.map((em) {
+                  final active = emoji == em;
+                  return GestureDetector(
+                    onTap: () => setSheet(() => emoji = em),
+                    child: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: active
+                            ? context.theav.primary.withValues(alpha: 0.18)
+                            : context.theav.onSurface.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(11),
+                        border: Border.all(
+                          color: active
+                              ? context.theav.primary
+                              : context.theav.divider,
                         ),
-                        const SizedBox(height: 14),
-                        TextField(
-                          controller: _descCtrl,
-                          maxLines: 3,
-                          decoration: InputDecoration(
-                            labelText: 'Описание сообщества',
-                            filled: true,
-                            fillColor:
-                                p.surfaceSecondary.withValues(alpha: 0.5),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        AdaptiveSwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          value: _isPublic,
-                          activeTrackColor: primaryColor,
-                          title: Text(
-                            'Публичное сообщество',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color: p.textPrimary,
-                            ),
-                          ),
-                          subtitle: Text(
-                            'Доступно в глобальном каталоге сообществ',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: p.textSecondary,
-                            ),
-                          ),
-                          onChanged: (v) => setState(() => _isPublic = v),
-                        ),
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: _savingOverview ? null : _saveOverview,
-                          icon: const Icon(Icons.check_rounded),
-                          label: Text(
-                            _savingOverview
-                                ? 'Сохранение...'
-                                : 'Сохранить изменения',
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Divider(color: p.borderSubtle),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Приглашение участников',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: p.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                          onPressed: _generateInvite,
-                          icon: const Icon(Icons.link_rounded),
-                          label: Text(
-                            _inviteCode != null
-                                ? 'Код: $_inviteCode (Скопирован)'
-                                : 'Создать код приглашения',
-                          ),
-                        ),
-                        const SizedBox(height: 24),
-                        Divider(color: p.borderSubtle),
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.redAccent,
-                            side: const BorderSide(color: Colors.redAccent),
-                          ),
-                          onPressed: _confirmDeleteCommunity,
-                          icon: const Icon(Icons.delete_forever_rounded),
-                          label: const Text('Удалить сообщество'),
-                        ),
-                      ],
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(em, style: const TextStyle(fontSize: 18)),
                     ),
-
-                    // 2. Channels & Categories Tab
-                    ListView(
-                      padding: const EdgeInsets.all(20),
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _promptCreateCategory,
-                                icon: const Icon(
-                                  Icons.create_new_folder_outlined,
-                                  size: 18,
-                                ),
-                                label: const Text('+ Категория'),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: FilledButton.icon(
-                                onPressed: _promptCreateChannel,
-                                icon: const Icon(Icons.add_rounded, size: 18),
-                                label: const Text('+ Канал'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 18),
-                        if (_community.categories.isNotEmpty) ...[
-                          Text(
-                            'Категории',
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w700,
-                              color: p.textSecondary,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          ..._community.categories.map((cat) {
-                            return ListTile(
-                              dense: true,
-                              contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 8),
-                              leading: Icon(
-                                Icons.folder_outlined,
-                                color: p.textSecondary,
-                              ),
-                              title: Text(
-                                cat.name,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: p.textPrimary,
-                                ),
-                              ),
-                              trailing: IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline_rounded,
-                                  size: 18,
-                                  color: Colors.redAccent,
-                                ),
-                                onPressed: () => _deleteCategory(cat),
-                              ),
-                            );
-                          }),
-                          Divider(color: p.borderSubtle, height: 20),
-                        ],
-                        ..._community.channels.map((ch) {
-                          return ListTile(
-                            contentPadding:
-                                const EdgeInsets.symmetric(horizontal: 8),
-                            leading: Icon(
-                              ch.isStage
-                                  ? Icons.podcasts_rounded
-                                  : ch.isVoice
-                                      ? Icons.volume_up_rounded
-                                      : ch.isWhiteboard
-                                          ? Icons.draw_rounded
-                                          : ch.isAnnouncement
-                                              ? Icons.campaign_rounded
-                                              : Icons.tag_rounded,
-                              color: ch.isAudioRoom
-                                  ? const Color(0xFF00C853)
-                                  : ch.isWhiteboard
-                                      ? const Color(0xFFAA00FF)
-                                      : primaryColor,
-                            ),
-                            title: Text(
-                              ch.name,
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                color: p.textPrimary,
-                              ),
-                            ),
-                            subtitle: Text(
-                              ch.isStage
-                                  ? 'Трибуна (Stage)'
-                                  : ch.isVoice
-                                      ? 'Голосовой канал + Go Live 144 FPS'
-                                      : ch.isWhiteboard
-                                          ? 'Интерактивная доска (Miro-style)'
-                                          : ch.isAnnouncement
-                                              ? 'Канал объявлений'
-                                              : 'Текстовый канал',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: p.textSecondary,
-                              ),
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(
-                                Icons.delete_outline_rounded,
-                                size: 19,
-                                color: Colors.redAccent,
-                              ),
-                              onPressed: () => _deleteChannel(ch),
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-
-                    // 3. Roles & Bitmask Permissions Tab
-                    ListView(
-                      padding: const EdgeInsets.all(16),
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  children: _community.roles.map((r) {
-                                    final selected = r.id == _selectedRole?.id;
-                                    return Padding(
-                                      padding: const EdgeInsets.only(right: 8),
-                                      child: ChoiceChip(
-                                        label: Text(r.name),
-                                        selected: selected,
-                                        onSelected: (_) => setState(
-                                            () => _selectedRole = r),
-                                      ),
-                                    );
-                                  }).toList(),
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Создать роль',
-                              icon: Icon(Icons.add_circle_outline_rounded,
-                                  color: primaryColor),
-                              onPressed: _promptCreateRole,
-                            ),
-                            if (_selectedRole != null &&
-                                !_selectedRole!.isEveryone)
-                              IconButton(
-                                tooltip: 'Удалить роль',
-                                icon: const Icon(
-                                  Icons.delete_outline_rounded,
-                                  color: Colors.redAccent,
-                                ),
-                                onPressed: _deleteSelectedRole,
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: primaryColor.withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.shield_rounded, color: primaryColor),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  'Роль: ${_selectedRole?.name ?? "@everyone"} (Битовая маска прав)',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: p.textPrimary,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        ...CommunityPermissions.allFlags.map((flag) {
-                          final enabled =
-                              ((_selectedRole?.permissions ?? 0) & flag.bit) !=
-                                  0;
-                          return AdaptiveSwitchListTile(
-                            value: enabled,
-                            activeTrackColor: primaryColor,
-                            title: Text(
-                              flag.title,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: p.textPrimary,
-                              ),
-                            ),
-                            subtitle: Text(
-                              flag.subtitle,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: p.textSecondary,
-                              ),
-                            ),
-                            onChanged: (_) => _toggleRolePermission(flag.bit),
-                          );
-                        }),
-                      ],
-                    ),
-
-                    // 4. Members Tab
-                    _loadingMembers
-                        ? const Center(child: CircularProgressIndicator())
-                        : ListView.builder(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: _members.length,
-                            itemBuilder: (ctx, i) {
-                              final m = _members[i];
-                              final roleNames = _community.roles
-                                  .where((r) => m.roleIds.contains(r.id))
-                                  .map((r) => r.name)
-                                  .join(', ');
-                              final memberName = m.displayName.isNotEmpty
-                                  ? m.displayName
-                                  : (m.username.isNotEmpty ? m.username : 'U');
-                              final memberCust = m.peerCustomization;
-                              return ListTile(
-                                leading: AvatarWithStatus(
-                                  userId: m.userId,
-                                  avatarUrl: m.avatarUrl,
-                                  name: memberName,
-                                  radius: 20,
-                                  isOnline: m.isOnline,
-                                  decorationOverride:
-                                      memberCust?.avatarDecoration,
-                                  showDecoration: true,
-                                  animateDecoration: false,
-                                ),
-                                title: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        memberName,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          color: p.textPrimary,
-                                        ),
-                                      ),
-                                    ),
-                                    if (memberCust?.activeEmojiStatus !=
-                                        null) ...[
-                                      const SizedBox(width: 4),
-                                      EmojiStatusBadge(
-                                        status: memberCust!.activeEmojiStatus,
-                                        size: 15,
-                                        interactive: false,
-                                      ),
-                                    ],
-                                    PeerBadgesRow(
-                                      isBot: m.isBot,
-                                      isVerified: m.isVerified,
-                                      badge: memberCust?.visibleBadge,
-                                      interactiveBadge: false,
-                                      verifiedIconSize: 15,
-                                    ),
-                                  ],
-                                ),
-                                subtitle: Text(
-                                  roleNames.isNotEmpty
-                                      ? roleNames
-                                      : '@everyone',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: p.textSecondary,
-                                  ),
-                                ),
-                                trailing: IconButton(
-                                  icon: Icon(
-                                    Icons.more_vert_rounded,
-                                    color: p.textSecondary,
-                                  ),
-                                  onPressed: () => _showMemberActions(m),
-                                ),
-                              );
-                            },
-                          ),
-                  ],
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: TheavFloatingPillButton(
+                  label: 'Сохранить клип',
+                  isPrimary: true,
+                  enabled: !uploading,
+                  onTap: () async {
+                    final clipName = nameCtrl.text.trim();
+                    final clipUrl = urlCtrl.text.trim();
+                    if (clipName.isEmpty || clipUrl.isEmpty) {
+                      GlassToastService().showError(
+                        ctx,
+                        'Укажите название и аудиофайл',
+                      );
+                      return;
+                    }
+                    final created = await CommunityService.createSoundboardSound(
+                      _community.id,
+                      name: clipName,
+                      fileUrl: clipUrl,
+                      emoji: emoji,
+                    );
+                    if (!ctx.mounted || !mounted) return;
+                    if (created != null) {
+                      setState(() => _sounds = [..._sounds, created]);
+                      Navigator.of(ctx).pop();
+                      GlassToastService().show(context, 'Звук добавлен');
+                    } else {
+                      GlassToastService().showError(
+                        ctx,
+                        'Не удалось добавить звук',
+                      );
+                    }
+                  },
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _deleteSound(SoundboardItem item) async {
+    final ok = await CommunityService.deleteSoundboardSound(
+      _community.id,
+      item.id,
+    );
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _sounds = _sounds.where((s) => s.id != item.id).toList());
+      GlassToastService().show(context, 'Звук удалён');
+    } else {
+      GlassToastService().showError(context, 'Не удалось удалить звук');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Build
+  // ---------------------------------------------------------------------------
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.theav;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Dual-mode Pill Tab Strip
+        SizedBox(
+          height: 44,
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            scrollDirection: Axis.horizontal,
+            itemCount: _kTabTitles.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            itemBuilder: (ctx, i) {
+              final selected = i == _activeTab;
+              return GestureDetector(
+                onTap: () {
+                  HapticUtils.selection();
+                  setState(() => _activeTab = i);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 160),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? palette.primary
+                        : palette.onSurface.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: selected ? palette.primary : palette.divider,
+                      width: 0.5,
+                    ),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _kTabTitles[i],
+                    style: TextStyle(
+                      color: selected ? palette.onPrimary : palette.onSurface,
+                      fontSize: 13.5,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 4),
+        Flexible(
+          child: _buildActiveTabBody(context, palette),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActiveTabBody(BuildContext context, TheavPalette palette) {
+    switch (_activeTab) {
+      case 0:
+        return _buildOverviewTab(context, palette);
+      case 1:
+        return _buildChannelsTab(context, palette);
+      case 2:
+        return _buildRolesTab(context, palette);
+      case 3:
+        return _buildMembersAndBansTab(context, palette);
+      case 4:
+        return _buildSoundboardTab(context, palette);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildOverviewTab(BuildContext context, TheavPalette palette) {
+    final bool isOwner =
+        _currentUserId == null || _currentUserId == _community.ownerId;
+
+    return ListView(
+      padding: const EdgeInsets.only(top: 6, bottom: 24),
+      children: [
+        Center(
+          child: GestureDetector(
+            onTap: _uploadingAvatar ? null : _pickAndUploadAvatar,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                CommunityAvatar(
+                  avatarUrl: _avatarUrlOverride ?? _community.avatarUrl,
+                  name: _community.name,
+                  size: 76,
+                ),
+                Positioned(
+                  right: -4,
+                  bottom: -4,
+                  child: Container(
+                    width: 28,
+                    height: 28,
+                    decoration: BoxDecoration(
+                      color: palette.primary,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: palette.surface, width: 2),
+                    ),
+                    alignment: Alignment.center,
+                    child: _uploadingAvatar
+                        ? const SizedBox(
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const iconoir.Camera(
+                            width: 14,
+                            height: 14,
+                            color: Colors.white,
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TheavInsetGroup(
+          header: 'ОСНОВНОЕ',
+          children: [
+            TheavInlineTextField(
+              controller: _nameCtrl,
+              label: 'Название сообщества',
+              placeholder: 'Название',
+            ),
+            TheavInlineTextField(
+              controller: _descCtrl,
+              label: 'Описание',
+              placeholder: 'Чем занимается сообщество',
+              maxLines: 3,
+            ),
+            TheavListRow(
+              title: 'Публичное сообщество',
+              subtitle: 'Видно в глобальном каталоге и поиске',
+              trailing: TheavSwitch(
+                value: _isPublic,
+                onChanged: (v) => setState(() => _isPublic = v),
+              ),
+              onTap: () => setState(() => _isPublic = !_isPublic),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+          child: SizedBox(
+            width: double.infinity,
+            child: TheavFloatingPillButton(
+              label: _savingOverview ? 'Сохранение...' : 'Сохранить изменения',
+              icon: const iconoir.Check(width: 18, height: 18),
+              isPrimary: true,
+              enabled: !_savingOverview,
+              onTap: _saveOverview,
+            ),
+          ),
+        ),
+        TheavInsetGroup(
+          header: 'ПРИГЛАШЕНИЯ',
+          headerTrailing: _loadingInvites
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.6),
+                )
+              : null,
+          children: [
+            TheavListRow(
+              leading: const iconoir.Link(width: 20, height: 20),
+              title: 'Создать код приглашения',
+              subtitle: 'Скопируется в буфер обмена',
+              showChevron: true,
+              onTap: _generateInvite,
+            ),
+            ..._invites.map((inv) {
+              final usesLabel = inv.maxUses > 0
+                  ? '${inv.uses}/${inv.maxUses} исп.'
+                  : '${inv.uses} исп.';
+              return TheavListRow(
+                leading: const iconoir.Copy(width: 18, height: 18),
+                title: inv.code,
+                subtitle: inv.isExpired ? 'Истекло • $usesLabel' : usesLabel,
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: inv.code));
+                  if (context.mounted) {
+                    GlassToastService().show(
+                      context,
+                      'Скопировано: ${inv.code}',
+                    );
+                  }
+                },
+                trailing: GestureDetector(
+                  onTap: () => _revokeInvite(inv),
+                  child: iconoir.Trash(
+                    width: 18,
+                    height: 18,
+                    color: palette.error,
+                  ),
+                ),
+              );
+            }),
+          ],
+        ),
+        if (isOwner)
+          TheavInsetGroup(
+            header: 'ОПАСНАЯ ЗОНА',
+            children: [
+              TheavListRow(
+                leading: const iconoir.Trash(width: 20, height: 20),
+                title: 'Удалить сообщество',
+                subtitle: 'Действие необратимо удалит все каналы и переписки',
+                isDestructive: true,
+                onTap: _confirmDeleteCommunity,
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildChannelsTab(BuildContext context, TheavPalette palette) {
+    return ListView(
+      padding: const EdgeInsets.only(top: 6, bottom: 24),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: TheavFloatingPillButton(
+                  label: 'Категория',
+                  icon: const iconoir.Folder(width: 17, height: 17),
+                  onTap: _promptCreateCategory,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: TheavFloatingPillButton(
+                  label: 'Канал',
+                  icon: const iconoir.Plus(width: 17, height: 17),
+                  isPrimary: true,
+                  onTap: _promptCreateChannel,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_community.categories.isNotEmpty)
+          TheavInsetGroup(
+            header: 'КАТЕГОРИИ',
+            children: _community.categories.map((cat) {
+              return TheavListRow(
+                leading: iconoir.Folder(
+                  width: 19,
+                  height: 19,
+                  color: palette.primary,
+                ),
+                title: cat.name,
+                subtitle: cat.isPrivate ? 'Приватная категория' : null,
+                onTap: () => _editCategory(cat),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      onTap: () => showCommunityOverwritesSheet(
+                        context,
+                        community: _community,
+                        categoryId: cat.id,
+                        targetName: cat.name,
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: iconoir.Shield(
+                          width: 17,
+                          height: 17,
+                          color: palette.primary,
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => _deleteCategory(cat),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: iconoir.Trash(
+                          width: 17,
+                          height: 17,
+                          color: palette.error,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+        TheavInsetGroup(
+          header: 'КАНАЛЫ (${_community.channels.length})',
+          footer:
+              'Нажмите на канал для редактирования медленного режима и прав доступа, или перемещайте стрелками.',
+          children: _community.channels.isEmpty
+              ? [
+                  const TheavListRow(
+                    title: 'Каналы ещё не созданы',
+                    subtitle: 'Нажмите «+ Канал» выше',
+                  ),
+                ]
+              : [
+                  for (int i = 0; i < _community.channels.length; i++)
+                    Builder(
+                      builder: (ctx) {
+                        final ch = _community.channels[i];
+                        return TheavListRow(
+                          leading: CommunityChannelIcon(
+                            channelType: ch.channelType,
+                            size: 19,
+                          ),
+                          title: ch.name,
+                          subtitle:
+                              CommunityChannelIcon.describeType(ch.channelType),
+                          onTap: () => _editChannel(ch),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (i > 0)
+                                GestureDetector(
+                                  onTap: () => _moveChannel(i, -1),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(4),
+                                    child: iconoir.NavArrowUp(
+                                      width: 16,
+                                      height: 16,
+                                      color: palette.subtext,
+                                    ),
+                                  ),
+                                ),
+                              if (i < _community.channels.length - 1)
+                                GestureDetector(
+                                  onTap: () => _moveChannel(i, 1),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(4),
+                                    child: iconoir.NavArrowDown(
+                                      width: 16,
+                                      height: 16,
+                                      color: palette.subtext,
+                                    ),
+                                  ),
+                                ),
+                              GestureDetector(
+                                onTap: () => showCommunityOverwritesSheet(
+                                  ctx,
+                                  community: _community,
+                                  chatId: ch.id,
+                                  targetName: '#${ch.name}',
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(5),
+                                  child: iconoir.Shield(
+                                    width: 16,
+                                    height: 16,
+                                    color: palette.primary,
+                                  ),
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: () => _deleteChannel(ch),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(5),
+                                  child: iconoir.Trash(
+                                    width: 16,
+                                    height: 16,
+                                    color: palette.error,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRolesTab(BuildContext context, TheavPalette palette) {
+    final role = _selectedRole;
+    final flagByBit = {
+      for (final f in CommunityPermissions.allFlags) f.bit: f,
+    };
+
+    return ListView(
+      padding: const EdgeInsets.only(top: 6, bottom: 24),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 36,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _community.roles.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (ctx, i) {
+                      final r = _community.roles[i];
+                      final selected = r.id == role?.id;
+                      final dotColor = r.parsedColor ?? palette.subtext;
+                      return GestureDetector(
+                        onTap: () {
+                          HapticUtils.selection();
+                          setState(() => _selectRole(r));
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? palette.primary.withValues(alpha: 0.14)
+                                : palette.onSurface.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: selected
+                                  ? palette.primary
+                                  : palette.divider,
+                              width: selected ? 1.1 : 0.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: dotColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                r.name,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: selected
+                                      ? FontWeight.w600
+                                      : FontWeight.w500,
+                                  color: palette.onSurface,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _SmallActionIcon(
+                icon: iconoir.PlusCircle(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                onTap: _promptCreateRole,
+              ),
+              if (role != null && !role.isEveryone) ...[
+                const SizedBox(width: 4),
+                _SmallActionIcon(
+                  icon: iconoir.Trash(
+                    width: 19,
+                    height: 19,
+                    color: palette.error,
+                  ),
+                  onTap: _deleteSelectedRole,
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (role != null) ...[
+          TheavInsetGroup(
+            header: 'НАСТРОЙКИ РОЛИ',
+            children: [
+              if (!role.isEveryone)
+                TheavInlineTextField(
+                  controller: _roleNameCtrl,
+                  label: 'Название роли',
+                  placeholder: 'Название',
+                  onSubmitted: (v) {
+                    if (v.trim().isNotEmpty) {
+                      _updateSelectedRoleField(name: v.trim());
+                    }
+                  },
+                  suffix: GestureDetector(
+                    onTap: () {
+                      final trimmed = _roleNameCtrl.text.trim();
+                      if (trimmed.isNotEmpty) {
+                        _updateSelectedRoleField(name: trimmed);
+                        GlassToastService().show(context, 'Имя роли обновлено');
+                      }
+                    },
+                    child: iconoir.Check(
+                      width: 18,
+                      height: 18,
+                      color: palette.primary,
+                    ),
+                  ),
+                ),
+              if (!role.isEveryone)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Цвет роли',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: palette.subtext,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 8,
+                        children: _kRoleColors.map((hex) {
+                          final colorVal = int.parse(
+                            'ff${hex.substring(1)}',
+                            radix: 16,
+                          );
+                          final c = Color(colorVal);
+                          final isSelected =
+                              role.colorHex.toUpperCase() == hex.toUpperCase();
+                          return GestureDetector(
+                            onTap: () =>
+                                _updateSelectedRoleField(colorHex: hex),
+                            child: Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: c,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: isSelected
+                                      ? palette.onSurface
+                                      : Colors.transparent,
+                                  width: 2.2,
+                                ),
+                              ),
+                              alignment: Alignment.center,
+                              child: isSelected
+                                  ? const iconoir.Check(
+                                      width: 14,
+                                      height: 14,
+                                      color: Colors.white,
+                                    )
+                                  : null,
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              if (!role.isEveryone)
+                TheavListRow(
+                  title: 'Показывать отдельно (Hoisted)',
+                  subtitle: 'Группировать участников с этой ролью в списке',
+                  trailing: TheavSwitch(
+                    value: role.isHoisted,
+                    onChanged: (v) => _updateSelectedRoleField(isHoisted: v),
+                  ),
+                  onTap: () =>
+                      _updateSelectedRoleField(isHoisted: !role.isHoisted),
+                ),
+              TheavListRow(
+                title: 'Разрешить упоминания (@роль)',
+                trailing: TheavSwitch(
+                  value: role.isMentionable,
+                  onChanged: (v) => _updateSelectedRoleField(isMentionable: v),
+                ),
+                onTap: () =>
+                    _updateSelectedRoleField(isMentionable: !role.isMentionable),
+              ),
+            ],
+          ),
+          for (final group in _kPermissionGroups)
+            TheavInsetGroup(
+              header: group.header,
+              dividerIndent: 16,
+              children: group.bits
+                  .map((bit) => flagByBit[bit])
+                  .whereType<({int bit, String title, String subtitle})>()
+                  .map((flag) {
+                    final enabled = (role.permissions & flag.bit) != 0;
+                    final locked = role.id == 'default_member';
+                    return TheavListRow(
+                      title: flag.title,
+                      subtitle: flag.subtitle,
+                      trailing: TheavSwitch(
+                        value: enabled,
+                        onChanged:
+                            locked ? null : (_) => _toggleRolePermission(flag.bit),
+                      ),
+                      onTap: locked
+                          ? null
+                          : () => _toggleRolePermission(flag.bit),
+                    );
+                  })
+                  .toList(),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildMembersAndBansTab(BuildContext context, TheavPalette palette) {
+    final qLower = _memberQuery.trim().toLowerCase();
+    final filteredMembers = qLower.isEmpty
+        ? _members
+        : _members.where((m) {
+            return m.displayName.toLowerCase().contains(qLower) ||
+                m.username.toLowerCase().contains(qLower);
+          }).toList();
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+          child: TheavSegmentedControl<int>(
+            selected: _membersSegment,
+            onChanged: (v) => setState(() => _membersSegment = v),
+            options: [
+              TheavSegmentOption(
+                value: 0,
+                label: 'Участники (${_members.length})',
+              ),
+              TheavSegmentOption(
+                value: 1,
+                label: 'Баны (${_bans.length})',
+              ),
+            ],
+          ),
+        ),
+        if (_membersSegment == 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
+            child: TheavInsetGroup(
+              margin: EdgeInsets.zero,
+              borderRadius: 14,
+              children: [
+                TheavInlineTextField(
+                  controller: _memberSearchCtrl,
+                  placeholder: 'Найти участника...',
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  prefix: iconoir.Search(
+                    width: 17,
+                    height: 17,
+                    color: palette.subtext,
+                  ),
+                  onChanged: (v) => setState(() => _memberQuery = v),
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: _membersSegment == 0
+              ? (_loadingMembers && _members.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.only(top: 4, bottom: 20),
+                      children: [
+                        TheavInsetGroup(
+                          dividerIndent: 58,
+                          children: filteredMembers.isEmpty
+                              ? [
+                                  const TheavListRow(
+                                    title: 'Участники не найдены',
+                                  ),
+                                ]
+                              : filteredMembers.map((m) {
+                                  final memberName = m.displayName.isNotEmpty
+                                      ? m.displayName
+                                      : (m.username.isNotEmpty
+                                          ? m.username
+                                          : 'U');
+                                  final roleNames = _community.roles
+                                      .where((r) => m.roleIds.contains(r.id))
+                                      .map((r) => r.name)
+                                      .join(', ');
+                                  final topRole = highestColoredRoleForMember(
+                                    m,
+                                    _community.roles,
+                                  );
+                                  final cust = m.peerCustomization;
+
+                                  return TheavListRow(
+                                    leading: AvatarWithStatus(
+                                      userId: m.userId,
+                                      avatarUrl: m.avatarUrl,
+                                      name: memberName,
+                                      radius: 19,
+                                      isOnline: m.isOnline,
+                                      decorationOverride: cust?.avatarDecoration,
+                                      showDecoration: true,
+                                      animateDecoration: false,
+                                    ),
+                                    titleWidget: Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            memberName,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              color: topRole?.parsedColor ??
+                                                  palette.onSurface,
+                                            ),
+                                          ),
+                                        ),
+                                        if (cust?.activeEmojiStatus != null) ...[
+                                          const SizedBox(width: 4),
+                                          EmojiStatusBadge(
+                                            status: cust!.activeEmojiStatus,
+                                            size: 14,
+                                            interactive: false,
+                                          ),
+                                        ],
+                                        PeerBadgesRow(
+                                          isBot: m.isBot,
+                                          isVerified: m.isVerified,
+                                          badge: cust?.visibleBadge,
+                                          interactiveBadge: false,
+                                          verifiedIconSize: 14,
+                                        ),
+                                      ],
+                                    ),
+                                    subtitle: roleNames.isNotEmpty
+                                        ? roleNames
+                                        : '@everyone',
+                                    showChevron: true,
+                                    onTap: () => _showMemberActions(m),
+                                  );
+                                }).toList(),
+                        ),
+                      ],
+                    ))
+              : (_loadingBans && _bans.isEmpty
+                  ? const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.only(top: 4, bottom: 20),
+                      children: [
+                        TheavInsetGroup(
+                          children: _bans.isEmpty
+                              ? [
+                                  const TheavListRow(
+                                    title: 'Чёрный список пуст',
+                                    subtitle: 'Заблокированных участников нет',
+                                  ),
+                                ]
+                              : _bans.map((b) {
+                                  return TheavListRow(
+                                    leading: AvatarWithStatus(
+                                      userId: b.userId,
+                                      avatarUrl: b.avatarUrl,
+                                      name: b.displayName,
+                                      radius: 18,
+                                      isOnline: false,
+                                      showDecoration: false,
+                                    ),
+                                    title: b.displayName,
+                                    subtitle: b.reason.isNotEmpty
+                                        ? 'Причина: ${b.reason}'
+                                        : (b.username.isNotEmpty
+                                            ? '@${b.username}'
+                                            : null),
+                                    trailing: TextButton(
+                                      onPressed: () => _unbanMember(b),
+                                      child: const Text('Разбанить'),
+                                    ),
+                                  );
+                                }).toList(),
+                        ),
+                      ],
+                    )),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSoundboardTab(BuildContext context, TheavPalette palette) {
+    return ListView(
+      padding: const EdgeInsets.only(top: 6, bottom: 24),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+          child: SizedBox(
+            width: double.infinity,
+            child: TheavFloatingPillButton(
+              label: 'Добавить звуковой клип',
+              icon: const iconoir.MusicDoubleNote(width: 18, height: 18),
+              isPrimary: true,
+              onTap: _promptAddSound,
+            ),
+          ),
+        ),
+        if (_loadingSounds && _sounds.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          )
+        else
+          TheavInsetGroup(
+            header: 'САУНДБОРД СООБЩЕСТВА (${_sounds.length})',
+            footer:
+                'Звуки доступны в голосовых комнатах и на трибуне для участников с правом саундборда.',
+            children: _sounds.isEmpty
+                ? [
+                    const TheavListRow(
+                      title: 'Пользовательских звуков пока нет',
+                      subtitle: 'Загрузите короткий аудиофайл (до 10 сек.)',
+                    ),
+                  ]
+                : _sounds.map((s) {
+                    final secStr =
+                        '${(s.durationMs / 1000.0).toStringAsFixed(1)} с';
+                    return TheavListRow(
+                      leading: Text(
+                        s.emoji.isNotEmpty ? s.emoji : '🔊',
+                        style: const TextStyle(fontSize: 20),
+                      ),
+                      title: s.name,
+                      subtitle: secStr,
+                      trailing: GestureDetector(
+                        onTap: () => _deleteSound(s),
+                        child: iconoir.Trash(
+                          width: 18,
+                          height: 18,
+                          color: palette.error,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+          ),
+      ],
+    );
+  }
+}
+
+class _SmallActionIcon extends StatelessWidget {
+  final Widget icon;
+  final VoidCallback onTap;
+
+  const _SmallActionIcon({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        HapticUtils.tap();
+        onTap();
+      },
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: icon,
       ),
     );
   }

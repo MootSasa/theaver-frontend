@@ -114,6 +114,12 @@ class GroupChatScreen extends StatefulWidget {
   final String? initialMessageId;
   final ForumTopic? activeTopic;
   final bool initialIsForum;
+  final String? communityName;
+  final bool communityReadOnly;
+  final String? communityReadOnlyReason;
+  final VoidCallback? onOpenCommunityChannels;
+  final VoidCallback? onOpenCommunityMembers;
+  final VoidCallback? onOpenCommunitySettings;
 
   const GroupChatScreen({
     Key? key,
@@ -123,6 +129,12 @@ class GroupChatScreen extends StatefulWidget {
     this.initialMessageId,
     this.activeTopic,
     this.initialIsForum = false,
+    this.communityName,
+    this.communityReadOnly = false,
+    this.communityReadOnlyReason,
+    this.onOpenCommunityChannels,
+    this.onOpenCommunityMembers,
+    this.onOpenCommunitySettings,
   }) : super(key: key);
 
   @override
@@ -240,6 +252,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   bool get _isGuestViewer => !_isMember || _myRole == 'guest';
   bool get _canSendMessages =>
+      !widget.communityReadOnly &&
       !_isGuestViewer &&
       !_isActiveTopicClosed &&
       _effectivePermissions.canSendMessages;
@@ -5185,7 +5198,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 isVerified: _isVerified,
                 statusText: (!_isTyping && _activeTopic != null)
                     ? '${_activeTopic!.title} · $statusSubtitle'
-                    : statusSubtitle,
+                    : ((!_isTyping &&
+                            widget.communityName != null &&
+                            widget.communityName!.isNotEmpty)
+                        ? '${widget.communityName} · $statusSubtitle'
+                        : statusSubtitle),
                 statusColor: _isTyping
                     ? (Theme.of(context).brightness == Brightness.dark
                         ? const Color(0xFF5CB8E6)
@@ -5271,6 +5288,36 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                         height: 20,
                       ),
                       onTap: _openForumTopicsScreen,
+                    ),
+                  if (widget.onOpenCommunityChannels != null)
+                    FloatingChatMenuItem(
+                      label: 'Каналы сообщества',
+                      iconBuilder: (c) => iconoir.List(
+                        color: c,
+                        width: 20,
+                        height: 20,
+                      ),
+                      onTap: widget.onOpenCommunityChannels!,
+                    ),
+                  if (widget.onOpenCommunityMembers != null)
+                    FloatingChatMenuItem(
+                      label: 'Участники',
+                      iconBuilder: (c) => iconoir.Group(
+                        color: c,
+                        width: 20,
+                        height: 20,
+                      ),
+                      onTap: widget.onOpenCommunityMembers!,
+                    ),
+                  if (widget.onOpenCommunitySettings != null)
+                    FloatingChatMenuItem(
+                      label: 'Настройки сообщества',
+                      iconBuilder: (c) => iconoir.Settings(
+                        color: c,
+                        width: 20,
+                        height: 20,
+                      ),
+                      onTap: widget.onOpenCommunitySettings!,
                     ),
                 ],
               );
@@ -5828,6 +5875,33 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             Flexible(
               child: Text(
                 'Тема закрыта администраторами',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w500,
+                  color: mutedTextColor,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (widget.communityReadOnly) {
+      barChild = _buildGlassCapsuleBar(
+        key: const ValueKey('group_bottom_community_readonly'),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            iconoir.Lock(
+              width: 16,
+              height: 16,
+              color: mutedTextColor,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                widget.communityReadOnlyReason ?? 'Только для чтения',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
