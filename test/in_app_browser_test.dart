@@ -358,19 +358,28 @@ void main() {
       final js = MiniAppSession.buildBrowserSafeInsetsScript(
         topPx: 88,
         bottomPx: 96,
+        flutterViewportHeight: 800,
       );
       expect(js, contains('window.__theaverTopClear = 88;'));
       expect(js, contains('window.__theaverBottomClear = 96;'));
-      expect(js, contains('window.__theaverSyncSafeZones(88, 96);'));
+      expect(js, contains('window.__theaverFlutterVh = 800;'));
+      expect(js, contains('window.__theaverSyncSafeZones(88, 96, 800);'));
       expect(js, contains('--theaver-header-clearance'));
       expect(js, contains('--theaver-bottom-clearance'));
       expect(js, contains('scroll-padding-top:'));
       expect(js, contains('scroll-padding-bottom:'));
       expect(js, contains("'top-bar'"));
       expect(js, contains("'top-float'"));
+      expect(js, contains("'top-abs'"));
       expect(js, contains("'bottom-bar'"));
       expect(js, contains("'bottom-float'"));
+      expect(js, contains("'bottom-abs'"));
       expect(js, contains("'full-drawer'"));
+      expect(js, contains('__theaver_top_cap'));
+      expect(js, contains('__theaver_bottom_cap'));
+      expect(js, contains('shadowRoot'));
+      expect(js, contains("attributeFilter: ['class']"));
+      expect(js, contains("document.addEventListener('scroll'"));
       expect(js, contains('MutationObserver'));
     });
 
@@ -397,15 +406,16 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(session.browserTopClearance, closeTo(84.0, 0.01));
-        expect(session.browserBottomClearance, closeTo(84.0, 0.01));
+        expect(session.browserTopClearance, closeTo(88.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(88.0, 0.01));
+        expect(session.browserViewportHeight, closeTo(800.0, 0.01));
 
         await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Найти на странице'));
         await tester.pumpAndSettle();
 
-        expect(session.browserTopClearance, closeTo(136.0, 0.01));
+        expect(session.browserTopClearance, closeTo(140.0, 0.01));
 
         final findBarCloseFinder = find.descendant(
           of: find.ancestor(
@@ -417,7 +427,7 @@ void main() {
         await tester.tap(findBarCloseFinder);
         await tester.pumpAndSettle();
 
-        expect(session.browserTopClearance, closeTo(84.0, 0.01));
+        expect(session.browserTopClearance, closeTo(88.0, 0.01));
       },
     );
   });

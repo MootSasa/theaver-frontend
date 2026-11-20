@@ -146,14 +146,18 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _updateBrowserSafeClearances({EdgeInsets? paddingOverride}) {
+    final size = MediaQuery.sizeOf(context);
     final padding = paddingOverride ?? MediaQuery.paddingOf(context);
-    final double nextTop = padding.top + (_isFindOpen ? 112.0 : 60.0);
-    final double nextBottom = padding.bottom + 68.0;
+    final double nextTop = padding.top + (_isFindOpen ? 116.0 : 64.0);
+    final double nextBottom = padding.bottom + 72.0;
+    final double nextVh = size.height;
     final bool clearanceChanged =
         (nextTop - _session.browserTopClearance).abs() > 0.5 ||
-            (nextBottom - _session.browserBottomClearance).abs() > 0.5;
+            (nextBottom - _session.browserBottomClearance).abs() > 0.5 ||
+            (nextVh - _session.browserViewportHeight).abs() > 0.5;
     _session.browserTopClearance = nextTop;
     _session.browserBottomClearance = nextBottom;
+    _session.browserViewportHeight = nextVh;
     if (clearanceChanged && _session.controller != null) {
       unawaited(_session.injectBrowserSafeInsets());
     }

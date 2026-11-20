@@ -242,6 +242,7 @@ class MiniAppSession {
   bool isDesktopMode = false;
   double browserTopClearance = 64.0;
   double browserBottomClearance = 76.0;
+  double browserViewportHeight = 0.0;
   bool _earlyBrowserInsetsApplied = false;
 
   VoidCallback? onSheetStateChanged;
@@ -340,27 +341,37 @@ class MiniAppSession {
             : 'Mini App');
   }
 
-  /// Builds idempotent JS that offsets page flow, locked app shells, and
-  /// fixed/sticky headers, floating buttons, drawers, and footers clear of
-  /// the floating top (`topPx`) and bottom (`bottomPx`) browser controls.
+  /// Builds idempotent JS that offsets page flow, locked app shells, open
+  /// Shadow DOM components, fixed/sticky bars, transparent HUD portals, and
+  /// top/bottom floating `absolute` controls clear of the floating browser HUD.
   static String buildBrowserSafeInsetsScript({
     required int topPx,
     required int bottomPx,
+    int flutterViewportHeight = 0,
   }) {
     final int safeTop = topPx.clamp(0, 320);
     final int safeBottom = bottomPx.clamp(0, 320);
+    final int safeFlutterVh = flutterViewportHeight.clamp(0, 4096);
     const String template = r'''
 (function() {
   try {
     if (!document || !document.documentElement) return;
     window.__theaverTopClear = __TOP_PX__;
     window.__theaverBottomClear = __BOTTOM_PX__;
+    window.__theaverFlutterVh = __FLUTTER_VH__;
 
-    window.__theaverSyncSafeZones = function(topClear, bottomClear) {
+    window.__theaverSyncSafeZones = function(rawTopClear, rawBottomClear, rawFlutterVh) {
       try {
         if (!document || !document.documentElement) return;
-        var tc = Math.max(0, Number(topClear) || 0);
-        var bc = Math.max(0, Number(bottomClear) || 0);
+        var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (!document.body || vw <= 0 || vh <= 0) return;
+
+        var fvh = Number(rawFlutterVh) || 0;
+        var scale = (fvh > 0 && vh > fvh * 1.15) ? (vh / fvh) : 1.0;
+        var tc = Math.round(Math.max(0, Number(rawTopClear) || 0) * scale);
+        var bc = Math.round(Math.max(0, Number(rawBottomClear) || 0) * scale);
+
         var rootStyle = document.documentElement.style;
         rootStyle.setProperty('--theaver-header-clearance', tc + 'px');
         rootStyle.setProperty('--theaver-bottom-clearance', bc + 'px');
@@ -377,10 +388,6 @@ class MiniAppSession {
             'html { scroll-padding-top: ' + tc + 'px !important; scroll-padding-bottom: ' + bc + 'px !important; }';
         }
 
-        var vw = window.innerWidth || document.documentElement.clientWidth || 0;
-        var vh = window.innerHeight || document.documentElement.clientHeight || 0;
-        if (!document.body || vw <= 0 || vh <= 0) return;
-
         var body = document.body;
         var htmlCs = window.getComputedStyle(document.documentElement);
         var bodyCs = window.getComputedStyle(body);
@@ -392,6 +399,7 @@ class MiniAppSession {
         var basePb = parseFloat(body.dataset.theaverBasePb) || 0;
         var nextPt = basePt <= 180 ? basePt + tc : Math.max(basePt, tc);
         var nextPb = basePb <= 180 ? basePb + bc : Math.max(basePb, bc);
+        var bodyAddedPt = Math.max(0, nextPt - basePt);
         body.style.setProperty('box-sizing', 'border-box', 'important');
         body.style.setProperty('padding-top', Math.round(nextPt) + 'px', 'important');
         body.style.setProperty('padding-bottom', Math.round(nextPb) + 'px', 'important');
@@ -440,105 +448,232 @@ class MiniAppSession {
           return isNaN(n) || !isFinite(n) ? null : n;
         }
 
-        var all = body.querySelectorAll('*');
+        function hasAppliedAncestor(node) {
+          var cur = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
+          while (cur && cur.nodeType === 1) {
+            if (cur.dataset && cur.dataset.theaverSafeZoneApplied === '1') {
+              return true;
+            }
+            cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+          }
+          return false;
+        }
+
+        function collectCandidates(root, outList) {
+          if (!root) return;
+          var kids = root.children;
+          if (!kids) return;
+          for (var k = 0; k < kids.length; k++) {
+            var node = kids[k];
+            if (!node || !node.tagName) continue;
+            var t = node.tagName;
+            if (
+              t === 'SCRIPT' ||
+              t === 'STYLE' ||
+              t === 'LINK' ||
+              t === 'META' ||
+              t === 'SVG' ||
+              t === 'PATH' ||
+              node.id === '__theaver_top_cap' ||
+              node.id === '__theaver_bottom_cap'
+            ) {
+              continue;
+            }
+            outList.push(node);
+            if (node.shadowRoot) {
+              collectCandidates(node.shadowRoot, outList);
+            }
+            collectCandidates(node, outList);
+          }
+        }
+
+        function syncSyntheticCap(capId, edgeKey, edgeSize, sourceEl) {
+          var cap = document.getElementById(capId);
+          if (!sourceEl || edgeSize <= 0) {
+            if (cap) cap.style.setProperty('display', 'none', 'important');
+            return;
+          }
+          if (!cap) {
+            cap = document.createElement('div');
+            cap.id = capId;
+            (document.documentElement || body).appendChild(cap);
+          }
+          var srcCs = window.getComputedStyle(sourceEl);
+          var z = parseInt(srcCs.zIndex, 10);
+          var capZ = (!isNaN(z) && isFinite(z)) ? Math.max(1, z) : 2;
+          cap.style.setProperty('display', 'block', 'important');
+          cap.style.setProperty('position', 'fixed', 'important');
+          cap.style.setProperty(edgeKey, '0px', 'important');
+          cap.style.setProperty('left', '0px', 'important');
+          cap.style.setProperty('right', '0px', 'important');
+          cap.style.setProperty('height', edgeSize + 'px', 'important');
+          cap.style.setProperty('pointer-events', 'none', 'important');
+          cap.style.setProperty('z-index', String(capZ), 'important');
+          cap.style.setProperty('background-color', srcCs.backgroundColor || 'transparent', 'important');
+          var bf = srcCs.backdropFilter || srcCs.webkitBackdropFilter || '';
+          if (bf && bf !== 'none') {
+            cap.style.setProperty('backdrop-filter', bf, 'important');
+            cap.style.setProperty('-webkit-backdrop-filter', bf, 'important');
+          } else {
+            cap.style.removeProperty('backdrop-filter');
+            cap.style.removeProperty('-webkit-backdrop-filter');
+          }
+        }
+
+        var all = [];
+        collectCandidates(body, all);
+        var scrollY = window.scrollY || window.pageYOffset || 0;
+        var hasPrimaryTopBar = false;
+        var topCapSource = null;
+        var bottomCapSource = null;
+        var deferredTopBars = [];
+
         for (var i = 0; i < all.length; i++) {
           var el = all[i];
           if (!el || !el.tagName) continue;
           var tag = el.tagName;
-          if (
-            tag === 'SCRIPT' ||
-            tag === 'STYLE' ||
-            tag === 'LINK' ||
-            tag === 'META' ||
-            tag === 'SVG' ||
-            tag === 'PATH'
-          ) {
-            continue;
-          }
-          if (
-            el.parentElement &&
-            el.parentElement.closest('[data-theaver-safe-zone-applied="1"]')
-          ) {
-            continue;
-          }
+          if (hasAppliedAncestor(el)) continue;
 
           var cs = window.getComputedStyle(el);
           if (cs.display === 'none' || cs.visibility === 'hidden') continue;
 
           var pos = cs.position;
           var existingRole = el.dataset.theaverSafeRole || '';
-          if (!existingRole && pos !== 'fixed' && pos !== 'sticky') continue;
+          if (!existingRole && pos !== 'fixed' && pos !== 'sticky' && pos !== 'absolute') {
+            continue;
+          }
 
           var rect = el.getBoundingClientRect();
           if (rect.width <= 0 || rect.height <= 0) continue;
 
           if (el.dataset.theaverOrigRecorded !== '1') {
+            var inlineTop = el.style.top || '';
+            var inlineTopNum = parseNum(inlineTop);
+            if (inlineTopNum !== null && inlineTopNum < -12 && pos !== 'static') {
+              continue;
+            }
+            var recordedTop = cs.top;
+            if (recordedTop === 'auto' && pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -4 && rect.top < tc + 96) {
+              recordedTop = String(Math.max(0, rect.top));
+            }
             el.dataset.theaverOrigRecorded = '1';
-            el.dataset.theaverOrigTop = cs.top === 'auto' ? 'auto' : String(parseFloat(cs.top) || 0);
+            el.dataset.theaverOrigTop = recordedTop === 'auto' ? 'auto' : String(parseFloat(recordedTop) || 0);
             el.dataset.theaverOrigBottom = cs.bottom === 'auto' ? 'auto' : String(parseFloat(cs.bottom) || 0);
             el.dataset.theaverOrigPt = String(parseFloat(cs.paddingTop) || 0);
             el.dataset.theaverOrigPb = String(parseFloat(cs.paddingBottom) || 0);
-            el.dataset.theaverOrigH = String(rect.height);
-            el.dataset.theaverOrigStyleH = el.style.height || '';
-            el.dataset.theaverOrigMaxH = cs.maxHeight || 'none';
-            el.dataset.theaverOrigMinH = cs.minHeight || '0px';
-            el.dataset.theaverOrigBox = cs.boxSizing || 'content-box';
           }
 
           var origTop = el.dataset.theaverOrigTop === 'auto' ? null : parseNum(el.dataset.theaverOrigTop);
           var origBottom = el.dataset.theaverOrigBottom === 'auto' ? null : parseNum(el.dataset.theaverOrigBottom);
           var origPt = parseFloat(el.dataset.theaverOrigPt) || 0;
           var origPb = parseFloat(el.dataset.theaverOrigPb) || 0;
-          var origH = parseFloat(el.dataset.theaverOrigH) || 0;
-          var origStyleH = el.dataset.theaverOrigStyleH || '';
-          var origMaxH = parseNum(el.dataset.theaverOrigMaxH);
-          var origBox = el.dataset.theaverOrigBox || 'content-box';
 
           var role = existingRole;
           if (!role) {
-            if (
-              pos === 'fixed' &&
-              rect.height >= vh * 0.60 &&
-              rect.top <= 4 &&
-              rect.bottom >= vh - 4 &&
-              el.children.length > 0 &&
+            if (pos === 'fixed' || pos === 'sticky') {
+              if (
+                pos === 'fixed' &&
+                rect.height >= vh * 0.60 &&
+                rect.top <= 4 &&
+                rect.bottom >= vh - 4 &&
+                el.children.length > 0 &&
+                tag !== 'VIDEO' &&
+                tag !== 'CANVAS' &&
+                tag !== 'IMG' &&
+                hasOpaqueBg(cs) &&
+                cs.pointerEvents !== 'none'
+              ) {
+                role = 'full-drawer';
+              } else if (
+                rect.height >= 12 &&
+                rect.height < vh * 0.50 &&
+                origTop !== null &&
+                origTop >= -4 &&
+                origTop < tc &&
+                (origBottom === null || rect.bottom < vh * 0.60)
+              ) {
+                role =
+                  pos === 'fixed' &&
+                  origTop >= -2 &&
+                  origTop <= 4 &&
+                  rect.width >= vw * 0.85 &&
+                  hasOpaqueBg(cs)
+                    ? 'top-bar'
+                    : 'top-float';
+              } else if (
+                rect.height >= 12 &&
+                rect.height < vh * 0.50 &&
+                origTop !== null &&
+                origTop >= tc &&
+                origTop < tc + 96 &&
+                (origBottom === null || rect.bottom < vh * 0.65)
+              ) {
+                deferredTopBars.push({ el: el, origTop: origTop });
+                continue;
+              } else if (
+                rect.height >= 12 &&
+                rect.height < vh * 0.50 &&
+                origBottom !== null &&
+                origBottom >= -4 &&
+                origBottom < bc &&
+                (origTop === null || rect.top > vh * 0.45)
+              ) {
+                role =
+                  pos === 'fixed' &&
+                  origBottom >= -2 &&
+                  origBottom <= 4 &&
+                  rect.width >= vw * 0.85 &&
+                  hasOpaqueBg(cs)
+                    ? 'bottom-bar'
+                    : 'bottom-float';
+              }
+            } else if (
+              pos === 'absolute' &&
+              rect.height >= 16 &&
+              rect.height < vh * 0.42 &&
+              tag !== 'IMG' &&
               tag !== 'VIDEO' &&
               tag !== 'CANVAS' &&
-              tag !== 'IMG'
+              tag !== 'PICTURE'
             ) {
-              role = 'full-drawer';
-            } else if (
-              rect.height >= 12 &&
-              rect.height < vh * 0.50 &&
-              origTop !== null &&
-              origTop >= -4 &&
-              origTop < tc &&
-              (origBottom === null || rect.bottom < vh * 0.55)
-            ) {
-              role =
-                pos === 'fixed' &&
-                origTop >= -2 &&
-                origTop <= 4 &&
-                rect.width >= vw * 0.85 &&
-                hasOpaqueBg(cs)
-                  ? 'top-bar'
-                  : 'top-float';
-            } else if (
-              rect.height >= 12 &&
-              rect.height < vh * 0.50 &&
-              origBottom !== null &&
-              origBottom >= -4 &&
-              origBottom < bc &&
-              (origTop === null || rect.top > vh * 0.45)
-            ) {
-              role =
-                pos === 'fixed' &&
-                origBottom >= -2 &&
-                origBottom <= 4 &&
-                rect.width >= vw * 0.85 &&
-                hasOpaqueBg(cs)
-                  ? 'bottom-bar'
-                  : 'bottom-float';
+              var hasInteractiveChild =
+                el.querySelector('button, a, input, select, [role="button"], [tabindex]') !== null;
+              var zNum = parseInt(cs.zIndex, 10) || 0;
+              var isUiControl =
+                (cs.pointerEvents !== 'none' || hasInteractiveChild) &&
+                (tag === 'HEADER' ||
+                    tag === 'NAV' ||
+                    tag === 'FORM' ||
+                    tag === 'BUTTON' ||
+                    tag === 'A' ||
+                    tag === 'INPUT' ||
+                    hasInteractiveChild ||
+                    zNum >= 1);
+              if (isUiControl) {
+                var op = el.offsetParent || el.parentElement;
+                var opRect = op ? op.getBoundingClientRect() : null;
+                var opDocTop = opRect ? (opRect.top + scrollY) : 0;
+                var elDocTop = rect.top + scrollY;
+                if (
+                  origTop !== null &&
+                  origTop >= -4 &&
+                  origTop < tc &&
+                  opDocTop <= 16 &&
+                  elDocTop >= -4 &&
+                  elDocTop < tc + bodyAddedPt
+                ) {
+                  role = 'top-abs';
+                } else if (origBottom !== null && origBottom >= -4 && origBottom < bc) {
+                  var opCs = op ? window.getComputedStyle(op) : null;
+                  var inFixedOrLocked =
+                    isLockedViewport ||
+                    (opCs && opCs.position === 'fixed') ||
+                    (opRect && opRect.height >= vh - 8);
+                  if (inFixedOrLocked) {
+                    role = 'bottom-abs';
+                  }
+                }
+              }
             }
           }
 
@@ -550,42 +685,42 @@ class MiniAppSession {
             el.style.setProperty('box-sizing', 'border-box', 'important');
             el.style.setProperty('padding-top', Math.round(origPt + tc) + 'px', 'important');
             el.style.setProperty('padding-bottom', Math.round(origPb + bc) + 'px', 'important');
-          } else if (role === 'top-bar') {
-            el.style.setProperty('box-sizing', 'border-box', 'important');
-            el.style.setProperty('padding-top', Math.round(origPt + tc) + 'px', 'important');
-            if (origH > 0) {
-              var nextTopBarH = Math.round(origH + tc);
-              el.style.setProperty('min-height', nextTopBarH + 'px', 'important');
-              if (origBox === 'border-box' || origStyleH !== '') {
-                el.style.setProperty('height', nextTopBarH + 'px', 'important');
-              }
-              if (origMaxH !== null && origMaxH < nextTopBarH) {
-                el.style.setProperty('max-height', nextTopBarH + 'px', 'important');
+          } else if (role === 'top-bar' || role === 'top-float' || role === 'top-abs') {
+            if (origTop !== null) {
+              el.style.setProperty('top', Math.round(origTop + tc) + 'px', 'important');
+            }
+            if (role !== 'top-abs') {
+              hasPrimaryTopBar = true;
+              if (role === 'top-bar' && !topCapSource) {
+                topCapSource = el;
               }
             }
-          } else if (role === 'top-float' && origTop !== null) {
-            el.style.setProperty('top', Math.round(origTop + tc) + 'px', 'important');
-          } else if (role === 'bottom-bar') {
-            el.style.setProperty('box-sizing', 'border-box', 'important');
-            el.style.setProperty('padding-bottom', Math.round(origPb + bc) + 'px', 'important');
-            if (origH > 0) {
-              var nextBottomBarH = Math.round(origH + bc);
-              el.style.setProperty('min-height', nextBottomBarH + 'px', 'important');
-              if (origBox === 'border-box' || origStyleH !== '') {
-                el.style.setProperty('height', nextBottomBarH + 'px', 'important');
-              }
-              if (origMaxH !== null && origMaxH < nextBottomBarH) {
-                el.style.setProperty('max-height', nextBottomBarH + 'px', 'important');
-              }
+          } else if (role === 'bottom-bar' || role === 'bottom-float' || role === 'bottom-abs') {
+            if (origBottom !== null) {
+              el.style.setProperty('bottom', Math.round(origBottom + bc) + 'px', 'important');
             }
-          } else if (role === 'bottom-float' && origBottom !== null) {
-            el.style.setProperty('bottom', Math.round(origBottom + bc) + 'px', 'important');
+            if (role === 'bottom-bar' && !bottomCapSource) {
+              bottomCapSource = el;
+            }
           }
         }
+
+        if (hasPrimaryTopBar && deferredTopBars.length > 0) {
+          for (var d = 0; d < deferredTopBars.length; d++) {
+            var item = deferredTopBars[d];
+            if (!item || !item.el || hasAppliedAncestor(item.el)) continue;
+            item.el.dataset.theaverSafeRole = 'top-float';
+            item.el.dataset.theaverSafeZoneApplied = '1';
+            item.el.style.setProperty('top', Math.round(item.origTop + tc) + 'px', 'important');
+          }
+        }
+
+        syncSyntheticCap('__theaver_top_cap', 'top', tc, topCapSource);
+        syncSyntheticCap('__theaver_bottom_cap', 'bottom', bc, bottomCapSource);
       } catch (e) {}
     };
 
-    window.__theaverSyncSafeZones(__TOP_PX__, __BOTTOM_PX__);
+    window.__theaverSyncSafeZones(__TOP_PX__, __BOTTOM_PX__, __FLUTTER_VH__);
 
     if (!window.__theaverSafeZoneObserverInstalled) {
       window.__theaverSafeZoneObserverInstalled = true;
@@ -595,22 +730,34 @@ class MiniAppSession {
         syncTimer = setTimeout(function() {
           syncTimer = null;
           if (typeof window.__theaverSyncSafeZones === 'function') {
-            window.__theaverSyncSafeZones(window.__theaverTopClear || 0, window.__theaverBottomClear || 0);
+            window.__theaverSyncSafeZones(
+              window.__theaverTopClear || 0,
+              window.__theaverBottomClear || 0,
+              window.__theaverFlutterVh || 0
+            );
           }
-        }, 180);
+        }, 160);
       };
       if (typeof MutationObserver === 'function') {
         var obs = new MutationObserver(scheduleSync);
-        obs.observe(document.documentElement, { childList: true, subtree: true });
+        obs.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class']
+        });
       }
       window.addEventListener('resize', scheduleSync, { passive: true });
+      window.addEventListener('scroll', scheduleSync, { passive: true });
+      document.addEventListener('scroll', scheduleSync, { passive: true, capture: true });
     }
   } catch (e) {}
 })();
 ''';
     return template
         .replaceAll('__TOP_PX__', safeTop.toString())
-        .replaceAll('__BOTTOM_PX__', safeBottom.toString());
+        .replaceAll('__BOTTOM_PX__', safeBottom.toString())
+        .replaceAll('__FLUTTER_VH__', safeFlutterVh.toString());
   }
 
   Future<void> injectBrowserSafeInsets() async {
@@ -618,7 +765,12 @@ class MiniAppSession {
     if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
     final int topPx = browserTopClearance.round().clamp(0, 320);
     final int bottomPx = browserBottomClearance.round().clamp(0, 320);
-    final js = buildBrowserSafeInsetsScript(topPx: topPx, bottomPx: bottomPx);
+    final int vhPx = browserViewportHeight.round().clamp(0, 4096);
+    final js = buildBrowserSafeInsetsScript(
+      topPx: topPx,
+      bottomPx: bottomPx,
+      flutterViewportHeight: vhPx,
+    );
     try {
       await ctrl.runJavaScript(js);
     } catch (_) {}
