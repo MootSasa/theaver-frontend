@@ -1517,7 +1517,7 @@ void main() {
   });
 
   testWidgets(
-      'MiniAppTabsSwitcher closes on native system back without popping underlying route and pauses gyro during scroll',
+      'MiniAppTabsSwitcher closes on native system back without popping underlying route and keeps gyro active during scroll',
       (tester) async {
     final gyroController = StreamController<GyroscopeEvent>.broadcast();
     MiniAppTabsSwitcher.debugGyroscopeStreamOverride = gyroController.stream;
@@ -1583,7 +1583,7 @@ void main() {
         )
         .first;
 
-    // Start scrolling vertically, emit gyro events mid-scroll -> gyro is paused while scrolling.
+    // Scroll vertically and emit gyro events mid-scroll -> gyroscope keeps tilting smoothly while scrolling.
     final lastCardTransformFinder =
         find.byKey(const ValueKey('mini_app_tab_transform_back_tab_5'));
     await tester.drag(scrollFinder, const Offset(0, -320));
@@ -1600,7 +1600,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 32));
     expect(
       tester.widget<Transform>(lastCardTransformFinder).transform,
-      equals(restingAfterScroll),
+      isNot(equals(restingAfterScroll)),
     );
     await gesture.up();
     await tester.pumpAndSettle();

@@ -19,7 +19,6 @@ import '../../services/browser_data_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
-import '../../services/power_saving_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
@@ -787,9 +786,20 @@ class MiniAppSessionController extends ChangeNotifier {
   final List<MiniAppSession> _minimizedSessions = <MiniAppSession>[];
   bool _isSwitcherOpen = false;
   int _activeFullScreenCount = 0;
+  DateTime? _lastMinimizeToSwitcherAt;
   bool _backObserverRegistered = false;
   late final _MiniAppSwitcherBackObserver _backObserver =
       _MiniAppSwitcherBackObserver(this);
+
+  /// Delay before snapshotting the underlying route into a frozen blurred
+  /// backdrop so an active sheet pop animation finishes clearing first.
+  Duration get backdropCaptureDelay {
+    final at = _lastMinimizeToSwitcherAt;
+    if (at == null) return Duration.zero;
+    final elapsed = DateTime.now().difference(at);
+    const total = Duration(milliseconds: 260);
+    return elapsed >= total ? Duration.zero : (total - elapsed);
+  }
 
   /// Registers a high-priority [WidgetsBindingObserver] before [MaterialApp]
   /// mounts so native Android system Back closes [MiniAppTabsSwitcher] first.
@@ -904,6 +914,7 @@ class MiniAppSessionController extends ChangeNotifier {
 
   void openSwitcher() {
     if (_minimizedSessions.isEmpty || _isSwitcherOpen) return;
+    _lastMinimizeToSwitcherAt = null;
     _isSwitcherOpen = true;
     _syncPlatformBackState();
     notifyListeners();
@@ -933,6 +944,7 @@ class MiniAppSessionController extends ChangeNotifier {
               s.currentUrl == session.currentUrl),
     );
     _minimizedSessions.add(session);
+    _lastMinimizeToSwitcherAt = DateTime.now();
     _isSwitcherOpen = true;
     _syncPlatformBackState();
     if (!session.isBrowser) {
@@ -943,6 +955,7 @@ class MiniAppSessionController extends ChangeNotifier {
 
   void closeSwitcher() {
     if (!_isSwitcherOpen) return;
+    _lastMinimizeToSwitcherAt = null;
     _isSwitcherOpen = false;
     notifyListeners();
   }
@@ -1143,7 +1156,10 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
     _frozenBackdropImage = null;
   }
 
-  void _captureFrozenBackdropIfNeeded() {
+  void _captureFrozenBackdropIfNeeded({
+    required double devicePixelRatio,
+    required Color fallbackBg,
+  }) {
     if (kIsWeb ||
         WidgetsBinding.instance is! WidgetsFlutterBinding ||
         _backdropCaptureInFlight ||
@@ -1152,11 +1168,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
         !MiniAppSessionController.instance.isSwitcherOpen) {
       return;
     }
-    _backdropCaptureTimer = Timer(const Duration(milliseconds: 280), () {
-      _backdropCaptureTimer = null;
-      if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
-        return;
-      }
+    final Duration delay =
+        MiniAppSessionController.instance.backdropCaptureDelay;
+    void runCapture() {
       _backdropCaptureInFlight = true;
       SchedulerBinding.instance.addPostFrameCallback((_) async {
         try {
@@ -1170,14 +1184,43 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
               ro.debugNeedsPaint) {
             return;
           }
-          final ui.Image img = await ro.toImage(pixelRatio: 0.18);
+          final double captureRatio =
+              (devicePixelRatio * 0.5).clamp(0.85, 1.5);
+          final ui.Image rawImg = await ro.toImage(pixelRatio: captureRatio);
           if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
-            img.dispose();
+            rawImg.dispose();
+            return;
+          }
+          final int w = rawImg.width;
+          final int h = rawImg.height;
+          final Rect dst = Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble());
+          final double sigmaPx = 16.0 * captureRatio;
+          final ui.PictureRecorder recorder = ui.PictureRecorder();
+          final Canvas canvas = Canvas(recorder);
+          canvas.drawRect(dst, Paint()..color = fallbackBg);
+          canvas.drawImageRect(
+            rawImg,
+            dst,
+            dst,
+            Paint()
+              ..filterQuality = FilterQuality.medium
+              ..imageFilter = ui.ImageFilter.blur(
+                sigmaX: sigmaPx,
+                sigmaY: sigmaPx,
+                tileMode: ui.TileMode.clamp,
+              ),
+          );
+          final ui.Picture picture = recorder.endRecording();
+          final ui.Image blurredImg = await picture.toImage(w, h);
+          picture.dispose();
+          rawImg.dispose();
+          if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
+            blurredImg.dispose();
             return;
           }
           setState(() {
             _frozenBackdropImage?.dispose();
-            _frozenBackdropImage = img;
+            _frozenBackdropImage = blurredImg;
           });
         } catch (_) {
           // Fallback to live BackdropFilter when boundary snapshot is unavailable.
@@ -1185,7 +1228,19 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
           _backdropCaptureInFlight = false;
         }
       });
-    });
+    }
+
+    if (delay == Duration.zero) {
+      runCapture();
+    } else {
+      _backdropCaptureTimer = Timer(delay, () {
+        _backdropCaptureTimer = null;
+        if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
+          return;
+        }
+        runCapture();
+      });
+    }
   }
 
   @override
@@ -1401,7 +1456,10 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
 
           if (switcherOpen) {
             if (BlurUtils.shouldBlurMaterialHud(context, listen: false)) {
-              _captureFrozenBackdropIfNeeded();
+              _captureFrozenBackdropIfNeeded(
+                devicePixelRatio: mq.devicePixelRatio,
+                fallbackBg: resolved.bodyBg,
+              );
             }
             return Stack(
               fit: StackFit.expand,
@@ -1766,17 +1824,13 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   double _targetYaw = 0.0;
   double _currentPitch = 0.0;
   double _currentYaw = 0.0;
-  bool _disableAnimations = false;
-  bool _isScrolling = false;
   double _lastCullingOffset = 0.0;
 
   bool get _shouldUseGyro =>
-      PowerSavingProvider.instance.allowAnimations &&
-      !_disableAnimations &&
-      (MiniAppTabsSwitcher.debugGyroscopeStreamOverride != null ||
-          (!kIsWeb &&
-              (defaultTargetPlatform == TargetPlatform.android ||
-                  defaultTargetPlatform == TargetPlatform.iOS)));
+      MiniAppTabsSwitcher.debugGyroscopeStreamOverride != null ||
+      (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS));
 
   @override
   void initState() {
@@ -1800,13 +1854,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
       return true;
     }
     return false;
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _disableAnimations = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
-    _syncGyroSubscription();
   }
 
   @override
@@ -1843,7 +1890,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             _stopGyroListening(resetTilt: true);
             return;
           }
-          if (_isScrolling) return;
           if (event.x.abs() < _kGyroDeadzone &&
               event.y.abs() < _kGyroDeadzone) {
             return;
@@ -1954,12 +2000,12 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     final mq = MediaQuery.of(context);
     final bool allowBlur = BlurUtils.shouldBlurMaterialHud(context);
     final ui.Image? frozenBg = widget.frozenBackdropImage;
+    final Color dimTint = resolved.bodyBg.withValues(
+      alpha: allowBlur ? (style.isDark ? 0.76 : 0.70) : 0.95,
+    );
 
     final Widget backdrop;
     if (frozenBg != null && allowBlur) {
-      final Color dimTint = resolved.bodyBg.withValues(
-        alpha: style.isDark ? 0.78 : 0.72,
-      );
       backdrop = RepaintBoundary(
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -1967,13 +2013,10 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              ImageFiltered(
-                imageFilter: BlurUtils.createMaterialHudBlur(sigma: 3.2),
-                child: RawImage(
-                  image: frozenBg,
-                  fit: BoxFit.cover,
-                  filterQuality: FilterQuality.low,
-                ),
+              RawImage(
+                image: frozenBg,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.medium,
               ),
               ColoredBox(color: dimTint),
             ],
@@ -1981,12 +2024,8 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
         ),
       );
     } else {
-      final blurFilter = allowBlur
-          ? BlurUtils.createDownsampledBlur(10.0, scale: 0.25)
-          : null;
-      final Color dimTint = resolved.bodyBg.withValues(
-        alpha: blurFilter != null ? (style.isDark ? 0.86 : 0.82) : 0.95,
-      );
+      final blurFilter =
+          allowBlur ? BlurUtils.createMaterialHudBlur(sigma: 16.0) : null;
       Widget liveBackdrop = GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _handleDismissTap,
@@ -2095,39 +2134,15 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
               return RepaintBoundary(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (ScrollNotification notification) {
-                    if (notification is ScrollStartNotification) {
-                      if (!_isScrolling) {
-                        _isScrolling = true;
-                        if (_gyroTicker.isAnimating) {
-                          _gyroTicker.stop();
-                        }
-                      }
-                    } else if (notification is ScrollUpdateNotification) {
-                      if (!_isScrolling) {
-                        _isScrolling = true;
-                        if (_gyroTicker.isAnimating) {
-                          _gyroTicker.stop();
-                        }
-                      }
-                      if (n > 4 &&
-                          stepY > 0.0 &&
-                          (notification.metrics.pixels - _lastCullingOffset)
-                                  .abs() >=
-                              stepY * 0.45) {
-                        _lastCullingOffset = notification.metrics.pixels;
-                        if (mounted) {
-                          setState(() {});
-                        }
-                      }
-                    } else if (notification is ScrollEndNotification) {
-                      _isScrolling = false;
-                      if ((_currentPitch.abs() > 0.0005 ||
-                              _currentYaw.abs() > 0.0005 ||
-                              _targetPitch.abs() > 0.0008 ||
-                              _targetYaw.abs() > 0.0008) &&
-                          !_gyroTicker.isAnimating &&
-                          _shouldUseGyro) {
-                        _gyroTicker.repeat();
+                    if (notification is ScrollUpdateNotification &&
+                        n > 4 &&
+                        stepY > 0.0 &&
+                        (notification.metrics.pixels - _lastCullingOffset)
+                                .abs() >=
+                            stepY * 0.45) {
+                      _lastCullingOffset = notification.metrics.pixels;
+                      if (mounted) {
+                        setState(() {});
                       }
                     }
                     return false;
