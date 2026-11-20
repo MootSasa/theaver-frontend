@@ -87,6 +87,8 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
     final textColor = themeExt?.palette.onPrimary ?? Colors.white;
     final onlineColor =
         themeExt?.palette.onlineIndicator ?? const Color(0xFF4CAF50);
+    final cutoutBorderColor =
+        themeExt?.palette.surface ?? theme.scaffoldBackgroundColor;
 
     final size = widget.radius * 2;
 
@@ -161,6 +163,37 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
           final indicatorDiameter = (widget.radius * 0.55).clamp(8.0, 16.0);
           final indicatorRadius = indicatorDiameter / 2;
           final gap = (indicatorDiameter * 0.2).clamp(1.8, 2.8);
+
+          if (decoration == null) {
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                baseAvatar,
+                Positioned(
+                  right: -gap,
+                  bottom: -gap,
+                  child: Transform.scale(
+                    scale: progress,
+                    alignment: Alignment.center,
+                    child: Container(
+                      key: const ValueKey('avatar_online_indicator'),
+                      width: indicatorDiameter + gap * 2,
+                      height: indicatorDiameter + gap * 2,
+                      decoration: BoxDecoration(
+                        color: onlineColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: cutoutBorderColor,
+                          width: gap,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
           final indicatorCenter =
               Offset(size - indicatorRadius, size - indicatorRadius);
 
@@ -171,7 +204,7 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
                 clipper: _AvatarCutoutClipper(
                   center: indicatorCenter,
                   cutoutRadius: (indicatorRadius + gap) * progress,
-                  clipToOval: decoration == null,
+                  clipToOval: false,
                 ),
                 child: baseAvatar,
               ),

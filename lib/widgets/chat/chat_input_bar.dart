@@ -381,26 +381,35 @@ class _ChatInputBarState extends State<ChatInputBar> {
       }
     }
 
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = Theme.of(context).colorScheme.surface;
+    final bannerBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+    final Widget card = Container(
+      decoration: BoxDecoration(
+        color: bannerBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: content,
+    );
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.65)
-                  : Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: content,
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: card,
+              )
+            : card,
       ),
     );
   }
@@ -431,26 +440,35 @@ class _ChatInputBarState extends State<ChatInputBar> {
         );
       }
     }
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = Theme.of(context).colorScheme.surface;
+    final pillBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+    final Widget card = Container(
+      decoration: BoxDecoration(
+        color: pillBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: child,
+    );
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.68)
-                  : Colors.white.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? Colors.white12 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: child,
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: card,
+              )
+            : card,
       ),
     );
   }
@@ -625,33 +643,42 @@ class _ChatInputBarState extends State<ChatInputBar> {
         ),
       );
     } else {
-      final defaultBg = isDark
-          ? Colors.black.withValues(alpha: 0.65)
-          : Colors.white.withValues(alpha: 0.65);
-      final bg = widget.isSilentBroadcast
+      final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+      final rawBg = themeExt?.palette.explicitChatInputBackground ??
+          themeExt?.palette.surface ??
+          (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+      final resolvedRaw = widget.isSilentBroadcast
           ? Color.alphaBlend(
               activeColor.withValues(alpha: isDark ? 0.22 : 0.14),
-              themeExt?.palette.explicitChatInputBackground ?? defaultBg,
+              rawBg,
             )
-          : (themeExt?.palette.explicitChatInputBackground ?? defaultBg);
-      capsule = ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: widget.isSilentBroadcast
-                    ? activeColor.withValues(alpha: 0.45)
-                    : (isDark ? Colors.white10 : Colors.black12),
-                width: 0.5,
-              ),
-            ),
-            child: innerTap,
+          : rawBg;
+      final bg = BlurUtils.resolveMaterialHudColor(
+        resolvedRaw,
+        isDark: isDark,
+        blurEnabled: blurEnabled,
+      );
+      final Widget circle = Container(
+        decoration: BoxDecoration(
+          color: bg,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: widget.isSilentBroadcast
+                ? activeColor.withValues(alpha: 0.45)
+                : (isDark ? Colors.white12 : Colors.black12),
+            width: blurEnabled ? 0.6 : 0.5,
           ),
         ),
+        child: innerTap,
+      );
+      capsule = ClipRRect(
+        borderRadius: BorderRadius.circular(22),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: circle,
+              )
+            : circle,
       );
     }
 

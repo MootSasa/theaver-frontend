@@ -369,7 +369,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Widget avatarContent;
 
     if (isFullyExpanded && widget.avatarUrls.length > 1) {
-      avatarContent = _buildPageView(size, size, iconSize, bgColor, isDark, Alignment.topCenter, enableInnerHero);
+      avatarContent = _buildPageView(size, size, iconSize, bgColor, isDark, Alignment.center, enableInnerHero);
     } else if (_currentPage != 0 && targetUrl != null && primaryUrl != null && targetUrl != primaryUrl) {
       avatarContent = AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
@@ -377,17 +377,17 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         switchOutCurve: Curves.easeInOutCubic,
         child: SizedBox.expand(
           key: ValueKey(targetUrl),
-          child: _buildAvatarImage(targetUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, enableInnerHero),
+          child: _buildAvatarImage(targetUrl, size, size, bgColor, iconSize, isDark, Alignment.center, enableInnerHero),
         ),
       );
     } else {
       avatarContent = (primaryUrl != null && primaryUrl.isNotEmpty
-          ? _buildAvatarImage(primaryUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, enableInnerHero)
+          ? _buildAvatarImage(primaryUrl, size, size, bgColor, iconSize, isDark, Alignment.center, enableInnerHero)
           : (widget.avatarFile != null
               ? Image.file(
                   widget.avatarFile!,
                   fit: BoxFit.cover,
-                  alignment: Alignment.topCenter,
+                  alignment: Alignment.center,
                   width: size,
                   height: size,
                 )
@@ -623,7 +623,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     double iconSize,
     Color bgColor,
     bool isDark, [
-    Alignment imgAlignment = Alignment.topCenter,
+    Alignment imgAlignment = Alignment.center,
     bool enableHero = true,
   ]) {
     _ensureLoopControllerSynced();
@@ -698,13 +698,13 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Color bgColor,
     double iconSize,
     bool isDark, [
-    Alignment imgAlignment = Alignment.topCenter,
+    Alignment imgAlignment = Alignment.center,
     bool enableHero = true,
   ]) {
     Widget imageWidget;
 
     if (url.startsWith('data:')) {
-      final provider = avatarImageProvider(url);
+      final provider = avatarFullImageProvider(url);
       if (provider != null) {
         imageWidget = Image(
           image: provider,

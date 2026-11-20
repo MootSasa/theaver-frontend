@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
 
 /// Layer 2 floating HUD surface supporting three rendering modes cleanly:
 /// - [GlassMode.full] / [GlassMode.lite]: shader-backed [LiquidGlassLens]
 ///   (never wrapped in `Opacity` or `FadeTransition`)
-/// - [GlassMode.disabled]: M3 matte solid surface + `0.5dp` hairline divider
+/// - [GlassMode.disabled]: single-pass frosted Material HUD (`BackdropFilter.grouped`)
+///   when permitted by power saving, or opaque M3 surface + hairline divider.
 class TheavFloatingSurface extends StatelessWidget {
   final Widget child;
   final double borderRadius;
@@ -16,6 +18,7 @@ class TheavFloatingSurface extends StatelessWidget {
   final double refractionWidth;
   final Color? colorOverride;
   final bool enableFlex;
+  final bool enableBlur;
 
   const TheavFloatingSurface({
     super.key,
@@ -26,6 +29,7 @@ class TheavFloatingSurface extends StatelessWidget {
     this.refractionWidth = 22.0,
     this.colorOverride,
     this.enableFlex = true,
+    this.enableBlur = true,
   });
 
   @override
@@ -58,8 +62,25 @@ class TheavFloatingSurface extends StatelessWidget {
       );
     }
 
-    final Color bg = colorOverride ?? surfaceStyle.hudFill;
-    final blurFilter = surfaceStyle.getBlurFilter(sigma: 18.0);
+    final bool suppressBlur = !enableBlur || TheavModalSheetScope.isActive(context);
+    final blurFilter = suppressBlur
+        ? null
+        : surfaceStyle.getMaterialHudBlurFilter(sigma: 10.0);
+    final Color bg = colorOverride != null
+        ? (blurFilter != null
+            ? BlurUtils.resolveMaterialHudColor(
+                colorOverride!,
+                isDark: surfaceStyle.isDark,
+                blurEnabled: true,
+                darkAlpha: 0.86,
+                lightAlpha: 0.88,
+              )
+            : colorOverride!)
+        : (blurFilter != null
+            ? surfaceStyle.hudFill
+            : (surfaceStyle.palette.appBarBackground != Colors.transparent
+                ? surfaceStyle.palette.appBarBackground
+                : surfaceStyle.palette.surface));
 
     Widget box = DecoratedBox(
       decoration: BoxDecoration(
@@ -67,14 +88,14 @@ class TheavFloatingSurface extends StatelessWidget {
         borderRadius: BorderRadius.circular(borderRadius),
         border: Border.all(
           color: surfaceStyle.hudBorder,
-          width: 0.5,
+          width: blurFilter != null ? 0.6 : 0.5,
         ),
       ),
       child: content,
     );
 
     if (blurFilter != null) {
-      box = BackdropFilter(
+      box = BackdropFilter.grouped(
         filter: blurFilter,
         child: box,
       );

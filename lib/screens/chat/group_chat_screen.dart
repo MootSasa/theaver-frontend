@@ -102,6 +102,8 @@ import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../call/group_call_screen.dart';
 import '../../services/bot_service.dart';
 import '../../services/dm_parity_service.dart';
+import '../../services/account_manager.dart';
+import '../../services/chat_instant_cache.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../widgets/chat/contact_picker_sheet.dart';
 import '../../widgets/chat/dm_parity_sheets.dart';
@@ -211,6 +213,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   int _slowmodeRemainingSeconds = 0;
   Timer? _slowmodeTimer;
   List<ChatParticipant> _participants = [];
+  int _cachedMemberCount = 0;
 
   // Wave 3B parity state
   bool _isForum = false;
@@ -512,12 +515,68 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _isForum = widget.initialIsForum || widget.activeTopic != null;
+    _currentUserId = AccountManager().currentAccount?.userId;
+    final instant = ChatInstantCache.instance.getSync(widget.chatId);
+    final groupSnap = ProfileInstantCache.instance.getGroupSnapshotSync(widget.chatId);
+
+    _isForum = widget.initialIsForum ||
+        widget.activeTopic != null ||
+        (instant?.chatDetails?.isForum ?? instant?.chat?.isForum ?? false);
     _activeTopic = widget.activeTopic;
     _isMuted = NotificationSettingsProvider().isChatMuted(
-      widget.chatId,
-      chatType: 'group',
-    );
+          widget.chatId,
+          chatType: 'group',
+        ) ||
+        ProfileInstantCache.instance.isChatMutedSync(widget.chatId);
+    _keyboardHeight =
+        instant?.keyboardHeight ?? ChatInstantCache.instance.globalKeyboardHeight;
+    if (instant?.inputHeight != null) {
+      _inputHeight = instant!.inputHeight!;
+    }
+    if (_activeTopicId == null && instant?.chatDetails != null) {
+      _seedFromChatDetails(instant!.chatDetails!);
+    }
+    _groupName = (widget.groupName != null && widget.groupName!.isNotEmpty)
+        ? widget.groupName!
+        : (instant?.chat?.name ?? _groupName);
+    _groupAvatar = widget.groupAvatar ?? instant?.chat?.avatarUrl ?? _groupAvatar;
+    _myRole ??= instant?.myRole ?? instant?.chat?.myRole;
+    _isMember = instant?.isMember ?? instant?.chat?.isMember ?? _isMember;
+    _isVerified = instant?.isVerified ?? instant?.chat?.isVerified ?? _isVerified;
+    _hasProtectedContent =
+        instant?.hasProtectedContent ?? instant?.chat?.hasProtectedContent ?? _hasProtectedContent;
+    if (_autoDeleteSeconds == 0) {
+      _autoDeleteSeconds =
+          instant?.messageAutoDeleteTime ?? instant?.chat?.messageAutoDeleteTime ?? 0;
+    }
+    if (_cachedMemberCount == 0) {
+      _cachedMemberCount = instant?.memberCount ?? groupSnap?.memberCount ?? 0;
+    }
+    final instantPinned = instant?.effectivePinnedMessage;
+    if (_pinnedMessage == null && instantPinned != null) {
+      _pinnedMessage = instantPinned;
+      _pinnedMessages = instant?.pinnedMessages ?? [instantPinned];
+    }
+    _chatAppearance ??=
+        (instant?.appearance == null || instant!.appearance!.isEmpty)
+            ? null
+            : instant.appearance;
+
+    if (_activeTopicId == null && instant != null && instant.hasMessages) {
+      _messages.addAll(instant.messages!);
+      for (final m in _messages) {
+        if (m.reactions.isNotEmpty) {
+          _messageReactions[m.id] = Map<String, int>.from(m.reactions);
+        }
+        if (m.myReactions.isNotEmpty) {
+          _myReactions[m.id] = Set<String>.from(m.myReactions);
+        }
+      }
+      _isLoading = false;
+      _hasMoreMessages = _messages.length >= 35;
+      _updateFeedItems();
+    }
+
     ProfileInstantCache.instance.prefetchGroupOrChannel(widget.chatId);
 
     _emojiPanelController = AnimationController(
@@ -781,11 +840,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getDouble('cached_keyboard_height');
     if (cached != null && cached > 150) {
-      if (mounted) setState(() => _keyboardHeight = cached);
+      ChatInstantCache.instance.setKeyboardHeight(cached, chatId: widget.chatId);
+      if (mounted && (cached - _keyboardHeight).abs() > 0.5) {
+        setState(() => _keyboardHeight = cached);
+      }
     }
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
+    ChatInstantCache.instance.setKeyboardHeight(height, chatId: widget.chatId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('cached_keyboard_height', height);
   }
@@ -870,7 +933,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     _transitionTimer?.cancel();
-    final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     if (!_showEmojiPanel) {
       if (kbOpen) {
@@ -1447,37 +1510,47 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     } catch (_) {}
   }
 
+  void _seedFromChatDetails(ChatDetails chat) {
+    _chatDetails = chat;
+    if (chat.name.isNotEmpty) _groupName = chat.name;
+    if (chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty) {
+      _groupAvatar = chat.avatarUrl;
+    }
+    _groupDescription = chat.description;
+    if (chat.participants.isNotEmpty) {
+      _participants = chat.participants;
+    }
+    if (chat.effectiveMemberCount > 0) {
+      _cachedMemberCount = chat.effectiveMemberCount;
+    }
+    _isVerified = chat.isVerified;
+    _myRole = chat.myRole;
+    _isMember = chat.isMember;
+    _myIsAnonymous = chat.myIsAnonymous;
+    _myAdminTitle = chat.myAdminTitle;
+    _myAdminPermissions = chat.myAdminPermissions;
+    _defaultPermissions =
+        chat.defaultPermissions ?? const GroupDefaultPermissions();
+    _myRestrictions = chat.myRestrictions;
+    _restrictedUntil = chat.restrictedUntil;
+    _reactionSettings = chat.reactionSettings ?? const ReactionSettings();
+    _slowModeInterval = chat.slowModeInterval;
+    _autoDeleteSeconds = chat.messageAutoDeleteTime;
+    _hasProtectedContent = chat.hasProtectedContent;
+    _isForum = chat.isForum || _activeTopic != null;
+    _unreadMentionsCount = chat.unreadMentionsCount;
+    _unreadReactionsCount = chat.unreadReactionsCount;
+    _selectedSendAsChatId ??= chat.mySendAsChatId;
+    if (chat.pinnedMessage != null) {
+      _pinnedMessage = chat.pinnedMessage;
+      _pinnedMessages = [chat.pinnedMessage!];
+    }
+  }
+
   void _applyChatDetails(ChatDetails chat) {
     if (!mounted) return;
-    setState(() {
-      _chatDetails = chat;
-      _groupName = chat.name;
-      _groupAvatar = chat.avatarUrl;
-      _groupDescription = chat.description;
-      _participants = chat.participants;
-      _isVerified = chat.isVerified;
-      _myRole = chat.myRole;
-      _isMember = chat.isMember;
-      _myIsAnonymous = chat.myIsAnonymous;
-      _myAdminTitle = chat.myAdminTitle;
-      _myAdminPermissions = chat.myAdminPermissions;
-      _defaultPermissions =
-          chat.defaultPermissions ?? const GroupDefaultPermissions();
-      _myRestrictions = chat.myRestrictions;
-      _restrictedUntil = chat.restrictedUntil;
-      _reactionSettings = chat.reactionSettings ?? const ReactionSettings();
-      _slowModeInterval = chat.slowModeInterval;
-      _autoDeleteSeconds = chat.messageAutoDeleteTime;
-      _hasProtectedContent = chat.hasProtectedContent;
-      _isForum = chat.isForum || _activeTopic != null;
-      _unreadMentionsCount = chat.unreadMentionsCount;
-      _unreadReactionsCount = chat.unreadReactionsCount;
-      _selectedSendAsChatId ??= chat.mySendAsChatId;
-      if (chat.pinnedMessage != null) {
-        _pinnedMessage = chat.pinnedMessage;
-        _pinnedMessages = [chat.pinnedMessage!];
-      }
-    });
+    ChatInstantCache.instance.putChatDetails(chat);
+    setState(() => _seedFromChatDetails(chat));
     _syncScreenProtection(chat.hasProtectedContent);
     if (chat.isForum || _isForum) {
       unawaited(_loadForumTopics());
@@ -1735,11 +1808,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     try {
       final list = await ChatService.getPinnedMessages(chatId: widget.chatId);
       if (!mounted) return;
+      ChatInstantCache.instance.putPinnedMessages(widget.chatId, list);
+      final nextIndex =
+          list.isNotEmpty ? _currentPinnedIndex.clamp(0, list.length - 1) : 0;
+      final nextPinned = list.isNotEmpty ? list[nextIndex] : null;
+      if (_pinnedMessages.length == list.length &&
+          _pinnedMessage?.id == nextPinned?.id &&
+          _currentPinnedIndex == nextIndex) {
+        return;
+      }
       setState(() {
         _pinnedMessages = list;
         if (list.isNotEmpty) {
-          _currentPinnedIndex = _currentPinnedIndex.clamp(0, list.length - 1);
-          _pinnedMessage = list[_currentPinnedIndex];
+          _currentPinnedIndex = nextIndex;
+          _pinnedMessage = nextPinned;
         } else {
           _pinnedMessage = null;
           _currentPinnedIndex = 0;
@@ -2430,8 +2512,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Future<void> _loadChatAppearance() async {
     final cfg = await DmParityService.getChatAppearance(widget.chatId);
     if (!mounted) return;
+    final nextCfg = (cfg == null || cfg.isEmpty) ? null : cfg;
+    if (nextCfg != null) {
+      ChatInstantCache.instance.putAppearance(widget.chatId, nextCfg);
+    }
+    if (_chatAppearance?.themeId == nextCfg?.themeId &&
+        _chatAppearance?.wallpaperUrl == nextCfg?.wallpaperUrl &&
+        _chatAppearance?.accentColorId == nextCfg?.accentColorId) {
+      return;
+    }
     setState(() {
-      _chatAppearance = (cfg == null || cfg.isEmpty) ? null : cfg;
+      _chatAppearance = nextCfg;
     });
   }
 
@@ -2714,7 +2805,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
     // Get current user ID
     final userId = await AuthService.getUserId();
-    if (mounted) {
+    if (mounted && userId != _currentUserId) {
       setState(() {
         _currentUserId = userId;
       });
@@ -2784,7 +2875,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Future<void> _loadMessages() async {
-    setState(() => _isLoading = true);
+    final bool hadInitialMessages = _messages.isNotEmpty;
+    if (_messages.isEmpty && !_isLoading) {
+      setState(() => _isLoading = true);
+    }
 
     // 1. Сначала загрузить из Drift (мгновенно, offline-first)
     final db = AppDatabase();
@@ -2814,23 +2908,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         return m;
       }).toList();
 
-      setState(() {
-        _isLoading = false;
-        _messages.clear();
-        _messages.addAll(
-            fixedMessages.map((m) => Message.fromDbMessage(m)).toList());
-        _hasMoreMessages = localMessages.length >= 50;
-        for (final m in _messages) {
-          if (m.reactions.isNotEmpty) {
-            _messageReactions[m.id] = Map.from(m.reactions);
+      final parsedLocal =
+          fixedMessages.map((m) => Message.fromDbMessage(m)).toList();
+      _sortMessagesDescending(parsedLocal);
+      if (_activeTopicId == null) {
+        ChatInstantCache.instance.putMessages(widget.chatId, parsedLocal);
+      }
+
+      if (_isLoading || !ChatInstantCache.messagesEqual(_messages, parsedLocal)) {
+        setState(() {
+          _isLoading = false;
+          _messages.clear();
+          _messages.addAll(parsedLocal);
+          _hasMoreMessages = localMessages.length >= 50;
+          for (final m in _messages) {
+            if (m.reactions.isNotEmpty) {
+              _messageReactions[m.id] = Map.from(m.reactions);
+            }
+            if (m.myReactions.isNotEmpty) {
+              _myReactions[m.id] = Set.from(m.myReactions);
+            }
           }
-          if (m.myReactions.isNotEmpty) {
-            _myReactions[m.id] = Set.from(m.myReactions);
-          }
-        }
-        _updateFeedItems();
-      });
-      if (widget.initialMessageId == null &&
+          _updateFeedItems();
+        });
+      }
+      if (!hadInitialMessages &&
+          widget.initialMessageId == null &&
           (_firstUnreadMessageId == null || _unreadCount == 0)) {
         _scrollToBottom();
       }
@@ -2845,95 +2948,101 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
 
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-          if (result['success'] == true) {
-            final serverMessages = result['messages'] as List<Message>;
-            _hasMoreMessages = result['has_more'] as bool? ?? (serverMessages.length >= 50);
+        if (result['success'] == true) {
+          final serverMessages = result['messages'] as List<Message>;
+          final nextHasMore =
+              result['has_more'] as bool? ?? (serverMessages.length >= 50);
 
-            // Сохранить pending/failed сообщения из текущего списка (их нет на сервере)
-            final pendingMessages = _messages
-                .where(
-                  (m) => m.sendStatus != 1 && m.localId != null,
-                )
-                .toList();
+          // Сохранить pending/failed сообщения из текущего списка (их нет на сервере)
+          final pendingMessages = _messages
+              .where(
+                (m) => m.sendStatus != 1 && m.localId != null,
+              )
+              .toList();
 
-            final Map<String, Message> mergedById = {};
-            final Map<String, Message> existingByLocalId = {};
-            for (final m in _messages) {
-              mergedById[m.id] = m;
-              if (m.localId != null && m.localId!.isNotEmpty) {
-                existingByLocalId[m.localId!] = m;
-              }
-            }
-            for (final m in serverMessages) {
-              final existing = mergedById[m.id] ??
-                  (m.localId != null && m.localId!.isNotEmpty
-                      ? existingByLocalId[m.localId!]
-                      : null);
-              if (existing != null) {
-                mergedById[m.id] = m.copyWith(
-                  localId: m.localId ?? existing.localId,
-                  isQuote: m.isQuote || existing.isQuote,
-                  quoteText: m.quoteText ?? existing.quoteText,
-                  quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
-                  quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
-                );
-              } else {
-                mergedById[m.id] = m;
-              }
-            }
-            final Set<String> serverLocalIds = mergedById.values
-                .map((m) => m.localId)
-                .whereType<String>()
-                .where((id) => id.isNotEmpty)
-                .toSet();
-            for (final pending in pendingMessages) {
-              final lId = pending.localId;
-              if (!mergedById.containsKey(pending.id) &&
-                  (lId == null || !serverLocalIds.contains(lId))) {
-                mergedById[pending.id] = pending;
-              }
-            }
-
-            _messages.clear();
-            _messageReactions.clear();
-            _myReactions.clear();
-            _messages.addAll(mergedById.values);
-
-            for (final m in _messages) {
-              if (m.reactions.isNotEmpty) {
-                _messageReactions[m.id] = Map.from(m.reactions);
-              }
-              if (m.myReactions.isNotEmpty) {
-                _myReactions[m.id] = Set.from(m.myReactions);
-              }
-            }
-
-            // Сортировка по createdAt по убыванию
-            _messages.sort((a, b) {
-              try {
-                final ta = DateTime.parse(a.createdAt);
-                final tb = DateTime.parse(b.createdAt);
-                final cmp = tb.compareTo(ta);
-                if (cmp != 0) return cmp;
-                return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-              } catch (_) {
-                return 0;
-              }
-            });
-            _updateFeedItems();
-
-            // Сохранить в Drift для оффлайн-доступа
-            try {
-              db.saveMessages(
-                  serverMessages.map((m) => _messageToCompanion(m)).toList());
-            } catch (e) {
-              debugPrint('GroupChat: Drift saveMessages error: $e');
+          final Map<String, Message> mergedById = {};
+          final Map<String, Message> existingByLocalId = {};
+          for (final m in _messages) {
+            mergedById[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              existingByLocalId[m.localId!] = m;
             }
           }
-        });
-        if (localMessages.isEmpty &&
+          for (final m in serverMessages) {
+            final existing = mergedById[m.id] ??
+                (m.localId != null && m.localId!.isNotEmpty
+                    ? existingByLocalId[m.localId!]
+                    : null);
+            if (existing != null) {
+              mergedById[m.id] = m.copyWith(
+                localId: m.localId ?? existing.localId,
+                isQuote: m.isQuote || existing.isQuote,
+                quoteText: m.quoteText ?? existing.quoteText,
+                quoteOffset:
+                    m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                quoteLength:
+                    m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+              );
+            } else {
+              mergedById[m.id] = m;
+            }
+          }
+          final Set<String> serverLocalIds = mergedById.values
+              .map((m) => m.localId)
+              .whereType<String>()
+              .where((id) => id.isNotEmpty)
+              .toSet();
+          for (final pending in pendingMessages) {
+            final lId = pending.localId;
+            if (!mergedById.containsKey(pending.id) &&
+                (lId == null || !serverLocalIds.contains(lId))) {
+              mergedById[pending.id] = pending;
+            }
+          }
+
+          final mergedList = mergedById.values.toList();
+          _sortMessagesDescending(mergedList);
+          if (_activeTopicId == null) {
+            ChatInstantCache.instance.putMessages(widget.chatId, mergedList);
+          }
+
+          final bool needsUiUpdate = _isLoading ||
+              _hasMoreMessages != nextHasMore ||
+              !ChatInstantCache.messagesEqual(_messages, mergedList);
+
+          if (needsUiUpdate) {
+            setState(() {
+              _isLoading = false;
+              _hasMoreMessages = nextHasMore;
+              _messages.clear();
+              _messageReactions.clear();
+              _myReactions.clear();
+              _messages.addAll(mergedList);
+
+              for (final m in _messages) {
+                if (m.reactions.isNotEmpty) {
+                  _messageReactions[m.id] = Map.from(m.reactions);
+                }
+                if (m.myReactions.isNotEmpty) {
+                  _myReactions[m.id] = Set.from(m.myReactions);
+                }
+              }
+              _updateFeedItems();
+            });
+          }
+
+          // Сохранить в Drift для оффлайн-доступа
+          try {
+            db.saveMessages(
+                serverMessages.map((m) => _messageToCompanion(m)).toList());
+          } catch (e) {
+            debugPrint('GroupChat: Drift saveMessages error: $e');
+          }
+        } else if (_isLoading) {
+          setState(() => _isLoading = false);
+        }
+        if (!hadInitialMessages &&
+            localMessages.isEmpty &&
             widget.initialMessageId == null &&
             (_firstUnreadMessageId == null || _unreadCount == 0)) {
           _scrollToBottom();
@@ -2941,7 +3050,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     } catch (e) {
       debugPrint('GroupChat: Error loading from server: $e');
-      if (mounted && localMessages.isEmpty) {
+      if (mounted && _isLoading) {
         setState(() => _isLoading = false);
       }
     }
@@ -4216,16 +4325,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _sortMessagesDescending(List<Message> list) {
-    final dateMap = <String, int>{};
-    for (final m in list) {
-      dateMap[m.id] =
-          DateTimeUtils.parseUtcDateTime(m.createdAt)?.millisecondsSinceEpoch ??
-              0;
-    }
     list.sort((a, b) {
-      final ta = dateMap[a.id] ?? 0;
-      final tb = dateMap[b.id] ?? 0;
-      final cmp = tb.compareTo(ta);
+      final cmp = b.createdAtEpochMs.compareTo(a.createdAtEpochMs);
       if (cmp != 0) return cmp;
       return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
     });
@@ -4980,6 +5081,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
     _flushMarkRead();
+    if (_activeTopicId == null &&
+        !_isDetachedHistoryWindow &&
+        _messages.isNotEmpty) {
+      ChatInstantCache.instance.putMessages(widget.chatId, _messages);
+    }
     if (!_isEditing) {
       DraftService().flushDraft(widget.chatId);
     }
@@ -5131,6 +5237,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
         if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
+          ChatInstantCache.instance.setInputHeight(widget.chatId, newHeight);
           setState(() {
             _inputHeight = newHeight;
           });
@@ -5235,14 +5342,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _updateTopBannerHeight();
     final displayName = widget.groupName ?? (_groupName.isNotEmpty ? _groupName : 'Group');
 
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final bool isKeyboardVisible = bottomInset > 0;
 
     final int onlineCount = _participants.where((p) => p.isOnline).length;
     final int memberCount =
         (_chatDetails != null && _chatDetails!.effectiveMemberCount > 0)
             ? _chatDetails!.effectiveMemberCount
-            : _participants.length;
+            : (_participants.isNotEmpty
+                ? _participants.length
+                : _cachedMemberCount);
     final bool canStartOrJoinCall = _chatDetails == null ||
         _chatDetails!.hasActiveCall ||
         _chatDetails!.canManageCallsEffective;
@@ -5544,11 +5653,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Widget _buildChatTab() {
-    final topPadding = MediaQuery.of(context).padding.top +
+    final topPadding = MediaQuery.paddingOf(context).top +
         kFloatingAppBarTotalHeight +
         _topBannerHeight +
         8.0;
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
     if (bottomInset > _keyboardHeight) {
       _keyboardHeight = bottomInset;
@@ -5597,7 +5706,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (mounted &&
             !_showEmojiPanel &&
             !_isKeyboardRising &&
-            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            MediaQuery.viewInsetsOf(context).bottom == 0 &&
             _inputFocusNode.hasFocus) {
           _inputFocusNode.unfocus();
         }
@@ -8366,7 +8475,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (totalDy > 42.0 &&
           totalDy > totalDx * 1.8 &&
           _touchVelocityY > 1250.0) {
-        final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+        final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
         if (kbOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
           _dismissedOnCurrentTouch = true;
           _dismissKeyboardAndEmoji();
@@ -8455,7 +8564,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (isShortTap && !_isSelectionMode && !_isLmbDirectTextSelecting && !_isLmbDraggingMessages) {
         if (_isMobilePlatform) {
           if (!_touchDownInsideBubble) {
-            final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+            final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
             if (kbOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
               _dismissKeyboardAndEmoji();
             }
@@ -8757,9 +8866,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       canApplyForBoth: _isAdmin,
     );
     if (!mounted || res == null || !res.changed) return;
+    final nextCfg =
+        (res.appearance == null || res.appearance!.isEmpty) ? null : res.appearance;
+    if (nextCfg != null) {
+      ChatInstantCache.instance.putAppearance(widget.chatId, nextCfg);
+    }
     setState(() {
-      _chatAppearance =
-          (res.appearance == null || res.appearance!.isEmpty) ? null : res.appearance;
+      _chatAppearance = nextCfg;
     });
   }
 

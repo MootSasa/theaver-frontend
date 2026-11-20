@@ -32,6 +32,7 @@ import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
@@ -45,6 +46,7 @@ import '../../services/sync_service.dart';
 import '../../services/database/app_database.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../utils/date_time_utils.dart';
+import '../../utils/blur_utils.dart';
 import '../../services/update_service.dart';
 import '../settings/widgets/update_dialog.dart';
 import '../../widgets/chat/media_note_player_header.dart';
@@ -83,6 +85,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   int _currentIndex = 1; // 0: Settings, 1: Chats, 2: Search
+  final Set<int> _visitedPages = <int>{1};
   int _activeFilter = 0; // Index of the active folder in _folderService.folders
   final ChatFolderService _folderService = ChatFolderService();
   String _lastTilingSignature = '';
@@ -227,6 +230,7 @@ class _MainScreenState extends State<MainScreen>
           .map(_dbChatToChat)
           .toList();
       setState(() => _archivedChats = archived);
+      ChatInstantCache.instance.putChatSummaries(archived);
     });
     _chatsStreamSubscription = db.watchChats().listen((dbChats) async {
       if (!mounted) return;
@@ -270,6 +274,13 @@ class _MainScreenState extends State<MainScreen>
         }
       });
       DraftService().populateFromChats(_chats);
+      ChatInstantCache.instance.putChatSummaries(_chats);
+      unawaited(
+        ChatInstantCache.instance.prewarmFromDatabase(
+          _currentUserId,
+          chatIds: _chats.take(20).map((c) => c.id),
+        ),
+      );
     });
   }
 
@@ -277,8 +288,8 @@ class _MainScreenState extends State<MainScreen>
   bool _isSelectMode = false;
   Set<String> _selectedChatIds = {};
   bool _isSelectionMenuOpen = false;
-  double _archivePullExtent = 0.0;
-  bool _archivePullArmed = false;
+  final ValueNotifier<({double extent, bool armed})> _archivePullNotifier =
+      ValueNotifier<({double extent, bool armed})>((extent: 0.0, armed: false));
   static const double _kArchivePullThreshold = 58.0;
 
   // Top glass bar & morph context menu
@@ -703,6 +714,11 @@ class _MainScreenState extends State<MainScreen>
             parsedMsg = Message.fromJson(messageData);
           } catch (_) {}
         }
+        if (parsedMsg != null &&
+            (parsedMsg.threadRootMessageId == null ||
+                parsedMsg.threadRootMessageId!.isEmpty)) {
+          ChatInstantCache.instance.upsertMessage(chatId, parsedMsg);
+        }
         final isThreadComment = parsedMsg?.threadRootMessageId != null &&
             parsedMsg!.threadRootMessageId!.isNotEmpty;
 
@@ -754,6 +770,9 @@ class _MainScreenState extends State<MainScreen>
             // unpinned chats sort by updated_at
             _sortChats();
           });
+          if (updatedChat != null) {
+            ChatInstantCache.instance.putChatSummaries([updatedChat!]);
+          }
           // Save to local storage
           _localStorage.saveChats(_chats);
         }
@@ -994,6 +1013,7 @@ class _MainScreenState extends State<MainScreen>
         (event.data['message_id'] ?? event.data['messageId'])?.toString();
     if (chatId != null) {
       if (messageId != null) {
+        ChatInstantCache.instance.removeMessages(chatId, [messageId]);
         try {
           await AppDatabase().deleteMessage(messageId);
         } catch (_) {}
@@ -1112,6 +1132,7 @@ class _MainScreenState extends State<MainScreen>
               .where((c) => !c.isCommunityChannel)
               .toList();
           DraftService().populateFromChats(serverChats);
+          ChatInstantCache.instance.putChatSummaries(serverChats);
 
           for (final chat in serverChats) {
             _chatLastMessageEntities[chat.id] = chat.lastMessageEntities;
@@ -1198,6 +1219,7 @@ class _MainScreenState extends State<MainScreen>
                 if (res['success'] == true && res['messages'] is List<Message>) {
                   final msgs = res['messages'] as List<Message>;
                   if (msgs.isNotEmpty) {
+                    ChatInstantCache.instance.putMessages(chat.id, msgs);
                     await db.saveMessages(
                       msgs.map((m) => m.toCompanion(fallbackChatId: chat.id)).toList(),
                     );
@@ -1307,6 +1329,7 @@ class _MainScreenState extends State<MainScreen>
     _classicCreateMenuAnimation.dispose();
     _selectModeController.dispose();
     _classicCreateMenuController.dispose();
+    _archivePullNotifier.dispose();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     DraftService().draftsNotifier.removeListener(_onDraftsChanged);
@@ -1391,6 +1414,7 @@ class _MainScreenState extends State<MainScreen>
     AppDatabase.setActiveUser(newUserId);
     unawaited(ArchivePreferencesService().init());
     CommunityService.clearMemoryCache();
+    ChatInstantCache.instance.clearMemory();
 
     setState(() {
       _activeFilter = 0;
@@ -1504,6 +1528,7 @@ class _MainScreenState extends State<MainScreen>
     }
     setState(() {
       _currentIndex = index;
+      _visitedPages.add(index);
       if (index == 2) {
         _searchController.clear();
         _searchQuery = '';
@@ -2369,7 +2394,7 @@ class _MainScreenState extends State<MainScreen>
     }
 
     final Widget scrollList = ListView.builder(
-      cacheExtent: 3000.0,
+      cacheExtent: 600.0,
       physics: const AlwaysScrollableScrollPhysics(
         parent: BouncingScrollPhysics(),
       ),
@@ -2394,57 +2419,43 @@ class _MainScreenState extends State<MainScreen>
     final primaryColor = Theme.of(context).colorScheme.primary;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final double pullProgress =
-        (_archivePullExtent / _kArchivePullThreshold).clamp(0.0, 1.0);
 
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
+        final current = _archivePullNotifier.value;
         if (notification is ScrollUpdateNotification) {
           if (notification.metrics.pixels < 0) {
             final pull = (-notification.metrics.pixels).clamp(0.0, 96.0);
             if (notification.dragDetails != null) {
               final armed = pull >= _kArchivePullThreshold;
-              if (armed && !_archivePullArmed) {
+              if (armed && !current.armed) {
                 HapticUtils.impact();
               }
-              if ((pull - _archivePullExtent).abs() > 0.5 ||
-                  armed != _archivePullArmed) {
-                setState(() {
-                  _archivePullExtent = pull;
-                  _archivePullArmed = armed;
-                });
+              if ((pull - current.extent).abs() > 0.5 ||
+                  armed != current.armed) {
+                _archivePullNotifier.value = (extent: pull, armed: armed);
               }
             } else {
-              if (_archivePullArmed) {
-                _archivePullArmed = false;
-                _archivePullExtent = 0.0;
+              if (current.armed) {
+                _archivePullNotifier.value = (extent: 0.0, armed: false);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (mounted) _openArchivedChatsScreen();
                 });
-              } else if (_archivePullExtent > 0) {
-                setState(() {
-                  _archivePullExtent = pull;
-                });
+              } else if (current.extent > 0) {
+                _archivePullNotifier.value = (extent: pull, armed: false);
               }
             }
-          } else if (_archivePullExtent > 0 || _archivePullArmed) {
-            setState(() {
-              _archivePullExtent = 0.0;
-              _archivePullArmed = false;
-            });
+          } else if (current.extent > 0 || current.armed) {
+            _archivePullNotifier.value = (extent: 0.0, armed: false);
           }
         } else if (notification is ScrollEndNotification) {
-          if (_archivePullArmed) {
-            _archivePullArmed = false;
-            _archivePullExtent = 0.0;
+          if (current.armed) {
+            _archivePullNotifier.value = (extent: 0.0, armed: false);
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) _openArchivedChatsScreen();
             });
-          } else if (_archivePullExtent > 0) {
-            setState(() {
-              _archivePullExtent = 0.0;
-              _archivePullArmed = false;
-            });
+          } else if (current.extent > 0) {
+            _archivePullNotifier.value = (extent: 0.0, armed: false);
           }
         }
         return false;
@@ -2452,75 +2463,84 @@ class _MainScreenState extends State<MainScreen>
       child: Stack(
         children: [
           Positioned.fill(child: scrollList),
-          if (_archivePullExtent > 2.0)
-            Positioned(
-              top: safeTopPadding + 4,
-              left: 16,
-              right: 16,
-              child: IgnorePointer(
-                child: Opacity(
-                  opacity: pullProgress,
-                  child: Transform.translate(
-                    offset: Offset(0, -10.0 * (1.0 - pullProgress)),
-                    child: Center(
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 140),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _archivePullArmed
-                              ? primaryColor.withValues(alpha: 0.18)
-                              : (isDark
-                                  ? const Color(0xFF2C2C2E)
-                                  : Colors.white),
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.12),
-                              blurRadius: 10,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AnimatedRotation(
-                              turns: _archivePullArmed ? 0.5 : 0.0,
-                              duration: const Duration(milliseconds: 160),
-                              child: iconoir.NavArrowDown(
-                                width: 16,
-                                height: 16,
-                                color: _archivePullArmed
-                                    ? primaryColor
-                                    : theme.colorScheme.onSurface,
+          ValueListenableBuilder<({double extent, bool armed})>(
+            valueListenable: _archivePullNotifier,
+            builder: (context, pullState, _) {
+              if (pullState.extent <= 2.0) {
+                return const SizedBox.shrink();
+              }
+              final double pullProgress =
+                  (pullState.extent / _kArchivePullThreshold).clamp(0.0, 1.0);
+              return Positioned(
+                top: safeTopPadding + 4,
+                left: 16,
+                right: 16,
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: pullProgress,
+                    child: Transform.translate(
+                      offset: Offset(0, -10.0 * (1.0 - pullProgress)),
+                      child: Center(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 140),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: pullState.armed
+                                ? primaryColor.withValues(alpha: 0.18)
+                                : (isDark
+                                    ? const Color(0xFF2C2C2E)
+                                    : Colors.white),
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              l10n.translate(
-                                _archivePullArmed
-                                    ? 'archive_release_hint'
-                                    : 'archive_pull_hint',
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              AnimatedRotation(
+                                turns: pullState.armed ? 0.5 : 0.0,
+                                duration: const Duration(milliseconds: 160),
+                                child: iconoir.NavArrowDown(
+                                  width: 16,
+                                  height: 16,
+                                  color: pullState.armed
+                                      ? primaryColor
+                                      : theme.colorScheme.onSurface,
+                                ),
                               ),
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: _archivePullArmed
-                                    ? primaryColor
-                                    : theme.colorScheme.onSurface,
+                              const SizedBox(width: 8),
+                              Text(
+                                l10n.translate(
+                                  pullState.armed
+                                      ? 'archive_release_hint'
+                                      : 'archive_pull_hint',
+                                ),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: pullState.armed
+                                      ? primaryColor
+                                      : theme.colorScheme.onSurface,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -3526,12 +3546,8 @@ class _MainScreenState extends State<MainScreen>
         return a.isPinned ? -1 : 1;
       }
 
-      // Then by parsed updated_at to ensure accurate chronological ordering
-      final dtA = DateTimeUtils.parseUtcDateTime(a.updatedAt) ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      final dtB = DateTimeUtils.parseUtcDateTime(b.updatedAt) ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      return dtB.compareTo(dtA);
+      // Then by precomputed updatedAtEpochMs to ensure accurate chronological ordering
+      return b.updatedAtEpochMs.compareTo(a.updatedAtEpochMs);
     });
   }
 
@@ -3632,6 +3648,7 @@ class _MainScreenState extends State<MainScreen>
                     if (_currentIndex != page) {
                       setState(() {
                         _currentIndex = page;
+                        _visitedPages.add(page);
                         if (page == 2) {
                           // Поиск — очищаем поле при переходе
                           _searchController.clear();
@@ -3646,10 +3663,12 @@ class _MainScreenState extends State<MainScreen>
                   },
                   children: [
                     // Страница 0: Настройки (встроенная)
-                    const RepaintBoundary(
-                      child: _KeepAlivePage(
-                        child: SettingsScreen(isEmbedded: true),
-                      ),
+                    RepaintBoundary(
+                      child: _visitedPages.contains(0)
+                          ? const _KeepAlivePage(
+                              child: SettingsScreen(isEmbedded: true),
+                            )
+                          : const SizedBox.shrink(),
                     ),
 
                     // Страница 1: Чаты
@@ -3697,58 +3716,60 @@ class _MainScreenState extends State<MainScreen>
 
                     // Страница 2: Поиск
                     RepaintBoundary(
-                      child: _KeepAlivePage(
-                        child: SafeArea(
-                          child: Column(
-                            children: [
-                              // Отступ под стационарный верхний бар
-                              const SizedBox(height: 52),
-                              // Поле поиска
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
-                                child: TextField(
-                                  controller: _searchController,
-                                  autofocus: false,
-                                  focusNode: _searchFocusNode,
-                                  decoration: InputDecoration(
-                                    hintText: l10n.translate('common_search'),
-                                    prefixIcon: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: iconoir.Search(
-                                        width: 20,
-                                        height: 20,
-                                        color: Theme.of(context).iconTheme.color ?? Colors.grey,
+                      child: _visitedPages.contains(2)
+                          ? _KeepAlivePage(
+                              child: SafeArea(
+                                child: Column(
+                                  children: [
+                                    // Отступ под стационарный верхний бар
+                                    const SizedBox(height: 52),
+                                    // Поле поиска
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 8),
+                                      child: TextField(
+                                        controller: _searchController,
+                                        autofocus: false,
+                                        focusNode: _searchFocusNode,
+                                        decoration: InputDecoration(
+                                          hintText: l10n.translate('common_search'),
+                                          prefixIcon: Padding(
+                                            padding: const EdgeInsets.all(12),
+                                            child: iconoir.Search(
+                                              width: 20,
+                                              height: 20,
+                                              color: Theme.of(context).iconTheme.color ?? Colors.grey,
+                                            ),
+                                          ),
+                                          suffixIcon: IconButton(
+                                            icon: const iconoir.Xmark(width: 20, height: 20),
+                                            onPressed: () {
+                                              _searchController.clear();
+                                              setState(() {
+                                                _searchQuery = '';
+                                                _unifiedSearchResult =
+                                                    UnifiedSearchResult.empty;
+                                              });
+                                            },
+                                          ),
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                            borderSide: BorderSide.none,
+                                          ),
+                                          filled: true,
+                                        ),
                                       ),
                                     ),
-                                    suffixIcon: IconButton(
-                                      icon: const iconoir.Xmark(width: 20, height: 20),
-                                      onPressed: () {
-                                        _searchController.clear();
-                                        setState(() {
-                                          _searchQuery = '';
-                                          _unifiedSearchResult =
-                                              UnifiedSearchResult.empty;
-                                        });
-                                      },
+                                    _buildSearchFilterChips(context),
+                                    // Результаты поиска
+                                    Expanded(
+                                      child: _buildSearchResults(),
                                     ),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: BorderSide.none,
-                                    ),
-                                    filled: true,
-                                  ),
+                                  ],
                                 ),
-                              ),
-                              _buildSearchFilterChips(context),
-                              // Результаты поиска
-                              Expanded(
-                                child: _buildSearchResults(),
-                              ),
-                            ],
-                          ),
-                        ), // closes SafeArea
-                      ), // closes _KeepAlivePage
+                              ), // closes SafeArea
+                            )
+                          : const SizedBox.shrink(), // closes _KeepAlivePage
                     ),
                   ], // closes PageView children
                 ); // closes PageView
@@ -3997,90 +4018,94 @@ class _MainScreenState extends State<MainScreen>
               );
             }
 
-            // Классический режим — сплошная заливка бара поверх контента
-            return Scaffold(
-              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-              resizeToAvoidBottomInset: true,
-              body: Stack(
-                children: [
-                  Positioned.fill(child: pageView),
-                  if (_isTopMenuOpen ||
-                      _isFolderMenuOpen ||
-                      _isCreateMenuOpen ||
-                      _isSelectionMenuOpen)
-                    Positioned.fill(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          if (_isTopMenuOpen) _closeTopMenu();
-                          if (_isFolderMenuOpen) _closeFolderMenu();
-                          if (_isCreateMenuOpen) _closeCreateMenu();
-                          if (_isSelectionMenuOpen) {
-                            setState(() => _isSelectionMenuOpen = false);
-                          }
-                        },
-                      ),
-                    ),
-                  Positioned(
-                    top: topBarHeight + 4.0,
-                    left: 0,
-                    right: 0,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        CallDeviceTransferBanner(),
-                        MediaNotePlayerHeader(),
-                      ],
+            // Классический режим — матовый single-pass blur HUD поверх контента
+            final Widget classicStack = Stack(
+              children: [
+                Positioned.fill(child: pageView),
+                if (_isTopMenuOpen ||
+                    _isFolderMenuOpen ||
+                    _isCreateMenuOpen ||
+                    _isSelectionMenuOpen)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () {
+                        if (_isTopMenuOpen) _closeTopMenu();
+                        if (_isFolderMenuOpen) _closeFolderMenu();
+                        if (_isCreateMenuOpen) _closeCreateMenu();
+                        if (_isSelectionMenuOpen) {
+                          setState(() => _isSelectionMenuOpen = false);
+                        }
+                      },
                     ),
                   ),
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 8.0),
-                        child: _buildAdaptiveTopBar(context),
-                      ),
+                Positioned(
+                  top: topBarHeight + 4.0,
+                  left: 0,
+                  right: 0,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      CallDeviceTransferBanner(),
+                      MediaNotePlayerHeader(),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: _buildAdaptiveTopBar(context),
                     ),
                   ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: IgnorePointer(
-                      ignoring: _isSelectMode,
-                      child: AnimatedSlide(
-                        offset: Offset(0, _isSelectMode ? 1.35 : 0.0),
-                        duration: const Duration(milliseconds: 260),
-                        curve: Curves.easeOutCubic,
-                        child: AnimatedOpacity(
-                          opacity: _isSelectMode ? 0.0 : 1.0,
-                          duration: const Duration(milliseconds: 200),
-                          child: SafeArea(
-                            top: false,
-                            child: ClassicBottomBar(
-                              selectedIndex: _currentIndex,
-                              unreadCount: totalUnread,
-                              onTabSelected: (index) {
-                                _onTabTapped(index);
-                              },
-                              onAddTap: _toggleCreateMenu,
-                              bottomPadding: 12,
-                            ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    ignoring: _isSelectMode,
+                    child: AnimatedSlide(
+                      offset: Offset(0, _isSelectMode ? 1.35 : 0.0),
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedOpacity(
+                        opacity: _isSelectMode ? 0.0 : 1.0,
+                        duration: const Duration(milliseconds: 200),
+                        child: SafeArea(
+                          top: false,
+                          child: ClassicBottomBar(
+                            selectedIndex: _currentIndex,
+                            unreadCount: totalUnread,
+                            onTabSelected: (index) {
+                              _onTabTapped(index);
+                            },
+                            onAddTap: _toggleCreateMenu,
+                            bottomPadding: 12,
                           ),
                         ),
                       ),
                     ),
                   ),
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: _buildClassicCreateMenuOverlay(context),
-                  ),
-                ],
-              ),
+                ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: _buildClassicCreateMenuOverlay(context),
+                ),
+              ],
+            );
+
+            return Scaffold(
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              resizeToAvoidBottomInset: true,
+              body: BackdropGroup.of(context) == null
+                  ? BackdropGroup(child: classicStack)
+                  : classicStack,
             );
           },
         ),
@@ -4093,9 +4118,17 @@ class _MainScreenState extends State<MainScreen>
     final themeExt = theme.extension<TheavThemeExtension>();
     final p = themeExt?.palette;
     final isDark = theme.brightness == Brightness.dark;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
 
-    final barBackgroundColor =
+    final rawBg =
         p?.surface ?? (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final barBackgroundColor = BlurUtils.resolveMaterialHudColor(
+      rawBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+      darkAlpha: 0.84,
+      lightAlpha: 0.88,
+    );
     final borderColor = p?.divider ??
         (isDark
             ? Colors.white.withValues(alpha: 0.1)
@@ -4120,17 +4153,72 @@ class _MainScreenState extends State<MainScreen>
             ctrlSize + (panelHeight - ctrlSize) * progress;
         final double currentRadius = 30.0 - 4.0 * progress;
 
+        final Widget menuCard = Container(
+          width: currentWidth,
+          height: currentHeight,
+          decoration: BoxDecoration(
+            color: barBackgroundColor,
+            borderRadius: BorderRadius.circular(currentRadius),
+            border: Border.all(color: borderColor, width: 0.6),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              if (progress > 0.01)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  width: panelWidth,
+                  height: panelHeight,
+                  child: Opacity(
+                    opacity: ((progress - 0.15) / 0.85).clamp(0.0, 1.0),
+                    child: Transform.translate(
+                      offset: Offset(0, 10.0 * (1.0 - progress)),
+                      child: IgnorePointer(
+                        ignoring: progress < 0.85,
+                        child: CreateChatSelectorPanel(
+                          key: const ValueKey<String>(
+                            'classic_create_chat_panel',
+                          ),
+                          onClose: _closeCreateMenu,
+                          onSelectOption: _handleCreateOptionSelected,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (progress < 0.99)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  width: ctrlSize,
+                  height: ctrlSize,
+                  child: Opacity(
+                    opacity: (1.0 - (progress / 0.35)).clamp(0.0, 1.0),
+                    child: Transform.rotate(
+                      angle: progress * math.pi / 4,
+                      child: IgnorePointer(
+                        ignoring: progress > 0.1,
+                        child: _PlusActionGlyph(
+                          size: ctrlSize,
+                          onTap: _toggleCreateMenu,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+
         return SafeArea(
           top: false,
           child: Padding(
             padding: const EdgeInsets.only(right: 16.0, bottom: 12.0),
-            child: Container(
-              width: currentWidth,
-              height: currentHeight,
+            child: DecoratedBox(
               decoration: BoxDecoration(
-                color: barBackgroundColor,
                 borderRadius: BorderRadius.circular(currentRadius),
-                border: Border.all(color: borderColor, width: 0.6),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(
@@ -4142,56 +4230,14 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ],
               ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                clipBehavior: Clip.hardEdge,
-                children: [
-                  if (progress > 0.01)
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      width: panelWidth,
-                      height: panelHeight,
-                      child: Opacity(
-                        opacity:
-                            ((progress - 0.15) / 0.85).clamp(0.0, 1.0),
-                        child: Transform.translate(
-                          offset: Offset(0, 10.0 * (1.0 - progress)),
-                          child: IgnorePointer(
-                            ignoring: progress < 0.85,
-                            child: CreateChatSelectorPanel(
-                              key: const ValueKey<String>(
-                                'classic_create_chat_panel',
-                              ),
-                              onClose: _closeCreateMenu,
-                              onSelectOption: _handleCreateOptionSelected,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (progress < 0.99)
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      width: ctrlSize,
-                      height: ctrlSize,
-                      child: Opacity(
-                        opacity:
-                            (1.0 - (progress / 0.35)).clamp(0.0, 1.0),
-                        child: Transform.rotate(
-                          angle: progress * math.pi / 4,
-                          child: IgnorePointer(
-                            ignoring: progress > 0.1,
-                            child: _PlusActionGlyph(
-                              size: ctrlSize,
-                              onTap: _toggleCreateMenu,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(currentRadius),
+                child: blurEnabled
+                    ? BackdropFilter.grouped(
+                        filter: BlurUtils.createMaterialHudBlur(sigma: 12.0),
+                        child: menuCard,
+                      )
+                    : menuCard,
               ),
             ),
           ),

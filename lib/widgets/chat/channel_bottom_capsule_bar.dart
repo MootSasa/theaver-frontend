@@ -523,27 +523,37 @@ class _ChannelBottomCapsuleBarState extends State<ChannelBottomCapsuleBar> {
       );
     }
 
-    final defaultBg = isDark
-        ? Colors.black.withValues(alpha: 0.65)
-        : Colors.white.withValues(alpha: 0.72);
-    final pillBg = themeExt?.palette.appBarBackground ?? defaultBg;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final defaultBg = isDark ? const Color(0xFF1C1C1E) : Colors.white;
+    final rawBg = themeExt?.palette.appBarBackground ?? defaultBg;
+    final baseBg = rawBg == Colors.transparent ? defaultBg : rawBg;
+    final pillBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: pillBg,
+        borderRadius: BorderRadius.circular(_kCapsuleRadius),
+        border: Border.all(
+          color: themeExt?.palette.borderSubtle ??
+              (isDark ? Colors.white12 : Colors.black12),
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: interactiveChild,
+    );
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(_kCapsuleRadius),
-      child: BackdropFilter.grouped(
-        filter: BlurUtils.createDownsampledBlur(15),
-        child: Container(
-          decoration: BoxDecoration(
-            color: pillBg,
-            borderRadius: BorderRadius.circular(_kCapsuleRadius),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: interactiveChild,
-        ),
-      ),
+      child: blurEnabled
+          ? BackdropFilter.grouped(
+              filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+              child: container,
+            )
+          : container,
     );
   }
 }

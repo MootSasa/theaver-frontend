@@ -673,9 +673,9 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                 style: pillStyle,
                 child: stackWidget,
               )
-            : BackdropGroup(
-                child: stackWidget,
-              ),
+            : (BackdropGroup.of(context) == null
+                ? BackdropGroup(child: stackWidget)
+                : stackWidget),
       ),
     );
   }
@@ -1014,25 +1014,41 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
 
   Widget _buildMattePill({required bool isDark, required Widget child}) {
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final defaultBg = isDark
-        ? Colors.black.withValues(alpha: 0.65)
-        : Colors.white.withValues(alpha: 0.65);
-    final pillBg = themeExt?.palette.appBarBackground ?? defaultBg;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final defaultBg = isDark ? const Color(0xFF1C1C1E) : Colors.white;
+    final rawBg = themeExt?.palette.appBarBackground ?? defaultBg;
+    final baseBg = rawBg == Colors.transparent ? defaultBg : rawBg;
+    final pillBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: pillBg,
+        borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
+        border: Border.all(
+          color: themeExt?.palette.borderSubtle ??
+              (isDark ? Colors.white12 : Colors.black12),
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: child,
+    );
+
+    if (!blurEnabled) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
+        child: container,
+      );
+    }
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
       child: BackdropFilter.grouped(
-        filter: BlurUtils.createDownsampledBlur(15),
-        child: Container(
-          decoration: BoxDecoration(
-            color: pillBg,
-            borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: child,
-        ),
+        filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+        child: container,
       ),
     );
   }
@@ -1815,23 +1831,43 @@ class _GlassChatMenuState extends State<GlassChatMenu> {
   }
 
   Widget _buildMatteMenu(bool isDark, ThemeData theme) {
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = themeExt?.palette.surface ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final menuBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+      darkAlpha: 0.84,
+      lightAlpha: 0.88,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: menuBg,
+        borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
+        border: Border.all(
+          color: themeExt?.palette.borderSubtle ??
+              (isDark ? Colors.white12 : Colors.black12),
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: _buildMenuItems(theme),
+    );
+
+    if (!blurEnabled) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
+        child: container,
+      );
+    }
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-      child: BackdropFilter(
-        filter: BlurUtils.createDownsampledBlur(15),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark
-                ? Colors.black.withValues(alpha: 0.65)
-                : Colors.white.withValues(alpha: 0.65),
-            borderRadius: BorderRadius.circular(_kAppBarBorderRadius),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: _buildMenuItems(theme),
-        ),
+      child: BackdropFilter.grouped(
+        filter: BlurUtils.createMaterialHudBlur(sigma: 12.0),
+        child: container,
       ),
     );
   }

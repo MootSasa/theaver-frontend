@@ -87,6 +87,8 @@ import '../../widgets/message/telegram_service_message_widget.dart';
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import '../../services/bot_service.dart';
 import '../../services/dm_parity_service.dart';
+import '../../services/account_manager.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../widgets/chat/contact_picker_sheet.dart';
 import '../../widgets/chat/location_picker_sheet.dart';
 import '../../widgets/chat/mention_and_bot_popup.dart';
@@ -175,6 +177,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   ReactionSettings? _reactionSettings;
   bool _hasActiveCall = false;
   bool _isSilentBroadcast = false;
+  bool _seededFromChatDetails = false;
   List<BotInfo> _inlineDirectoryBots = const [];
   String? _activeMentionQuery;
   int _mentionTokenStart = -1;
@@ -328,7 +331,11 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-  void _applyChatDetails(ChatDetails chat) {
+  void _applyChatDetails(ChatDetails chat, {bool fromInitialCache = false}) {
+    if (!fromInitialCache) {
+      ChatInstantCache.instance.putChatDetails(chat);
+    }
+    _seededFromChatDetails = true;
     _channelName = chat.name;
     _channelAvatar = chat.avatarUrl;
     _channelDescription = chat.description;
@@ -548,11 +555,66 @@ class _ChannelScreenState extends State<ChannelScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _currentUserId = AccountManager().currentAccount?.userId;
     _highlightMessageId = widget.highlightMessageId;
+    final instant = ChatInstantCache.instance.getSync(widget.channelId);
+    final chanSnap = ProfileInstantCache.instance.getGroupSnapshotSync(widget.channelId);
+
     _isMuted = NotificationSettingsProvider().isChatMuted(
-      widget.channelId,
-      chatType: 'channel',
-    );
+          widget.channelId,
+          chatType: 'channel',
+        ) ||
+        ProfileInstantCache.instance.isChatMutedSync(widget.channelId);
+    _keyboardHeight =
+        instant?.keyboardHeight ?? ChatInstantCache.instance.globalKeyboardHeight;
+    if (instant?.inputHeight != null) {
+      _inputHeight = instant!.inputHeight!;
+    }
+    if (instant?.chatDetails != null) {
+      _applyChatDetails(instant!.chatDetails!, fromInitialCache: true);
+    }
+    if ((widget.channelName != null && widget.channelName!.isNotEmpty) ||
+        _channelName.isEmpty) {
+      _channelName = (widget.channelName != null && widget.channelName!.isNotEmpty)
+          ? widget.channelName!
+          : (instant?.chat?.name ?? _channelName);
+    }
+    _channelAvatar =
+        widget.channelAvatar ?? instant?.chat?.avatarUrl ?? _channelAvatar;
+    if (_subscriberCount == 0) {
+      _subscriberCount =
+          instant?.subscriberCount ?? instant?.memberCount ?? chanSnap?.memberCount ?? 0;
+    }
+    _isVerified = instant?.isVerified ?? instant?.chat?.isVerified ?? _isVerified;
+    _linkedChat ??= instant?.linkedChat;
+    _linkedChatId ??= instant?.linkedChat?.id ?? instant?.chat?.linkedChatId;
+    if (!_seededFromChatDetails) {
+      final cachedRole = instant?.myRole ?? instant?.chat?.myRole;
+      if (cachedRole != null && cachedRole.isNotEmpty) {
+        _myRole = cachedRole;
+        _isMember = instant?.isMember ?? instant?.chat?.isMember ?? (cachedRole != 'guest');
+        _isAdmin = _isMember && (cachedRole == 'owner' || cachedRole == 'admin');
+        _canPostInChannel = _isAdmin;
+      } else if (instant?.isMember != null) {
+        _isMember = instant!.isMember!;
+      }
+      _hasProtectedContent =
+          instant?.hasProtectedContent ?? instant?.chat?.hasProtectedContent ?? _hasProtectedContent;
+    }
+    final instantPinned = instant?.effectivePinnedMessage;
+    if (_pinnedMessage == null && instantPinned != null) {
+      _pinnedMessage = instantPinned;
+      _pinnedMessages = instant?.pinnedMessages ?? [instantPinned];
+    }
+
+    if (instant != null && instant.hasMessages) {
+      _messages.addAll(instant.messages!);
+      _syncReactionCacheFromMessages(_messages);
+      _isLoading = false;
+      _hasMoreMessages = _messages.length >= 35;
+      _updateFeedItems();
+    }
+
     ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
 
     _emojiPanelController = AnimationController(
@@ -801,11 +863,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getDouble('cached_keyboard_height');
     if (cached != null && cached > 150) {
-      if (mounted) setState(() => _keyboardHeight = cached);
+      ChatInstantCache.instance.setKeyboardHeight(cached, chatId: widget.channelId);
+      if (mounted && (cached - _keyboardHeight).abs() > 0.5) {
+        setState(() => _keyboardHeight = cached);
+      }
     }
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
+    ChatInstantCache.instance.setKeyboardHeight(height, chatId: widget.channelId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('cached_keyboard_height', height);
   }
@@ -891,7 +957,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
 
     _transitionTimer?.cancel();
-    final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     if (!_showEmojiPanel) {
       if (kbOpen) {
@@ -1605,11 +1671,20 @@ class _ChannelScreenState extends State<ChannelScreen>
     try {
       final list = await ChatService.getPinnedMessages(chatId: widget.channelId);
       if (!mounted) return;
+      ChatInstantCache.instance.putPinnedMessages(widget.channelId, list);
+      final nextIndex =
+          list.isNotEmpty ? _currentPinnedIndex.clamp(0, list.length - 1) : 0;
+      final nextPinned = list.isNotEmpty ? list[nextIndex] : null;
+      if (_pinnedMessages.length == list.length &&
+          _pinnedMessage?.id == nextPinned?.id &&
+          _currentPinnedIndex == nextIndex) {
+        return;
+      }
       setState(() {
         _pinnedMessages = list;
         if (list.isNotEmpty) {
-          _currentPinnedIndex = _currentPinnedIndex.clamp(0, list.length - 1);
-          _pinnedMessage = list[_currentPinnedIndex];
+          _currentPinnedIndex = nextIndex;
+          _pinnedMessage = nextPinned;
         } else {
           _pinnedMessage = null;
           _currentPinnedIndex = 0;
@@ -2023,42 +2098,70 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   Future<void> _loadData() async {
-    // Load cached channel flags from Drift immediately
-    try {
-      final db = AppDatabase();
-      await db.ensureInitialized();
-      final cachedChat = await (db.select(db.chats)
-            ..where((t) => t.chatId.equals(widget.channelId)))
-          .getSingleOrNull();
-      if (cachedChat != null && mounted) {
-        final cachedReactions =
-            ReactionSettings.tryParse(cachedChat.reactionSettingsJson);
-        setState(() {
-          if (cachedChat.name.isNotEmpty) _channelName = cachedChat.name;
-          if (cachedChat.avatarUrl != null &&
-              cachedChat.avatarUrl!.isNotEmpty) {
-            _channelAvatar = cachedChat.avatarUrl;
+    // Load cached channel flags from Drift if not already seeded with full ChatDetails
+    if (!_seededFromChatDetails) {
+      try {
+        final db = AppDatabase();
+        await db.ensureInitialized();
+        final cachedChat = await (db.select(db.chats)
+              ..where((t) => t.chatId.equals(widget.channelId)))
+            .getSingleOrNull();
+        if (cachedChat != null && mounted && !_seededFromChatDetails) {
+          final cachedReactions =
+              ReactionSettings.tryParse(cachedChat.reactionSettingsJson);
+          final nextRole =
+              (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty)
+                  ? cachedChat.myRole!
+                  : _myRole;
+          final nextMember =
+              (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty)
+                  ? nextRole != 'guest'
+                  : _isMember;
+          final nextAdmin =
+              (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty)
+                  ? (nextRole == 'owner' || nextRole == 'admin')
+                  : _isAdmin;
+          final bool changed =
+              (cachedChat.name.isNotEmpty && cachedChat.name != _channelName) ||
+                  (cachedChat.avatarUrl != null &&
+                      cachedChat.avatarUrl!.isNotEmpty &&
+                      cachedChat.avatarUrl != _channelAvatar) ||
+                  cachedChat.showAuthorProfiles != _showAuthorProfiles ||
+                  cachedChat.signMessages != _signMessages ||
+                  cachedChat.linkedChatId != _linkedChatId ||
+                  cachedChat.hasActiveCall != _hasActiveCall ||
+                  nextRole != _myRole ||
+                  nextMember != _isMember ||
+                  nextAdmin != _isAdmin;
+          if (changed) {
+            setState(() {
+              if (cachedChat.name.isNotEmpty) _channelName = cachedChat.name;
+              if (cachedChat.avatarUrl != null &&
+                  cachedChat.avatarUrl!.isNotEmpty) {
+                _channelAvatar = cachedChat.avatarUrl;
+              }
+              _showAuthorProfiles = cachedChat.showAuthorProfiles;
+              _signMessages = cachedChat.signMessages;
+              _linkedChatId = cachedChat.linkedChatId;
+              _hasActiveCall = cachedChat.hasActiveCall;
+              if (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty) {
+                _myRole = nextRole;
+                _isMember = nextMember;
+                _isAdmin = nextAdmin;
+                _canPostInChannel = nextAdmin;
+              }
+              if (cachedReactions != null) {
+                _reactionSettings = cachedReactions;
+              }
+            });
           }
-          _showAuthorProfiles = cachedChat.showAuthorProfiles;
-          _signMessages = cachedChat.signMessages;
-          _linkedChatId = cachedChat.linkedChatId;
-          _hasActiveCall = cachedChat.hasActiveCall;
-          if (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty) {
-            _myRole = cachedChat.myRole!;
-            _isMember = _myRole != 'guest';
-            _isAdmin = _myRole == 'owner' || _myRole == 'admin';
-            _canPostInChannel = _isAdmin;
-          }
-          if (cachedReactions != null) {
-            _reactionSettings = cachedReactions;
-          }
-        });
-      }
-    } catch (_) {}
+        }
+      } catch (_) {}
+    }
 
     // Get current user ID before applying chat permissions
     final userId = await AuthService.getUserId();
-    if (mounted) {
+    if (mounted && userId != _currentUserId) {
       setState(() => _currentUserId = userId);
     }
 
@@ -2117,7 +2220,10 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   Future<void> _loadMessages() async {
-    setState(() => _isLoading = true);
+    final bool hadInitialMessages = _messages.isNotEmpty;
+    if (_messages.isEmpty && !_isLoading) {
+      setState(() => _isLoading = true);
+    }
 
     final db = AppDatabase();
     List<DbMessage> localMessages = [];
@@ -2142,15 +2248,21 @@ class _ChannelScreenState extends State<ChannelScreen>
         return m;
       }).toList();
 
-      setState(() {
-        _isLoading = false;
-        _messages.clear();
-        _messages
-            .addAll(fixedMessages.map((m) => Message.fromDbMessage(m)).toList());
-        _syncReactionCacheFromMessages(_messages);
-        _hasMoreMessages = localMessages.length >= 50;
-        _updateFeedItems();
-      });
+      final parsedLocal =
+          fixedMessages.map((m) => Message.fromDbMessage(m)).toList();
+      _sortMessagesDescending(parsedLocal);
+      ChatInstantCache.instance.putMessages(widget.channelId, parsedLocal);
+
+      if (_isLoading || !ChatInstantCache.messagesEqual(_messages, parsedLocal)) {
+        setState(() {
+          _isLoading = false;
+          _messages.clear();
+          _messages.addAll(parsedLocal);
+          _syncReactionCacheFromMessages(_messages);
+          _hasMoreMessages = localMessages.length >= 50;
+          _updateFeedItems();
+        });
+      }
 
       if (_highlightMessageId != null && !_hasScrolledToHighlight) {
         _scrollToMessage(_highlightMessageId!);
@@ -2163,84 +2275,98 @@ class _ChannelScreenState extends State<ChannelScreen>
           await ChatService.getMessages(chatId: widget.channelId, limit: 50);
 
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-          if (result['success'] == true) {
-            final serverMessages = result['messages'] as List<Message>;
-            _hasMoreMessages =
-                result['has_more'] as bool? ?? (serverMessages.length >= 50);
+        if (result['success'] == true) {
+          final serverMessages = result['messages'] as List<Message>;
+          final nextHasMore =
+              result['has_more'] as bool? ?? (serverMessages.length >= 50);
 
-            final pendingMessages = _messages
-                .where(
-                  (m) => m.sendStatus != 1 && m.localId != null,
-                )
-                .toList();
+          final pendingMessages = _messages
+              .where(
+                (m) => m.sendStatus != 1 && m.localId != null,
+              )
+              .toList();
 
-            final Map<String, Message> mergedById = {};
-            final Map<String, Message> existingByLocalId = {};
-            for (final m in _messages) {
-              mergedById[m.id] = m;
-              if (m.localId != null && m.localId!.isNotEmpty) {
-                existingByLocalId[m.localId!] = m;
-              }
-            }
-            for (final m in serverMessages) {
-              final existing = mergedById[m.id] ??
-                  (m.localId != null && m.localId!.isNotEmpty
-                      ? existingByLocalId[m.localId!]
-                      : null);
-              if (existing != null) {
-                mergedById[m.id] = m.copyWith(
-                  localId: m.localId ?? existing.localId,
-                  isQuote: m.isQuote || existing.isQuote,
-                  quoteText: m.quoteText ?? existing.quoteText,
-                  quoteOffset:
-                      m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
-                  quoteLength:
-                      m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
-                );
-              } else {
-                mergedById[m.id] = m;
-              }
-            }
-            final Set<String> serverLocalIds = mergedById.values
-                .map((m) => m.localId)
-                .whereType<String>()
-                .where((id) => id.isNotEmpty)
-                .toSet();
-            for (final pending in pendingMessages) {
-              final lId = pending.localId;
-              if (!mergedById.containsKey(pending.id) &&
-                  (lId == null || !serverLocalIds.contains(lId))) {
-                mergedById[pending.id] = pending;
-              }
-            }
-
-            _messages.clear();
-            _messages.addAll(mergedById.values);
-            _sortMessagesDescending(_messages);
-            _syncReactionCacheFromMessages(serverMessages);
-            _updateFeedItems();
-
-            try {
-              db.saveMessages(
-                  serverMessages.map((m) => _messageToCompanion(m)).toList());
-            } catch (e) {
-              debugPrint('Channel: Drift saveMessages error: $e');
+          final Map<String, Message> mergedById = {};
+          final Map<String, Message> existingByLocalId = {};
+          for (final m in _messages) {
+            mergedById[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              existingByLocalId[m.localId!] = m;
             }
           }
-        });
+          for (final m in serverMessages) {
+            final existing = mergedById[m.id] ??
+                (m.localId != null && m.localId!.isNotEmpty
+                    ? existingByLocalId[m.localId!]
+                    : null);
+            if (existing != null) {
+              mergedById[m.id] = m.copyWith(
+                localId: m.localId ?? existing.localId,
+                isQuote: m.isQuote || existing.isQuote,
+                quoteText: m.quoteText ?? existing.quoteText,
+                quoteOffset:
+                    m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                quoteLength:
+                    m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+              );
+            } else {
+              mergedById[m.id] = m;
+            }
+          }
+          final Set<String> serverLocalIds = mergedById.values
+              .map((m) => m.localId)
+              .whereType<String>()
+              .where((id) => id.isNotEmpty)
+              .toSet();
+          for (final pending in pendingMessages) {
+            final lId = pending.localId;
+            if (!mergedById.containsKey(pending.id) &&
+                (lId == null || !serverLocalIds.contains(lId))) {
+              mergedById[pending.id] = pending;
+            }
+          }
+
+          final mergedList = mergedById.values.toList();
+          _sortMessagesDescending(mergedList);
+          ChatInstantCache.instance.putMessages(widget.channelId, mergedList);
+
+          final bool needsUiUpdate = _isLoading ||
+              _hasMoreMessages != nextHasMore ||
+              !ChatInstantCache.messagesEqual(_messages, mergedList);
+
+          if (needsUiUpdate) {
+            setState(() {
+              _isLoading = false;
+              _hasMoreMessages = nextHasMore;
+              _messages.clear();
+              _messages.addAll(mergedList);
+              _syncReactionCacheFromMessages(serverMessages);
+              _updateFeedItems();
+            });
+          }
+
+          try {
+            db.saveMessages(
+                serverMessages.map((m) => _messageToCompanion(m)).toList());
+          } catch (e) {
+            debugPrint('Channel: Drift saveMessages error: $e');
+          }
+        } else if (_isLoading) {
+          setState(() => _isLoading = false);
+        }
 
         if (_highlightMessageId != null && !_hasScrolledToHighlight) {
           _scrollToMessage(_highlightMessageId!);
           _hasScrolledToHighlight = true;
-        } else if (localMessages.isEmpty && !_showUnreadDivider) {
+        } else if (!hadInitialMessages &&
+            localMessages.isEmpty &&
+            !_showUnreadDivider) {
           _scrollToBottom();
         }
       }
     } catch (e) {
       debugPrint('Channel: Error loading from server: $e');
-      if (mounted && localMessages.isEmpty) {
+      if (mounted && _isLoading) {
         setState(() => _isLoading = false);
       }
     }
@@ -2335,16 +2461,8 @@ class _ChannelScreenState extends State<ChannelScreen>
       msg.toCompanion(fallbackChatId: widget.channelId);
 
   void _sortMessagesDescending(List<Message> list) {
-    final dateMap = <String, int>{};
-    for (final m in list) {
-      dateMap[m.id] =
-          DateTimeUtils.parseUtcDateTime(m.createdAt)?.millisecondsSinceEpoch ??
-              0;
-    }
     list.sort((a, b) {
-      final ta = dateMap[a.id] ?? 0;
-      final tb = dateMap[b.id] ?? 0;
-      final cmp = tb.compareTo(ta);
+      final cmp = b.createdAtEpochMs.compareTo(a.createdAtEpochMs);
       if (cmp != 0) return cmp;
       return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
     });
@@ -3960,6 +4078,9 @@ class _ChannelScreenState extends State<ChannelScreen>
     unawaited(_flushPendingViews());
     _realtimeUpdateSub?.cancel();
 
+    if (!_isDetachedHistoryWindow && _messages.isNotEmpty) {
+      ChatInstantCache.instance.putMessages(widget.channelId, _messages);
+    }
     DraftService().flushDraft(widget.channelId);
     StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _messageController.removeListener(_onInputTextChanged);
@@ -4066,9 +4187,10 @@ class _ChannelScreenState extends State<ChannelScreen>
       if (!mounted) return;
       final RenderBox? renderBox =
           _inputKey.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null) {
+      if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
-        if (newHeight != _inputHeight && newHeight > 0) {
+        if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
+          ChatInstantCache.instance.setInputHeight(widget.channelId, newHeight);
           setState(() {
             _inputHeight = newHeight;
           });
@@ -4082,7 +4204,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _updateInputHeight();
     final displayName = widget.channelName ?? (_channelName.isNotEmpty ? _channelName : 'Channel');
     final topPadding = ChatScaffold.getTopContentPadding(context);
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
     if (bottomInset > _keyboardHeight && !_showEmojiPanel) {
       _keyboardHeight = bottomInset;
@@ -4113,7 +4235,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         _inputFocusNode.hasFocus) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
-            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            MediaQuery.viewInsetsOf(context).bottom == 0 &&
             !_showEmojiPanel &&
             _inputFocusNode.hasFocus) {
           _inputFocusNode.unfocus();
@@ -5518,7 +5640,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           _touchVelocityY = _touchVelocityY * 0.35 + instantVy * 0.65;
           // Fast vertical scroll on mobile dismisses keyboard & emoji panel
           if (_touchVelocityY > 1250.0 && totalDy > 42.0 && totalDy > totalDx * 1.8) {
-            final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+            final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
             if (isKeyboardOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
               _dismissedOnCurrentTouch = true;
               _dismissKeyboardAndEmoji();
@@ -5595,7 +5717,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           !_isSelectionMode) {
         final dist = (event.position - downPos).distance;
         if (dist < 12.0) {
-          final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+          final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
           if (isKeyboardOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
             _dismissKeyboardAndEmoji();
           }

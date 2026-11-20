@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
 import 'auth_service.dart';
@@ -72,6 +73,13 @@ class BotMenuButton {
       webAppUrl: url,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'type': type,
+        'text': text,
+        if (webAppUrl != null && webAppUrl!.isNotEmpty)
+          'web_app': {'url': webAppUrl},
+      };
 }
 
 /// Named Mini App registered with a bot via `@BotMother` or `/api/bots/:botId/apps`.
@@ -99,6 +107,14 @@ class BotWebAppInfo {
       photoUrl: (json['photo_url'] ?? '').toString().trim(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'short_name': shortName,
+        'title': title,
+        'description': description,
+        'url': url,
+        'photo_url': photoUrl,
+      };
 }
 
 /// Signed payload returned by `POST /api/bots/:botId/webapp/launch`.
@@ -496,10 +512,36 @@ class BotInfo {
       webhookUrl: map['webhook_url']?.toString(),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'id': userId,
+        'user_id': userId,
+        if (username != null) 'username': username,
+        'display_name': displayName,
+        if (avatarUrl != null) 'avatar_url': avatarUrl,
+        'description': description,
+        'about': about,
+        'commands': commands.map((c) => c.toJson()).toList(),
+        'can_join_groups': canJoinGroups,
+        'can_read_all_group_messages': canReadAllGroupMessages,
+        'supports_inline_queries': supportsInlineQueries,
+        if (inlinePlaceholder != null) 'inline_placeholder': inlinePlaceholder,
+        'menu_button': menuButton.toJson(),
+        'main_app_url': mainAppUrl,
+        'has_main_web_app': hasMainWebApp,
+        'supports_inline_feedback': supportsInlineFeedback,
+        'short_name': shortName,
+        'web_apps': webApps.map((w) => w.toJson()).toList(),
+        'is_verified': isVerified,
+        'is_owned': isOwned,
+        if (token != null) 'token': token,
+        if (webhookUrl != null) 'webhook_url': webhookUrl,
+      };
 }
 
 /// Service for interacting with Theaver Bots (`@BotMother`, Bot API v7+ & Mini Apps).
 class BotService {
+  static const String persistedPrefix = 'instant_bot_info_v1_';
   static final Map<String, BotInfo> _botInfoCache = {};
   static final Map<String, ({List<BotInfo> items, DateTime fetchedAt})>
       _directoryCache = {};
@@ -514,8 +556,42 @@ class BotService {
       _botInfoCache.removeWhere(
         (k, _) => k == trimmed || k.startsWith('${trimmed}_'),
       );
+      SharedPreferences.getInstance().then((prefs) async {
+        final keys = prefs.getKeys();
+        for (final key in keys) {
+          if (key == '$persistedPrefix$trimmed' ||
+              key.startsWith('$persistedPrefix${trimmed}_')) {
+            await prefs.remove(key);
+          }
+        }
+      }).catchError((_) {});
     }
     _directoryCache.clear();
+  }
+
+  /// Synchronously seeds the in-memory bot metadata cache (used on app startup).
+  static void seedBotInfoCache(BotInfo info, {String? chatId}) {
+    if (info.userId.isEmpty) return;
+    final trimmedChatId = chatId?.trim() ?? '';
+    _botInfoCache['${info.userId}_$trimmedChatId'] = info;
+    if (trimmedChatId.isEmpty || !_botInfoCache.containsKey(info.userId)) {
+      _botInfoCache[info.userId] = info;
+    }
+  }
+
+  static void _persistBotInfo(BotInfo info, {String? chatId}) {
+    if (info.userId.isEmpty) return;
+    final trimmedChatId = chatId?.trim() ?? '';
+    final encoded = jsonEncode(info.toJson());
+    SharedPreferences.getInstance().then((prefs) async {
+      await prefs.setString('$persistedPrefix${info.userId}', encoded);
+      if (trimmedChatId.isNotEmpty) {
+        await prefs.setString(
+          '$persistedPrefix${info.userId}_$trimmedChatId',
+          encoded,
+        );
+      }
+    }).catchError((_) {});
   }
 
   /// Parses an active `@mention` prefix right before [cursorOffset].
@@ -627,6 +703,7 @@ class BotService {
           if (chatId == null || chatId.isEmpty) {
             _botInfoCache[userId] = info;
           }
+          _persistBotInfo(info, chatId: chatId);
           return info;
         }
       }

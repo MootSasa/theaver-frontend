@@ -756,23 +756,36 @@ class _ScrollDownFabState extends State<ScrollDownFab>
   }
 
   Widget _buildMatteButton(BuildContext context, bool isDark, Widget child) {
-    return ClipOval(
-      child: BackdropFilter.grouped(
-        filter: BlurUtils.createDownsampledBlur(15),
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isDark
-                ? Colors.black.withValues(alpha: 0.65)
-                : Colors.white.withValues(alpha: 0.65),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: Center(child: child),
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final rawBg = themeExt?.palette.surface ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final bg = BlurUtils.resolveMaterialHudColor(
+      rawBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget circle = Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: bg,
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
         ),
       ),
+      child: Center(child: child),
+    );
+
+    return ClipOval(
+      child: blurEnabled
+          ? BackdropFilter.grouped(
+              filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+              child: circle,
+            )
+          : circle,
     );
   }
 }

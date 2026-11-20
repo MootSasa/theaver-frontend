@@ -6,6 +6,36 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 
+final Map<String, ({bool exists, int checkedAtMs})> _localFileExistsCache = {};
+const int _kLocalFileExistsTtlMs = 5000;
+
+/// Invalidates cached `File.existsSync()` lookups for local avatar paths.
+void invalidateLocalAvatarCache([String? path]) {
+  if (path != null && path.isNotEmpty) {
+    _localFileExistsCache.remove(path);
+  } else {
+    _localFileExistsCache.clear();
+  }
+}
+
+bool _localFileExistsCached(String filePath) {
+  if (kIsWeb || filePath.isEmpty) return false;
+  final now = DateTime.now().millisecondsSinceEpoch;
+  final cached = _localFileExistsCache[filePath];
+  if (cached != null && (now - cached.checkedAtMs) < _kLocalFileExistsTtlMs) {
+    return cached.exists;
+  }
+  bool exists = false;
+  try {
+    exists = File(filePath).existsSync();
+  } catch (_) {}
+  if (_localFileExistsCache.length > 512) {
+    _localFileExistsCache.clear();
+  }
+  _localFileExistsCache[filePath] = (exists: exists, checkedAtMs: now);
+  return exists;
+}
+
 /// Validates and returns a valid avatar URL or local file path, or null if invalid
 ///
 /// This function checks if the URL is a valid HTTP/HTTPS URL, data: URL, relative URL,
@@ -31,15 +61,14 @@ String? getValidAvatarUrl(String? url) {
   
   // Local file path or file:// URI
   if (!kIsWeb && url.startsWith('file://')) {
-    final file = File(Uri.parse(url).toFilePath());
-    if (file.existsSync()) return url;
+    try {
+      if (_localFileExistsCached(Uri.parse(url).toFilePath())) return url;
+    } catch (_) {}
   } else if (!kIsWeb && (url.contains(':\\') || url.contains(':/'))) {
-    final file = File(url);
-    if (file.existsSync()) return url;
+    if (_localFileExistsCached(url)) return url;
   } else if (url.startsWith('/')) {
-    if (!kIsWeb) {
-      final file = File(url);
-      if (file.existsSync()) return url;
+    if (!kIsWeb && _localFileExistsCached(url)) {
+      return url;
     }
     // Relative URL on storage or backend (e.g. /avatars/xyz.jpg or /api/...)
     final base = url.startsWith('/avatars/')
@@ -54,19 +83,13 @@ String? getValidAvatarUrl(String? url) {
     if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
       return url;
     }
-    if (!kIsWeb) {
-      // Fallback: check if local file path without scheme
-      final file = File(url);
-      if (file.existsSync()) return url;
+    if (!kIsWeb && _localFileExistsCached(url)) {
+      return url;
     }
     return null;
   } catch (e) {
-    if (!kIsWeb) {
-      // Check if it's a valid local file path even if URI parsing failed
-      try {
-        final file = File(url);
-        if (file.existsSync()) return url;
-      } catch (_) {}
+    if (!kIsWeb && _localFileExistsCached(url)) {
+      return url;
     }
     return null;
   }
@@ -74,74 +97,131 @@ String? getValidAvatarUrl(String? url) {
 
 final Map<String, MemoryImage> _dataUrlMemoryImageCache = {};
 
-/// Creates an ImageProvider from an avatar URL or local file path.
-/// Supports network URLs (http/https via CachedNetworkImageProvider with offline disk cache),
-/// local file paths, and data: URLs (base64).
-/// If the URL is invalid or empty, falls back to [localFallbackPath] if provided.
-ImageProvider? avatarImageProvider(String? url, {String? localFallbackPath}) {
+ImageProvider _maybeResizeAvatar(
+  ImageProvider provider, {
+  required int? maxDecodeDimension,
+  required bool fullResolution,
+}) {
+  if (fullResolution || maxDecodeDimension == null || maxDecodeDimension <= 0) {
+    return provider;
+  }
+  return ResizeImage(
+    provider,
+    width: maxDecodeDimension,
+    height: maxDecodeDimension,
+    policy: ResizeImagePolicy.fit,
+  );
+}
+
+/// Creates a thumbnail [ImageProvider] from an avatar URL or local file path.
+/// Uses [ResizeImagePolicy.fit] when [fullResolution] is false to cut VRAM usage
+/// while preserving non-square photo aspect ratios without stretching.
+ImageProvider? avatarImageProvider(
+  String? url, {
+  String? localFallbackPath,
+  int? maxDecodeDimension = 200,
+  bool fullResolution = false,
+}) {
   if ((url == null || url.isEmpty) && (localFallbackPath == null || localFallbackPath.isEmpty)) {
     return null;
   }
 
   // If URL is missing, try fallback local path
   if (url == null || url.isEmpty) {
-    if (!kIsWeb && localFallbackPath != null) {
-      final f = File(localFallbackPath);
-      if (f.existsSync()) return FileImage(f);
+    if (!kIsWeb && localFallbackPath != null && _localFileExistsCached(localFallbackPath)) {
+      return _maybeResizeAvatar(
+        FileImage(File(localFallbackPath)),
+        maxDecodeDimension: maxDecodeDimension,
+        fullResolution: fullResolution,
+      );
     }
     return null;
   }
 
   // Handle data: URLs (base64 encoded avatars stored in DB)
   if (url.startsWith('data:')) {
-    final cached = _dataUrlMemoryImageCache[url];
-    if (cached != null) return cached;
-    try {
-      final commaIndex = url.indexOf(',');
-      if (commaIndex == -1) return null;
-      final base64Str = url.substring(commaIndex + 1);
-      final bytes = base64Decode(base64Str);
-      final provider = MemoryImage(bytes);
-      if (_dataUrlMemoryImageCache.length > 64) {
-        _dataUrlMemoryImageCache.remove(_dataUrlMemoryImageCache.keys.first);
+    var cached = _dataUrlMemoryImageCache[url];
+    if (cached == null) {
+      try {
+        final commaIndex = url.indexOf(',');
+        if (commaIndex == -1) return null;
+        final base64Str = url.substring(commaIndex + 1);
+        final bytes = base64Decode(base64Str);
+        cached = MemoryImage(bytes);
+        if (_dataUrlMemoryImageCache.length > 64) {
+          _dataUrlMemoryImageCache.remove(_dataUrlMemoryImageCache.keys.first);
+        }
+        _dataUrlMemoryImageCache[url] = cached;
+      } catch (_) {
+        return null;
       }
-      _dataUrlMemoryImageCache[url] = provider;
-      return provider;
-    } catch (_) {
-      return null;
     }
+    return _maybeResizeAvatar(
+      cached,
+      maxDecodeDimension: maxDecodeDimension,
+      fullResolution: fullResolution,
+    );
   }
 
   // Handle local file paths or file:// URIs on non-Web platforms
   if (!kIsWeb) {
     if (url.startsWith('file://')) {
       try {
-        final file = File(Uri.parse(url).toFilePath());
-        if (file.existsSync()) return FileImage(file);
+        final filePath = Uri.parse(url).toFilePath();
+        if (_localFileExistsCached(filePath)) {
+          return _maybeResizeAvatar(
+            FileImage(File(filePath)),
+            maxDecodeDimension: maxDecodeDimension,
+            fullResolution: fullResolution,
+          );
+        }
       } catch (_) {}
     }
 
-    final localFile = File(url);
-    if (localFile.existsSync()) {
-      return FileImage(localFile);
+    if (_localFileExistsCached(url)) {
+      return _maybeResizeAvatar(
+        FileImage(File(url)),
+        maxDecodeDimension: maxDecodeDimension,
+        fullResolution: fullResolution,
+      );
     }
   }
 
   // Network URL or relative backend path
   final validUrl = getValidAvatarUrl(url);
   if (validUrl == null || (!validUrl.startsWith('http://') && !validUrl.startsWith('https://'))) {
-    if (!kIsWeb && localFallbackPath != null) {
-      final f = File(localFallbackPath);
-      if (f.existsSync()) return FileImage(f);
+    if (!kIsWeb && localFallbackPath != null && _localFileExistsCached(localFallbackPath)) {
+      return _maybeResizeAvatar(
+        FileImage(File(localFallbackPath)),
+        maxDecodeDimension: maxDecodeDimension,
+        fullResolution: fullResolution,
+      );
     }
     return null;
   }
 
-  return CachedNetworkImageProvider(
-    validUrl,
-    errorListener: (e) {
-      debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
-    },
+  return _maybeResizeAvatar(
+    CachedNetworkImageProvider(
+      validUrl,
+      errorListener: (e) {
+        debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
+      },
+    ),
+    maxDecodeDimension: maxDecodeDimension,
+    fullResolution: fullResolution,
+  );
+}
+
+/// Creates a full-resolution [ImageProvider] without thumbnail downscaling,
+/// used for fullscreen photo inspection and expanded profile headers.
+ImageProvider? avatarFullImageProvider(
+  String? url, {
+  String? localFallbackPath,
+}) {
+  return avatarImageProvider(
+    url,
+    localFallbackPath: localFallbackPath,
+    fullResolution: true,
   );
 }
 
@@ -156,7 +236,11 @@ Widget buildAvatar({
   String? localFallbackPath,
   Key? key,
 }) {
-  final provider = avatarImageProvider(avatarUrl, localFallbackPath: localFallbackPath);
+  final provider = avatarImageProvider(
+    avatarUrl,
+    localFallbackPath: localFallbackPath,
+    maxDecodeDimension: (radius * 6).round().clamp(120, 480),
+  );
   return CircleAvatar(
     key: key,
     radius: radius,

@@ -35,6 +35,7 @@ import 'services/wallpaper_provider.dart';
 import 'services/profile_theme_provider.dart';
 import 'services/peer_customization_cache.dart';
 import 'services/profile_instant_cache.dart';
+import 'services/chat_instant_cache.dart';
 import 'utils/emoji_utils.dart';
 import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -150,6 +151,7 @@ void main() async {
   await AccountManager().init();
   await AppLockService.instance.init();
   await ProfileInstantCache.instance.init();
+  await ChatInstantCache.instance.init();
   AppDatabase.setActiveUser(AccountManager().currentAccount?.userId);
   await ChatFolderService().init();
   await ChatSwipeService().init();

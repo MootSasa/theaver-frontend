@@ -449,12 +449,12 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
                       scrollPhysics: const BouncingScrollPhysics(),
                       builder: (context, index) {
                         final url = widget.avatarUrls[index];
-                        final provider = avatarImageProvider(url) ?? NetworkImage(url);
+                        final provider = avatarFullImageProvider(url) ?? NetworkImage(url);
                         final tag = widget.heroTagPrefix != null ? '${widget.heroTagPrefix}_$url' : 'avatar_hero_$url';
                         return PhotoViewGalleryPageOptions(
                           imageProvider: provider,
                           controller: _controllerForIndex(index),
-                          filterQuality: FilterQuality.medium,
+                          filterQuality: FilterQuality.high,
                           initialScale: PhotoViewComputedScale.contained,
                           minScale: PhotoViewComputedScale.contained,
                           maxScale: PhotoViewComputedScale.covered * 4.0,

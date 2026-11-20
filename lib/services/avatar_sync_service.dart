@@ -53,6 +53,8 @@ class AvatarSyncService extends ChangeNotifier {
     try {
       await sourceFile.copy(currentLocalFile.path);
     } catch (_) {}
+    invalidateLocalAvatarCache(permanentPath);
+    invalidateLocalAvatarCache(currentLocalFile.path);
 
     // 2. Добавляем путь в очередь отложенной загрузки
     final pendingList = prefs.getStringList(_pendingKey(userId)) ?? [];
@@ -130,6 +132,7 @@ class AvatarSyncService extends ChangeNotifier {
         if (await f.exists()) {
           await f.delete();
         }
+        invalidateLocalAvatarCache(avatarUrlOrPath);
       } catch (_) {}
     }
     notifyListeners();

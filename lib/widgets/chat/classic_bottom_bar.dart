@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../models/theav_theme.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 
 /// Описание вкладки в нижнем баре.
@@ -82,15 +83,111 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
     final isDark = theme.brightness == Brightness.dark;
     final themeExt = theme.extension<TheavThemeExtension>();
     final p = themeExt?.palette;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
 
-    // Цвета заливки — непрозрачные (классический дизайн)
-    final barBackgroundColor = p?.surface ??
+    final rawBg = p?.surface ??
         (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final barBackgroundColor = BlurUtils.resolveMaterialHudColor(
+      rawBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
     final indicatorColor = isDark
         ? Colors.white.withValues(alpha: 0.15)
         : Colors.black.withValues(alpha: 0.08);
-    final addButtonColor = p?.surface ??
-        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final addButtonColor = barBackgroundColor;
+
+    final Widget pillBody = Container(
+      height: widget.barHeight,
+      decoration: BoxDecoration(
+        color: barBackgroundColor,
+        borderRadius: BorderRadius.circular(32),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.1)
+              : Colors.black.withValues(alpha: 0.06),
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: Stack(
+        children: [
+          // Скользящий индикатор
+          AnimatedAlign(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOutCubic,
+            alignment: Alignment(
+              _computeXAlignmentForTab(widget.selectedIndex),
+              0,
+            ),
+            child: FractionallySizedBox(
+              widthFactor: 1 / _tabs.length,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: indicatorColor,
+                    borderRadius: BorderRadius.circular(64),
+                    border: Border.all(color: indicatorColor, width: 0.2),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Вкладки поверх индикатора
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              for (var i = 0; i < _tabs.length; i++)
+                Expanded(
+                  child: _ClassicBottomBarTabButton(
+                    tab: _tabs[i],
+                    selected: widget.selectedIndex == i,
+                    badgeCount: i == 1 ? widget.unreadCount : 0,
+                    onTap: () {
+                      HapticUtils.selection();
+                      widget.onTabSelected(i);
+                    },
+                    isDark: isDark,
+                    theme: theme,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    final Widget addButtonBody = Container(
+      height: widget.barHeight,
+      width: widget.barHeight,
+      decoration: BoxDecoration(
+        color: addButtonColor,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.1)
+              : Colors.black.withValues(alpha: 0.06),
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: Center(
+        child: iconoir.Plus(
+          width: 28,
+          height: 28,
+          color: p?.onSurface ?? (isDark ? Colors.white70 : Colors.black54),
+        ),
+      ),
+    );
+
+    final List<BoxShadow> shadow = [
+      BoxShadow(
+        color: isDark
+            ? Colors.black.withValues(alpha: 0.3)
+            : Colors.black.withValues(alpha: 0.08),
+        blurRadius: 12,
+        offset: const Offset(0, 4),
+      ),
+    ];
 
     return Padding(
       padding: EdgeInsets.only(
@@ -104,72 +201,19 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
         children: [
           // Основной бар с вкладками (скруглённый суперквадрат)
           Expanded(
-            child: Container(
-              height: widget.barHeight,
+            child: DecoratedBox(
               decoration: BoxDecoration(
-                color: barBackgroundColor,
                 borderRadius: BorderRadius.circular(32),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.1)
-                      : Colors.black.withValues(alpha: 0.06),
-                  width: 0.5,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: isDark
-                        ? Colors.black.withValues(alpha: 0.3)
-                        : Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+                boxShadow: shadow,
               ),
-              child: Stack(
-                children: [
-                  // Скользящий индикатор
-                  AnimatedAlign(
-                    duration: const Duration(milliseconds: 300),
-                    curve: Curves.easeInOutCubic,
-                    alignment: Alignment(
-                      _computeXAlignmentForTab(widget.selectedIndex),
-                      0,
-                    ),
-                    child: FractionallySizedBox(
-                      widthFactor: 1 / _tabs.length,
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: indicatorColor,
-                            borderRadius: BorderRadius.circular(64),
-                            border: Border.all(color: indicatorColor, width: 0.2),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  // Вкладки поверх индикатора
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      for (var i = 0; i < _tabs.length; i++)
-                        Expanded(
-                          child: _ClassicBottomBarTabButton(
-                            tab: _tabs[i],
-                            selected: widget.selectedIndex == i,
-                            badgeCount: i == 1 ? widget.unreadCount : 0,
-                            onTap: () {
-                              HapticUtils.selection();
-                              widget.onTabSelected(i);
-                            },
-                            isDark: isDark,
-                            theme: theme,
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(32),
+                child: blurEnabled
+                    ? BackdropFilter.grouped(
+                        filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                        child: pillBody,
+                      )
+                    : pillBody,
               ),
             ),
           ),
@@ -177,34 +221,18 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
           if (widget.onAddTap != null)
             GestureDetector(
               onTap: widget.onAddTap,
-              child: Container(
-                height: widget.barHeight,
-                width: widget.barHeight,
+              child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: addButtonColor,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.1)
-                        : Colors.black.withValues(alpha: 0.06),
-                    width: 0.5,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: isDark
-                          ? Colors.black.withValues(alpha: 0.3)
-                          : Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  boxShadow: shadow,
                 ),
-                child: Center(
-                  child: iconoir.Plus(
-                    width: 28,
-                    height: 28,
-                    color: p?.onSurface ?? (isDark ? Colors.white70 : Colors.black54),
-                  ),
+                child: ClipOval(
+                  child: blurEnabled
+                      ? BackdropFilter.grouped(
+                          filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                          child: addButtonBody,
+                        )
+                      : addButtonBody,
                 ),
               ),
             ),

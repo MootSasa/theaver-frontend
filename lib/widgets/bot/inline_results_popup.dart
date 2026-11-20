@@ -176,29 +176,39 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
         ),
       );
     } else {
+      final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+      final bg = BlurUtils.resolveMaterialHudColor(
+        ext?.glassSurfaceColor ?? cs.surfaceContainerLow,
+        isDark: isDark,
+        blurEnabled: blurEnabled,
+        darkAlpha: 0.86,
+        lightAlpha: 0.90,
+      );
+      final Widget card = AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        height: targetHeight,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: ext?.glassBorderColor ??
+                (isDark ? Colors.white12 : Colors.black12),
+            width: 0.8,
+          ),
+        ),
+        child: innerContent,
+      );
       surface = Padding(
         padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(20),
-          child: BackdropFilter.grouped(
-            filter: BlurUtils.createDownsampledBlur(15),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOutCubic,
-              height: targetHeight,
-              decoration: BoxDecoration(
-                color: ext?.glassSurfaceColor ??
-                    cs.surfaceContainerLow.withValues(alpha: 0.94),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: ext?.glassBorderColor ??
-                      (isDark ? Colors.white12 : Colors.black12),
-                  width: 0.8,
-                ),
-              ),
-              child: innerContent,
-            ),
-          ),
+          child: blurEnabled
+              ? BackdropFilter.grouped(
+                  filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                  child: card,
+                )
+              : card,
         ),
       );
     }

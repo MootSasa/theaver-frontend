@@ -160,14 +160,21 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
             ),
           );
         } else {
-          panelSurface = Container(
+          final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+          final bg = BlurUtils.resolveMaterialHudColor(
+            ext?.glassSurfaceColor ?? colorScheme.surfaceContainerLow,
+            isDark: isDark,
+            blurEnabled: blurEnabled,
+            darkAlpha: 0.88,
+            lightAlpha: 0.92,
+          );
+          final Widget surfaceBox = Container(
             width: double.infinity,
             constraints: BoxConstraints(
               maxHeight: widget.resizeKeyboard ? 220 : 260,
             ),
             decoration: BoxDecoration(
-              color: ext?.glassSurfaceColor ??
-                  colorScheme.surfaceContainerLow.withValues(alpha: 0.95),
+              color: bg,
               border: Border(
                 top: BorderSide(
                   color: ext?.glassBorderColor ??
@@ -176,12 +183,15 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
                 ),
               ),
             ),
-            child: ClipRect(
-              child: BackdropFilter.grouped(
-                filter: BlurUtils.createDownsampledBlur(15),
-                child: gridContent,
-              ),
-            ),
+            child: gridContent,
+          );
+          panelSurface = ClipRect(
+            child: blurEnabled
+                ? BackdropFilter.grouped(
+                    filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                    child: surfaceBox,
+                  )
+                : surfaceBox,
           );
         }
 

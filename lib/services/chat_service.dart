@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:drift/drift.dart' as drift;
@@ -1324,6 +1325,8 @@ class Chat {
   final int unreadMentionsCount;
   final int unreadReactionsCount;
   final String? mySendAsChatId;
+  late final int updatedAtEpochMs =
+      DateTimeUtils.parseUtcDateTime(updatedAt)?.millisecondsSinceEpoch ?? 0;
 
   Chat({
     required this.id,
@@ -2260,6 +2263,8 @@ class Message {
   final String? senderChatId;
   final String? senderChatName;
   final String? senderChatAvatarUrl;
+  late final int createdAtEpochMs =
+      DateTimeUtils.parseUtcDateTime(createdAt)?.millisecondsSinceEpoch ?? 0;
 
   Message({
     required this.id,
@@ -2441,7 +2446,10 @@ class Message {
       : null;
   bool get hasWebAppData => webAppData != null;
 
-  factory Message.fromJson(Map<String, dynamic> json) {
+  factory Message.fromJson(
+    Map<String, dynamic> json, {
+    Map<String, PeerCustomization>? outPeerCustomizations,
+  }) {
     // Parse replyInfo from nested object or flat fields
     ReplyInfo? replyInfo;
     if (json['reply_info'] != null && json['reply_info'] is Map) {
@@ -2480,11 +2488,15 @@ class Message {
           PeerCustomization.tryParseJsonString(rawReplySenderCust);
     }
     if (replySenderIdStr.isNotEmpty && parsedReplySenderCust != null) {
-      PeerCustomizationCache.instance.put(
-        replySenderIdStr,
-        parsedReplySenderCust,
-        notify: false,
-      );
+      if (outPeerCustomizations != null) {
+        outPeerCustomizations[replySenderIdStr] = parsedReplySenderCust;
+      } else {
+        PeerCustomizationCache.instance.put(
+          replySenderIdStr,
+          parsedReplySenderCust,
+          notify: false,
+        );
+      }
     }
     if (replyInfo != null) {
       final resolvedReplyEmoji = replyInfo.replyEmoji ??
@@ -2496,9 +2508,10 @@ class Message {
           ) ??
           parsedReplySenderCust?.replyEmoji ??
           (replySenderIdStr.isNotEmpty
-              ? PeerCustomizationCache.instance
-                  .getSync(replySenderIdStr)
-                  ?.replyEmoji
+              ? (outPeerCustomizations?[replySenderIdStr]?.replyEmoji ??
+                  PeerCustomizationCache.instance
+                      .getSync(replySenderIdStr)
+                      ?.replyEmoji)
               : null);
       if (resolvedReplyEmoji != null &&
           resolvedReplyEmoji != replyInfo.replyEmoji) {
@@ -2596,11 +2609,15 @@ class Message {
             ? PeerCustomization.tryParseJsonString(rawSenderCust)
             : null);
     if (parsedSenderId.isNotEmpty && parsedSenderCust != null) {
-      PeerCustomizationCache.instance.put(
-        parsedSenderId,
-        parsedSenderCust,
-        notify: false,
-      );
+      if (outPeerCustomizations != null) {
+        outPeerCustomizations[parsedSenderId] = parsedSenderCust;
+      } else {
+        PeerCustomizationCache.instance.put(
+          parsedSenderId,
+          parsedSenderCust,
+          notify: false,
+        );
+      }
     }
 
     final String? parsedReplyToChatId = _nonEmptyString(json['reply_to_chat_id']);
@@ -3289,6 +3306,8 @@ class ChatDetails {
   final int unreadMentionsCount;
   final int unreadReactionsCount;
   final String? mySendAsChatId;
+  late final int updatedAtEpochMs =
+      DateTimeUtils.parseUtcDateTime(updatedAt)?.millisecondsSinceEpoch ?? 0;
 
   ChatDetails({
     required this.id,
@@ -4041,25 +4060,45 @@ class ChatService {
         },
       );
 
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        List<Message> messages = [];
-        if (data['messages'] != null && data['messages'] is List) {
-          for (var msg in data['messages']) {
-            if (msg is Map) {
-              final map = Map<String, dynamic>.from(msg);
-              if (map['chat_id'] == null || map['chat_id'].toString().isEmpty) {
-                map['chat_id'] = chatId;
-              }
-              messages.add(Message.fromJson(map));
-            }
-          }
+      final bool useIsolate = !kIsWeb &&
+          response.statusCode == 200 &&
+          response.body.length >= 4096;
+      if (useIsolate) {
+        final rawBody = response.body;
+        final parsed = await Isolate.run(
+          () => _parseMessagesResponseBody((rawBody, chatId, limit)),
+        );
+        if (parsed.success) {
+          parsed.peerCustomizations.forEach((uid, cust) {
+            PeerCustomizationCache.instance.put(uid, cust, notify: false);
+          });
+          return {
+            'success': true,
+            'messages': parsed.messages,
+            'has_more': parsed.hasMore,
+            'has_more_newer': parsed.hasMoreNewer,
+          };
         }
         return {
+          'success': false,
+          'status_code': response.statusCode,
+          'error_code': parsed.errorCode,
+          'message': _extractErrorMessage(
+            parsed.errorBody,
+            'Failed to get messages',
+          ),
+          'messages': <Message>[],
+        };
+      }
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        final parsed = _parseMessagesFromDecoded(data, chatId, limit);
+        return {
           'success': true,
-          'messages': messages,
-          'has_more': data['has_more'] ?? (messages.length >= limit),
-          'has_more_newer': data['has_more_newer'] ?? false,
+          'messages': parsed.messages,
+          'has_more': parsed.hasMore,
+          'has_more_newer': parsed.hasMoreNewer,
         };
       } else {
         return {
@@ -7324,4 +7363,77 @@ class ChatCalendarDayInfo {
           (rawBlurhash != null && rawBlurhash.isNotEmpty) ? rawBlurhash : null,
     );
   }
+}
+
+class _ParsedMessagesPayload {
+  final bool success;
+  final List<Message> messages;
+  final bool hasMore;
+  final bool hasMoreNewer;
+  final Map<String, PeerCustomization> peerCustomizations;
+  final dynamic errorCode;
+  final dynamic errorBody;
+
+  const _ParsedMessagesPayload({
+    required this.success,
+    this.messages = const [],
+    this.hasMore = false,
+    this.hasMoreNewer = false,
+    this.peerCustomizations = const {},
+    this.errorCode,
+    this.errorBody,
+  });
+}
+
+_ParsedMessagesPayload _parseMessagesFromDecoded(
+  dynamic data,
+  String chatId,
+  int limit, {
+  Map<String, PeerCustomization>? outPeerCustomizations,
+}) {
+  if (data is! Map || data['success'] != true) {
+    return _ParsedMessagesPayload(
+      success: false,
+      errorCode: data is Map ? (data['error'] ?? data['code']) : null,
+      errorBody: data,
+    );
+  }
+  final messages = <Message>[];
+  final rawList = data['messages'];
+  if (rawList is List) {
+    for (final msg in rawList) {
+      if (msg is Map) {
+        final map = Map<String, dynamic>.from(msg);
+        if (map['chat_id'] == null || map['chat_id'].toString().isEmpty) {
+          map['chat_id'] = chatId;
+        }
+        messages.add(
+          Message.fromJson(
+            map,
+            outPeerCustomizations: outPeerCustomizations,
+          ),
+        );
+      }
+    }
+  }
+  return _ParsedMessagesPayload(
+    success: true,
+    messages: messages,
+    hasMore: data['has_more'] ?? (messages.length >= limit),
+    hasMoreNewer: data['has_more_newer'] ?? false,
+    peerCustomizations: outPeerCustomizations ?? const {},
+  );
+}
+
+_ParsedMessagesPayload _parseMessagesResponseBody(
+  (String body, String chatId, int limit) args,
+) {
+  final data = jsonDecode(args.$1);
+  final outPeers = <String, PeerCustomization>{};
+  return _parseMessagesFromDecoded(
+    data,
+    args.$2,
+    args.$3,
+    outPeerCustomizations: outPeers,
+  );
 }

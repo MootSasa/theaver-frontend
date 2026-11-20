@@ -531,23 +531,29 @@ class _LiveChatCallBannerState extends State<LiveChatCallBanner>
       );
     }
 
-    final matteBg = themeExt?.palette.explicitChatInputBackground ??
-        surfaceStyle.hudFill;
-    final blurFilter = surfaceStyle.allowBlur
-        ? BlurUtils.createDownsampledBlur(15)
-        : null;
+    final blurFilter = surfaceStyle.getMaterialHudBlurFilter(sigma: 10.0);
+    final rawBg = themeExt?.palette.explicitChatInputBackground ??
+        themeExt?.palette.surface ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final matteBg = surfaceStyle.isGlass
+        ? surfaceStyle.hudFill
+        : BlurUtils.resolveMaterialHudColor(
+            rawBg,
+            isDark: isDark,
+            blurEnabled: blurFilter != null,
+          );
 
     Widget card = Container(
       decoration: BoxDecoration(
         color: matteBg,
         borderRadius: BorderRadius.circular(_kCornerRadius),
         border: Border.all(
-          color: surfaceStyle.isGlass
+          color: (surfaceStyle.isGlass || blurFilter != null)
               ? (isDark
                   ? Colors.white.withValues(alpha: 0.14)
                   : Colors.black.withValues(alpha: 0.10))
               : surfaceStyle.hairlineBorder,
-          width: 0.5,
+          width: blurFilter != null ? 0.6 : 0.5,
         ),
       ),
       child: Material(

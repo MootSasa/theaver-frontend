@@ -474,27 +474,31 @@ class SettingsFloatingScaffold extends StatelessWidget {
             child: body,
           );
 
+    final Widget stackBody = Stack(
+      children: [
+        Positioned.fill(child: resolvedBody),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: SettingsFloatingHeader(
+            title: title,
+            titleWidget: titleWidget,
+            onBack: onBack,
+            showBackButton: showBackButton,
+            actions: actions,
+          ),
+        ),
+      ],
+    );
+
     return Scaffold(
       backgroundColor: effectiveBg,
       floatingActionButton: floatingActionButton,
       bottomNavigationBar: bottomNavigationBar,
-      body: Stack(
-        children: [
-          Positioned.fill(child: resolvedBody),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SettingsFloatingHeader(
-              title: title,
-              titleWidget: titleWidget,
-              onBack: onBack,
-              showBackButton: showBackButton,
-              actions: actions,
-            ),
-          ),
-        ],
-      ),
+      body: BackdropGroup.of(context) == null
+          ? BackdropGroup(child: stackBody)
+          : stackBody,
     );
   }
 }

@@ -5,8 +5,23 @@ import 'package:flutter/rendering.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import 'theav_design_system.dart';
+
+/// Marks subtrees inside [TheavSheetSurface] / [TheavModalSheet] so nested
+/// HUD pills never mount a [BackdropFilter] during sheet drag/slide transitions.
+class TheavModalSheetScope extends InheritedWidget {
+  const TheavModalSheetScope({super.key, required super.child});
+
+  static bool isActive(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<TheavModalSheetScope>() !=
+        null;
+  }
+
+  @override
+  bool updateShouldNotify(TheavModalSheetScope oldWidget) => false;
+}
 
 /// Opens a dual-mode [TheavModalSheet] that can be stretched or dismissed via its
 /// top handle bar while rendering a real [LiquidGlassLens] surface in
@@ -252,12 +267,15 @@ class TheavSheetSurface extends StatelessWidget {
       type: MaterialType.transparency,
       child: child,
     );
-    final Widget wrappedChild = disableOverscrollStretch
-        ? ScrollConfiguration(
-            behavior: const MaterialScrollBehavior().copyWith(overscroll: false),
-            child: materialChild,
-          )
-        : materialChild;
+    final Widget wrappedChild = TheavModalSheetScope(
+      child: disableOverscrollStretch
+          ? ScrollConfiguration(
+              behavior:
+                  const MaterialScrollBehavior().copyWith(overscroll: false),
+              child: materialChild,
+            )
+          : materialChild,
+    );
 
     if (style.isGlass && style.glassProvider != null) {
       final Color glassTint = glassTintOverride ??
@@ -688,22 +706,33 @@ class TheavDialog<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final blurFilter = style.getBlurFilter(sigma: 26.0);
+    final blurFilter = style.isGlass
+        ? style.getBlurFilter(sigma: 26.0)
+        : style.getMaterialHudBlurFilter(sigma: 12.0);
+    final Color dialogBg = (!style.isGlass && blurFilter != null)
+        ? BlurUtils.resolveMaterialHudColor(
+            style.overlayFill,
+            isDark: style.isDark,
+            blurEnabled: true,
+            darkAlpha: 0.84,
+            lightAlpha: 0.88,
+          )
+        : style.overlayFill;
     final resolvedActions = actions ?? const [];
-    final Color borderColor = style.isGlass
+    final Color borderColor = (style.isGlass || blurFilter != null)
         ? (style.isDark
-            ? Colors.white.withValues(alpha: 0.16)
-            : Colors.black.withValues(alpha: 0.08))
+            ? Colors.white.withValues(alpha: style.isGlass ? 0.16 : 0.12)
+            : Colors.black.withValues(alpha: style.isGlass ? 0.08 : 0.07))
         : style.hairlineBorder;
 
     Widget card = Container(
       constraints: const BoxConstraints(maxWidth: 344),
       decoration: BoxDecoration(
-        color: style.overlayFill,
+        color: dialogBg,
         borderRadius: BorderRadius.circular(22),
         border: Border.all(
           color: borderColor,
-          width: style.isGlass ? 0.6 : 0.5,
+          width: (style.isGlass || blurFilter != null) ? 0.6 : 0.5,
         ),
         boxShadow: style.floatingShadow,
       ),
@@ -781,7 +810,7 @@ class TheavDialog<T> extends StatelessWidget {
     if (blurFilter != null) {
       card = ClipRRect(
         borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter(
+        child: BackdropFilter.grouped(
           filter: blurFilter,
           child: card,
         ),

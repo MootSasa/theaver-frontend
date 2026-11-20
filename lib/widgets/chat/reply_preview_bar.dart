@@ -77,27 +77,36 @@ class ReplyPreviewBar extends StatelessWidget {
   Widget _buildClassicBar(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = theme.colorScheme.surface;
+    final barBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: barBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: _buildAnimatedContent(context),
+    );
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.65)
-                  : Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: _buildAnimatedContent(context),
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: container,
+              )
+            : container,
       ),
     );
   }

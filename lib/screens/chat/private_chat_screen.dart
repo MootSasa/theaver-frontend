@@ -88,6 +88,9 @@ import '../../services/tiling_layout_controller.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../services/bot_service.dart';
 import '../../services/dm_parity_service.dart';
+import '../../services/account_manager.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/chat_instant_cache.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../widgets/chat/contact_picker_sheet.dart';
 import '../../widgets/chat/dm_parity_sheets.dart';
@@ -435,14 +438,95 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _replyToChatId = widget.initialReplyChatId;
       _replyToChatName = widget.initialReplyChatName;
     }
-    if (widget.otherUserId != null) {
-      _otherUserId = widget.otherUserId;
-      if (_otherUserId!.isNotEmpty) {
-        ProfileInstantCache.instance.prefetchUser(
-          _otherUserId!,
-          chatId: widget.chatId,
-        );
+
+    _currentUserId = AccountManager().currentAccount?.userId;
+    final instant = ChatInstantCache.instance.getSync(widget.chatId);
+    final bool inferredSavedFromArgs = widget.chatId.startsWith('saved_') ||
+        instant?.chat?.chatType == 'saved' ||
+        instant?.chatDetails?.chatType == 'saved' ||
+        (widget.otherUserId == null &&
+            (widget.otherUserName == 'Избранное' ||
+                widget.otherUserName == 'Saved Messages' ||
+                widget.otherUserName == 'chat_saved_messages'));
+    _chatType = inferredSavedFromArgs
+        ? 'saved'
+        : (instant?.chatDetails?.chatType ??
+            instant?.chat?.chatType ??
+            'private');
+    _chatName = widget.otherUserName ??
+        instant?.chatDetails?.name ??
+        instant?.chat?.name ??
+        _chatName;
+    _chatAvatar = widget.otherUserAvatar ??
+        instant?.chatDetails?.avatarUrl ??
+        instant?.chat?.avatarUrl ??
+        _chatAvatar;
+    _otherUserId =
+        widget.otherUserId ?? instant?.chat?.otherUserId ?? _otherUserId;
+    _otherUsername = instant?.username ?? instant?.chat?.username;
+    _isMuted = NotificationSettingsProvider().isChatMuted(
+          widget.chatId,
+          chatType: _chatType == 'saved' ? 'saved' : 'private',
+        ) ||
+        ProfileInstantCache.instance.isChatMutedSync(widget.chatId);
+    _keyboardHeight =
+        instant?.keyboardHeight ?? ChatInstantCache.instance.globalKeyboardHeight;
+    if (instant?.inputHeight != null) {
+      _inputHeight = instant!.inputHeight!;
+    }
+    _chatAppearance =
+        (instant?.appearance == null || instant!.appearance!.isEmpty)
+            ? null
+            : instant.appearance;
+    _hasProtectedContent = instant?.hasProtectedContent ?? false;
+    _autoDeleteSeconds = instant?.messageAutoDeleteTime ?? 0;
+    final instantPinned = instant?.effectivePinnedMessage;
+    if (instantPinned != null) {
+      _pinnedMessage = instantPinned;
+      _pinnedMessages = instant?.pinnedMessages ?? [instantPinned];
+    }
+
+    final unameLower = (_otherUsername ?? '').toLowerCase();
+    final dnameLower = _chatName.toLowerCase();
+    _isBot = (instant?.isBot ?? false) ||
+        (instant?.chat?.isBot ?? false) ||
+        unameLower == 'botmother' ||
+        dnameLower == 'botmother' ||
+        unameLower == 'walt' ||
+        dnameLower == 'walt' ||
+        unameLower.endsWith('bot');
+    _isVerified = (instant?.isVerified ?? false) ||
+        (instant?.chat?.isVerified ?? false) ||
+        unameLower == 'botmother' ||
+        unameLower == 'walt';
+    if (_otherUserId != null && _otherUserId!.isNotEmpty) {
+      final cachedBot =
+          BotService.getCachedBotInfo(_otherUserId!, chatId: widget.chatId);
+      if (cachedBot != null) {
+        _botInfo = cachedBot;
+        _isBot = true;
+        if (cachedBot.isVerified) {
+          _isVerified = true;
+        }
       }
+      ProfileInstantCache.instance.prefetchUser(
+        _otherUserId!,
+        chatId: widget.chatId,
+      );
+    }
+    if (instant != null && instant.hasMessages) {
+      _messages.addAll(instant.messages!);
+      for (final m in _messages) {
+        if (m.reactions.isNotEmpty) {
+          _messageReactions[m.id] = Map<String, int>.from(m.reactions);
+        }
+        if (m.myReactions.isNotEmpty) {
+          _myReactions[m.id] = Set<String>.from(m.myReactions);
+        }
+      }
+      _isLoading = false;
+      _hasMoreMessages = _messages.length >= 35;
+      _updateFeedItems();
     }
     ProfileInstantCache.instance.prefetchSharedContent(widget.chatId);
     WidgetsBinding.instance.addObserver(this);
@@ -795,17 +879,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               }
             }
 
-            _messages.sort((a, b) {
-              try {
-                final ta = DateTime.parse(a.createdAt);
-                final tb = DateTime.parse(b.createdAt);
-                final cmp = tb.compareTo(ta);
-                if (cmp != 0) return cmp;
-                return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-              } catch (_) {
-                return 0;
-              }
-            });
+            _sortMessagesDescending(_messages);
 
             _updateFeedItems();
           });
@@ -876,9 +950,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
       DraftService().flushDraft(widget.chatId);
     }
-    if (mounted) {
-      setState(() {});
-    }
   }
 
   void _initWebSocket() {
@@ -939,11 +1010,19 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     try {
       final list = await ChatService.getPinnedMessages(chatId: widget.chatId);
       if (!mounted) return;
+      ChatInstantCache.instance.putPinnedMessages(widget.chatId, list);
+      final nextIndex =
+          list.isNotEmpty ? _currentPinnedIndex.clamp(0, list.length - 1) : 0;
+      final nextPinned = list.isNotEmpty ? list[nextIndex] : null;
+      final unchanged = _pinnedMessages.length == list.length &&
+          _pinnedMessage?.id == nextPinned?.id &&
+          _currentPinnedIndex == nextIndex;
+      if (unchanged) return;
       setState(() {
         _pinnedMessages = list;
         if (list.isNotEmpty) {
-          _currentPinnedIndex = _currentPinnedIndex.clamp(0, list.length - 1);
-          _pinnedMessage = list[_currentPinnedIndex];
+          _currentPinnedIndex = nextIndex;
+          _pinnedMessage = nextPinned;
         } else {
           _pinnedMessage = null;
           _currentPinnedIndex = 0;
@@ -1083,6 +1162,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
+    ChatInstantCache.instance.setKeyboardHeight(height, chatId: widget.chatId);
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setDouble('keyboard_height', height);
@@ -1599,7 +1679,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       return;
     }
 
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     _transitionTimer?.cancel();
 
     if (_showEmojiPanel || _isKeyboardRising) {
@@ -2356,16 +2436,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   void _sortMessagesDescending(List<Message> list) {
-    final dateMap = <String, int>{
-      for (final m in list)
-        m.id: DateTimeUtils.parseUtcDateTime(m.createdAt)
-                ?.millisecondsSinceEpoch ??
-            0,
-    };
     list.sort((a, b) {
-      final ta = dateMap[a.id] ?? 0;
-      final tb = dateMap[b.id] ?? 0;
-      final cmp = tb.compareTo(ta);
+      final cmp = b.createdAtEpochMs.compareTo(a.createdAtEpochMs);
       if (cmp != 0) return cmp;
       return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
     });
@@ -3074,7 +3146,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     // Get current user ID
     final userId = await AuthService.getUserId();
-    if (mounted) {
+    if (mounted && userId != _currentUserId) {
       setState(() {
         _currentUserId = userId;
       });
@@ -3084,15 +3156,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final chatResult = await ChatService.getChat(widget.chatId);
     if (chatResult['success'] == true && mounted) {
       final chat = chatResult['chat'] as ChatDetails;
-      setState(() {
-        _chatType = chat.chatType;
-        _hasProtectedContent = chat.hasProtectedContent;
-        _autoDeleteSeconds = chat.messageAutoDeleteTime;
-        if (chat.pinnedMessage != null) {
-          _pinnedMessage = chat.pinnedMessage;
-          _pinnedMessages = [chat.pinnedMessage!];
-        }
-      });
+      ChatInstantCache.instance.putChatDetails(chat);
+      final chatPinned = chat.pinnedMessage;
+      final bool chatMetaChanged = _chatType != chat.chatType ||
+          _hasProtectedContent != chat.hasProtectedContent ||
+          _autoDeleteSeconds != chat.messageAutoDeleteTime ||
+          (chatPinned != null && _pinnedMessage?.id != chatPinned.id);
+      if (chatMetaChanged) {
+        setState(() {
+          _chatType = chat.chatType;
+          _hasProtectedContent = chat.hasProtectedContent;
+          _autoDeleteSeconds = chat.messageAutoDeleteTime;
+          if (chatPinned != null) {
+            _pinnedMessage = chatPinned;
+            _pinnedMessages = [chatPinned];
+          }
+        });
+      }
       unawaited(_loadChatAppearance());
       if (chat.chatType == 'saved') {
         unawaited(_loadSavedTags());
@@ -3118,18 +3198,35 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               chat.isVerified ||
               unameLower == 'botmother' ||
               unameLower == 'walt';
-          setState(() {
-            _chatName = participant.displayName.isNotEmpty
-                ? participant.displayName
-                : participant.username;
-            _chatAvatar = participant.avatarUrl;
-            _otherUserId = participant.id;
-            _otherUsername = participant.username;
-            _isOtherUserOnline = participant.isOnline;
-            _otherUserLastSeen = participant.lastSeen;
-            _isBot = isBotPeer;
-            _isVerified = isVerifiedPeer;
-          });
+          final nextName = participant.displayName.isNotEmpty
+              ? participant.displayName
+              : participant.username;
+          ChatInstantCache.instance.putPrivatePeerMeta(
+            widget.chatId,
+            isBot: isBotPeer,
+            isVerified: isVerifiedPeer,
+            username: participant.username,
+          );
+          final bool peerChanged = _chatName != nextName ||
+              _chatAvatar != participant.avatarUrl ||
+              _otherUserId != participant.id ||
+              _otherUsername != participant.username ||
+              _isOtherUserOnline != participant.isOnline ||
+              _otherUserLastSeen != participant.lastSeen ||
+              _isBot != isBotPeer ||
+              _isVerified != isVerifiedPeer;
+          if (peerChanged) {
+            setState(() {
+              _chatName = nextName;
+              _chatAvatar = participant.avatarUrl;
+              _otherUserId = participant.id;
+              _otherUsername = participant.username;
+              _isOtherUserOnline = participant.isOnline;
+              _otherUserLastSeen = participant.lastSeen;
+              _isBot = isBotPeer;
+              _isVerified = isVerifiedPeer;
+            });
+          }
           if (isBotPeer && participant.id.isNotEmpty) {
             unawaited(
               BotService.getBotInfo(
@@ -3137,7 +3234,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 chatId: widget.chatId,
                 forceRefresh: true,
               ).then((info) {
-                if (mounted && info != null) {
+                if (!mounted || info == null) return;
+                final prevJson =
+                    _botInfo != null ? jsonEncode(_botInfo!.toJson()) : null;
+                final nextJson = jsonEncode(info.toJson());
+                if (prevJson != nextJson) {
                   setState(() => _botInfo = info);
                 }
               }),
@@ -3191,9 +3292,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       final prefs = await SharedPreferences.getInstance();
       final savedHeight = prefs.getDouble('keyboard_height');
       if (savedHeight != null && savedHeight > 100 && mounted) {
-        setState(() {
-          _keyboardHeight = savedHeight;
-        });
+        ChatInstantCache.instance
+            .setKeyboardHeight(savedHeight, chatId: widget.chatId);
+        if ((savedHeight - _keyboardHeight).abs() > 0.5) {
+          setState(() {
+            _keyboardHeight = savedHeight;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error loading keyboard height: $e');
@@ -3218,7 +3323,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Future<void> _loadMessages() async {
-    setState(() => _isLoading = true);
+    final bool hadInitialMessages = _messages.isNotEmpty;
+    if (_messages.isEmpty && !_isLoading) {
+      setState(() => _isLoading = true);
+    }
 
     final bool hasSavedFilter = _chatType == 'saved' &&
         ((_selectedSavedTag != null && _selectedSavedTag!.isNotEmpty) ||
@@ -3278,35 +3386,31 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         return m;
       }).toList();
 
-      setState(() {
-        _isLoading = false;
-        _messages.clear();
-        _messages.addAll(
-            fixedMessages.map((m) => Message.fromDbMessage(m)).toList());
-        _messages.sort((a, b) {
-          try {
-            final ta = DateTime.parse(a.createdAt);
-            final tb = DateTime.parse(b.createdAt);
-            final cmp = tb.compareTo(ta); // descending
-            if (cmp != 0) return cmp;
-            return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-          } catch (_) {
-            return 0;
-          }
-        });
-        _hasMoreMessages = localMessages.length >= 50;
-        for (final m in _messages) {
-          if (m.reactions.isNotEmpty) {
-            _messageReactions[m.id] = Map.from(m.reactions);
-          }
-          if (m.myReactions.isNotEmpty) {
-            _myReactions[m.id] = Set.from(m.myReactions);
-          }
-        }
-        _updateFeedItems();
-      });
+      final parsedLocal =
+          fixedMessages.map((m) => Message.fromDbMessage(m)).toList();
+      _sortMessagesDescending(parsedLocal);
+      ChatInstantCache.instance.putMessages(widget.chatId, parsedLocal);
 
-      if (widget.initialMessageId == null &&
+      if (_isLoading || !ChatInstantCache.messagesEqual(_messages, parsedLocal)) {
+        setState(() {
+          _isLoading = false;
+          _messages.clear();
+          _messages.addAll(parsedLocal);
+          _hasMoreMessages = localMessages.length >= 50;
+          for (final m in _messages) {
+            if (m.reactions.isNotEmpty) {
+              _messageReactions[m.id] = Map.from(m.reactions);
+            }
+            if (m.myReactions.isNotEmpty) {
+              _myReactions[m.id] = Set.from(m.myReactions);
+            }
+          }
+          _updateFeedItems();
+        });
+      }
+
+      if (!hadInitialMessages &&
+          widget.initialMessageId == null &&
           (_firstUnreadMessageId == null || _unreadCount == 0)) {
         _scrollToBottom();
       }
@@ -3317,112 +3421,113 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         await ChatService.getMessages(chatId: widget.chatId, limit: 50);
 
     if (mounted) {
-      setState(() {
-        _isLoading = false;
-        if (result['success'] == true) {
-          final serverMessages = result['messages'] as List<Message>;
-          _hasMoreMessages = result['has_more'] as bool? ?? (serverMessages.length >= 50);
+      if (result['success'] == true) {
+        final serverMessages = result['messages'] as List<Message>;
+        final nextHasMore =
+            result['has_more'] as bool? ?? (serverMessages.length >= 50);
 
-          // Сохранить pending/failed сообщения из текущего списка (их нет на сервере)
-          final pendingMessages = _messages
-              .where(
-                (m) => m.sendStatus != 1 && m.localId != null,
-              )
-              .toList();
+        // Сохранить pending/failed сообщения из текущего списка (их нет на сервере)
+        final pendingMessages = _messages
+            .where(
+              (m) => m.sendStatus != 1 && m.localId != null,
+            )
+            .toList();
 
-          // Merge server messages without truncating older messages already loaded into _messages
-          final Map<String, Message> mergedById = {};
-          final Map<String, Message> existingByLocalId = {};
-          for (final m in _messages) {
-            mergedById[m.id] = m;
-            if (m.localId != null && m.localId!.isNotEmpty) {
-              existingByLocalId[m.localId!] = m;
-            }
+        // Merge server messages without truncating older messages already loaded into _messages
+        final Map<String, Message> mergedById = {};
+        final Map<String, Message> existingByLocalId = {};
+        for (final m in _messages) {
+          mergedById[m.id] = m;
+          if (m.localId != null && m.localId!.isNotEmpty) {
+            existingByLocalId[m.localId!] = m;
           }
-          for (final m in serverMessages) {
-            final existing = mergedById[m.id] ??
-                (m.localId != null && m.localId!.isNotEmpty
-                    ? existingByLocalId[m.localId!]
-                    : null);
-            if (existing != null) {
-              mergedById[m.id] = m.copyWith(
-                localId: m.localId ?? existing.localId,
-                isQuote: m.isQuote || existing.isQuote,
-                quoteText: m.quoteText ?? existing.quoteText,
-                quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
-                quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
-              );
-            } else {
-              mergedById[m.id] = m;
-            }
-          }
-          final Set<String> serverLocalIds = mergedById.values
-              .map((m) => m.localId)
-              .whereType<String>()
-              .where((id) => id.isNotEmpty)
-              .toSet();
-          for (final pending in pendingMessages) {
-            final lId = pending.localId;
-            if (!mergedById.containsKey(pending.id) &&
-                (lId == null || !serverLocalIds.contains(lId))) {
-              mergedById[pending.id] = pending;
-            }
-          }
-
-          _messages.clear();
-          _messageReactions.clear();
-          _myReactions.clear();
-          _messages.addAll(mergedById.values);
-
-          for (final m in _messages) {
-            if (m.reactions.isNotEmpty) {
-              _messageReactions[m.id] = Map.from(m.reactions);
-            }
-            if (m.myReactions.isNotEmpty) {
-              _myReactions[m.id] = Set.from(m.myReactions);
-            }
-          }
-
-          // Сортировка по createdAt по убыванию (новейшие первыми)
-          // для корректного отображения в reverse=true ListView
-          _messages.sort((a, b) {
-            try {
-              final ta = DateTime.parse(a.createdAt);
-              final tb = DateTime.parse(b.createdAt);
-              final cmp = tb.compareTo(ta); // descending
-              if (cmp != 0) return cmp;
-              return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-            } catch (_) {
-              return 0;
-            }
-          });
-          _updateFeedItems();
-
-          // Сохранить в Drift для оффлайн-доступа
-          try {
-            db.saveMessages(
-                serverMessages.map((m) => _messageToCompanion(m)).toList());
-            if (serverMessages.isNotEmpty) {
-              final latest = serverMessages.first;
-              db.updateChatLastMessage(
-                chatId: widget.chatId,
-                content: latest.content,
-                createdAt: latest.createdAt,
-                messageType: latest.messageType,
-                isRound: latest.isRound,
-                fileUrl: latest.fileUrl,
-                groupedId: latest.groupedId,
-              );
-            }
-          } catch (e) {
-            debugPrint('Drift saveMessages error: $e');
-          }
-        } else if (localMessages.isEmpty) {
-          // Нет ни локальных, ни серверных — показать пустое состояние
         }
-      });
+        for (final m in serverMessages) {
+          final existing = mergedById[m.id] ??
+              (m.localId != null && m.localId!.isNotEmpty
+                  ? existingByLocalId[m.localId!]
+                  : null);
+          if (existing != null) {
+            mergedById[m.id] = m.copyWith(
+              localId: m.localId ?? existing.localId,
+              isQuote: m.isQuote || existing.isQuote,
+              quoteText: m.quoteText ?? existing.quoteText,
+              quoteOffset:
+                  m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+              quoteLength:
+                  m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+            );
+          } else {
+            mergedById[m.id] = m;
+          }
+        }
+        final Set<String> serverLocalIds = mergedById.values
+            .map((m) => m.localId)
+            .whereType<String>()
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        for (final pending in pendingMessages) {
+          final lId = pending.localId;
+          if (!mergedById.containsKey(pending.id) &&
+              (lId == null || !serverLocalIds.contains(lId))) {
+            mergedById[pending.id] = pending;
+          }
+        }
 
-      if (widget.initialMessageId == null &&
+        final mergedList = mergedById.values.toList();
+        _sortMessagesDescending(mergedList);
+        ChatInstantCache.instance.putMessages(widget.chatId, mergedList);
+
+        final bool needsUiUpdate = _isLoading ||
+            _hasMoreMessages != nextHasMore ||
+            !ChatInstantCache.messagesEqual(_messages, mergedList);
+
+        if (needsUiUpdate) {
+          setState(() {
+            _isLoading = false;
+            _hasMoreMessages = nextHasMore;
+            _messages.clear();
+            _messageReactions.clear();
+            _myReactions.clear();
+            _messages.addAll(mergedList);
+
+            for (final m in _messages) {
+              if (m.reactions.isNotEmpty) {
+                _messageReactions[m.id] = Map.from(m.reactions);
+              }
+              if (m.myReactions.isNotEmpty) {
+                _myReactions[m.id] = Set.from(m.myReactions);
+              }
+            }
+            _updateFeedItems();
+          });
+        }
+
+        // Сохранить в Drift для оффлайн-доступа
+        try {
+          db.saveMessages(
+              serverMessages.map((m) => _messageToCompanion(m)).toList());
+          if (serverMessages.isNotEmpty) {
+            final latest = serverMessages.first;
+            db.updateChatLastMessage(
+              chatId: widget.chatId,
+              content: latest.content,
+              createdAt: latest.createdAt,
+              messageType: latest.messageType,
+              isRound: latest.isRound,
+              fileUrl: latest.fileUrl,
+              groupedId: latest.groupedId,
+            );
+          }
+        } catch (e) {
+          debugPrint('Drift saveMessages error: $e');
+        }
+      } else if (_isLoading) {
+        setState(() => _isLoading = false);
+      }
+
+      if (!hadInitialMessages &&
+          widget.initialMessageId == null &&
           (_firstUnreadMessageId == null || _unreadCount == 0)) {
         _scrollToBottom();
       }
@@ -4478,7 +4583,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       builder: (context, glassProvider, _) {
         final glassEnabled = glassProvider.enabled;
 
-        final bool isKeyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
+        final bool isKeyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
 
         return ChatScaffold(
           customBackground: buildChatAppearanceBackgroundWidget(_chatAppearance),
@@ -4506,9 +4611,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           appBar: Builder(
             builder: (context) {
               final isSavedChat = _chatType == 'saved' ||
-                  _otherUserId == null ||
-                  _otherUserId!.isEmpty ||
-                  (_currentUserId != null && _otherUserId == _currentUserId);
+                  widget.chatId.startsWith('saved_') ||
+                  (_currentUserId != null &&
+                      _otherUserId != null &&
+                      _otherUserId!.isNotEmpty &&
+                      _otherUserId == _currentUserId);
               final heroTag = _otherUserId ?? displayName;
               return FloatingGlassAppBar(
                 name: displayName,
@@ -4597,7 +4704,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   // Выделен метод для построения контента чата (сообщения + поле ввода)
   Widget _buildChatContent(bool glassEnabled) {
-    final mediaQuery = MediaQuery.of(context);
+    final topSafePadding = MediaQuery.paddingOf(context).top;
     final screenHeight = TileViewportScope.heightOf(context);
 
     // В glass-режиме Scaffold без appBar, поэтому нужно учесть
@@ -4610,8 +4717,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final savedBarOffset = hasSavedFilterBar ? 44.0 : 0.0;
     final pinnedOffset = _pinnedMessage != null ? 48.0 : 0.0;
     final topPadding =
-        mediaQuery.padding.top + kToolbarHeight + 16.0 + pinnedOffset + savedBarOffset;
-    final bottomInset = mediaQuery.viewInsets.bottom;
+        topSafePadding + kToolbarHeight + 16.0 + pinnedOffset + savedBarOffset;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
     // Cap panel height to ensure it doesn't cover the entire chat in small windows
     // but allow it to be as large as the keyboard if possible.
@@ -4646,7 +4753,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         if (mounted &&
             !_showEmojiPanel &&
             !_isKeyboardRising &&
-            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            MediaQuery.viewInsetsOf(context).bottom == 0 &&
             _inputFocusNode.hasFocus) {
           _inputFocusNode.unfocus();
         }
@@ -4786,6 +4893,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             return _buildFeedItem(index);
           },
         );
+      }
+
+      if (!_isLoading) {
+        return listContent;
       }
 
       return AnimatedSwitcher(
@@ -7254,6 +7365,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     // Flush any pending mark-as-read and draft before leaving
     _markReadTimer?.cancel();
     _flushMarkRead();
+    if (!_isDetachedHistoryWindow && _messages.isNotEmpty) {
+      ChatInstantCache.instance.putMessages(widget.chatId, _messages);
+    }
     if (!_isEditing) {
       DraftService().flushDraft(widget.chatId);
     }
@@ -7407,6 +7521,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
         if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
+          ChatInstantCache.instance.setInputHeight(widget.chatId, newHeight);
           setState(() {
             _inputHeight = newHeight;
           });
@@ -7960,8 +8075,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Future<void> _loadChatAppearance() async {
     final cfg = await DmParityService.getChatAppearance(widget.chatId);
     if (!mounted) return;
+    final nextCfg = (cfg == null || cfg.isEmpty) ? null : cfg;
+    if (nextCfg != null) {
+      ChatInstantCache.instance.putAppearance(widget.chatId, nextCfg);
+    }
+    if (_chatAppearance?.themeId == nextCfg?.themeId &&
+        _chatAppearance?.wallpaperUrl == nextCfg?.wallpaperUrl &&
+        _chatAppearance?.accentColorId == nextCfg?.accentColorId) {
+      return;
+    }
     setState(() {
-      _chatAppearance = (cfg == null || cfg.isEmpty) ? null : cfg;
+      _chatAppearance = nextCfg;
     });
   }
 
@@ -7996,9 +8120,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       canApplyForBoth: !isSavedChat,
     );
     if (!mounted || res == null || !res.changed) return;
+    final nextCfg =
+        (res.appearance == null || res.appearance!.isEmpty) ? null : res.appearance;
+    if (nextCfg != null) {
+      ChatInstantCache.instance.putAppearance(widget.chatId, nextCfg);
+    }
     setState(() {
-      _chatAppearance =
-          (res.appearance == null || res.appearance!.isEmpty) ? null : res.appearance;
+      _chatAppearance = nextCfg;
     });
   }
 

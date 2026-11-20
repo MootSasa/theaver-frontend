@@ -519,10 +519,32 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
-    final defaultBg = isDark
-        ? Colors.black.withValues(alpha: 0.65)
-        : Colors.white.withValues(alpha: 0.65);
-    final inputBg = themeExt?.palette.explicitChatInputBackground ?? defaultBg;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = themeExt?.palette.explicitChatInputBackground ??
+        themeExt?.palette.surface ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final inputBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: inputBg,
+        borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.bottomCenter,
+        child: _buildInputRow(context),
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -531,25 +553,12 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: inputBg,
-              borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: AnimatedSize(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.bottomCenter,
-              child: _buildInputRow(context),
-            ),
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: container,
+              )
+            : container,
       ),
     );
   }

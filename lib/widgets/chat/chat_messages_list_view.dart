@@ -108,6 +108,10 @@ class ChatMessagesListView extends StatelessWidget {
       );
     }
 
+    if (!isLoading) {
+      return content;
+    }
+
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 220),
       switchInCurve: Curves.easeOutCubic,

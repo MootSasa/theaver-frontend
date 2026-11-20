@@ -7,6 +7,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
 import '../tiling/tile_viewport_scope.dart';
@@ -706,21 +707,47 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           );
         }
 
-        // Classic Material floating pills with smooth container morphing
+        // Classic Material floating pills with smooth container morphing & optional single-pass frosted blur
         final themeExt = theme.extension<TheavThemeExtension>();
         final p = themeExt?.palette;
-        final barBackgroundColor = p?.surface ??
-            (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+        final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+        final rawBaseBg = (p?.appBarBackground != null && p!.appBarBackground != Colors.transparent)
+            ? p.appBarBackground
+            : (p?.surface ?? (isDark ? const Color(0xFF2C2C2E) : Colors.white));
+        final barBackgroundColor = BlurUtils.resolveMaterialHudColor(
+          rawBaseBg,
+          isDark: isDark,
+          blurEnabled: blurEnabled,
+        );
         final borderColor = p?.divider ??
             (isDark
                 ? Colors.white.withValues(alpha: 0.1)
                 : Colors.black.withValues(alpha: 0.06));
         final double baseShadowAlpha = isDark ? 0.35 : 0.08;
 
+        Widget wrapFrosted(Widget child) {
+          if (!blurEnabled) return child;
+          return BackdropFilter.grouped(
+            filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+            child: child,
+          );
+        }
+
         BoxDecoration pillDecoration({bool elevated = false}) => BoxDecoration(
-              color: barBackgroundColor,
+              color: elevated && blurEnabled
+                  ? BlurUtils.resolveMaterialHudColor(
+                      p?.surface ?? rawBaseBg,
+                      isDark: isDark,
+                      blurEnabled: true,
+                      darkAlpha: 0.84,
+                      lightAlpha: 0.88,
+                    )
+                  : barBackgroundColor,
               borderRadius: BorderRadius.circular(_barRadius),
-              border: Border.all(color: borderColor, width: 0.5),
+              border: Border.all(
+                color: borderColor,
+                width: blurEnabled ? 0.6 : 0.5,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(
@@ -746,14 +773,19 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
               child: AnimatedOpacity(
                 opacity: showLeftControl ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 180),
-                child: Container(
-                  width: _ctrlSize,
-                  height: _ctrlSize,
-                  decoration: pillDecoration(),
-                  clipBehavior: Clip.antiAlias,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: leftContent,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(_barRadius),
+                  child: wrapFrosted(
+                    Container(
+                      width: _ctrlSize,
+                      height: _ctrlSize,
+                      decoration: pillDecoration(),
+                      clipBehavior: Clip.antiAlias,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 200),
+                        child: leftContent,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -767,22 +799,27 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           curve: Curves.easeOutCubic,
           top: 2,
           left: centerLeft,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOutCubic,
-            width: activeCenterWidth,
-            height: activeCenterHeight,
-            decoration: pillDecoration(elevated: centerMenuActive),
-            clipBehavior: Clip.antiAlias,
-            child: OverflowBox(
-              minWidth: 0,
-              maxWidth: math.max(activeCenterWidth, openCenterMenuWidth ?? 220),
-              minHeight: 0,
-              maxHeight: math.max(_ctrlSize, openCenterMenuHeight ?? _ctrlSize),
-              alignment: Alignment.topCenter,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: centerContent,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(_barRadius),
+            child: wrapFrosted(
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
+                width: activeCenterWidth,
+                height: activeCenterHeight,
+                decoration: pillDecoration(elevated: centerMenuActive),
+                clipBehavior: Clip.antiAlias,
+                child: OverflowBox(
+                  minWidth: 0,
+                  maxWidth: math.max(activeCenterWidth, openCenterMenuWidth ?? 220),
+                  minHeight: 0,
+                  maxHeight: math.max(_ctrlSize, openCenterMenuHeight ?? _ctrlSize),
+                  alignment: Alignment.topCenter,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: centerContent,
+                  ),
+                ),
               ),
             ),
           ),
@@ -793,25 +830,30 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
                 key: const ValueKey<String>('classic_right_pos'),
                 top: 2,
                 right: edgePadding,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  width: activeRightWidth,
-                  height: activeRightHeight,
-                  decoration: pillDecoration(elevated: isRightMenuActive),
-                  clipBehavior: Clip.antiAlias,
-                  child: OverflowBox(
-                    minWidth: 0,
-                    maxWidth: math.max(
-                      activeRightWidth,
-                      math.max(capsuleWidth, rightMenuWidth),
-                    ),
-                    minHeight: 0,
-                    maxHeight: math.max(_ctrlSize, rightMenuHeight),
-                    alignment: Alignment.topRight,
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      child: rightContent,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(_barRadius),
+                  child: wrapFrosted(
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutCubic,
+                      width: activeRightWidth,
+                      height: activeRightHeight,
+                      decoration: pillDecoration(elevated: isRightMenuActive),
+                      clipBehavior: Clip.antiAlias,
+                      child: OverflowBox(
+                        minWidth: 0,
+                        maxWidth: math.max(
+                          activeRightWidth,
+                          math.max(capsuleWidth, rightMenuWidth),
+                        ),
+                        minHeight: 0,
+                        maxHeight: math.max(_ctrlSize, rightMenuHeight),
+                        alignment: Alignment.topRight,
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          child: rightContent,
+                        ),
+                      ),
                     ),
                   ),
                 ),
