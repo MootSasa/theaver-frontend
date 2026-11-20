@@ -15,6 +15,7 @@ import '../../services/bot_service.dart';
 import '../../services/browser_data_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
@@ -71,22 +72,62 @@ class InAppBrowserSheet extends StatefulWidget {
 }
 
 class _InAppBrowserSheetState extends State<InAppBrowserSheet>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const String _desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
   late final MiniAppSession _session;
   late final AnimationController _menuAnimController;
+  late final AnimationController _dragResetController;
+  final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier<double>(0.0);
   final TextEditingController _findCtrl = TextEditingController();
 
   bool _isMenuOpen = false;
   bool _isFindOpen = false;
   String _findStatus = '';
-  double _dragOffsetY = 0.0;
+  double _dragResetFrom = 0.0;
+  double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
+  bool _isTransitionReady = false;
+  Animation<double>? _routeAnimation;
+  bool? _lastRequestedRestingOpaque;
 
   bool get _hasPlatformWebView => !kIsWeb && WebViewPlatform.instance != null;
+
+  void _onSessionStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _setRouteRestingOpaque(bool opaque) {
+    if (!mounted || _lastRequestedRestingOpaque == opaque) return;
+    _lastRequestedRestingOpaque = opaque;
+    TheavSheetRoutePerfControl.setRestingOpaque(context, opaque);
+  }
+
+  void _onRouteAnimationStatusChanged(AnimationStatus status) {
+    if (!mounted) return;
+    if (status == AnimationStatus.completed) {
+      _isTransitionReady = true;
+      _maybeInitWebView();
+      if (_dragOffsetNotifier.value <= 0.5 && !_isMinimizing) {
+        _setRouteRestingOpaque(true);
+      }
+    } else if (status == AnimationStatus.reverse ||
+        status == AnimationStatus.dismissed) {
+      _setRouteRestingOpaque(false);
+    }
+  }
+
+  void _maybeInitWebView({bool shouldRebuild = true}) {
+    if (!mounted) return;
+    if (_session.controller == null && _isTransitionReady && _hasPlatformWebView) {
+      _session.ensureWebViewInitialized();
+      if (_session.controller != null && shouldRebuild) {
+        setState(() {});
+      }
+    }
+  }
 
   @override
   void initState() {
@@ -97,12 +138,55 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       vsync: this,
       duration: const Duration(milliseconds: 170),
     );
-    _session.onSheetStateChanged = () {
-      if (mounted) setState(() {});
-    };
-    _session.ensureWebViewInitialized();
+    _dragResetController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+    )..addListener(() {
+        if (!mounted) return;
+        final double t =
+            Curves.easeOutCubic.transform(_dragResetController.value);
+        _dragOffsetNotifier.value = _dragResetFrom * (1.0 - t);
+      });
+    _session.onSheetStateChanged = _onSessionStateChanged;
     unawaited(BrowserDataService.instance.ensureLoaded());
     BrowserDataService.instance.addListener(_onBrowserDataChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final padding = MediaQuery.paddingOf(context);
+    final double nextTop = padding.top + 60.0;
+    final double nextBottom = padding.bottom + 68.0;
+    final bool clearanceChanged =
+        (nextTop - _session.browserTopClearance).abs() > 0.5 ||
+            (nextBottom - _session.browserBottomClearance).abs() > 0.5;
+    _session.browserTopClearance = nextTop;
+    _session.browserBottomClearance = nextBottom;
+    if (clearanceChanged &&
+        _session.isWebContentReady &&
+        _session.controller != null) {
+      unawaited(_session.injectBrowserSafeInsets());
+    }
+
+    final nextRouteAnim = ModalRoute.of(context)?.animation;
+    if (!identical(nextRouteAnim, _routeAnimation)) {
+      _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
+      _routeAnimation = nextRouteAnim;
+      if (nextRouteAnim == null ||
+          nextRouteAnim.status == AnimationStatus.completed) {
+        _isTransitionReady = true;
+        _maybeInitWebView(shouldRebuild: false);
+        if (_dragOffsetNotifier.value <= 0.5 && !_isMinimizing) {
+          _setRouteRestingOpaque(true);
+        }
+      } else {
+        if (!_hasPlatformWebView) {
+          _isTransitionReady = true;
+        }
+        nextRouteAnim.addStatusListener(_onRouteAnimationStatusChanged);
+      }
+    }
   }
 
   void _onBrowserDataChanged() {
@@ -111,8 +195,14 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   @override
   void dispose() {
+    _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
+    _routeAnimation = null;
     BrowserDataService.instance.removeListener(_onBrowserDataChanged);
-    _session.onSheetStateChanged = null;
+    if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
+      _session.onSheetStateChanged = null;
+    }
+    _dragOffsetNotifier.dispose();
+    _dragResetController.dispose();
     _menuAnimController.dispose();
     _findCtrl.dispose();
     MiniAppSessionController.instance.unregisterFullScreenOpen();
@@ -123,6 +213,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (_isMinimizing) return;
     _isMinimizing = true;
     _closeMenu();
+    _setRouteRestingOpaque(false);
     HapticUtils.selection();
     final nav = Navigator.of(context, rootNavigator: true);
     MiniAppSessionController.instance.minimize(_session, navigator: nav);
@@ -131,6 +222,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   void _closeTab() {
     _closeMenu();
+    _setRouteRestingOpaque(false);
     HapticUtils.tap();
     MiniAppSessionController.instance.closeSession(_session);
     Navigator.of(context, rootNavigator: true).maybePop();
@@ -394,6 +486,63 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _session.controller?.loadRequest(uri);
   }
 
+  void _handleHeaderDragStart(DragStartDetails _) {
+    _dragResetController.stop();
+    _dragAccumulated = 0.0;
+  }
+
+  void _handleHeaderDragUpdate(DragUpdateDetails details) {
+    _dragAccumulated += details.delta.dy;
+    final double current = _dragOffsetNotifier.value;
+    final double nextOffset = (current + details.delta.dy).clamp(0.0, 260.0);
+    if ((nextOffset - current).abs() > 0.1) {
+      if (_isMenuOpen) {
+        _closeMenu();
+      }
+      if (nextOffset > 0.5) {
+        _setRouteRestingOpaque(false);
+      } else if (_routeAnimation?.status == AnimationStatus.completed) {
+        _setRouteRestingOpaque(true);
+      }
+      _dragOffsetNotifier.value = nextOffset;
+    }
+  }
+
+  void _resetDragOffset() {
+    final double current = _dragOffsetNotifier.value;
+    if (current <= 0.5) {
+      if (current != 0.0) {
+        _dragOffsetNotifier.value = 0.0;
+      }
+      if (_routeAnimation?.status == AnimationStatus.completed) {
+        _setRouteRestingOpaque(true);
+      }
+      return;
+    }
+    _dragResetFrom = current;
+    _dragResetController.forward(from: 0.0).whenComplete(() {
+      if (!mounted) return;
+      if (_dragOffsetNotifier.value != 0.0) {
+        _dragOffsetNotifier.value = 0.0;
+      }
+      if (_routeAnimation?.status == AnimationStatus.completed &&
+          !_isMinimizing) {
+        _setRouteRestingOpaque(true);
+      }
+    });
+  }
+
+  void _handleHeaderDragEnd(DragEndDetails details) {
+    final double dy = _dragAccumulated;
+    final double vy = details.primaryVelocity ?? 0.0;
+    _dragAccumulated = 0.0;
+    if (dy >= 90 || vy >= 450) {
+      _minimizeToDock();
+      return;
+    }
+    _resetDragOffset();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -407,218 +556,213 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final bool isHttps = currentUrl.toLowerCase().startsWith('https://');
     final String host = BrowserDataService.extractHost(currentUrl);
     final String title = _session.displayTitle;
-    final bool isLoading =
-        _session.loadProgress > 0.0 && _session.loadProgress < 1.0;
     final bool bookmarked = BrowserDataService.instance.isBookmarked(currentUrl);
 
-    final Widget headerBar = GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onVerticalDragUpdate: (d) {
-        if (d.delta.dy > 0 || _dragOffsetY > 0) {
-          setState(() {
-            _dragOffsetY = (_dragOffsetY + d.delta.dy).clamp(0.0, 220.0);
-          });
-        }
-      },
-      onVerticalDragEnd: (d) {
-        if ((d.primaryVelocity ?? 0.0) > 450 || _dragOffsetY > 90) {
-          _minimizeToDock();
-        } else {
-          setState(() => _dragOffsetY = 0.0);
-        }
-      },
-      onVerticalDragCancel: () {
-        if (mounted) setState(() => _dragOffsetY = 0.0);
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          color: resolved.headerBg,
-          border: Border(
-            bottom: BorderSide(color: resolved.divider, width: 0.75),
+    final Widget floatingHeader = WebViewFloatingHeader(
+      topInset: topInset,
+      progressListenable: _session.loadProgressNotifier,
+      progressColor: resolved.palette.primary,
+      onCenterTap: _copyCurrentUrl,
+      onVerticalDragStart: _handleHeaderDragStart,
+      onVerticalDragUpdate: _handleHeaderDragUpdate,
+      onVerticalDragEnd: _handleHeaderDragEnd,
+      onVerticalDragCancel: _resetDragOffset,
+      leadingChild: IconButton(
+        key: const ValueKey('in_app_browser_close_button'),
+        tooltip: 'Закрыть',
+        padding: EdgeInsets.zero,
+        icon: Icon(Icons.close_rounded, size: 22, color: resolved.headerFg),
+        onPressed: _closeTab,
+      ),
+      centerChild: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              height: 1.15,
+              color: resolved.headerFg,
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isHttps ? Icons.lock_rounded : Icons.warning_amber_rounded,
+                size: 11,
+                color: isHttps
+                    ? resolved.palette.primary
+                    : resolved.palette.error,
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  host,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.15,
+                    color: resolved.headerFg.withValues(alpha: 0.68),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      trailingActions: [
+        SizedBox(
+          width: 40,
+          height: 44,
+          child: IconButton(
+            key: const ValueKey('in_app_browser_minimize_button'),
+            tooltip: 'Свернуть',
+            padding: EdgeInsets.zero,
+            icon: Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 24,
+              color: resolved.headerFg,
+            ),
+            onPressed: _minimizeToDock,
           ),
         ),
-        padding: EdgeInsets.only(top: topInset),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 54,
+        SizedBox(
+          width: 40,
+          height: 44,
+          child: IconButton(
+            key: const ValueKey('in_app_browser_menu_button'),
+            tooltip: 'Меню',
+            padding: EdgeInsets.zero,
+            icon: Icon(
+              Icons.more_vert_rounded,
+              size: 21,
+              color: resolved.headerFg,
+            ),
+            onPressed: _toggleMenu,
+          ),
+        ),
+      ],
+    );
+
+    final Widget? floatingFindBar = _isFindOpen
+        ? Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: WebViewFloatingCapsule(
+              height: 46,
+              borderRadius: 22,
+              padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
               child: Row(
                 children: [
-                  SizedBox(
-                    width: 48,
-                    height: 54,
-                    child: IconButton(
-                      key: const ValueKey('in_app_browser_close_button'),
-                      tooltip: 'Закрыть',
-                      icon: Icon(Icons.close_rounded, color: resolved.headerFg),
-                      onPressed: _closeTab,
-                    ),
-                  ),
                   Expanded(
-                    child: GestureDetector(
-                      onTap: _copyCurrentUrl,
-                      behavior: HitTestBehavior.opaque,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 15.5,
-                              fontWeight: FontWeight.w700,
-                              color: resolved.headerFg,
-                            ),
-                          ),
-                          const SizedBox(height: 1),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                isHttps
-                                    ? Icons.lock_rounded
-                                    : Icons.warning_amber_rounded,
-                                size: 12,
-                                color: isHttps
-                                    ? resolved.palette.primary
-                                    : resolved.palette.error,
-                              ),
-                              const SizedBox(width: 4),
-                              Flexible(
-                                child: Text(
-                                  host,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color:
-                                        resolved.headerFg.withValues(alpha: 0.65),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 42,
-                    height: 54,
-                    child: IconButton(
-                      key: const ValueKey('in_app_browser_minimize_button'),
-                      tooltip: 'Свернуть',
-                      icon: Icon(
-                        Icons.keyboard_arrow_down_rounded,
-                        size: 26,
+                    child: TextField(
+                      controller: _findCtrl,
+                      autofocus: true,
+                      style: TextStyle(
+                        fontSize: 14,
                         color: resolved.headerFg,
                       ),
-                      onPressed: _minimizeToDock,
+                      decoration: InputDecoration(
+                        hintText: 'Найти на странице...',
+                        hintStyle: TextStyle(
+                          fontSize: 13.5,
+                          color: resolved.headerFg.withValues(alpha: 0.55),
+                        ),
+                        isDense: true,
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 8,
+                        ),
+                      ),
+                      onSubmitted: (v) => _findInPage(v),
                     ),
                   ),
-                  SizedBox(
-                    width: 44,
-                    height: 54,
-                    child: IconButton(
-                      key: const ValueKey('in_app_browser_menu_button'),
-                      tooltip: 'Меню',
-                      icon: Icon(Icons.more_vert_rounded, color: resolved.headerFg),
-                      onPressed: _toggleMenu,
+                  if (_findStatus.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Text(
+                        _findStatus,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: resolved.headerFg.withValues(alpha: 0.7),
+                        ),
+                      ),
                     ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.keyboard_arrow_up_rounded,
+                      size: 21,
+                      color: resolved.headerFg,
+                    ),
+                    onPressed: () =>
+                        _findInPage(_findCtrl.text, backwards: true),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 21,
+                      color: resolved.headerFg,
+                    ),
+                    onPressed: () => _findInPage(_findCtrl.text),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 19,
+                      color: resolved.headerFg,
+                    ),
+                    onPressed: () => setState(() {
+                      _isFindOpen = false;
+                      _findStatus = '';
+                    }),
                   ),
                 ],
               ),
             ),
-            if (_isFindOpen)
-              Container(
-                padding: const EdgeInsets.fromLTRB(12, 0, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 36,
-                        child: TextField(
-                          controller: _findCtrl,
-                          autofocus: true,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: resolved.headerFg,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: 'Найти на странице...',
-                            hintStyle: TextStyle(
-                              fontSize: 13.5,
-                              color: resolved.headerFg.withValues(alpha: 0.55),
-                            ),
-                            isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            filled: true,
-                            fillColor: resolved.bodyBg,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                          onSubmitted: (v) => _findInPage(v),
-                        ),
-                      ),
-                    ),
-                    if (_findStatus.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: Text(
-                          _findStatus,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: resolved.headerFg.withValues(alpha: 0.7),
-                          ),
-                        ),
-                      ),
-                    IconButton(
-                      icon: Icon(Icons.keyboard_arrow_up_rounded,
-                          color: resolved.headerFg),
-                      onPressed: () =>
-                          _findInPage(_findCtrl.text, backwards: true),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.keyboard_arrow_down_rounded,
-                          color: resolved.headerFg),
-                      onPressed: () => _findInPage(_findCtrl.text),
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.close_rounded,
-                          size: 20, color: resolved.headerFg),
-                      onPressed: () => setState(() {
-                        _isFindOpen = false;
-                        _findStatus = '';
-                      }),
-                    ),
-                  ],
-                ),
-              ),
-            if (isLoading)
-              LinearProgressIndicator(
-                minHeight: 2.2,
-                value: _session.loadProgress,
-                backgroundColor: Colors.transparent,
-                valueColor:
-                    AlwaysStoppedAnimation<Color>(resolved.palette.primary),
-              ),
-          ],
-        ),
-      ),
-    );
+          )
+        : null;
 
-    final Widget webBody = _hasPlatformWebView && _session.controller != null
-        ? WebViewWidget(controller: _session.controller!)
+    final Widget webBody = _hasPlatformWebView
+        ? Stack(
+            fit: StackFit.expand,
+            children: [
+              if (_session.controller != null)
+                RepaintBoundary(
+                  child: ColoredBox(
+                    color: resolved.bodyBg,
+                    child: WebViewWidget(controller: _session.controller!),
+                  ),
+                )
+              else
+                Positioned.fill(
+                  child: ColoredBox(
+                    color: resolved.bodyBg,
+                    child: Center(
+                      child: MiniAppGridPlaceholder(
+                        key: const ValueKey('in_app_browser_loader'),
+                        bodyColor: resolved.bodyBg,
+                        foregroundColor: resolved.headerFg,
+                        animate: true,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          )
         : Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                topInset + 76,
+                24,
+                bottomInset + 84,
+              ),
               child: Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
@@ -667,210 +811,274 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
           );
 
-    final Widget bottomBar = Container(
-      key: const ValueKey('in_app_browser_bottom_bar'),
-      decoration: BoxDecoration(
-        color: resolved.headerBg,
-        border: Border(top: BorderSide(color: resolved.divider, width: 0.7)),
-      ),
-      padding: EdgeInsets.only(bottom: bottomInset),
-      child: SizedBox(
-        height: 48,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            IconButton(
-              tooltip: 'Назад',
-              icon: Icon(
-                Icons.arrow_back_ios_new_rounded,
-                size: 20,
-                color: _session.canGoBack
-                    ? resolved.headerFg
-                    : resolved.headerFg.withValues(alpha: 0.35),
-              ),
-              onPressed: _session.canGoBack ? _goBack : null,
-            ),
-            IconButton(
-              tooltip: 'Вперёд',
-              icon: Icon(
-                Icons.arrow_forward_ios_rounded,
-                size: 20,
-                color: _session.canGoForward
-                    ? resolved.headerFg
-                    : resolved.headerFg.withValues(alpha: 0.35),
-              ),
-              onPressed: _session.canGoForward ? _goForward : null,
-            ),
-            IconButton(
-              tooltip: 'Поделиться',
-              icon: Icon(Icons.ios_share_rounded,
-                  size: 21, color: resolved.headerFg),
-              onPressed: _shareCurrentUrl,
-            ),
-            IconButton(
-              tooltip: 'Закладки и история',
-              icon: Icon(
-                bookmarked
-                    ? Icons.bookmark_rounded
-                    : Icons.bookmarks_outlined,
-                size: 22,
-                color: bookmarked ? resolved.palette.primary : resolved.headerFg,
-              ),
-              onPressed: _openBookmarksAndHistorySheet,
-            ),
-            IconButton(
-              tooltip: isLoading ? 'Стоп' : 'Обновить',
-              icon: Icon(
-                isLoading ? Icons.close_rounded : Icons.refresh_rounded,
-                size: 22,
-                color: resolved.headerFg,
-              ),
-              onPressed: _reloadOrStop,
-            ),
-          ],
-        ),
-      ),
-    );
-
-    final Widget menuItemsColumn = Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _browserMenuItem(
-          icon: Icons.refresh_rounded,
-          label: 'Обновить',
-          fg: resolved.headerFg,
-          onTap: () {
-            _closeMenu();
-            _reloadOrStop();
-          },
-        ),
-        _browserMenuItem(
-          icon: bookmarked
-              ? Icons.bookmark_rounded
-              : Icons.bookmark_border_rounded,
-          label: bookmarked ? 'Убрать из закладок' : 'В закладки',
-          fg: resolved.headerFg,
-          onTap: _toggleBookmark,
-        ),
-        _browserMenuItem(
-          icon: Icons.history_rounded,
-          label: 'Закладки и история',
-          fg: resolved.headerFg,
-          onTap: _openBookmarksAndHistorySheet,
-        ),
-        _browserMenuItem(
-          icon: Icons.search_rounded,
-          label: 'Найти на странице',
-          fg: resolved.headerFg,
-          onTap: () {
-            _closeMenu();
-            setState(() => _isFindOpen = true);
-          },
-        ),
-        _browserMenuItem(
-          icon: _session.isDesktopMode
-              ? Icons.phone_android_rounded
-              : Icons.desktop_windows_rounded,
-          label: _session.isDesktopMode
-              ? 'Мобильная версия'
-              : 'Версия для ПК',
-          fg: resolved.headerFg,
-          onTap: _toggleDesktopMode,
-        ),
-        _browserMenuItem(
-          icon: Icons.copy_rounded,
-          label: 'Копировать ссылку',
-          fg: resolved.headerFg,
-          onTap: _copyCurrentUrl,
-        ),
-        _browserMenuItem(
-          icon: Icons.open_in_browser_rounded,
-          label: 'Открыть во внешнем браузере',
-          fg: resolved.headerFg,
-          onTap: _openExternalBrowser,
-        ),
-      ],
-    );
-
-    final Widget menuCard = (style.isGlass && style.glassProvider != null)
-        ? LiquidGlassLens(
-            style: style.glassProvider!.createStyle(
-              context: context,
-              cornerRadius: 18,
-              isLiteOverride: _hasPlatformWebView ? true : null,
-              refractionIndex: 1.08,
-              refractionWidth: 16.0,
-              borderWidth: 1.1,
-              color: resolved.headerBg
-                  .withValues(alpha: style.isDark ? 0.88 : 0.92),
-            ),
-            child: menuItemsColumn,
-          )
-        : DecoratedBox(
-            decoration: BoxDecoration(
-              color: resolved.headerBg,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: style.hairlineBorder, width: 0.6),
-              boxShadow: style.floatingShadow,
-            ),
-            child: menuItemsColumn,
-          );
-
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) return;
-        if (_isMenuOpen) {
-          _closeMenu();
-          return;
-        }
-        if (_hasPlatformWebView && _session.canGoBack) {
-          await _goBack();
-          return;
-        }
-        if (mounted) {
-          Navigator.of(context, rootNavigator: true).pop();
-        }
-      },
-      child: Transform.translate(
-        offset: Offset(0, _dragOffsetY),
-        child: Material(
-          key: const ValueKey('in_app_browser_sheet'),
-          color: resolved.bodyBg,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Column(
-                children: [
-                  headerBar,
-                  Expanded(child: webBody),
-                  bottomBar,
-                ],
-              ),
-              if (_isMenuOpen) ...[
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: _closeMenu,
-                    child: const SizedBox.expand(),
+    final Widget floatingBottomBar = Positioned(
+      left: 16,
+      right: 16,
+      bottom: bottomInset + 10,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: WebViewFloatingCapsule(
+            key: const ValueKey('in_app_browser_bottom_bar'),
+            height: 48,
+            borderRadius: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                IconButton(
+                  tooltip: 'Назад',
+                  icon: Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    size: 19,
+                    color: _session.canGoBack
+                        ? resolved.headerFg
+                        : resolved.headerFg.withValues(alpha: 0.35),
                   ),
+                  onPressed: _session.canGoBack ? _goBack : null,
                 ),
-                Positioned(
-                  top: topInset + 58,
-                  right: 10,
-                  width: 256,
-                  child: ScaleTransition(
-                    alignment: Alignment.topRight,
-                    scale: CurvedAnimation(
-                      parent: _menuAnimController,
-                      curve: Curves.easeOutCubic,
-                    ).drive(Tween<double>(begin: 0.92, end: 1.0)),
-                    child: menuCard,
+                IconButton(
+                  tooltip: 'Вперёд',
+                  icon: Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 19,
+                    color: _session.canGoForward
+                        ? resolved.headerFg
+                        : resolved.headerFg.withValues(alpha: 0.35),
                   ),
+                  onPressed: _session.canGoForward ? _goForward : null,
+                ),
+                IconButton(
+                  tooltip: 'Поделиться',
+                  icon: Icon(
+                    Icons.ios_share_rounded,
+                    size: 20,
+                    color: resolved.headerFg,
+                  ),
+                  onPressed: _shareCurrentUrl,
+                ),
+                IconButton(
+                  tooltip: 'Закладки и история',
+                  icon: Icon(
+                    bookmarked
+                        ? Icons.bookmark_rounded
+                        : Icons.bookmarks_outlined,
+                    size: 21,
+                    color:
+                        bookmarked ? resolved.palette.primary : resolved.headerFg,
+                  ),
+                  onPressed: _openBookmarksAndHistorySheet,
+                ),
+                ValueListenableBuilder<double>(
+                  valueListenable: _session.loadProgressNotifier,
+                  builder: (context, progress, _) {
+                    final bool isLoading = progress > 0.0 && progress < 1.0;
+                    return IconButton(
+                      tooltip: isLoading ? 'Стоп' : 'Обновить',
+                      icon: Icon(
+                        isLoading
+                            ? Icons.close_rounded
+                            : Icons.refresh_rounded,
+                        size: 21,
+                        color: resolved.headerFg,
+                      ),
+                      onPressed: _reloadOrStop,
+                    );
+                  },
                 ),
               ],
-            ],
+            ),
           ),
+        ),
+      ),
+    );
+
+    final Widget menuItemsColumn = Material(
+      type: MaterialType.transparency,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _browserMenuItem(
+            icon: Icons.refresh_rounded,
+            label: 'Обновить',
+            fg: resolved.headerFg,
+            onTap: () {
+              _closeMenu();
+              _reloadOrStop();
+            },
+          ),
+          _browserMenuItem(
+            icon: bookmarked
+                ? Icons.bookmark_rounded
+                : Icons.bookmark_border_rounded,
+            label: bookmarked ? 'Убрать из закладок' : 'В закладки',
+            fg: resolved.headerFg,
+            onTap: _toggleBookmark,
+          ),
+          _browserMenuItem(
+            icon: Icons.history_rounded,
+            label: 'Закладки и история',
+            fg: resolved.headerFg,
+            onTap: _openBookmarksAndHistorySheet,
+          ),
+          _browserMenuItem(
+            icon: Icons.search_rounded,
+            label: 'Найти на странице',
+            fg: resolved.headerFg,
+            onTap: () {
+              _closeMenu();
+              setState(() => _isFindOpen = true);
+            },
+          ),
+          _browserMenuItem(
+            icon: _session.isDesktopMode
+                ? Icons.phone_android_rounded
+                : Icons.desktop_windows_rounded,
+            label: _session.isDesktopMode
+                ? 'Мобильная версия'
+                : 'Версия для ПК',
+            fg: resolved.headerFg,
+            onTap: _toggleDesktopMode,
+          ),
+          _browserMenuItem(
+            icon: Icons.copy_rounded,
+            label: 'Копировать ссылку',
+            fg: resolved.headerFg,
+            onTap: _copyCurrentUrl,
+          ),
+          _browserMenuItem(
+            icon: Icons.open_in_browser_rounded,
+            label: 'Открыть во внешнем браузере',
+            fg: resolved.headerFg,
+            onTap: _openExternalBrowser,
+          ),
+        ],
+      ),
+    );
+
+    final blurFilter = style.getMaterialHudBlurFilter(sigma: 10.0);
+    final Widget menuCard;
+    if (style.isGlass && style.glassProvider != null) {
+      menuCard = LiquidGlassLens(
+        style: style.glassProvider!.createStyle(
+          context: context,
+          cornerRadius: 18,
+          isLiteOverride: true,
+          refractionIndex: 1.08,
+          refractionWidth: 16.0,
+          borderWidth: 1.1,
+          color:
+              resolved.headerBg.withValues(alpha: style.isDark ? 0.86 : 0.90),
+        ),
+        child: menuItemsColumn,
+      );
+    } else {
+      final Color menuBg = blurFilter != null
+          ? BlurUtils.resolveMaterialHudColor(
+              resolved.headerBg,
+              isDark: style.isDark,
+              blurEnabled: true,
+              darkAlpha: 0.88,
+              lightAlpha: 0.90,
+            )
+          : resolved.headerBg;
+      Widget box = DecoratedBox(
+        decoration: BoxDecoration(
+          color: menuBg,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: blurFilter != null ? style.hudBorder : style.hairlineBorder,
+            width: 0.6,
+          ),
+        ),
+        child: menuItemsColumn,
+      );
+      if (blurFilter != null) {
+        box = BackdropFilter.grouped(filter: blurFilter, child: box);
+      }
+      menuCard = DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: style.floatingShadow,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(18),
+          child: box,
+        ),
+      );
+    }
+
+    final Widget sheetBody = Material(
+      key: const ValueKey('in_app_browser_sheet'),
+      color: resolved.bodyBg,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(child: webBody),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                floatingHeader,
+                if (floatingFindBar != null) floatingFindBar,
+              ],
+            ),
+          ),
+          floatingBottomBar,
+          if (_isMenuOpen) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _closeMenu,
+                child: const SizedBox.expand(),
+              ),
+            ),
+            Positioned(
+              top: topInset + 58,
+              right: 12,
+              width: 256,
+              child: ScaleTransition(
+                alignment: Alignment.topRight,
+                scale: CurvedAnimation(
+                  parent: _menuAnimController,
+                  curve: Curves.easeOutCubic,
+                ).drive(Tween<double>(begin: 0.92, end: 1.0)),
+                child: menuCard,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return BackdropGroup(
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop) return;
+          if (_isMenuOpen) {
+            _closeMenu();
+            return;
+          }
+          if (_hasPlatformWebView && _session.canGoBack) {
+            await _goBack();
+            return;
+          }
+          _setRouteRestingOpaque(false);
+          if (mounted) {
+            Navigator.of(context, rootNavigator: true).pop();
+          }
+        },
+        child: ValueListenableBuilder<double>(
+          valueListenable: _dragOffsetNotifier,
+          builder: (context, offsetY, child) => MiniAppDragOffset(
+            offsetY: offsetY,
+            child: child!,
+          ),
+          child: sheetBody,
         ),
       ),
     );

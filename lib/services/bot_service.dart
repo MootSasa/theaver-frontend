@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
+import 'account_manager.dart';
 import 'auth_service.dart';
 import 'websocket_service.dart';
 
@@ -546,8 +547,71 @@ class BotService {
   static final Map<String, ({List<BotInfo> items, DateTime fetchedAt})>
       _directoryCache = {};
   static const Duration _directoryCacheTtl = Duration(seconds: 30);
+  static const Duration _launchCacheTtl = Duration(minutes: 5);
+  static final Map<String, ({MiniAppLaunchData data, DateTime cachedAt})>
+      _launchCache = {};
   static final RegExp _inlinePattern =
       RegExp(r'^@([a-zA-Z][a-zA-Z0-9_]{3,31})\s([\s\S]*)$');
+
+  static String _buildLaunchCacheKey({
+    required String botId,
+    String? url,
+    String? appShortName,
+    String? chatId,
+    required String mode,
+    String? startParam,
+  }) {
+    final userId = AccountManager().currentAccount?.userId ?? '';
+    return [
+      userId,
+      botId.trim(),
+      mode.trim(),
+      (appShortName ?? '').trim(),
+      (chatId ?? '').trim(),
+      (url ?? '').trim(),
+      (startParam ?? '').trim(),
+    ].join('|');
+  }
+
+  /// Synchronously returns a fresh cached [MiniAppLaunchData] payload when within TTL.
+  static MiniAppLaunchData? getCachedLaunchData({
+    required String botId,
+    String? url,
+    String? appShortName,
+    String? chatId,
+    String mode = 'menu',
+    String? startParam,
+  }) {
+    if (botId.trim().isEmpty) return null;
+    final key = _buildLaunchCacheKey(
+      botId: botId,
+      url: url,
+      appShortName: appShortName,
+      chatId: chatId,
+      mode: mode,
+      startParam: startParam,
+    );
+    final entry = _launchCache[key];
+    if (entry == null) return null;
+    if (DateTime.now().difference(entry.cachedAt) > _launchCacheTtl) {
+      _launchCache.remove(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  /// Clears cached Mini App launch payloads (for [botId], or all bots when null).
+  static void clearLaunchCache({String? botId}) {
+    if (botId == null || botId.trim().isEmpty) {
+      _launchCache.clear();
+      return;
+    }
+    final target = botId.trim();
+    _launchCache.removeWhere((k, _) {
+      final parts = k.split('|');
+      return parts.length > 1 && parts[1] == target;
+    });
+  }
 
   /// Invalidates cached metadata for [userId] and clears directory cache.
   static void invalidateBotInfo(String userId) {
@@ -556,6 +620,7 @@ class BotService {
       _botInfoCache.removeWhere(
         (k, _) => k == trimmed || k.startsWith('${trimmed}_'),
       );
+      clearLaunchCache(botId: trimmed);
       SharedPreferences.getInstance().then((prefs) async {
         final keys = prefs.getKeys();
         for (final key in keys) {
@@ -723,7 +788,21 @@ class BotService {
     String mode = 'menu',
     String? startParam,
     Map<String, dynamic>? themeParams,
+    bool forceRefresh = false,
   }) async {
+    if (!forceRefresh) {
+      final cached = getCachedLaunchData(
+        botId: botId,
+        url: url,
+        appShortName: appShortName,
+        chatId: chatId,
+        mode: mode,
+        startParam: startParam,
+      );
+      if (cached != null) {
+        return cached;
+      }
+    }
     try {
       final token = await AuthService.getToken();
       if (token == null) return null;
@@ -749,7 +828,17 @@ class BotService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data is Map<String, dynamic> && data['success'] == true) {
-          return MiniAppLaunchData.fromJson(data);
+          final launch = MiniAppLaunchData.fromJson(data);
+          final key = _buildLaunchCacheKey(
+            botId: botId,
+            url: url,
+            appShortName: appShortName,
+            chatId: chatId,
+            mode: mode,
+            startParam: startParam,
+          );
+          _launchCache[key] = (data: launch, cachedAt: DateTime.now());
+          return launch;
         }
       }
     } catch (e) {

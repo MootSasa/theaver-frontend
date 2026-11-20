@@ -122,7 +122,12 @@ void main() {
 
       expect(find.byType(InAppBrowserSheet), findsOneWidget);
       expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+      expect(find.byType(WebViewFloatingHeader), findsOneWidget);
       expect(find.byKey(const ValueKey('in_app_browser_bottom_bar')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('in_app_browser_bottom_bar')).evaluate().single.widget,
+        isA<WebViewFloatingCapsule>(),
+      );
       expect(find.text('example.org'), findsWidgets);
       expect(launchedExternal, isNull);
 
@@ -240,10 +245,45 @@ void main() {
         MiniAppJsBridge.buildThemeParams(ThemeData.dark()),
         colorScheme: 'dark',
         viewportHeight: 720,
+        topClearance: 88,
+        bottomClearance: 64,
       );
       expect(js, contains('openInvoice'));
       expect(js, contains('web_app_open_invoice'));
       expect(js, contains('invoiceClosed'));
+      expect(js, contains('--theaver-header-clearance'));
+      expect(js, contains('--theaver-bottom-clearance'));
+      expect(js, contains('theaver_webapp_ready'));
+    });
+
+    test('MiniAppSession.updateLoadProgress throttles sub-2% updates and preserves bounds', () {
+      final session = MiniAppSession(
+        launchData: const MiniAppLaunchData(
+          url: 'https://example.com',
+          initData: '',
+        ),
+        isBrowser: true,
+      );
+      var notifications = 0;
+      session.loadProgressNotifier.addListener(() => notifications++);
+
+      session.updateLoadProgress(10);
+      expect(session.loadProgress, closeTo(0.10, 0.001));
+      expect(notifications, 1);
+
+      // Sub-2% step is suppressed to prevent unnecessary rebuild ticks.
+      session.updateLoadProgress(11);
+      expect(session.loadProgress, closeTo(0.10, 0.001));
+      expect(notifications, 1);
+
+      // >= 2% delta or 100% boundary propagates immediately.
+      session.updateLoadProgress(12);
+      expect(session.loadProgress, closeTo(0.12, 0.001));
+      expect(notifications, 2);
+
+      session.updateLoadProgress(100);
+      expect(session.loadProgress, 1.0);
+      expect(notifications, 3);
     });
 
     testWidgets('MiniAppWebViewSheet renders verified seal for @walt', (tester) async {

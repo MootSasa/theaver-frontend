@@ -677,7 +677,7 @@ void main() {
         );
         expect(find.byType(MiniAppGridPlaceholder), findsOneWidget);
 
-        // Resting state must not wrap the Mini App viewport in glass shaders or blur.
+        // Floating oval header must sit over an unblurred full-bleed viewport.
         expect(
           find.descendant(
             of: sheetFinder,
@@ -685,20 +685,54 @@ void main() {
           ),
           findsNothing,
         );
+        final headerFinder = find.descendant(
+          of: sheetFinder,
+          matching: find.byType(WebViewFloatingHeader),
+        );
+        expect(headerFinder, findsOneWidget);
+        final viewportFinder = find.descendant(
+          of: sheetFinder,
+          matching: find.byKey(const ValueKey('mini_app_viewport_container')),
+        );
+        expect(viewportFinder, findsOneWidget);
         expect(
           find.descendant(
-            of: sheetFinder,
+            of: viewportFinder,
             matching: find.byType(BackdropFilter),
           ),
           findsNothing,
         );
         expect(
           find.descendant(
-            of: sheetFinder,
+            of: viewportFinder,
             matching: find.byType(LiquidGlassLens),
           ),
           findsNothing,
         );
+        if (expectGlass) {
+          expect(
+            find.descendant(
+              of: headerFinder,
+              matching: find.byType(LiquidGlassLens),
+            ),
+            findsNWidgets(3),
+          );
+          expect(
+            find.descendant(
+              of: sheetFinder,
+              matching: find.byType(BackdropFilter),
+            ),
+            findsNothing,
+          );
+        } else {
+          expect(
+            find.descendant(
+              of: headerFinder,
+              matching: find.byType(LiquidGlassLens),
+            ),
+            findsNothing,
+          );
+        }
 
         // Opening overflow menu surfaces targeted LiquidGlassLens when glass is enabled.
         await tester.tap(
@@ -709,15 +743,16 @@ void main() {
         final menuFinder = find.byKey(const ValueKey('mini_app_overflow_menu'));
         expect(menuFinder, findsOneWidget);
 
-        final menuLensFinder = find.descendant(
+        final sheetLensesFinder = find.descendant(
           of: sheetFinder,
           matching: find.byType(LiquidGlassLens),
         );
         if (expectGlass) {
-          expect(menuLensFinder, findsOneWidget);
+          expect(sheetLensesFinder, findsNWidgets(4));
+          expect(tester.widget<Widget>(menuFinder), isA<LiquidGlassLens>());
           expect(
             find.ancestor(
-              of: menuLensFinder,
+              of: menuFinder,
               matching: find.descendant(
                 of: sheetFinder,
                 matching: find.byWidgetPredicate(
@@ -728,7 +763,7 @@ void main() {
             findsNothing,
           );
         } else {
-          expect(menuLensFinder, findsNothing);
+          expect(sheetLensesFinder, findsNothing);
         }
 
         // Dismiss overflow menu before tapping downward chevron to minimize.
@@ -962,15 +997,18 @@ void main() {
     );
 
     final headerDecorated = tester
-        .widgetList<Container>(
+        .widgetList<DecoratedBox>(
           find.descendant(
-            of: find.byType(MiniAppWebViewSheet),
-            matching: find.byType(Container),
+            of: find.byType(WebViewFloatingHeader),
+            matching: find.byType(DecoratedBox),
           ),
         )
-        .where((c) {
-      final d = c.decoration;
-      return d is BoxDecoration && d.color == const Color(0xFF4A1B59);
+        .where((box) {
+      final d = box.decoration;
+      return d is BoxDecoration &&
+          d.color != null &&
+          (d.color!.toARGB32() & 0x00FFFFFF) ==
+              (const Color(0xFF4A1B59).toARGB32() & 0x00FFFFFF);
     });
     expect(headerDecorated, isNotEmpty);
   });

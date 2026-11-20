@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -137,6 +138,18 @@ class _RenderSheetVerticalOffset extends RenderShiftedBox {
   }
 }
 
+/// Performance helper allowing edge-to-edge custom routes (e.g. WebView sheets)
+/// to toggle overlay opaque culling while resting so Flutter skips painting
+/// underlying routes behind the full-screen surface.
+abstract final class TheavSheetRoutePerfControl {
+  static void setRestingOpaque(BuildContext context, bool opaque) {
+    final route = ModalRoute.of(context);
+    if (route is _TheavModalSheetRoute) {
+      route.setRestingOpaque(opaque);
+    }
+  }
+}
+
 class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   final WidgetBuilder builder;
   final WidgetBuilder? customSheetBuilder;
@@ -152,6 +165,10 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   @override
   final String? barrierLabel;
 
+  bool _restingOpaque = false;
+  bool _overlaySyncScheduled = false;
+  bool _isDisposed = false;
+
   _TheavModalSheetRoute({
     required this.builder,
     this.customSheetBuilder,
@@ -166,11 +183,61 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     required this.barrierLabel,
   });
 
+  void setRestingOpaque(bool value) {
+    if (_isDisposed || _restingOpaque == value) return;
+    _restingOpaque = value;
+    _scheduleOrSyncOverlayOpaque();
+  }
+
+  void _handleRouteStatusChanged(AnimationStatus _) {
+    if (_isDisposed || !_restingOpaque) return;
+    _scheduleOrSyncOverlayOpaque();
+  }
+
+  void _scheduleOrSyncOverlayOpaque() {
+    if (_isDisposed || navigator == null) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      if (_overlaySyncScheduled) return;
+      _overlaySyncScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _overlaySyncScheduled = false;
+        if (!_isDisposed && navigator != null) {
+          _syncOverlayOpaque();
+        }
+      });
+      return;
+    }
+    _syncOverlayOpaque();
+  }
+
+  void _syncOverlayOpaque() {
+    if (_isDisposed || overlayEntries.isEmpty) return;
+    final bool shouldBeOpaque =
+        _restingOpaque && animation?.status == AnimationStatus.completed;
+    overlayEntries.first.opaque = false;
+    overlayEntries.last.opaque = shouldBeOpaque;
+  }
+
+  @override
+  void install() {
+    super.install();
+    animation?.addStatusListener(_handleRouteStatusChanged);
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    animation?.removeStatusListener(_handleRouteStatusChanged);
+    super.dispose();
+  }
+
   @override
   Color? get barrierColor => Colors.black54;
 
   @override
-  bool get opaque => false;
+  bool get opaque =>
+      _restingOpaque && animation?.status == AnimationStatus.completed;
 
   @override
   Duration get transitionDuration => const Duration(milliseconds: 280);

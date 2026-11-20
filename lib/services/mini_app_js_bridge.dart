@@ -243,6 +243,8 @@ class MiniAppJsBridge {
     required double viewportHeight,
     bool isExpanded = false,
     String platform = 'android',
+    double topClearance = 0,
+    double bottomClearance = 0,
   }) {
     final initDataJson = jsonEncode(launch.initData);
     final initDataUnsafeJson = jsonEncode(launch.initDataUnsafe);
@@ -255,6 +257,8 @@ class MiniAppJsBridge {
     final btnColorJson = jsonEncode(themeParams['button_color'] ?? '#3390ec');
     final btnTextColorJson = jsonEncode(themeParams['button_text_color'] ?? '#ffffff');
     final vpHeight = viewportHeight.round();
+    final topSafe = topClearance > 0 ? topClearance.round() : 0;
+    final bottomSafe = bottomClearance > 0 ? bottomClearance.round() : 0;
 
     return '''
 (function() {
@@ -301,7 +305,7 @@ class MiniAppJsBridge {
     }
   }
 
-  function _applyThemeCssVars(tp, scheme, vpH, vpStableH) {
+  function _applyThemeCssVars(tp, scheme, vpH, vpStableH, topClear, bottomClear) {
     try {
       if (typeof document === 'undefined' || !document.documentElement) return;
       var rootStyle = document.documentElement.style;
@@ -311,6 +315,12 @@ class MiniAppJsBridge {
       }
       if (typeof vpStableH === 'number' && vpStableH > 0) {
         rootStyle.setProperty('--tg-viewport-stable-height', Math.round(vpStableH) + 'px');
+      }
+      if (typeof topClear === 'number' && topClear >= 0) {
+        rootStyle.setProperty('--theaver-header-clearance', Math.round(topClear) + 'px');
+      }
+      if (typeof bottomClear === 'number' && bottomClear >= 0) {
+        rootStyle.setProperty('--theaver-bottom-clearance', Math.round(bottomClear) + 'px');
       }
       if (tp && typeof tp === 'object') {
         var keys = Object.keys(tp);
@@ -325,7 +335,18 @@ class MiniAppJsBridge {
     } catch (e) {}
   }
 
-  _applyThemeCssVars(_theme, $colorSchemeJson, $vpHeight, $vpHeight);
+  _applyThemeCssVars(_theme, $colorSchemeJson, $vpHeight, $vpHeight, $topSafe, $bottomSafe);
+  try {
+    if (typeof document !== 'undefined' && document.head) {
+      var insetStyle = document.getElementById('__theaver_hud_insets');
+      if (!insetStyle) {
+        insetStyle = document.createElement('style');
+        insetStyle.id = '__theaver_hud_insets';
+        document.head.appendChild(insetStyle);
+      }
+      insetStyle.textContent = 'html { scroll-padding-top: var(--theaver-header-clearance, 0px); scroll-padding-bottom: var(--theaver-bottom-clearance, 0px); }';
+    }
+  } catch (e) {}
 
   window.__theaverWebAppReceive = function(eventType, eventData, reqId) {
     if (reqId && _pendingCallbacks[reqId]) {
@@ -598,6 +619,11 @@ class MiniAppJsBridge {
 
   window.Telegram.WebApp = webApp;
   window.__theaverWebAppInitialized = true;
+  try {
+    if (typeof window.CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('theaver_webapp_ready'));
+    }
+  } catch (e) {}
 })();
 ''';
   }
