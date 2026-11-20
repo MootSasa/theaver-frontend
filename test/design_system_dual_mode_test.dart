@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:theaver/models/theav_theme.dart';
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
@@ -1411,5 +1413,104 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+      'MiniAppTabsSwitcher dismisses on empty-area tap and applies subtle 3D gyroscope card tilt',
+      (tester) async {
+    final gyroController = StreamController<GyroscopeEvent>.broadcast();
+    MiniAppTabsSwitcher.debugGyroscopeStreamOverride = gyroController.stream;
+    addTearDown(() async {
+      MiniAppTabsSwitcher.debugGyroscopeStreamOverride = null;
+      MiniAppSessionController.instance.resetForTesting();
+      await gyroController.close();
+    });
+
+    final session1 = MiniAppSession(
+      id: 'gyro_tab_1',
+      launchData: const MiniAppLaunchData(
+        url: 'https://api.theaver.app/api/miniapps/studio',
+        initData: 'hash=studio',
+        botId: '1',
+        botUsername: 'BotMother',
+        botDisplayName: 'BotMother',
+        botIsVerified: true,
+      ),
+      botName: 'BotMother',
+      botUsername: 'BotMother',
+      isVerified: true,
+    );
+
+    final session2 = MiniAppSession(
+      id: 'gyro_tab_2',
+      launchData: const MiniAppLaunchData(
+        url: 'https://api.theaver.app/api/miniapps/wallet',
+        initData: 'hash=walt',
+        botId: '2',
+        botUsername: 'walt',
+        botDisplayName: 'Walt',
+        botIsVerified: true,
+      ),
+      botName: 'Walt',
+      botUsername: 'walt',
+      isVerified: true,
+    );
+
+    await tester.pumpWidget(
+      _buildHost(
+        glassMode: GlassMode.lite,
+        child: const Center(child: Text('Home')),
+      ),
+    );
+
+    MiniAppSessionController.instance.minimize(session1);
+    MiniAppSessionController.instance.minimize(session2);
+    MiniAppSessionController.instance.openSwitcher();
+    await tester.pumpAndSettle();
+
+    final switcherFinder = find.byKey(const ValueKey('mini_app_tabs_switcher'));
+    expect(switcherFinder, findsOneWidget);
+
+    final transformFinder = find.byKey(const ValueKey('mini_app_tab_transform_gyro_tab_2'));
+    expect(transformFinder, findsOneWidget);
+    final Matrix4 restingMatrix =
+        Matrix4.copy(tester.widget<Transform>(transformFinder).transform);
+
+    // Emit gyroscope impulse and advance a few frames -> card tilts subtly in 3D.
+    gyroController.add(GyroscopeEvent(0.9, -1.1, 0.0));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 64));
+
+    final Matrix4 tiltedMatrix =
+        tester.widget<Transform>(transformFinder).transform;
+    expect(tiltedMatrix, isNot(equals(restingMatrix)));
+    final translation = tiltedMatrix.getTranslation();
+    expect(translation.x.isFinite && translation.y.isFinite, isTrue);
+    expect(translation.x.abs(), lessThan(3.0));
+    expect(translation.y.abs(), lessThan(3.0));
+
+    // Gyro ticker decays back to resting orientation and stops cleanly without hanging pumpAndSettle.
+    await tester.pumpAndSettle();
+    final Matrix4 settledMatrix =
+        tester.widget<Transform>(transformFinder).transform;
+    expect(settledMatrix, equals(restingMatrix));
+
+    // Tapping empty space beside "Закрыть все вкладки" collapses switcher back to minimized dock bar.
+    await tester.tapAt(const Offset(24, 28));
+    await tester.pumpAndSettle();
+    expect(switcherFinder, findsNothing);
+    expect(MiniAppSessionController.instance.minimizedCount, 2);
+    expect(find.byKey(const ValueKey('minimized_mini_app_bar')), findsOneWidget);
+
+    // Re-open with a single card and tap empty area below the card -> dismisses cleanly.
+    MiniAppSessionController.instance.closeSession(session1);
+    MiniAppSessionController.instance.openSwitcher();
+    await tester.pumpAndSettle();
+    expect(switcherFinder, findsOneWidget);
+
+    await tester.tapAt(const Offset(400, 580));
+    await tester.pumpAndSettle();
+    expect(switcherFinder, findsNothing);
+    expect(MiniAppSessionController.instance.minimizedCount, 1);
   });
 }

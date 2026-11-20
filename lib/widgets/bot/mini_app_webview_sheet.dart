@@ -9,6 +9,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -17,6 +18,7 @@ import '../../services/browser_data_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
+import '../../services/power_saving_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
@@ -1584,6 +1586,10 @@ class MiniAppTabsSwitcher extends StatefulWidget {
   final ValueChanged<MiniAppSession> onCloseSession;
   final VoidCallback onCloseAll;
 
+  /// Test-only override for supplying synthetic gyroscope events without native sensors.
+  @visibleForTesting
+  static Stream<GyroscopeEvent>? debugGyroscopeStreamOverride;
+
   const MiniAppTabsSwitcher({
     super.key,
     required this.sessions,
@@ -1597,22 +1603,160 @@ class MiniAppTabsSwitcher extends StatefulWidget {
   State<MiniAppTabsSwitcher> createState() => _MiniAppTabsSwitcherState();
 }
 
-class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
+class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  static const double _kBasePitchX = 0.14;
+  static const double _kMaxGyroPitch = 0.052;
+  static const double _kMaxGyroYaw = 0.070;
+  static const double _kGyroDeadzone = 0.06;
+
+  StreamSubscription<GyroscopeEvent>? _gyroSub;
+  late final AnimationController _gyroTicker;
+  final ValueNotifier<Offset> _gyroTiltNotifier =
+      ValueNotifier<Offset>(Offset.zero);
+  double _targetPitch = 0.0;
+  double _targetYaw = 0.0;
+  double _currentPitch = 0.0;
+  double _currentYaw = 0.0;
+  bool _disableAnimations = false;
+
+  bool get _shouldUseGyro =>
+      PowerSavingProvider.instance.allowAnimations &&
+      !_disableAnimations &&
+      (MiniAppTabsSwitcher.debugGyroscopeStreamOverride != null ||
+          (!kIsWeb &&
+              (defaultTargetPlatform == TargetPlatform.android ||
+                  defaultTargetPlatform == TargetPlatform.iOS)));
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _gyroTicker = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 16),
+    )..addListener(_onGyroTick);
     MiniAppSessionController.instance.addListener(_onControllerUpdated);
     _captureMissingPreviews();
+    _syncGyroSubscription();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _disableAnimations = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    _syncGyroSubscription();
   }
 
   @override
   void didUpdateWidget(covariant MiniAppTabsSwitcher oldWidget) {
     super.didUpdateWidget(oldWidget);
     _captureMissingPreviews();
+    _syncGyroSubscription();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncGyroSubscription();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _stopGyroListening(resetTilt: false);
+      _gyroTicker.stop();
+    }
+  }
+
+  void _syncGyroSubscription() {
+    if (!_shouldUseGyro) {
+      _stopGyroListening(resetTilt: true);
+      return;
+    }
+    if (_gyroSub != null) return;
+    try {
+      final stream = MiniAppTabsSwitcher.debugGyroscopeStreamOverride ??
+          gyroscopeEventStream(samplingPeriod: SensorInterval.uiInterval);
+      _gyroSub = stream.listen(
+        (GyroscopeEvent event) {
+          if (!_shouldUseGyro) {
+            _stopGyroListening(resetTilt: true);
+            return;
+          }
+          if (event.x.abs() < _kGyroDeadzone &&
+              event.y.abs() < _kGyroDeadzone) {
+            return;
+          }
+          _targetPitch = (_targetPitch + event.x * 0.014)
+              .clamp(-_kMaxGyroPitch, _kMaxGyroPitch);
+          _targetYaw = (_targetYaw - event.y * 0.018)
+              .clamp(-_kMaxGyroYaw, _kMaxGyroYaw);
+          if (!_gyroTicker.isAnimating && mounted) {
+            _gyroTicker.repeat();
+          }
+        },
+        onError: (_) {},
+        cancelOnError: false,
+      );
+    } catch (_) {}
+  }
+
+  void _stopGyroListening({bool resetTilt = true}) {
+    _gyroSub?.cancel();
+    _gyroSub = null;
+    if (resetTilt) {
+      if (_gyroTicker.isAnimating) {
+        _gyroTicker.stop();
+      }
+      _targetPitch = 0.0;
+      _targetYaw = 0.0;
+      _currentPitch = 0.0;
+      _currentYaw = 0.0;
+      if (_gyroTiltNotifier.value != Offset.zero) {
+        _gyroTiltNotifier.value = Offset.zero;
+      }
+    }
+  }
+
+  void _onGyroTick() {
+    if (!mounted) return;
+    _targetPitch *= 0.965;
+    _targetYaw *= 0.965;
+
+    final double nextPitch =
+        _currentPitch + (_targetPitch - _currentPitch) * 0.14;
+    final double nextYaw = _currentYaw + (_targetYaw - _currentYaw) * 0.14;
+    _currentPitch = nextPitch;
+    _currentYaw = nextYaw;
+
+    final Offset prev = _gyroTiltNotifier.value;
+    if ((prev.dx - nextPitch).abs() >= 0.0003 ||
+        (prev.dy - nextYaw).abs() >= 0.0003) {
+      _gyroTiltNotifier.value = Offset(nextPitch, nextYaw);
+    }
+
+    if (_currentPitch.abs() < 0.0005 &&
+        _currentYaw.abs() < 0.0005 &&
+        _targetPitch.abs() < 0.0008 &&
+        _targetYaw.abs() < 0.0008) {
+      _targetPitch = 0.0;
+      _targetYaw = 0.0;
+      _currentPitch = 0.0;
+      _currentYaw = 0.0;
+      if (_gyroTiltNotifier.value != Offset.zero) {
+        _gyroTiltNotifier.value = Offset.zero;
+      }
+      if (_gyroTicker.isAnimating) {
+        _gyroTicker.stop();
+      }
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopGyroListening(resetTilt: false);
+    _gyroTicker.dispose();
+    _gyroTiltNotifier.dispose();
     MiniAppSessionController.instance.removeListener(_onControllerUpdated);
     super.dispose();
   }
@@ -1621,6 +1765,11 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  void _handleDismissTap() {
+    HapticUtils.tap();
+    widget.onDismiss();
   }
 
   void _captureMissingPreviews() {
@@ -1648,7 +1797,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
     );
     Widget backdrop = GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: widget.onDismiss,
+      onTap: _handleDismissTap,
       child: ColoredBox(color: dimTint),
     );
     if (blurFilter != null) {
@@ -1726,29 +1875,36 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
                   ((availH - mq.padding.top - 72.0 - stackHeight) * 0.30)
                       .clamp(4.0, 48.0);
 
-              return SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  mq.padding.top + 64 + topPad,
-                  16,
-                  math.max(24.0, mq.padding.bottom + 16),
-                ),
-                child: SizedBox(
-                  height: stackHeight,
-                  width: double.infinity,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      for (int i = 0; i < n; i++)
-                        _buildStackedCard(
-                          context,
-                          session: widget.sessions[i],
-                          top: i * stepY,
-                          cardHeight: cardHeight,
-                          resolved: resolved,
-                          style: style,
-                        ),
-                    ],
+              return GestureDetector(
+                key: const ValueKey('mini_app_tabs_empty_area_detector'),
+                behavior: HitTestBehavior.translucent,
+                onTap: _handleDismissTap,
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    mq.padding.top + 64 + topPad,
+                    16,
+                    math.max(24.0, mq.padding.bottom + 16),
+                  ),
+                  child: SizedBox(
+                    height: stackHeight,
+                    width: double.infinity,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        for (int i = 0; i < n; i++)
+                          _buildStackedCard(
+                            context,
+                            session: widget.sessions[i],
+                            index: i,
+                            totalCount: n,
+                            top: i * stepY,
+                            cardHeight: cardHeight,
+                            resolved: resolved,
+                            style: style,
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -1770,6 +1926,8 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
   Widget _buildStackedCard(
     BuildContext context, {
     required MiniAppSession session,
+    required int index,
+    required int totalCount,
     required double top,
     required double cardHeight,
     required MiniAppThemeColors resolved,
@@ -1804,9 +1962,8 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
             unameLower == 'botfather' ||
             unameLower == 'walt');
 
-    final Matrix4 tiltMatrix = Matrix4.identity()
-      ..setEntry(3, 2, 0.0010)
-      ..rotateX(0.14);
+    final double depthFactor =
+        totalCount <= 1 ? 1.0 : (0.82 + 0.18 * (index / (totalCount - 1)));
 
     return Positioned(
       top: top,
@@ -1817,127 +1974,148 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
         key: ValueKey('mini_app_tab_dismiss_${session.id}'),
         direction: DismissDirection.horizontal,
         onDismissed: (_) => widget.onCloseSession(session),
-        child: Transform(
-          alignment: Alignment.topCenter,
-          transform: tiltMatrix,
-          child: GestureDetector(
-            key: ValueKey('mini_app_tab_card_${session.id}'),
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              HapticUtils.selection();
-              widget.onSelectSession(session);
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: cardBodyBg,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: cardDivider, width: 0.8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: style.isDark ? 0.45 : 0.16),
-                    blurRadius: 24,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: cardHeaderBg,
-                      border: Border(
-                        bottom: BorderSide(color: cardDivider, width: 0.75),
-                      ),
+        child: ValueListenableBuilder<Offset>(
+          valueListenable: _gyroTiltNotifier,
+          child: RepaintBoundary(
+            child: GestureDetector(
+              key: ValueKey('mini_app_tab_card_${session.id}'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.selection();
+                widget.onSelectSession(session);
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: cardBodyBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: cardDivider, width: 0.8),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black
+                          .withValues(alpha: style.isDark ? 0.45 : 0.16),
+                      blurRadius: 24,
+                      offset: const Offset(0, 8),
                     ),
-                    child: Material(
-                      type: MaterialType.transparency,
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 46,
-                            height: 48,
-                            child: Semantics(
-                              button: true,
-                              label: 'Закрыть',
-                              child: InkWell(
-                                key: ValueKey('mini_app_tab_close_${session.id}'),
-                                borderRadius: BorderRadius.circular(24),
-                                onTap: () {
-                                  HapticUtils.tap();
-                                  widget.onCloseSession(session);
-                                },
-                                child: Center(
-                                  child: Icon(
-                                    Icons.close_rounded,
-                                    size: 22,
-                                    color: cardHeaderFg,
+                  ],
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: cardHeaderBg,
+                        border: Border(
+                          bottom: BorderSide(color: cardDivider, width: 0.75),
+                        ),
+                      ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 46,
+                              height: 48,
+                              child: Semantics(
+                                button: true,
+                                label: 'Закрыть',
+                                child: InkWell(
+                                  key: ValueKey(
+                                      'mini_app_tab_close_${session.id}'),
+                                  borderRadius: BorderRadius.circular(24),
+                                  onTap: () {
+                                    HapticUtils.tap();
+                                    widget.onCloseSession(session);
+                                  },
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.close_rounded,
+                                      size: 22,
+                                      color: cardHeaderFg,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                          Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.only(right: 14),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (session.isBrowser) ...[
-                                    Icon(
-                                      session.currentUrl
-                                              .toLowerCase()
-                                              .startsWith('https://')
-                                          ? Icons.lock_outline_rounded
-                                          : Icons.public_rounded,
-                                      size: 16,
-                                      color: cardHeaderFg.withValues(alpha: 0.78),
-                                    ),
-                                    const SizedBox(width: 6),
-                                  ],
-                                  Flexible(
-                                    child: Text(
-                                      session.displayTitle,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 16.5,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: -0.15,
-                                        color: cardHeaderFg,
-                                        decoration: TextDecoration.none,
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.only(right: 14),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (session.isBrowser) ...[
+                                      Icon(
+                                        session.currentUrl
+                                                .toLowerCase()
+                                                .startsWith('https://')
+                                            ? Icons.lock_outline_rounded
+                                            : Icons.public_rounded,
+                                        size: 16,
+                                        color:
+                                            cardHeaderFg.withValues(alpha: 0.78),
+                                      ),
+                                      const SizedBox(width: 6),
+                                    ],
+                                    Flexible(
+                                      child: Text(
+                                        session.displayTitle,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 16.5,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: -0.15,
+                                          color: cardHeaderFg,
+                                          decoration: TextDecoration.none,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  if (isVerified) ...[
-                                    const SizedBox(width: 6),
-                                    MiniAppVerifiedSeal(
-                                      size: 17,
-                                      color: sealColor,
-                                      checkColor: sealCheckColor,
-                                    ),
+                                    if (isVerified) ...[
+                                      const SizedBox(width: 6),
+                                      MiniAppVerifiedSeal(
+                                        size: 17,
+                                        color: sealColor,
+                                        checkColor: sealCheckColor,
+                                      ),
+                                    ],
                                   ],
-                                ],
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  Expanded(
-                    child: _MiniAppSessionCardPreview(
-                      key: ValueKey('mini_app_tab_preview_${session.id}'),
-                      session: session,
-                      resolved: resolved,
+                    Expanded(
+                      child: _MiniAppSessionCardPreview(
+                        key: ValueKey('mini_app_tab_preview_${session.id}'),
+                        session: session,
+                        resolved: resolved,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
+          builder: (context, gyroTilt, cardChild) {
+            final double pitch = _kBasePitchX + gyroTilt.dx * depthFactor;
+            final double yaw = gyroTilt.dy * depthFactor;
+            final double shiftX = yaw * 18.0;
+            final double shiftY = (gyroTilt.dx * depthFactor) * 10.0;
+            final Matrix4 tiltMatrix = Matrix4.identity()
+              ..translateByDouble(shiftX, shiftY, 0.0, 1.0)
+              ..setEntry(3, 2, 0.0011)
+              ..rotateX(pitch)
+              ..rotateY(yaw);
+            return Transform(
+              key: ValueKey('mini_app_tab_transform_${session.id}'),
+              alignment: Alignment.topCenter,
+              transform: tiltMatrix,
+              child: cardChild,
+            );
+          },
         ),
       ),
     );
