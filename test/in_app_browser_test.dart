@@ -353,5 +353,72 @@ void main() {
       expect(find.byType(MiniAppVerifiedSeal), findsOneWidget);
       expect(find.text('@walt • mini app'), findsOneWidget);
     });
+
+    test('MiniAppSession.buildBrowserSafeInsetsScript offsets fixed and sticky web controls', () {
+      final js = MiniAppSession.buildBrowserSafeInsetsScript(
+        topPx: 88,
+        bottomPx: 96,
+      );
+      expect(js, contains('window.__theaverTopClear = 88;'));
+      expect(js, contains('window.__theaverBottomClear = 96;'));
+      expect(js, contains('window.__theaverSyncSafeZones(88, 96);'));
+      expect(js, contains('--theaver-header-clearance'));
+      expect(js, contains('--theaver-bottom-clearance'));
+      expect(js, contains('scroll-padding-top:'));
+      expect(js, contains('scroll-padding-bottom:'));
+      expect(js, contains("'top-bar'"));
+      expect(js, contains("'top-float'"));
+      expect(js, contains("'bottom-bar'"));
+      expect(js, contains("'bottom-float'"));
+      expect(js, contains("'full-drawer'"));
+      expect(js, contains('MutationObserver'));
+    });
+
+    testWidgets(
+      'InAppBrowserSheet updates browserTopClearance dynamically when Find-in-Page opens and closes',
+      (tester) async {
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://example.org/app',
+            initData: '',
+          ),
+          isBrowser: true,
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(400, 800),
+                padding: EdgeInsets.only(top: 24, bottom: 16),
+              ),
+              child: InAppBrowserSheet(session: session),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(session.browserTopClearance, closeTo(84.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(84.0, 0.01));
+
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Найти на странице'));
+        await tester.pumpAndSettle();
+
+        expect(session.browserTopClearance, closeTo(136.0, 0.01));
+
+        final findBarCloseFinder = find.descendant(
+          of: find.ancestor(
+            of: find.byType(TextField),
+            matching: find.byType(WebViewFloatingCapsule),
+          ),
+          matching: find.byIcon(Icons.close_rounded),
+        );
+        await tester.tap(findBarCloseFinder);
+        await tester.pumpAndSettle();
+
+        expect(session.browserTopClearance, closeTo(84.0, 0.01));
+      },
+    );
   });
 }

@@ -145,22 +145,24 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     BrowserDataService.instance.addListener(_onBrowserDataChanged);
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final padding = MediaQuery.paddingOf(context);
-    final double nextTop = padding.top + 60.0;
+  void _updateBrowserSafeClearances({EdgeInsets? paddingOverride}) {
+    final padding = paddingOverride ?? MediaQuery.paddingOf(context);
+    final double nextTop = padding.top + (_isFindOpen ? 112.0 : 60.0);
     final double nextBottom = padding.bottom + 68.0;
     final bool clearanceChanged =
         (nextTop - _session.browserTopClearance).abs() > 0.5 ||
             (nextBottom - _session.browserBottomClearance).abs() > 0.5;
     _session.browserTopClearance = nextTop;
     _session.browserBottomClearance = nextBottom;
-    if (clearanceChanged &&
-        _session.isWebContentReady &&
-        _session.controller != null) {
+    if (clearanceChanged && _session.controller != null) {
       unawaited(_session.injectBrowserSafeInsets());
     }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateBrowserSafeClearances();
 
     final nextRouteAnim = ModalRoute.of(context)?.animation;
     if (!identical(nextRouteAnim, _routeAnimation)) {
@@ -648,6 +650,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               onTap: () {
                 _closeMenu();
                 setState(() => _isFindOpen = true);
+                _updateBrowserSafeClearances();
               },
             ),
             _browserMenuItem(
@@ -842,10 +845,13 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                       size: 19,
                       color: resolved.headerFg,
                     ),
-                    onPressed: () => setState(() {
-                      _isFindOpen = false;
-                      _findStatus = '';
-                    }),
+                    onPressed: () {
+                      setState(() {
+                        _isFindOpen = false;
+                        _findStatus = '';
+                      });
+                      _updateBrowserSafeClearances();
+                    },
                   ),
                 ],
               ),

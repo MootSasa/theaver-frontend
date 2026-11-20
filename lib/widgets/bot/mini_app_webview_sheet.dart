@@ -242,6 +242,7 @@ class MiniAppSession {
   bool isDesktopMode = false;
   double browserTopClearance = 64.0;
   double browserBottomClearance = 76.0;
+  bool _earlyBrowserInsetsApplied = false;
 
   VoidCallback? onSheetStateChanged;
   VoidCallback? onPendingLaunchResolved;
@@ -339,43 +340,285 @@ class MiniAppSession {
             : 'Mini App');
   }
 
-  Future<void> injectBrowserSafeInsets() async {
-    final ctrl = controller;
-    if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
-    final int topPx = browserTopClearance.round().clamp(0, 240);
-    final int bottomPx = browserBottomClearance.round().clamp(0, 240);
-    final js = '''
+  /// Builds idempotent JS that offsets page flow, locked app shells, and
+  /// fixed/sticky headers, floating buttons, drawers, and footers clear of
+  /// the floating top (`topPx`) and bottom (`bottomPx`) browser controls.
+  static String buildBrowserSafeInsetsScript({
+    required int topPx,
+    required int bottomPx,
+  }) {
+    final int safeTop = topPx.clamp(0, 320);
+    final int safeBottom = bottomPx.clamp(0, 320);
+    const String template = r'''
 (function() {
   try {
     if (!document || !document.documentElement) return;
-    var rootStyle = document.documentElement.style;
-    rootStyle.setProperty('--theaver-header-clearance', '${topPx}px');
-    rootStyle.setProperty('--theaver-bottom-clearance', '${bottomPx}px');
-    var st = document.getElementById('__theaver_browser_insets');
-    if (!st && document.head) {
-      st = document.createElement('style');
-      st.id = '__theaver_browser_insets';
-      document.head.appendChild(st);
-    }
-    if (st) {
-      st.textContent = 'html { scroll-padding-top: ${topPx}px !important; scroll-padding-bottom: ${bottomPx}px !important; }';
-    }
-    if (document.body) {
-      var cs = window.getComputedStyle(document.body);
-      var pt = parseFloat(cs.paddingTop) || 0;
-      var pb = parseFloat(cs.paddingBottom) || 0;
-      if (!document.body.dataset.theaverPadTopApplied && pt < $topPx) {
-        document.body.dataset.theaverPadTopApplied = '1';
-        document.body.style.paddingTop = '${topPx}px';
+    window.__theaverTopClear = __TOP_PX__;
+    window.__theaverBottomClear = __BOTTOM_PX__;
+
+    window.__theaverSyncSafeZones = function(topClear, bottomClear) {
+      try {
+        if (!document || !document.documentElement) return;
+        var tc = Math.max(0, Number(topClear) || 0);
+        var bc = Math.max(0, Number(bottomClear) || 0);
+        var rootStyle = document.documentElement.style;
+        rootStyle.setProperty('--theaver-header-clearance', tc + 'px');
+        rootStyle.setProperty('--theaver-bottom-clearance', bc + 'px');
+
+        var st = document.getElementById('__theaver_browser_insets');
+        if (!st && document.head) {
+          st = document.createElement('style');
+          st.id = '__theaver_browser_insets';
+          document.head.appendChild(st);
+        }
+        if (st) {
+          st.textContent =
+            ':root { --theaver-header-clearance: ' + tc + 'px; --theaver-bottom-clearance: ' + bc + 'px; } ' +
+            'html { scroll-padding-top: ' + tc + 'px !important; scroll-padding-bottom: ' + bc + 'px !important; }';
+        }
+
+        var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (!document.body || vw <= 0 || vh <= 0) return;
+
+        var body = document.body;
+        var htmlCs = window.getComputedStyle(document.documentElement);
+        var bodyCs = window.getComputedStyle(body);
+        if (body.dataset.theaverBasePt === undefined) {
+          body.dataset.theaverBasePt = String(parseFloat(bodyCs.paddingTop) || 0);
+          body.dataset.theaverBasePb = String(parseFloat(bodyCs.paddingBottom) || 0);
+        }
+        var basePt = parseFloat(body.dataset.theaverBasePt) || 0;
+        var basePb = parseFloat(body.dataset.theaverBasePb) || 0;
+        var nextPt = basePt <= 180 ? basePt + tc : Math.max(basePt, tc);
+        var nextPb = basePb <= 180 ? basePb + bc : Math.max(basePb, bc);
+        body.style.setProperty('box-sizing', 'border-box', 'important');
+        body.style.setProperty('padding-top', Math.round(nextPt) + 'px', 'important');
+        body.style.setProperty('padding-bottom', Math.round(nextPb) + 'px', 'important');
+
+        var isLockedViewport =
+          (htmlCs.overflowY === 'hidden' || bodyCs.overflowY === 'hidden') &&
+          document.documentElement.scrollHeight <= vh + 8;
+        if (isLockedViewport) {
+          var children = body.children;
+          for (var c = 0; c < children.length; c++) {
+            var ch = children[c];
+            if (!ch || ch.tagName === 'SCRIPT' || ch.tagName === 'STYLE') continue;
+            if (
+              ch.id === 'app' ||
+              ch.id === 'root' ||
+              ch.id === '__next' ||
+              ch.tagName === 'MAIN'
+            ) {
+              var chRect = ch.getBoundingClientRect();
+              var chCs = window.getComputedStyle(ch);
+              if (
+                chRect.height >= vh - 4 &&
+                (chCs.overflowY === 'hidden' || chCs.overflow === 'hidden')
+              ) {
+                ch.style.setProperty('box-sizing', 'border-box', 'important');
+                ch.style.setProperty('max-height', '100%', 'important');
+              }
+            }
+          }
+        }
+
+        function hasOpaqueBg(cs) {
+          var bg = cs.backgroundColor || '';
+          var m = bg.match(/rgba?\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)\s*[,\s]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+))?/i);
+          if (m) {
+            var alpha = m[4] !== undefined ? parseFloat(m[4]) : 1.0;
+            if (!isNaN(alpha) && alpha > 0.75) return true;
+          }
+          var bf = cs.backdropFilter || cs.webkitBackdropFilter || '';
+          if (bf && bf !== 'none') return true;
+          return false;
+        }
+
+        function parseNum(v) {
+          var n = parseFloat(v);
+          return isNaN(n) || !isFinite(n) ? null : n;
+        }
+
+        var all = body.querySelectorAll('*');
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (!el || !el.tagName) continue;
+          var tag = el.tagName;
+          if (
+            tag === 'SCRIPT' ||
+            tag === 'STYLE' ||
+            tag === 'LINK' ||
+            tag === 'META' ||
+            tag === 'SVG' ||
+            tag === 'PATH'
+          ) {
+            continue;
+          }
+          if (
+            el.parentElement &&
+            el.parentElement.closest('[data-theaver-safe-zone-applied="1"]')
+          ) {
+            continue;
+          }
+
+          var cs = window.getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+
+          var pos = cs.position;
+          var existingRole = el.dataset.theaverSafeRole || '';
+          if (!existingRole && pos !== 'fixed' && pos !== 'sticky') continue;
+
+          var rect = el.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) continue;
+
+          if (el.dataset.theaverOrigRecorded !== '1') {
+            el.dataset.theaverOrigRecorded = '1';
+            el.dataset.theaverOrigTop = cs.top === 'auto' ? 'auto' : String(parseFloat(cs.top) || 0);
+            el.dataset.theaverOrigBottom = cs.bottom === 'auto' ? 'auto' : String(parseFloat(cs.bottom) || 0);
+            el.dataset.theaverOrigPt = String(parseFloat(cs.paddingTop) || 0);
+            el.dataset.theaverOrigPb = String(parseFloat(cs.paddingBottom) || 0);
+            el.dataset.theaverOrigH = String(rect.height);
+            el.dataset.theaverOrigStyleH = el.style.height || '';
+            el.dataset.theaverOrigMaxH = cs.maxHeight || 'none';
+            el.dataset.theaverOrigMinH = cs.minHeight || '0px';
+            el.dataset.theaverOrigBox = cs.boxSizing || 'content-box';
+          }
+
+          var origTop = el.dataset.theaverOrigTop === 'auto' ? null : parseNum(el.dataset.theaverOrigTop);
+          var origBottom = el.dataset.theaverOrigBottom === 'auto' ? null : parseNum(el.dataset.theaverOrigBottom);
+          var origPt = parseFloat(el.dataset.theaverOrigPt) || 0;
+          var origPb = parseFloat(el.dataset.theaverOrigPb) || 0;
+          var origH = parseFloat(el.dataset.theaverOrigH) || 0;
+          var origStyleH = el.dataset.theaverOrigStyleH || '';
+          var origMaxH = parseNum(el.dataset.theaverOrigMaxH);
+          var origBox = el.dataset.theaverOrigBox || 'content-box';
+
+          var role = existingRole;
+          if (!role) {
+            if (
+              pos === 'fixed' &&
+              rect.height >= vh * 0.60 &&
+              rect.top <= 4 &&
+              rect.bottom >= vh - 4 &&
+              el.children.length > 0 &&
+              tag !== 'VIDEO' &&
+              tag !== 'CANVAS' &&
+              tag !== 'IMG'
+            ) {
+              role = 'full-drawer';
+            } else if (
+              rect.height >= 12 &&
+              rect.height < vh * 0.50 &&
+              origTop !== null &&
+              origTop >= -4 &&
+              origTop < tc &&
+              (origBottom === null || rect.bottom < vh * 0.55)
+            ) {
+              role =
+                pos === 'fixed' &&
+                origTop >= -2 &&
+                origTop <= 4 &&
+                rect.width >= vw * 0.85 &&
+                hasOpaqueBg(cs)
+                  ? 'top-bar'
+                  : 'top-float';
+            } else if (
+              rect.height >= 12 &&
+              rect.height < vh * 0.50 &&
+              origBottom !== null &&
+              origBottom >= -4 &&
+              origBottom < bc &&
+              (origTop === null || rect.top > vh * 0.45)
+            ) {
+              role =
+                pos === 'fixed' &&
+                origBottom >= -2 &&
+                origBottom <= 4 &&
+                rect.width >= vw * 0.85 &&
+                hasOpaqueBg(cs)
+                  ? 'bottom-bar'
+                  : 'bottom-float';
+            }
+          }
+
+          if (!role) continue;
+          el.dataset.theaverSafeRole = role;
+          el.dataset.theaverSafeZoneApplied = '1';
+
+          if (role === 'full-drawer') {
+            el.style.setProperty('box-sizing', 'border-box', 'important');
+            el.style.setProperty('padding-top', Math.round(origPt + tc) + 'px', 'important');
+            el.style.setProperty('padding-bottom', Math.round(origPb + bc) + 'px', 'important');
+          } else if (role === 'top-bar') {
+            el.style.setProperty('box-sizing', 'border-box', 'important');
+            el.style.setProperty('padding-top', Math.round(origPt + tc) + 'px', 'important');
+            if (origH > 0) {
+              var nextTopBarH = Math.round(origH + tc);
+              el.style.setProperty('min-height', nextTopBarH + 'px', 'important');
+              if (origBox === 'border-box' || origStyleH !== '') {
+                el.style.setProperty('height', nextTopBarH + 'px', 'important');
+              }
+              if (origMaxH !== null && origMaxH < nextTopBarH) {
+                el.style.setProperty('max-height', nextTopBarH + 'px', 'important');
+              }
+            }
+          } else if (role === 'top-float' && origTop !== null) {
+            el.style.setProperty('top', Math.round(origTop + tc) + 'px', 'important');
+          } else if (role === 'bottom-bar') {
+            el.style.setProperty('box-sizing', 'border-box', 'important');
+            el.style.setProperty('padding-bottom', Math.round(origPb + bc) + 'px', 'important');
+            if (origH > 0) {
+              var nextBottomBarH = Math.round(origH + bc);
+              el.style.setProperty('min-height', nextBottomBarH + 'px', 'important');
+              if (origBox === 'border-box' || origStyleH !== '') {
+                el.style.setProperty('height', nextBottomBarH + 'px', 'important');
+              }
+              if (origMaxH !== null && origMaxH < nextBottomBarH) {
+                el.style.setProperty('max-height', nextBottomBarH + 'px', 'important');
+              }
+            }
+          } else if (role === 'bottom-float' && origBottom !== null) {
+            el.style.setProperty('bottom', Math.round(origBottom + bc) + 'px', 'important');
+          }
+        }
+      } catch (e) {}
+    };
+
+    window.__theaverSyncSafeZones(__TOP_PX__, __BOTTOM_PX__);
+
+    if (!window.__theaverSafeZoneObserverInstalled) {
+      window.__theaverSafeZoneObserverInstalled = true;
+      var syncTimer = null;
+      var scheduleSync = function() {
+        if (syncTimer) return;
+        syncTimer = setTimeout(function() {
+          syncTimer = null;
+          if (typeof window.__theaverSyncSafeZones === 'function') {
+            window.__theaverSyncSafeZones(window.__theaverTopClear || 0, window.__theaverBottomClear || 0);
+          }
+        }, 180);
+      };
+      if (typeof MutationObserver === 'function') {
+        var obs = new MutationObserver(scheduleSync);
+        obs.observe(document.documentElement, { childList: true, subtree: true });
       }
-      if (!document.body.dataset.theaverPadBottomApplied && pb < $bottomPx) {
-        document.body.dataset.theaverPadBottomApplied = '1';
-        document.body.style.paddingBottom = '${bottomPx}px';
-      }
+      window.addEventListener('resize', scheduleSync, { passive: true });
     }
   } catch (e) {}
 })();
 ''';
+    return template
+        .replaceAll('__TOP_PX__', safeTop.toString())
+        .replaceAll('__BOTTOM_PX__', safeBottom.toString());
+  }
+
+  Future<void> injectBrowserSafeInsets() async {
+    final ctrl = controller;
+    if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
+    final int topPx = browserTopClearance.round().clamp(0, 320);
+    final int bottomPx = browserBottomClearance.round().clamp(0, 320);
+    final js = buildBrowserSafeInsetsScript(topPx: topPx, bottomPx: bottomPx);
     try {
       await ctrl.runJavaScript(js);
     } catch (_) {}
@@ -412,8 +655,13 @@ class MiniAppSession {
           NavigationDelegate(
             onProgress: (p) {
               updateLoadProgress(p);
+              if (p >= 45 && !_earlyBrowserInsetsApplied) {
+                _earlyBrowserInsetsApplied = true;
+                unawaited(injectBrowserSafeInsets());
+              }
             },
             onPageStarted: (urlStr) {
+              _earlyBrowserInsetsApplied = false;
               if (urlStr.trim().isNotEmpty) {
                 currentUrl = urlStr.trim();
               }
@@ -426,6 +674,11 @@ class MiniAppSession {
                 currentUrl = next;
                 onSheetStateChanged?.call();
                 MiniAppSessionController.instance.notifySessionUpdated();
+                Future<void>.delayed(const Duration(milliseconds: 120), () {
+                  if (controller != null) {
+                    unawaited(injectBrowserSafeInsets());
+                  }
+                });
               }
             },
             onPageFinished: (urlStr) async {
