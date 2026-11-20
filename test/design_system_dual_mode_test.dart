@@ -1515,4 +1515,108 @@ void main() {
     expect(switcherFinder, findsNothing);
     expect(MiniAppSessionController.instance.minimizedCount, 1);
   });
+
+  testWidgets(
+      'MiniAppTabsSwitcher closes on native system back without popping underlying route and pauses gyro during scroll',
+      (tester) async {
+    final gyroController = StreamController<GyroscopeEvent>.broadcast();
+    MiniAppTabsSwitcher.debugGyroscopeStreamOverride = gyroController.stream;
+    MiniAppSessionController.instance.ensureInitialized();
+    addTearDown(() async {
+      MiniAppTabsSwitcher.debugGyroscopeStreamOverride = null;
+      MiniAppSessionController.instance.resetForTesting();
+      await gyroController.close();
+    });
+
+    await tester.pumpWidget(
+      _buildHost(
+        glassMode: GlassMode.lite,
+        child: Builder(
+          builder: (context) => Center(
+            child: ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const Scaffold(
+                      body: Center(child: Text('Chat Screen')),
+                    ),
+                  ),
+                );
+              },
+              child: const Text('OpenChat'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('OpenChat'));
+    await tester.pumpAndSettle();
+    expect(find.text('Chat Screen'), findsOneWidget);
+
+    for (int i = 0; i < 6; i++) {
+      final session = MiniAppSession(
+        id: 'back_tab_$i',
+        launchData: MiniAppLaunchData(
+          url: 'https://api.theaver.app/api/miniapps/studio?tab=$i',
+          initData: 'hash=$i',
+          botId: 'bot_$i',
+          botUsername: 'bot_$i',
+          botDisplayName: 'Mini App $i',
+        ),
+        botName: 'Mini App $i',
+        botUsername: 'bot_$i',
+      );
+      MiniAppSessionController.instance.minimize(session);
+    }
+    MiniAppSessionController.instance.openSwitcher();
+    await tester.pumpAndSettle();
+
+    final switcherFinder = find.byKey(const ValueKey('mini_app_tabs_switcher'));
+    expect(switcherFinder, findsOneWidget);
+
+    final scrollFinder = find
+        .descendant(
+          of: switcherFinder,
+          matching: find.byType(SingleChildScrollView),
+        )
+        .first;
+
+    // Start scrolling vertically, emit gyro events mid-scroll -> gyro is paused while scrolling.
+    final lastCardTransformFinder =
+        find.byKey(const ValueKey('mini_app_tab_transform_back_tab_5'));
+    await tester.drag(scrollFinder, const Offset(0, -320));
+    await tester.pumpAndSettle();
+    expect(lastCardTransformFinder, findsOneWidget);
+
+    final Matrix4 restingAfterScroll = Matrix4.copy(
+      tester.widget<Transform>(lastCardTransformFinder).transform,
+    );
+    final gesture = await tester.startGesture(const Offset(400, 300));
+    await gesture.moveBy(const Offset(0, -40));
+    await tester.pump();
+    gyroController.add(GyroscopeEvent(1.2, -1.2, 0.0));
+    await tester.pump(const Duration(milliseconds: 32));
+    expect(
+      tester.widget<Transform>(lastCardTransformFinder).transform,
+      equals(restingAfterScroll),
+    );
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    // First system Back closes MiniAppTabsSwitcher without popping 'Chat Screen'.
+    final bool handled = await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(handled, isTrue);
+    expect(switcherFinder, findsNothing);
+    expect(find.text('Chat Screen'), findsOneWidget);
+    expect(MiniAppSessionController.instance.minimizedCount, 6);
+
+    // Second system Back pops 'Chat Screen' back to home route.
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('Chat Screen'), findsNothing);
+    expect(find.text('OpenChat'), findsOneWidget);
+  });
 }

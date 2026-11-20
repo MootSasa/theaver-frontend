@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -199,6 +200,26 @@ class MiniAppSession {
   Uint8List? previewImageBytes;
   MiniAppDomPreview? domPreview;
   Future<void>? _activeSnapshotFuture;
+  Uint8List? _cachedPreviewBytesRef;
+  ImageProvider? _cachedPreviewProvider;
+
+  /// Cached downscaled [ImageProvider] for [previewImageBytes] so scroll frames
+  /// reuse decoded raster textures instead of recreating [MemoryImage] instances.
+  ImageProvider? get previewImageProvider {
+    final bytes = previewImageBytes;
+    if (bytes == null || bytes.isEmpty) {
+      _cachedPreviewBytesRef = null;
+      _cachedPreviewProvider = null;
+      return null;
+    }
+    if (!identical(_cachedPreviewBytesRef, bytes) ||
+        _cachedPreviewProvider == null) {
+      _cachedPreviewBytesRef = bytes;
+      _cachedPreviewProvider =
+          ResizeImage.resizeIfNeeded(540, null, MemoryImage(bytes));
+    }
+    return _cachedPreviewProvider;
+  }
   bool allowVerticalSwipe = true;
   bool backButtonVisible = false;
   bool settingsButtonVisible = false;
@@ -272,6 +293,7 @@ class MiniAppSession {
         currentUrl = (initialUrl != null && initialUrl.trim().isNotEmpty)
             ? initialUrl.trim()
             : launchData.url {
+    MiniAppSessionController.instance.ensureInitialized();
     if (pendingLaunchFuture != null) {
       isLaunchPending = true;
       pendingLaunchFuture.then((resolved) {
@@ -744,16 +766,58 @@ class MiniAppSession {
   }
 }
 
+class _MiniAppSwitcherBackObserver with WidgetsBindingObserver {
+  _MiniAppSwitcherBackObserver(this._controller);
+
+  final MiniAppSessionController _controller;
+
+  @override
+  Future<bool> didPopRoute() async => _controller.handleSystemBack();
+}
+
 /// Coordinates multiple minimized [MiniAppSession] entries, the bottom stacked
 /// capsule bar, and the 3D tabs switcher across navigation routes.
 class MiniAppSessionController extends ChangeNotifier {
-  MiniAppSessionController._();
+  MiniAppSessionController._() {
+    ensureInitialized();
+  }
 
   static final MiniAppSessionController instance = MiniAppSessionController._();
 
   final List<MiniAppSession> _minimizedSessions = <MiniAppSession>[];
   bool _isSwitcherOpen = false;
   int _activeFullScreenCount = 0;
+  bool _backObserverRegistered = false;
+  late final _MiniAppSwitcherBackObserver _backObserver =
+      _MiniAppSwitcherBackObserver(this);
+
+  /// Registers a high-priority [WidgetsBindingObserver] before [MaterialApp]
+  /// mounts so native Android system Back closes [MiniAppTabsSwitcher] first.
+  void ensureInitialized() {
+    if (_backObserverRegistered) return;
+    try {
+      WidgetsBinding.instance.addObserver(_backObserver);
+      _backObserverRegistered = true;
+    } catch (_) {}
+  }
+
+  /// Handles native back / Escape when [MiniAppTabsSwitcher] is open.
+  bool handleSystemBack() {
+    if (!isSwitcherOpen) return false;
+    HapticUtils.tap();
+    closeSwitcher();
+    return true;
+  }
+
+  void _syncPlatformBackState() {
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        isSwitcherOpen) {
+      try {
+        SystemNavigator.setFrameworkHandlesBack(true);
+      } catch (_) {}
+    }
+  }
 
   List<MiniAppSession> get minimizedSessions =>
       List<MiniAppSession>.unmodifiable(_minimizedSessions);
@@ -841,6 +905,7 @@ class MiniAppSessionController extends ChangeNotifier {
   void openSwitcher() {
     if (_minimizedSessions.isEmpty || _isSwitcherOpen) return;
     _isSwitcherOpen = true;
+    _syncPlatformBackState();
     notifyListeners();
   }
 
@@ -869,6 +934,7 @@ class MiniAppSessionController extends ChangeNotifier {
     );
     _minimizedSessions.add(session);
     _isSwitcherOpen = true;
+    _syncPlatformBackState();
     if (!session.isBrowser) {
       session.dispatchEvent('deactivated');
     }
@@ -1028,15 +1094,21 @@ class MinimizedMiniAppHost extends StatefulWidget {
 }
 
 class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final AnimationController _animController;
   late final Animation<double> _curvedAnim;
   late final Animation<Offset> _slideAnim;
   List<MiniAppSession> _displayedSessions = const [];
+  final GlobalKey _backdropBoundaryKey = GlobalKey();
+  ui.Image? _frozenBackdropImage;
+  Timer? _backdropCaptureTimer;
+  bool _backdropCaptureInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    MiniAppSessionController.instance.ensureInitialized();
+    WidgetsBinding.instance.addObserver(this);
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
@@ -1061,7 +1133,65 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   }
 
   @override
+  Future<bool> didPopRoute() async =>
+      MiniAppSessionController.instance.handleSystemBack();
+
+  void _disposeFrozenBackdrop() {
+    _backdropCaptureTimer?.cancel();
+    _backdropCaptureTimer = null;
+    _frozenBackdropImage?.dispose();
+    _frozenBackdropImage = null;
+  }
+
+  void _captureFrozenBackdropIfNeeded() {
+    if (kIsWeb ||
+        WidgetsBinding.instance is! WidgetsFlutterBinding ||
+        _backdropCaptureInFlight ||
+        _backdropCaptureTimer != null ||
+        _frozenBackdropImage != null ||
+        !MiniAppSessionController.instance.isSwitcherOpen) {
+      return;
+    }
+    _backdropCaptureTimer = Timer(const Duration(milliseconds: 280), () {
+      _backdropCaptureTimer = null;
+      if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
+        return;
+      }
+      _backdropCaptureInFlight = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) async {
+        try {
+          if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
+            return;
+          }
+          final RenderObject? ro =
+              _backdropBoundaryKey.currentContext?.findRenderObject();
+          if (ro is! RenderRepaintBoundary ||
+              !ro.hasSize ||
+              ro.debugNeedsPaint) {
+            return;
+          }
+          final ui.Image img = await ro.toImage(pixelRatio: 0.18);
+          if (!mounted || !MiniAppSessionController.instance.isSwitcherOpen) {
+            img.dispose();
+            return;
+          }
+          setState(() {
+            _frozenBackdropImage?.dispose();
+            _frozenBackdropImage = img;
+          });
+        } catch (_) {
+          // Fallback to live BackdropFilter when boundary snapshot is unavailable.
+        } finally {
+          _backdropCaptureInFlight = false;
+        }
+      });
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _disposeFrozenBackdrop();
     MiniAppSessionController.instance.removeListener(_onSessionChanged);
     _animController.dispose();
     super.dispose();
@@ -1070,6 +1200,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   void _onSessionChanged() {
     if (!mounted) return;
     final ctrl = MiniAppSessionController.instance;
+    if (!ctrl.isSwitcherOpen) {
+      _disposeFrozenBackdrop();
+    }
     if (ctrl.shouldShowMinimizedBar) {
       setState(() {
         _displayedSessions = ctrl.minimizedSessions;
@@ -1267,13 +1400,25 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
           );
 
           if (switcherOpen) {
+            if (BlurUtils.shouldBlurMaterialHud(context, listen: false)) {
+              _captureFrozenBackdropIfNeeded();
+            }
             return Stack(
               fit: StackFit.expand,
               children: [
-                columnLayout,
+                Offstage(
+                  offstage: _frozenBackdropImage != null,
+                  child: IgnorePointer(
+                    child: RepaintBoundary(
+                      key: _backdropBoundaryKey,
+                      child: columnLayout,
+                    ),
+                  ),
+                ),
                 MiniAppTabsSwitcher(
                   key: const ValueKey('mini_app_tabs_switcher'),
                   sessions: ctrl.minimizedSessions,
+                  frozenBackdropImage: _frozenBackdropImage,
                   onDismiss: ctrl.closeSwitcher,
                   onSelectSession: (s) => ctrl.restoreSession(
                     s,
@@ -1581,6 +1726,7 @@ class MinimizedMiniAppBar extends StatelessWidget {
 /// minimized Mini Apps with a top `Закрыть все вкладки` pill.
 class MiniAppTabsSwitcher extends StatefulWidget {
   final List<MiniAppSession> sessions;
+  final ui.Image? frozenBackdropImage;
   final VoidCallback onDismiss;
   final ValueChanged<MiniAppSession> onSelectSession;
   final ValueChanged<MiniAppSession> onCloseSession;
@@ -1593,6 +1739,7 @@ class MiniAppTabsSwitcher extends StatefulWidget {
   const MiniAppTabsSwitcher({
     super.key,
     required this.sessions,
+    this.frozenBackdropImage,
     required this.onDismiss,
     required this.onSelectSession,
     required this.onCloseSession,
@@ -1610,6 +1757,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   static const double _kMaxGyroYaw = 0.075;
   static const double _kGyroDeadzone = 0.045;
 
+  final ScrollController _scrollController = ScrollController();
   StreamSubscription<GyroscopeEvent>? _gyroSub;
   late final AnimationController _gyroTicker;
   final ValueNotifier<Offset> _gyroTiltNotifier =
@@ -1619,6 +1767,8 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   double _currentPitch = 0.0;
   double _currentYaw = 0.0;
   bool _disableAnimations = false;
+  bool _isScrolling = false;
+  double _lastCullingOffset = 0.0;
 
   bool get _shouldUseGyro =>
       PowerSavingProvider.instance.allowAnimations &&
@@ -1632,6 +1782,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     _gyroTicker = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 16),
@@ -1639,6 +1790,16 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     MiniAppSessionController.instance.addListener(_onControllerUpdated);
     _captureMissingPreviews();
     _syncGyroSubscription();
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (event is KeyDownEvent &&
+        (event.logicalKey == LogicalKeyboardKey.escape ||
+            event.logicalKey == LogicalKeyboardKey.browserBack)) {
+      _handleDismissTap();
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -1682,6 +1843,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             _stopGyroListening(resetTilt: true);
             return;
           }
+          if (_isScrolling) return;
           if (event.x.abs() < _kGyroDeadzone &&
               event.y.abs() < _kGyroDeadzone) {
             return;
@@ -1753,7 +1915,9 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     WidgetsBinding.instance.removeObserver(this);
+    _scrollController.dispose();
     _stopGyroListening(resetTilt: false);
     _gyroTicker.dispose();
     _gyroTiltNotifier.dispose();
@@ -1789,24 +1953,54 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     final style = TheavSurfaceStyle.of(context);
     final mq = MediaQuery.of(context);
     final bool allowBlur = BlurUtils.shouldBlurMaterialHud(context);
-    final blurFilter =
-        allowBlur ? BlurUtils.createDownsampledBlur(22.0, scale: 0.35) : null;
+    final ui.Image? frozenBg = widget.frozenBackdropImage;
 
-    final Color dimTint = resolved.bodyBg.withValues(
-      alpha: blurFilter != null ? (style.isDark ? 0.84 : 0.78) : 0.95,
-    );
-    Widget backdrop = GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _handleDismissTap,
-      child: ColoredBox(color: dimTint),
-    );
-    if (blurFilter != null) {
-      backdrop = ClipRect(
-        child: BackdropFilter(
-          filter: blurFilter,
-          child: backdrop,
+    final Widget backdrop;
+    if (frozenBg != null && allowBlur) {
+      final Color dimTint = resolved.bodyBg.withValues(
+        alpha: style.isDark ? 0.78 : 0.72,
+      );
+      backdrop = RepaintBoundary(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _handleDismissTap,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ImageFiltered(
+                imageFilter: BlurUtils.createMaterialHudBlur(sigma: 3.2),
+                child: RawImage(
+                  image: frozenBg,
+                  fit: BoxFit.cover,
+                  filterQuality: FilterQuality.low,
+                ),
+              ),
+              ColoredBox(color: dimTint),
+            ],
+          ),
         ),
       );
+    } else {
+      final blurFilter = allowBlur
+          ? BlurUtils.createDownsampledBlur(10.0, scale: 0.25)
+          : null;
+      final Color dimTint = resolved.bodyBg.withValues(
+        alpha: blurFilter != null ? (style.isDark ? 0.86 : 0.82) : 0.95,
+      );
+      Widget liveBackdrop = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _handleDismissTap,
+        child: ColoredBox(color: dimTint),
+      );
+      if (blurFilter != null) {
+        liveBackdrop = ClipRect(
+          child: BackdropFilter(
+            filter: blurFilter,
+            child: liveBackdrop,
+          ),
+        );
+      }
+      backdrop = RepaintBoundary(child: liveBackdrop);
     }
 
     final Widget closeAllChild = Material(
@@ -1838,6 +2032,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             style: style.glassProvider!.createStyle(
               context: context,
               cornerRadius: 18,
+              isLiteOverride: true,
               refractionIndex: 1.06,
               refractionWidth: 14.0,
               borderWidth: 1.0,
@@ -1870,40 +2065,105 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                   ? 0.0
                   : ((availH - cardHeight - 24.0) / (n - 1))
                       .clamp(200.0, 268.0);
-              final double stackHeight = cardHeight + (n - 1) * stepY;
+              final double stackHeight =
+                  n == 0 ? 0.0 : cardHeight + (n - 1) * stepY;
               final double topPad =
                   ((availH - mq.padding.top - 72.0 - stackHeight) * 0.30)
                       .clamp(4.0, 48.0);
+              final double contentTopOffset = mq.padding.top + 64 + topPad;
+              final double scrollOffset = _scrollController.hasClients
+                  ? _scrollController.offset
+                  : _lastCullingOffset;
+              final int firstIdx;
+              final int lastIdx;
+              if (n == 0) {
+                firstIdx = 0;
+                lastIdx = -1;
+              } else if (n <= 4 || stepY <= 0.0) {
+                firstIdx = 0;
+                lastIdx = n - 1;
+              } else {
+                final double viewTop = scrollOffset - contentTopOffset;
+                final double viewBottom =
+                    scrollOffset + availH - contentTopOffset;
+                firstIdx = (((viewTop - cardHeight) / stepY).floor() - 1)
+                    .clamp(0, n - 1);
+                lastIdx =
+                    ((viewBottom / stepY).ceil() + 1).clamp(firstIdx, n - 1);
+              }
 
-              return GestureDetector(
-                key: const ValueKey('mini_app_tabs_empty_area_detector'),
-                behavior: HitTestBehavior.translucent,
-                onTap: _handleDismissTap,
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    mq.padding.top + 64 + topPad,
-                    16,
-                    math.max(24.0, mq.padding.bottom + 16),
-                  ),
-                  child: SizedBox(
-                    height: stackHeight,
-                    width: double.infinity,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        for (int i = 0; i < n; i++)
-                          _buildStackedCard(
-                            context,
-                            session: widget.sessions[i],
-                            index: i,
-                            totalCount: n,
-                            top: i * stepY,
-                            cardHeight: cardHeight,
-                            resolved: resolved,
-                            style: style,
-                          ),
-                      ],
+              return RepaintBoundary(
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (ScrollNotification notification) {
+                    if (notification is ScrollStartNotification) {
+                      if (!_isScrolling) {
+                        _isScrolling = true;
+                        if (_gyroTicker.isAnimating) {
+                          _gyroTicker.stop();
+                        }
+                      }
+                    } else if (notification is ScrollUpdateNotification) {
+                      if (!_isScrolling) {
+                        _isScrolling = true;
+                        if (_gyroTicker.isAnimating) {
+                          _gyroTicker.stop();
+                        }
+                      }
+                      if (n > 4 &&
+                          stepY > 0.0 &&
+                          (notification.metrics.pixels - _lastCullingOffset)
+                                  .abs() >=
+                              stepY * 0.45) {
+                        _lastCullingOffset = notification.metrics.pixels;
+                        if (mounted) {
+                          setState(() {});
+                        }
+                      }
+                    } else if (notification is ScrollEndNotification) {
+                      _isScrolling = false;
+                      if ((_currentPitch.abs() > 0.0005 ||
+                              _currentYaw.abs() > 0.0005 ||
+                              _targetPitch.abs() > 0.0008 ||
+                              _targetYaw.abs() > 0.0008) &&
+                          !_gyroTicker.isAnimating &&
+                          _shouldUseGyro) {
+                        _gyroTicker.repeat();
+                      }
+                    }
+                    return false;
+                  },
+                  child: GestureDetector(
+                    key: const ValueKey('mini_app_tabs_empty_area_detector'),
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _handleDismissTap,
+                    child: SingleChildScrollView(
+                      controller: _scrollController,
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        contentTopOffset,
+                        16,
+                        math.max(24.0, mq.padding.bottom + 16),
+                      ),
+                      child: SizedBox(
+                        height: stackHeight,
+                        width: double.infinity,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            for (int i = firstIdx; i <= lastIdx; i++)
+                              _buildStackedCard(
+                                context,
+                                session: widget.sessions[i],
+                                index: i,
+                                totalCount: n,
+                                top: i * stepY,
+                                cardHeight: cardHeight,
+                                resolved: resolved,
+                                style: style,
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -1916,7 +2176,9 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
           left: 0,
           right: 0,
           child: Center(
-            child: SizedBox(height: 36, child: closeAllPill),
+            child: RepaintBoundary(
+              child: SizedBox(height: 36, child: closeAllPill),
+            ),
           ),
         ),
       ],
@@ -1984,117 +2246,126 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                 HapticUtils.selection();
                 widget.onSelectSession(session);
               },
-              child: Container(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: cardBodyBg,
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: cardDivider, width: 0.8),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black
-                          .withValues(alpha: style.isDark ? 0.45 : 0.16),
-                      blurRadius: 24,
-                      offset: const Offset(0, 8),
+                          .withValues(alpha: style.isDark ? 0.36 : 0.14),
+                      blurRadius: 12,
+                      offset: const Offset(0, 6),
                     ),
                   ],
                 ),
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: cardHeaderBg,
-                        border: Border(
-                          bottom: BorderSide(color: cardDivider, width: 0.75),
-                        ),
-                      ),
-                      child: Material(
-                        type: MaterialType.transparency,
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: 46,
-                              height: 48,
-                              child: Semantics(
-                                button: true,
-                                label: 'Закрыть',
-                                child: InkWell(
-                                  key: ValueKey(
-                                      'mini_app_tab_close_${session.id}'),
-                                  borderRadius: BorderRadius.circular(24),
-                                  onTap: () {
-                                    HapticUtils.tap();
-                                    widget.onCloseSession(session);
-                                  },
-                                  child: Center(
-                                    child: Icon(
-                                      Icons.close_rounded,
-                                      size: 22,
-                                      color: cardHeaderFg,
-                                    ),
-                                  ),
-                                ),
-                              ),
+                child: DecoratedBox(
+                  position: DecorationPosition.foreground,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: cardDivider, width: 0.8),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(20),
+                    clipBehavior: Clip.hardEdge,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Container(
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: cardHeaderBg,
+                            border: Border(
+                              bottom: BorderSide(color: cardDivider, width: 0.75),
                             ),
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.only(right: 14),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (session.isBrowser) ...[
-                                      Icon(
-                                        session.currentUrl
-                                                .toLowerCase()
-                                                .startsWith('https://')
-                                            ? Icons.lock_outline_rounded
-                                            : Icons.public_rounded,
-                                        size: 16,
-                                        color:
-                                            cardHeaderFg.withValues(alpha: 0.78),
-                                      ),
-                                      const SizedBox(width: 6),
-                                    ],
-                                    Flexible(
-                                      child: Text(
-                                        session.displayTitle,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 16.5,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: -0.15,
+                          ),
+                          child: Material(
+                            type: MaterialType.transparency,
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 46,
+                                  height: 48,
+                                  child: Semantics(
+                                    button: true,
+                                    label: 'Закрыть',
+                                    child: InkWell(
+                                      key: ValueKey(
+                                          'mini_app_tab_close_${session.id}'),
+                                      borderRadius: BorderRadius.circular(24),
+                                      onTap: () {
+                                        HapticUtils.tap();
+                                        widget.onCloseSession(session);
+                                      },
+                                      child: Center(
+                                        child: Icon(
+                                          Icons.close_rounded,
+                                          size: 22,
                                           color: cardHeaderFg,
-                                          decoration: TextDecoration.none,
                                         ),
                                       ),
                                     ),
-                                    if (isVerified) ...[
-                                      const SizedBox(width: 6),
-                                      MiniAppVerifiedSeal(
-                                        size: 17,
-                                        color: sealColor,
-                                        checkColor: sealCheckColor,
-                                      ),
-                                    ],
-                                  ],
+                                  ),
                                 ),
-                              ),
+                                Expanded(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(right: 14),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (session.isBrowser) ...[
+                                          Icon(
+                                            session.currentUrl
+                                                    .toLowerCase()
+                                                    .startsWith('https://')
+                                                ? Icons.lock_outline_rounded
+                                                : Icons.public_rounded,
+                                            size: 16,
+                                            color: cardHeaderFg
+                                                .withValues(alpha: 0.78),
+                                          ),
+                                          const SizedBox(width: 6),
+                                        ],
+                                        Flexible(
+                                          child: Text(
+                                            session.displayTitle,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 16.5,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: -0.15,
+                                              color: cardHeaderFg,
+                                              decoration: TextDecoration.none,
+                                            ),
+                                          ),
+                                        ),
+                                        if (isVerified) ...[
+                                          const SizedBox(width: 6),
+                                          MiniAppVerifiedSeal(
+                                            size: 17,
+                                            color: sealColor,
+                                            checkColor: sealCheckColor,
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
+                        Expanded(
+                          child: _MiniAppSessionCardPreview(
+                            key: ValueKey('mini_app_tab_preview_${session.id}'),
+                            session: session,
+                            resolved: resolved,
+                          ),
+                        ),
+                      ],
                     ),
-                    Expanded(
-                      child: _MiniAppSessionCardPreview(
-                        key: ValueKey('mini_app_tab_preview_${session.id}'),
-                        session: session,
-                        resolved: resolved,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -2140,17 +2411,17 @@ class _MiniAppSessionCardPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     final Color cardBg =
         session.domPreview?.bgColor ?? session.customBackgroundColor ?? resolved.bodyBg;
-    final Uint8List? screenshot = session.previewImageBytes;
-    if (screenshot != null && screenshot.isNotEmpty) {
+    final ImageProvider? provider = session.previewImageProvider;
+    if (provider != null) {
       return ColoredBox(
         color: cardBg,
-        child: Image.memory(
-          screenshot,
+        child: Image(
+          image: provider,
           fit: BoxFit.cover,
           alignment: Alignment.topCenter,
           width: double.infinity,
           height: double.infinity,
-          filterQuality: FilterQuality.medium,
+          filterQuality: FilterQuality.low,
           gaplessPlayback: true,
         ),
       );
@@ -2201,23 +2472,28 @@ class _MiniAppDomSnapshotView extends StatelessWidget {
       color: bg,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-        child: SingleChildScrollView(
-          physics: const NeverScrollableScrollPhysics(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final block in preview.blocks.take(6)) ...[
-                _buildBlock(
-                  block,
-                  defaultFg: defaultFg,
-                  subFg: subFg,
-                  surface: surface,
-                  accent: accent,
-                  borderColor: borderColor,
-                ),
-                const SizedBox(height: 8),
+        child: ClipRect(
+          child: OverflowBox(
+            alignment: Alignment.topCenter,
+            minHeight: 0,
+            maxHeight: double.infinity,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final block in preview.blocks.take(6)) ...[
+                  _buildBlock(
+                    block,
+                    defaultFg: defaultFg,
+                    subFg: subFg,
+                    surface: surface,
+                    accent: accent,
+                    borderColor: borderColor,
+                  ),
+                  const SizedBox(height: 8),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

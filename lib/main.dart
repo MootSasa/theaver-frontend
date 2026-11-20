@@ -57,6 +57,7 @@ import 'package:audio_session/audio_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MiniAppSessionController.instance.ensureInitialized();
   debugPrint('main() started');
 
   if (kIsWeb) {
