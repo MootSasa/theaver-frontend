@@ -1606,9 +1606,9 @@ class MiniAppTabsSwitcher extends StatefulWidget {
 class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const double _kBasePitchX = 0.14;
-  static const double _kMaxGyroPitch = 0.052;
-  static const double _kMaxGyroYaw = 0.070;
-  static const double _kGyroDeadzone = 0.06;
+  static const double _kMaxGyroPitch = 0.055;
+  static const double _kMaxGyroYaw = 0.075;
+  static const double _kGyroDeadzone = 0.045;
 
   StreamSubscription<GyroscopeEvent>? _gyroSub;
   late final AnimationController _gyroTicker;
@@ -1686,9 +1686,9 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
               event.y.abs() < _kGyroDeadzone) {
             return;
           }
-          _targetPitch = (_targetPitch + event.x * 0.014)
+          _targetPitch = (_targetPitch - event.x * 0.022)
               .clamp(-_kMaxGyroPitch, _kMaxGyroPitch);
-          _targetYaw = (_targetYaw - event.y * 0.018)
+          _targetYaw = (_targetYaw + event.y * 0.028)
               .clamp(-_kMaxGyroYaw, _kMaxGyroYaw);
           if (!_gyroTicker.isAnimating && mounted) {
             _gyroTicker.repeat();
@@ -1719,12 +1719,12 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
 
   void _onGyroTick() {
     if (!mounted) return;
-    _targetPitch *= 0.965;
-    _targetYaw *= 0.965;
+    _targetPitch *= 0.955;
+    _targetYaw *= 0.955;
 
     final double nextPitch =
-        _currentPitch + (_targetPitch - _currentPitch) * 0.14;
-    final double nextYaw = _currentYaw + (_targetYaw - _currentYaw) * 0.14;
+        _currentPitch + (_targetPitch - _currentPitch) * 0.24;
+    final double nextYaw = _currentYaw + (_targetYaw - _currentYaw) * 0.24;
     _currentPitch = nextPitch;
     _currentYaw = nextYaw;
 

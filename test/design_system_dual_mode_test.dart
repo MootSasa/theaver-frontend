@@ -1486,6 +1486,8 @@ void main() {
     expect(tiltedMatrix, isNot(equals(restingMatrix)));
     final translation = tiltedMatrix.getTranslation();
     expect(translation.x.isFinite && translation.y.isFinite, isTrue);
+    expect(translation.x, lessThan(0.0));
+    expect(translation.y, lessThan(0.0));
     expect(translation.x.abs(), lessThan(3.0));
     expect(translation.y.abs(), lessThan(3.0));
 
