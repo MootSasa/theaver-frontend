@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -713,9 +715,16 @@ void main() {
           expect(
             find.descendant(
               of: headerFinder,
-              matching: find.byType(LiquidGlassLens),
+              matching: find.byKey(const ValueKey('webview_right_morph')),
             ),
-            findsNWidgets(3),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: headerFinder,
+              matching: find.byType(LiquidGlassMorph),
+            ),
+            findsOneWidget,
           );
           expect(
             find.descendant(
@@ -728,43 +737,37 @@ void main() {
           expect(
             find.descendant(
               of: headerFinder,
+              matching: find.byKey(const ValueKey('webview_right_matte_morph')),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: headerFinder,
               matching: find.byType(LiquidGlassLens),
+            ),
+            findsNothing,
+          );
+          expect(
+            find.descendant(
+              of: headerFinder,
+              matching: find.byType(LiquidGlassMorph),
             ),
             findsNothing,
           );
         }
 
-        // Opening overflow menu surfaces targeted LiquidGlassLens when glass is enabled.
+        // Opening overflow menu morphs inline out of WebViewFloatingHeader's right capsule.
         await tester.tap(
           find.byKey(const ValueKey('mini_app_more_menu_button')),
         );
         await tester.pumpAndSettle();
 
-        final menuFinder = find.byKey(const ValueKey('mini_app_overflow_menu'));
-        expect(menuFinder, findsOneWidget);
-
-        final sheetLensesFinder = find.descendant(
-          of: sheetFinder,
-          matching: find.byType(LiquidGlassLens),
+        final menuFinder = find.descendant(
+          of: headerFinder,
+          matching: find.byKey(const ValueKey('mini_app_overflow_menu')),
         );
-        if (expectGlass) {
-          expect(sheetLensesFinder, findsNWidgets(4));
-          expect(tester.widget<Widget>(menuFinder), isA<LiquidGlassLens>());
-          expect(
-            find.ancestor(
-              of: menuFinder,
-              matching: find.descendant(
-                of: sheetFinder,
-                matching: find.byWidgetPredicate(
-                  (w) => w is Opacity || w is FadeTransition,
-                ),
-              ),
-            ),
-            findsNothing,
-          );
-        } else {
-          expect(sheetLensesFinder, findsNothing);
-        }
+        expect(menuFinder, findsOneWidget);
 
         // Dismiss overflow menu before tapping downward chevron to minimize.
         await tester.tapAt(tester.getCenter(sheetFinder));
@@ -1217,5 +1220,130 @@ void main() {
     expect(MiniAppSessionController.instance.minimizedCount, 0);
     expect(switcherFinder, findsNothing);
     expect(barFinder, findsNothing);
+  });
+
+  testWidgets(
+      'Tapping center title pill opens switcher with real image and DOM content previews',
+      (tester) async {
+    addTearDown(MiniAppSessionController.instance.resetForTesting);
+
+    // Minimal valid 1x1 PNG image payload to test native screenshot preview tier.
+    final samplePng = Uint8List.fromList(const <int>[
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+      0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+      0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x00, 0x00,
+      0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49,
+      0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ]);
+
+    final studioSession = MiniAppSession(
+      id: 'tab_studio_dom',
+      launchData: const MiniAppLaunchData(
+        url: 'https://api.theaver.app/api/miniapps/studio',
+        initData: 'hash=studio',
+        botId: '1',
+        botUsername: 'BotMother',
+        botDisplayName: 'BotMother',
+        botIsVerified: true,
+      ),
+      botName: 'BotMother',
+      botUsername: 'BotMother',
+      isVerified: true,
+    )..domPreview = const MiniAppDomPreview(
+        bgColor: Color(0xFF161B22),
+        textColor: Colors.white,
+        accentColor: Color(0xFF2EA6FF),
+        blocks: [
+          MiniAppDomBlock(
+            kind: 'hero',
+            title: 'My Bot Studio',
+            subtitle: 'Active bots & tokens',
+          ),
+          MiniAppDomBlock(
+            kind: 'row',
+            title: '@helper_bot',
+            subtitle: 'Webhook OK',
+            trailing: 'Active',
+            leadingBadge: 'HB',
+          ),
+        ],
+      );
+
+    final walletSession = MiniAppSession(
+      id: 'tab_wallet_img',
+      launchData: const MiniAppLaunchData(
+        url: 'https://api.theaver.app/api/miniapps/wallet',
+        initData: 'hash=walt',
+        botId: '2',
+        botUsername: 'walt',
+        botDisplayName: 'Walt',
+        botIsVerified: true,
+      ),
+      botName: 'Walt',
+      botUsername: 'walt',
+      isVerified: true,
+    )..previewImageBytes = samplePng;
+
+    await tester.pumpWidget(
+      _buildHost(
+        glassMode: GlassMode.lite,
+        child: Builder(
+          builder: (context) => Center(
+            child: ElevatedButton(
+              onPressed: () {
+                showTheavModalSheet<void>(
+                  context: context,
+                  enableDrag: false,
+                  useRootNavigator: true,
+                  builder: (_) => const SizedBox.shrink(),
+                  customSheetBuilder: (_) => MiniAppWebViewSheet(
+                    launchData: studioSession.launchData,
+                    botName: 'BotMother',
+                    botUsername: 'BotMother',
+                    isVerified: true,
+                    session: studioSession,
+                  ),
+                );
+              },
+              child: const Text('LaunchStudio'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    MiniAppSessionController.instance.minimize(walletSession);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('LaunchStudio'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+    await tester.pumpAndSettle();
+
+    final switcherFinder = find.byKey(const ValueKey('mini_app_tabs_switcher'));
+    expect(switcherFinder, findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('mini_app_tab_preview_tab_studio_dom')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('mini_app_tab_preview_tab_wallet_img')),
+      findsOneWidget,
+    );
+    // Live DOM snapshot renders extracted bot studio rows inside the preview card.
+    expect(find.text('My Bot Studio'), findsOneWidget);
+    expect(find.text('Active bots & tokens'), findsOneWidget);
+    expect(find.text('@helper_bot'), findsOneWidget);
+    // Native screenshot tier renders Image.memory for @walt card.
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('mini_app_tab_preview_tab_wallet_img')),
+        matching: find.byType(Image),
+      ),
+      findsOneWidget,
+    );
   });
 }

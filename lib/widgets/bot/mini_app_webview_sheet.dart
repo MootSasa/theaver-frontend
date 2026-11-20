@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -135,9 +136,47 @@ class MiniAppActionButtonState {
   Color? textColor;
 }
 
+/// Extracted DOM block from a live Mini App or browser page for rich switcher previews.
+class MiniAppDomBlock {
+  final String kind;
+  final String title;
+  final String subtitle;
+  final String trailing;
+  final String leadingBadge;
+  final Color? cardColor;
+  final Color? fgColor;
+
+  const MiniAppDomBlock({
+    this.kind = 'card',
+    required this.title,
+    this.subtitle = '',
+    this.trailing = '',
+    this.leadingBadge = '',
+    this.cardColor,
+    this.fgColor,
+  });
+}
+
+/// Snapshot of live page palette and visible DOM cards for the Mini App tabs switcher.
+class MiniAppDomPreview {
+  final Color? bgColor;
+  final Color? textColor;
+  final Color? accentColor;
+  final List<MiniAppDomBlock> blocks;
+
+  const MiniAppDomPreview({
+    this.bgColor,
+    this.textColor,
+    this.accentColor,
+    required this.blocks,
+  });
+}
+
 /// Persistent live Mini App state retained across full-screen <-> minimized dock
 /// bar <-> tabs switcher transitions so the underlying `WebViewController` and JS session never reload.
 class MiniAppSession {
+  static const MethodChannel _snapshotChannel =
+      MethodChannel('app.theaver.messenger/webview_snapshot');
   static int _nextSessionSeq = 0;
 
   final String id;
@@ -155,6 +194,9 @@ class MiniAppSession {
   bool isLaunchPending = false;
   String? launchError;
   bool isWebContentReady = false;
+  Uint8List? previewImageBytes;
+  MiniAppDomPreview? domPreview;
+  bool _snapshotInFlight = false;
   bool allowVerticalSwipe = true;
   bool backButtonVisible = false;
   bool settingsButtonVisible = false;
@@ -373,6 +415,11 @@ class MiniAppSession {
               await refreshBrowserNavState();
               await BrowserDataService.instance
                   .recordVisit(currentUrl, displayTitle);
+              Future<void>.delayed(const Duration(milliseconds: 350), () {
+                if (controller != null) {
+                  unawaited(capturePreviewSnapshot());
+                }
+              });
             },
             onNavigationRequest: (req) {
               final targetUri = Uri.tryParse(req.url);
@@ -418,6 +465,11 @@ class MiniAppSession {
             isWebContentReady = true;
             onSheetStateChanged?.call();
             onRequestBridgeInjection?.call();
+            Future<void>.delayed(const Duration(milliseconds: 350), () {
+              if (controller != null) {
+                unawaited(capturePreviewSnapshot());
+              }
+            });
           },
           onNavigationRequest: (req) {
             final targetUri = Uri.tryParse(req.url);
@@ -467,6 +519,206 @@ class MiniAppSession {
     try {
       await ctrl.runJavaScript(js);
     } catch (_) {}
+  }
+
+  static Color? _parseCssColor(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim();
+    if (s.isEmpty || s == 'transparent' || s == 'rgba(0, 0, 0, 0)') {
+      return null;
+    }
+    if (s.startsWith('#')) {
+      return MiniAppJsBridge.parseHexColor(s);
+    }
+    final rgbMatch = RegExp(
+      r'^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\s*\)$',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (rgbMatch == null) return null;
+    final int r = int.parse(rgbMatch.group(1)!).clamp(0, 255);
+    final int g = int.parse(rgbMatch.group(2)!).clamp(0, 255);
+    final int b = int.parse(rgbMatch.group(3)!).clamp(0, 255);
+    final double a = rgbMatch.group(4) != null
+        ? (double.tryParse(rgbMatch.group(4)!) ?? 1.0).clamp(0.0, 1.0)
+        : 1.0;
+    if (a <= 0.02) return null;
+    return Color.fromRGBO(r, g, b, a);
+  }
+
+  /// Captures a live viewport snapshot via the native Android WebView channel and/or
+  /// visible DOM content metadata so [MiniAppTabsSwitcher] shows actual app contents.
+  Future<void> capturePreviewSnapshot() async {
+    if (_snapshotInFlight) return;
+    _snapshotInFlight = true;
+    bool updated = false;
+    try {
+      final String targetUrl = isBrowser ? currentUrl : launchData.url;
+      try {
+        final bytes = await _snapshotChannel.invokeMethod<Uint8List>(
+          'captureWebView',
+          <String, dynamic>{
+            'url': targetUrl,
+            'maxWidth': 540,
+            'quality': 80,
+          },
+        );
+        if (bytes != null && bytes.isNotEmpty) {
+          previewImageBytes = bytes;
+          updated = true;
+        }
+      } on MissingPluginException {
+        // Non-Android / unit test environment cleanly falls back to DOM or contextual preview.
+      } on PlatformException {
+        // Native bitmap draw unavailable on current surface.
+      } catch (_) {}
+
+      final ctrl = controller;
+      if (ctrl != null && WebViewPlatform.instance != null) {
+        const String js = r'''
+(function() {
+  try {
+    if (!document || !document.body) return null;
+    var rootStyle = getComputedStyle(document.documentElement);
+    var bodyStyle = getComputedStyle(document.body);
+    var bg = bodyStyle.backgroundColor;
+    if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+      bg = rootStyle.backgroundColor || '';
+    }
+    var accent = rootStyle.getPropertyValue('--tg-theme-button-color') || rootStyle.getPropertyValue('--btn') || '';
+    var vh = window.innerHeight || 720;
+    var selectors = '.hero, .bot-row, .asset-row, .tx-row, .user-row, .card, h1, h2, h3, article, section, button, .btn, p';
+    var nodes = document.querySelectorAll(selectors);
+    var blocks = [];
+    var seen = {};
+    for (var i = 0; i < nodes.length && blocks.length < 8; i++) {
+      var el = nodes[i];
+      if (!el || el.classList.contains('hidden')) continue;
+      if (el.matches('.card, article, section') && el.querySelector('.bot-row, .asset-row, .tx-row, .user-row')) {
+        continue;
+      }
+      var cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) continue;
+      var rect = el.getBoundingClientRect();
+      if (rect.height < 14 || rect.width < 60 || rect.bottom <= 44 || rect.top >= vh) continue;
+
+      var title = '';
+      var subtitle = '';
+      var trailing = '';
+      var badge = '';
+      var kind = 'card';
+
+      if (el.matches('.bot-row, .asset-row, .tx-row, .user-row')) {
+        kind = 'row';
+        var bEl = el.querySelector('.avatar, .coin-icon');
+        if (bEl) badge = (bEl.innerText || '').trim().slice(0, 3);
+        var nEl = el.querySelector('.name, strong, b');
+        var sEl = el.querySelector('.sub, small');
+        title = ((nEl ? nEl.innerText : el.innerText) || '').trim().replace(/\s+/g, ' ');
+        subtitle = sEl ? (sEl.innerText || '').trim().replace(/\s+/g, ' ') : '';
+        var rEl = el.lastElementChild;
+        if (rEl && rEl !== bEl && rEl !== nEl && !rEl.contains(nEl)) {
+          trailing = (rEl.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 24);
+        }
+      } else if (el.matches('.hero')) {
+        kind = 'hero';
+        var hEl = el.querySelector('h1, h2, .bal, .title, .name');
+        var subEl = el.querySelector('.sub, p');
+        title = ((hEl ? hEl.innerText : el.innerText) || '').trim().replace(/\s+/g, ' ');
+        subtitle = subEl ? (subEl.innerText || '').trim().replace(/\s+/g, ' ') : '';
+      } else if (el.matches('button, .btn')) {
+        kind = 'button';
+        title = (el.innerText || '').trim().replace(/\s+/g, ' ');
+      } else if (el.matches('h1, h2, h3')) {
+        kind = 'heading';
+        title = (el.innerText || '').trim().replace(/\s+/g, ' ');
+      } else {
+        kind = el.matches('p') ? 'text' : 'card';
+        var rawTxt = (el.innerText || '').trim().replace(/\s+/g, ' ');
+        var parts = (el.innerText || '').split(/\n+/).map(function(x){ return x.trim(); }).filter(Boolean);
+        title = parts.length ? parts[0] : rawTxt;
+        subtitle = parts.length > 1 ? parts[1] : '';
+      }
+      title = title.slice(0, 68);
+      subtitle = subtitle.slice(0, 88);
+      if (!title || seen[title]) continue;
+      seen[title] = 1;
+      blocks.push({
+        kind: kind,
+        title: title,
+        subtitle: subtitle,
+        trailing: trailing,
+        leadingBadge: badge,
+        cardColor: cs.backgroundColor || '',
+        fgColor: cs.color || ''
+      });
+    }
+    return JSON.stringify({
+      bgColor: bg,
+      textColor: bodyStyle.color || '',
+      accentColor: (accent || '').trim(),
+      blocks: blocks
+    });
+  } catch (e) {
+    return null;
+  }
+})();
+''';
+        try {
+          final dynamic rawResult = await ctrl.runJavaScriptReturningResult(js);
+          dynamic decoded = rawResult;
+          if (decoded is String) {
+            final trimmed = decoded.trim();
+            if (trimmed.isNotEmpty && trimmed != 'null') {
+              decoded = jsonDecode(trimmed);
+              if (decoded is String) {
+                decoded = jsonDecode(decoded);
+              }
+            } else {
+              decoded = null;
+            }
+          }
+          if (decoded is Map) {
+            final map = Map<String, dynamic>.from(decoded);
+            final rawBlocks = map['blocks'];
+            final parsedBlocks = <MiniAppDomBlock>[];
+            if (rawBlocks is List) {
+              for (final item in rawBlocks) {
+                if (item is Map) {
+                  final b = Map<String, dynamic>.from(item);
+                  final t = (b['title'] ?? '').toString().trim();
+                  if (t.isEmpty) continue;
+                  parsedBlocks.add(
+                    MiniAppDomBlock(
+                      kind: (b['kind'] ?? 'card').toString(),
+                      title: t,
+                      subtitle: (b['subtitle'] ?? '').toString().trim(),
+                      trailing: (b['trailing'] ?? '').toString().trim(),
+                      leadingBadge: (b['leadingBadge'] ?? '').toString().trim(),
+                      cardColor: _parseCssColor(b['cardColor']?.toString()),
+                      fgColor: _parseCssColor(b['fgColor']?.toString()),
+                    ),
+                  );
+                }
+              }
+            }
+            if (parsedBlocks.isNotEmpty) {
+              domPreview = MiniAppDomPreview(
+                bgColor: _parseCssColor(map['bgColor']?.toString()),
+                textColor: _parseCssColor(map['textColor']?.toString()),
+                accentColor: _parseCssColor(map['accentColor']?.toString()),
+                blocks: parsedBlocks,
+              );
+              updated = true;
+            }
+          }
+        } catch (_) {}
+      }
+      if (updated) {
+        MiniAppSessionController.instance.notifySessionUpdated();
+      }
+    } finally {
+      _snapshotInFlight = false;
+    }
   }
 }
 
@@ -567,6 +819,37 @@ class MiniAppSessionController extends ChangeNotifier {
   void openSwitcher() {
     if (_minimizedSessions.isEmpty || _isSwitcherOpen) return;
     _isSwitcherOpen = true;
+    notifyListeners();
+  }
+
+  /// Registers [session] in the minimized stack and opens [MiniAppTabsSwitcher]
+  /// directly (used when tapping the floating header title pill).
+  void minimizeAndOpenSwitcher(
+    MiniAppSession session, {
+    NavigatorState? navigator,
+  }) {
+    session.isMinimized = true;
+    if (navigator != null) {
+      session.lastNavigator = navigator;
+    }
+    _minimizedSessions.removeWhere(
+      (s) =>
+          identical(s, session) ||
+          (!session.isBrowser &&
+              !s.isBrowser &&
+              session.launchData.botId.isNotEmpty &&
+              s.launchData.botId == session.launchData.botId &&
+              s.launchData.url == session.launchData.url) ||
+          (session.isBrowser &&
+              s.isBrowser &&
+              s.currentUrl.isNotEmpty &&
+              s.currentUrl == session.currentUrl),
+    );
+    _minimizedSessions.add(session);
+    _isSwitcherOpen = true;
+    if (!session.isBrowser) {
+      session.dispatchEvent('deactivated');
+    }
     notifyListeners();
   }
 
@@ -714,6 +997,9 @@ class MinimizedMiniAppHost extends StatefulWidget {
     required this.child,
     this.navigatorKey,
   });
+
+  static bool isMountedIn(BuildContext context) =>
+      _MinimizedMiniAppHostScope.maybeOf(context);
 
   @override
   State<MinimizedMiniAppHost> createState() => _MinimizedMiniAppHostState();
@@ -1582,40 +1868,730 @@ class MiniAppTabsSwitcher extends StatelessWidget {
                     ),
                   ),
                   Expanded(
-                    child: session.isBrowser
-                        ? ColoredBox(
-                            color: cardBodyBg,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.public_rounded,
-                                    size: 32,
-                                    color: cardHeaderFg.withValues(alpha: 0.35),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    BrowserDataService.extractHost(
-                                        session.currentUrl),
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color:
-                                          cardHeaderFg.withValues(alpha: 0.55),
-                                      decoration: TextDecoration.none,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                        : ColoredBox(color: cardBodyBg),
+                    child: _MiniAppSessionCardPreview(
+                      key: ValueKey('mini_app_tab_preview_${session.id}'),
+                      session: session,
+                      resolved: resolved,
+                    ),
                   ),
                 ],
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Renders the content body of a [MiniAppTabsSwitcher] card in 3 tiers:
+/// 1) native viewport screenshot [MiniAppSession.previewImageBytes],
+/// 2) extracted visible DOM blocks [MiniAppSession.domPreview], or
+/// 3) rich contextual preview tailored to the app or webpage.
+class _MiniAppSessionCardPreview extends StatelessWidget {
+  final MiniAppSession session;
+  final MiniAppThemeColors resolved;
+
+  const _MiniAppSessionCardPreview({
+    super.key,
+    required this.session,
+    required this.resolved,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color cardBg =
+        session.domPreview?.bgColor ?? session.customBackgroundColor ?? resolved.bodyBg;
+    final Uint8List? screenshot = session.previewImageBytes;
+    if (screenshot != null && screenshot.isNotEmpty) {
+      return ColoredBox(
+        color: cardBg,
+        child: Image.memory(
+          screenshot,
+          fit: BoxFit.cover,
+          alignment: Alignment.topCenter,
+          width: double.infinity,
+          height: double.infinity,
+          filterQuality: FilterQuality.medium,
+          gaplessPlayback: true,
+        ),
+      );
+    }
+
+    final MiniAppDomPreview? dom = session.domPreview;
+    if (dom != null && dom.blocks.isNotEmpty) {
+      return _MiniAppDomSnapshotView(
+        preview: dom,
+        fallbackBg: cardBg,
+        resolved: resolved,
+      );
+    }
+
+    return _MiniAppContextualFallbackView(
+      session: session,
+      cardBg: cardBg,
+      resolved: resolved,
+    );
+  }
+}
+
+class _MiniAppDomSnapshotView extends StatelessWidget {
+  final MiniAppDomPreview preview;
+  final Color fallbackBg;
+  final MiniAppThemeColors resolved;
+
+  const _MiniAppDomSnapshotView({
+    required this.preview,
+    required this.fallbackBg,
+    required this.resolved,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bg = preview.bgColor ?? fallbackBg;
+    final bool isBgDark = bg.computeLuminance() <= 0.55;
+    final Color defaultFg = preview.textColor ??
+        (isBgDark ? Colors.white : const Color(0xFF111827));
+    final Color subFg = defaultFg.withValues(alpha: 0.65);
+    final Color surface = isBgDark
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.06), bg)
+        : Color.alphaBlend(Colors.black.withValues(alpha: 0.04), bg);
+    final Color accent = preview.accentColor ?? resolved.palette.primary;
+    final Color borderColor = defaultFg.withValues(alpha: 0.12);
+
+    return ColoredBox(
+      color: bg,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final block in preview.blocks.take(6)) ...[
+                _buildBlock(
+                  block,
+                  defaultFg: defaultFg,
+                  subFg: subFg,
+                  surface: surface,
+                  accent: accent,
+                  borderColor: borderColor,
+                ),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBlock(
+    MiniAppDomBlock block, {
+    required Color defaultFg,
+    required Color subFg,
+    required Color surface,
+    required Color accent,
+    required Color borderColor,
+  }) {
+    final Color itemBg = block.cardColor ?? surface;
+    final Color itemFg = block.fgColor ?? defaultFg;
+    final Color itemSub = itemFg.withValues(alpha: 0.64);
+
+    if (block.kind == 'button') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: block.cardColor ?? accent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text(
+          block.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+            color: block.fgColor ?? Colors.white,
+            decoration: TextDecoration.none,
+          ),
+        ),
+      );
+    }
+
+    if (block.kind == 'hero') {
+      return Container(
+        padding: const EdgeInsets.all(11),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color.alphaBlend(accent.withValues(alpha: 0.18), itemBg),
+              itemBg,
+            ],
+          ),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: borderColor, width: 0.7),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              block.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: itemFg,
+                decoration: TextDecoration.none,
+              ),
+            ),
+            if (block.subtitle.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(
+                block.subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: itemSub,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    if (block.kind == 'row') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: itemBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: borderColor, width: 0.6),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(9),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                block.leadingBadge.isNotEmpty
+                    ? block.leadingBadge
+                    : block.title.characters.first.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: accent,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    block.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: itemFg,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  if (block.subtitle.isNotEmpty)
+                    Text(
+                      block.subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: itemSub,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (block.trailing.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(
+                block.trailing,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: itemFg,
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    if (block.kind == 'heading') {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Text(
+          block.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: itemFg,
+            decoration: TextDecoration.none,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: itemBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor, width: 0.6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            block.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: itemFg,
+              decoration: TextDecoration.none,
+            ),
+          ),
+          if (block.subtitle.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              block.subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                color: itemSub,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniAppContextualFallbackView extends StatelessWidget {
+  final MiniAppSession session;
+  final Color cardBg;
+  final MiniAppThemeColors resolved;
+
+  const _MiniAppContextualFallbackView({
+    required this.session,
+    required this.cardBg,
+    required this.resolved,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = cardBg.computeLuminance() <= 0.55;
+    final Color fg = isDark ? Colors.white : const Color(0xFF111827);
+    final Color sub = fg.withValues(alpha: 0.58);
+    final Color card = isDark
+        ? Color.alphaBlend(Colors.white.withValues(alpha: 0.06), cardBg)
+        : Color.alphaBlend(Colors.black.withValues(alpha: 0.04), cardBg);
+    final Color border = fg.withValues(alpha: 0.11);
+    final Color primary = resolved.palette.primary;
+
+    final String unameLower = (session.botUsername.isNotEmpty
+            ? session.botUsername
+            : session.launchData.botUsername)
+        .toLowerCase()
+        .trim();
+    final String urlLower = session.launchData.url.toLowerCase();
+
+    if (session.isBrowser) {
+      final String host = BrowserDataService.extractHost(session.currentUrl);
+      return ColoredBox(
+        color: cardBg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: card,
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(color: border, width: 0.6),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.public_rounded, size: 14, color: primary),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        host,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: sub,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: card,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: border, width: 0.6),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _previewBar(widthFactor: 0.72, height: 11, color: fg.withValues(alpha: 0.22)),
+                      const SizedBox(height: 8),
+                      _previewBar(widthFactor: 0.94, height: 8, color: fg.withValues(alpha: 0.12)),
+                      const SizedBox(height: 5),
+                      _previewBar(widthFactor: 0.85, height: 8, color: fg.withValues(alpha: 0.12)),
+                      const SizedBox(height: 5),
+                      _previewBar(widthFactor: 0.60, height: 8, color: fg.withValues(alpha: 0.12)),
+                      const Spacer(),
+                      Container(
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: primary.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        alignment: Alignment.center,
+                        child: Text(
+                          session.currentUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: primary,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (unameLower == 'walt' ||
+        unameLower == 'walt_bot' ||
+        urlLower.contains('/miniapps/wallet')) {
+      return ColoredBox(
+        color: cardBg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Color.alphaBlend(primary.withValues(alpha: 0.20), card),
+                      card,
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: border, width: 0.7),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Кошелёк • Баланс счёта',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: sub,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    _previewBar(
+                      widthFactor: 0.45,
+                      height: 14,
+                      color: fg.withValues(alpha: 0.26),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _chipBadge('Пополнить', primary),
+                        const SizedBox(width: 6),
+                        _chipBadge('Перевод', fg.withValues(alpha: 0.14), textColor: fg),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              _miniRowTile('THV', 'Theav Coin', const Color(0xFF00B4D8), fg, sub, card, border),
+              const SizedBox(height: 6),
+              _miniRowTile('\$', 'US Dollar', const Color(0xFF10B981), fg, sub, card, border),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (unameLower == 'botmother' ||
+        unameLower == 'botfather' ||
+        urlLower.contains('/miniapps/studio')) {
+      return ColoredBox(
+        color: cardBg,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Color.alphaBlend(primary.withValues(alpha: 0.20), card),
+                      card,
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: border, width: 0.7),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Bot Studio • Управление ботами',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: fg,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    _previewBar(widthFactor: 0.68, height: 8, color: fg.withValues(alpha: 0.16)),
+                    const SizedBox(height: 8),
+                    _chipBadge('Создать бота', primary),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              _miniRowTile('BM', 'Мои боты и команды', primary, fg, sub, card, border),
+              const SizedBox(height: 6),
+              _miniRowTile('WA', 'WebApp & Webhook', const Color(0xFF7C3AED), fg, sub, card, border),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final String handleLabel = unameLower.isNotEmpty ? '@$unameLower' : 'Mini App';
+    return ColoredBox(
+      color: cardBg,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: card,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: border, width: 0.7),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    handleLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: primary,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _previewBar(widthFactor: 0.76, height: 10, color: fg.withValues(alpha: 0.22)),
+                  const SizedBox(height: 5),
+                  _previewBar(widthFactor: 0.52, height: 8, color: fg.withValues(alpha: 0.14)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: card,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: border, width: 0.6),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _previewBar(widthFactor: 0.88, height: 9, color: fg.withValues(alpha: 0.14)),
+                    const SizedBox(height: 6),
+                    _previewBar(widthFactor: 0.64, height: 9, color: fg.withValues(alpha: 0.12)),
+                    const Spacer(),
+                    Container(
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: primary.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _previewBar({
+    required double widthFactor,
+    required double height,
+    required Color color,
+  }) {
+    return FractionallySizedBox(
+      widthFactor: widthFactor,
+      child: Container(
+        height: height,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(height / 2),
+        ),
+      ),
+    );
+  }
+
+  Widget _chipBadge(String text, Color bg, {Color textColor = Colors.white}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
+          color: textColor,
+          decoration: TextDecoration.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _miniRowTile(
+    String code,
+    String label,
+    Color badgeColor,
+    Color fg,
+    Color sub,
+    Color card,
+    Color border,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: card,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: border, width: 0.6),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: badgeColor,
+              borderRadius: BorderRadius.circular(7),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              code,
+              style: const TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: fg,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ),
+          Container(
+            width: 38,
+            height: 8,
+            decoration: BoxDecoration(
+              color: sub.withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1786,7 +2762,8 @@ class WebViewFloatingCapsule extends StatelessWidget {
 }
 
 /// Three-island floating oval header (`[close/back]`, `[title/domain + progress]`,
-/// `[minimize | more]`) matching the floating chat chrome aesthetic.
+/// `[minimize | more]`) matching the floating chat chrome aesthetic, with an
+/// inline morphing right menu (`LiquidGlassMorph` / animated Material morph).
 class WebViewFloatingHeader extends StatelessWidget {
   final double topInset;
   final Widget leadingChild;
@@ -1796,6 +2773,13 @@ class WebViewFloatingHeader extends StatelessWidget {
   final Color? capsuleColorOverride;
   final Color? progressColor;
   final VoidCallback? onCenterTap;
+  final VoidCallback? onCenterLongPress;
+  final bool isMenuOpen;
+  final VoidCallback? onDismissMenu;
+  final Widget? expandedMenuChild;
+  final double expandedMenuWidth;
+  final double expandedMenuHeight;
+  final double collapsedRightWidth;
   final GestureDragStartCallback? onVerticalDragStart;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
@@ -1811,6 +2795,13 @@ class WebViewFloatingHeader extends StatelessWidget {
     this.capsuleColorOverride,
     this.progressColor,
     this.onCenterTap,
+    this.onCenterLongPress,
+    this.isMenuOpen = false,
+    this.onDismissMenu,
+    this.expandedMenuChild,
+    this.expandedMenuWidth = 248.0,
+    this.expandedMenuHeight = 240.0,
+    this.collapsedRightWidth = 84.0,
     this.onVerticalDragStart,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
@@ -1819,8 +2810,18 @@ class WebViewFloatingHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = context.theav;
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
     final Color barAccent = progressColor ?? palette.primary;
+    final media = MediaQuery.of(context);
+    final double screenWidth = media.size.width;
+    final double fullHeight = media.size.height;
+    final double adaptiveMenuWidth = math.min(
+      expandedMenuWidth,
+      math.max(collapsedRightWidth + 40.0, screenWidth - 24.0),
+    );
+    final bool menuExpanded = isMenuOpen && expandedMenuChild != null;
+    final double normalHeight = topInset + 60.0;
 
     Widget titlePillBody = Center(
       widthFactor: 1.0,
@@ -1869,12 +2870,239 @@ class WebViewFloatingHeader extends StatelessWidget {
       );
     }
 
-    if (onCenterTap != null) {
-      titlePillBody = GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onCenterTap,
-        child: titlePillBody,
+    final Widget collapsedBox = SizedBox(
+      key: const ValueKey('webview_right_pill_collapsed'),
+      width: collapsedRightWidth,
+      height: 44.0,
+      child: OverflowBox(
+        minWidth: collapsedRightWidth,
+        maxWidth: collapsedRightWidth,
+        minHeight: 44.0,
+        maxHeight: 44.0,
+        alignment: Alignment.centerRight,
+        child: Material(
+          type: MaterialType.transparency,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: trailingActions,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final Widget expandedBox = expandedMenuChild != null
+        ? SizedBox(
+            key: const ValueKey('webview_right_pill_expanded'),
+            width: adaptiveMenuWidth,
+            height: expandedMenuHeight,
+            child: OverflowBox(
+              minWidth: adaptiveMenuWidth,
+              maxWidth: adaptiveMenuWidth,
+              minHeight: expandedMenuHeight,
+              maxHeight: expandedMenuHeight,
+              alignment: Alignment.topRight,
+              child: Material(
+                type: MaterialType.transparency,
+                child: expandedMenuChild,
+              ),
+            ),
+          )
+        : collapsedBox;
+
+    final Widget leftWidget = Positioned(
+      top: topInset + 8,
+      left: 12,
+      width: 44,
+      height: 44,
+      child: WebViewFloatingCapsule(
+        minWidth: 44,
+        height: 44,
+        borderRadius: 22,
+        colorOverride: capsuleColorOverride,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(child: leadingChild),
+        ),
+      ),
+    );
+
+    final Widget centerWidget = Positioned(
+      top: topInset + 8,
+      left: 12 + 44 + 8,
+      right: 12 + collapsedRightWidth + 8,
+      height: 44,
+      child: Center(
+        child: GestureDetector(
+          key: const ValueKey('webview_header_center_pill'),
+          behavior: HitTestBehavior.opaque,
+          onTap: onCenterTap,
+          onLongPress: onCenterLongPress,
+          onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
+          onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
+          onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
+          onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
+          child: WebViewFloatingCapsule(
+            height: 44,
+            borderRadius: 22,
+            colorOverride: capsuleColorOverride,
+            child: titlePillBody,
+          ),
+        ),
+      ),
+    );
+
+    final bool useGlass = style.isGlass && style.glassProvider != null;
+    final LiquidGlassStyle? morphStyle;
+    final Widget rightWidget;
+
+    if (useGlass) {
+      final Color glassFill = capsuleColorOverride != null
+          ? capsuleColorOverride!.withValues(
+              alpha: math.min(
+                capsuleColorOverride!.a,
+                style.isDark ? 0.78 : 0.84,
+              ),
+            )
+          : style.hudFill;
+      morphStyle = style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: 22.0,
+        isLiteOverride: true,
+        refractionIndex: 1.08,
+        refractionWidth: 18.0,
+        borderWidth: 1.05,
+        color: glassFill,
       );
+      rightWidget = Positioned(
+        top: topInset + 8,
+        right: 12,
+        child: SizedBox(
+          width: adaptiveMenuWidth,
+          height: expandedMenuHeight,
+          child: LiquidGlassMorph(
+            key: const ValueKey('webview_right_morph'),
+            alignment: Alignment.topRight,
+            motion: LiquidGlassMorphMotion.fluid,
+            smoothness: 28,
+            style: morphStyle,
+            child: menuExpanded ? expandedBox : collapsedBox,
+          ),
+        ),
+      );
+    } else {
+      morphStyle = null;
+      final blurFilter = style.getMaterialHudBlurFilter(sigma: 10.0);
+      final Color fill = capsuleColorOverride != null
+          ? BlurUtils.resolveMaterialHudColor(
+              capsuleColorOverride!,
+              isDark: style.isDark,
+              blurEnabled: blurFilter != null,
+              darkAlpha: 0.86,
+              lightAlpha: 0.88,
+            )
+          : style.hudFill;
+      final Color borderColor = capsuleColorOverride != null
+          ? (capsuleColorOverride!.computeLuminance() <= 0.55
+              ? Colors.white.withValues(alpha: blurFilter != null ? 0.14 : 0.10)
+              : Colors.black.withValues(alpha: blurFilter != null ? 0.10 : 0.08))
+          : style.hudBorder;
+      Widget surfaceBox = DecoratedBox(
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(22.0),
+          border: Border.all(
+            color: borderColor,
+            width: blurFilter != null ? 0.65 : 0.55,
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 170),
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              alignment: Alignment.topRight,
+              children: [
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            ),
+            child: menuExpanded ? expandedBox : collapsedBox,
+          ),
+        ),
+      );
+      if (blurFilter != null) {
+        surfaceBox = BackdropFilter.grouped(
+          filter: blurFilter,
+          child: surfaceBox,
+        );
+      }
+      rightWidget = Positioned(
+        top: topInset + 8,
+        right: 12,
+        child: AnimatedContainer(
+          key: const ValueKey('webview_right_matte_morph'),
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          width: menuExpanded ? adaptiveMenuWidth : collapsedRightWidth,
+          height: menuExpanded ? expandedMenuHeight : 44.0,
+          alignment: Alignment.topRight,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22.0),
+              boxShadow: style.floatingShadow,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(22.0),
+              child: surfaceBox,
+            ),
+          ),
+        ),
+      );
+    }
+
+    final Widget stackContent = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          key: const ValueKey('webview_header_menu_backdrop'),
+          child: IgnorePointer(
+            ignoring: !menuExpanded,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onDismissMenu,
+            ),
+          ),
+        ),
+        leftWidget,
+        if (menuExpanded) ...[
+          centerWidget,
+          rightWidget,
+        ] else ...[
+          rightWidget,
+          centerWidget,
+        ],
+      ],
+    );
+
+    final Widget framedHeader = SizedBox(
+      width: double.infinity,
+      height: menuExpanded ? fullHeight : normalHeight,
+      child: morphStyle != null
+          ? LiquidGlassBlender(
+              smoothness: 0,
+              style: morphStyle,
+              child: stackContent,
+            )
+          : stackContent,
+    );
+
+    if (menuExpanded) {
+      return framedHeader;
     }
 
     return GestureDetector(
@@ -1883,49 +3111,7 @@ class WebViewFloatingHeader extends StatelessWidget {
       onVerticalDragUpdate: onVerticalDragUpdate,
       onVerticalDragEnd: onVerticalDragEnd,
       onVerticalDragCancel: onVerticalDragCancel,
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(12, topInset + 8, 12, 8),
-        child: SizedBox(
-          height: 44,
-          child: Row(
-            children: [
-              WebViewFloatingCapsule(
-                minWidth: 44,
-                height: 44,
-                borderRadius: 22,
-                colorOverride: capsuleColorOverride,
-                child: SizedBox(
-                  width: 44,
-                  height: 44,
-                  child: Center(child: leadingChild),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Center(
-                  child: WebViewFloatingCapsule(
-                    height: 44,
-                    borderRadius: 22,
-                    colorOverride: capsuleColorOverride,
-                    child: titlePillBody,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              WebViewFloatingCapsule(
-                height: 44,
-                borderRadius: 22,
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                colorOverride: capsuleColorOverride,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: trailingActions,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+      child: framedHeader,
     );
   }
 }
@@ -2186,7 +3372,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   double _dragResetFrom = 0.0;
   double _dragAccumulated = 0.0;
   late final AnimationController _dragResetController;
-  late final AnimationController _menuAnimController;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
   double _computedTopClearance = 64.0;
@@ -2280,10 +3465,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         final double next = _dragResetFrom * (1.0 - t);
         _dragOffsetNotifier.value = next;
       });
-    _menuAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 160),
-    );
 
     _session.onSheetStateChanged = _onSessionStateChanged;
     _session.onPendingLaunchResolved = _onPendingLaunchResolved;
@@ -2353,7 +3534,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
-    _menuAnimController.dispose();
     super.dispose();
   }
 
@@ -2425,6 +3605,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_ready':
         if (!_session.isWebContentReady && mounted) {
           setState(() => _session.isWebContentReady = true);
+        }
+        if (_session.controller != null) {
+          unawaited(_session.capturePreviewSnapshot());
         }
         break;
 
@@ -2811,6 +3994,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   void _minimizeMiniApp() {
     HapticUtils.selection();
     _closeMenu();
+    unawaited(_session.capturePreviewSnapshot());
     _setRouteRestingOpaque(false);
     if (_MinimizedMiniAppHostScope.maybeOf(context)) {
       _isMinimizing = true;
@@ -2823,13 +4007,71 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
+  Future<void> _openTabsSwitcherFromHeader() async {
+    HapticUtils.selection();
+    _closeMenu();
+    await _session.capturePreviewSnapshot().timeout(
+          const Duration(milliseconds: 90),
+          onTimeout: () {},
+        );
+    if (!mounted) return;
+    if (_MinimizedMiniAppHostScope.maybeOf(context)) {
+      _isMinimizing = true;
+      _setRouteRestingOpaque(false);
+      _releaseFullScreenRegistration();
+      final nav = Navigator.of(context, rootNavigator: true);
+      MiniAppSessionController.instance.minimizeAndOpenSwitcher(
+        _session,
+        navigator: nav,
+      );
+      await nav.maybePop();
+      return;
+    }
+
+    final navigator = Navigator.of(context);
+    final sessions = <MiniAppSession>[
+      ...MiniAppSessionController.instance.minimizedSessions
+          .where((s) => !identical(s, _session)),
+      _session,
+    ];
+    await navigator.push<void>(
+      PageRouteBuilder<void>(
+        opaque: false,
+        pageBuilder: (routeCtx, _, __) => MiniAppTabsSwitcher(
+          key: const ValueKey('mini_app_tabs_switcher'),
+          sessions: sessions,
+          onDismiss: () => Navigator.of(routeCtx).maybePop(),
+          onSelectSession: (selected) {
+            Navigator.of(routeCtx).maybePop();
+            if (!identical(selected, _session)) {
+              unawaited(
+                MiniAppSessionController.instance.restoreSession(selected),
+              );
+            }
+          },
+          onCloseSession: (target) {
+            MiniAppSessionController.instance.closeSession(target);
+            Navigator.of(routeCtx).maybePop();
+            if (identical(target, _session) && mounted) {
+              _attemptClose(force: true);
+            }
+          },
+          onCloseAll: () {
+            MiniAppSessionController.instance.closeAllMinimized();
+            Navigator.of(routeCtx).maybePop();
+            if (mounted) {
+              _attemptClose(force: true);
+            }
+          },
+        ),
+      ),
+    );
+  }
+
   void _toggleMenu() {
     setState(() {
       _isMenuOpen = !_isMenuOpen;
     });
-    if (_isMenuOpen) {
-      _menuAnimController.forward(from: 0.0);
-    }
   }
 
   void _closeMenu() {
@@ -2948,11 +4190,111 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _computedTopClearance = topHudClearance;
     _computedBottomClearance = bottomClearance;
 
+    final double expandedMenuHeight =
+        (_session.settingsButtonVisible ? 5 : 4) * 44.0 + 12.0;
+
+    final Widget expandedMenuContent = Padding(
+      key: const ValueKey('mini_app_overflow_menu'),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: SingleChildScrollView(
+        physics: const NeverScrollableScrollPhysics(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildMenuItem(
+              icon: iconoir.RefreshDouble(
+                width: 18,
+                height: 18,
+                color: headerFg,
+              ),
+              label: 'Обновить страницу',
+              fgColor: headerFg,
+              onTap: () async {
+                _closeMenu();
+                if (_session.controller != null) {
+                  setState(() {
+                    _session.isWebContentReady = false;
+                    _session.loadProgress = 0.08;
+                  });
+                  await _session.controller!.reload();
+                }
+              },
+            ),
+            if (_session.settingsButtonVisible)
+              _buildMenuItem(
+                icon: iconoir.Settings(
+                  width: 18,
+                  height: 18,
+                  color: headerFg,
+                ),
+                label: 'Настройки приложения',
+                fgColor: headerFg,
+                onTap: () async {
+                  _closeMenu();
+                  await _dispatchEventToWebView('settings_button_pressed');
+                },
+              ),
+            _buildMenuItem(
+              icon: iconoir.NavArrowDown(
+                width: 18,
+                height: 18,
+                color: headerFg,
+              ),
+              label: 'Свернуть',
+              fgColor: headerFg,
+              onTap: _minimizeMiniApp,
+            ),
+            _buildMenuItem(
+              icon: iconoir.Copy(
+                width: 18,
+                height: 18,
+                color: headerFg,
+              ),
+              label: 'Скопировать ссылку',
+              fgColor: headerFg,
+              onTap: () async {
+                _closeMenu();
+                await Clipboard.setData(
+                  ClipboardData(text: _session.launchData.url),
+                );
+                if (context.mounted) {
+                  GlassToastService().show(context, 'Ссылка скопирована');
+                }
+              },
+            ),
+            _buildMenuItem(
+              icon: iconoir.OpenNewWindow(
+                width: 18,
+                height: 18,
+                color: headerFg,
+              ),
+              label: 'Открыть в браузере',
+              fgColor: headerFg,
+              onTap: () async {
+                _closeMenu();
+                final u = Uri.tryParse(_session.launchData.url);
+                if (u != null) {
+                  await launchUrl(u, mode: LaunchMode.externalApplication);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+
     final Widget floatingHeader = WebViewFloatingHeader(
       topInset: topInset,
       capsuleColorOverride: _session.customHeaderColor,
       progressColor: palette.primary,
       progressListenable: _session.loadProgressNotifier,
+      onCenterTap: _openTabsSwitcherFromHeader,
+      isMenuOpen: _isMenuOpen,
+      onDismissMenu: _closeMenu,
+      expandedMenuWidth: 244.0,
+      expandedMenuHeight: expandedMenuHeight,
+      expandedMenuChild: expandedMenuContent,
       onVerticalDragStart: _handleHeaderDragStart,
       onVerticalDragUpdate: _handleHeaderDragUpdate,
       onVerticalDragEnd: _handleHeaderDragEnd,
@@ -3144,12 +4486,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(child: viewportBody),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: floatingHeader,
-            ),
             if (_session.mainButton.isVisible ||
                 _session.secondaryButton.isVisible)
               Positioned(
@@ -3190,21 +4526,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                   ],
                 ),
               ),
-            if (_isMenuOpen) ...[
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: _closeMenu,
-                ),
-              ),
-              _buildOverflowMenu(
-                context,
-                topOffset: topInset + 58.0,
-                style: style,
-                headerBg: headerBg,
-                headerFg: headerFg,
-              ),
-            ],
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: floatingHeader,
+            ),
           ],
         ),
       ),
@@ -3231,171 +4558,6 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             child: sheetStackChild,
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildOverflowMenu(
-    BuildContext context, {
-    required double topOffset,
-    required TheavSurfaceStyle style,
-    required Color headerBg,
-    required Color headerFg,
-  }) {
-    final menuItemsColumn = Material(
-      type: MaterialType.transparency,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildMenuItem(
-              icon: iconoir.RefreshDouble(
-                width: 18,
-                height: 18,
-                color: headerFg,
-              ),
-              label: 'Обновить страницу',
-              fgColor: headerFg,
-              onTap: () async {
-                _closeMenu();
-                if (_session.controller != null) {
-                  setState(() {
-                    _session.isWebContentReady = false;
-                    _session.loadProgress = 0.08;
-                  });
-                  await _session.controller!.reload();
-                }
-              },
-            ),
-            if (_session.settingsButtonVisible)
-              _buildMenuItem(
-                icon: iconoir.Settings(
-                  width: 18,
-                  height: 18,
-                  color: headerFg,
-                ),
-                label: 'Настройки приложения',
-                fgColor: headerFg,
-                onTap: () async {
-                  _closeMenu();
-                  await _dispatchEventToWebView('settings_button_pressed');
-                },
-              ),
-            _buildMenuItem(
-              icon: iconoir.NavArrowDown(
-                width: 18,
-                height: 18,
-                color: headerFg,
-              ),
-              label: 'Свернуть',
-              fgColor: headerFg,
-              onTap: _minimizeMiniApp,
-            ),
-            _buildMenuItem(
-              icon: iconoir.Copy(
-                width: 18,
-                height: 18,
-                color: headerFg,
-              ),
-              label: 'Скопировать ссылку',
-              fgColor: headerFg,
-              onTap: () async {
-                _closeMenu();
-                await Clipboard.setData(
-                  ClipboardData(text: _session.launchData.url),
-                );
-                if (context.mounted) {
-                  GlassToastService().show(context, 'Ссылка скопирована');
-                }
-              },
-            ),
-            _buildMenuItem(
-              icon: iconoir.OpenNewWindow(
-                width: 18,
-                height: 18,
-                color: headerFg,
-              ),
-              label: 'Открыть в браузере',
-              fgColor: headerFg,
-              onTap: () async {
-                _closeMenu();
-                final u = Uri.tryParse(_session.launchData.url);
-                if (u != null) {
-                  await launchUrl(u, mode: LaunchMode.externalApplication);
-                }
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-
-    final blurFilter = style.getMaterialHudBlurFilter(sigma: 10.0);
-    final Widget surface;
-    if (style.isGlass && style.glassProvider != null) {
-      surface = LiquidGlassLens(
-        key: const ValueKey('mini_app_overflow_menu'),
-        style: style.glassProvider!.createStyle(
-          context: context,
-          cornerRadius: 18,
-          isLiteOverride: true,
-          refractionIndex: 1.08,
-          refractionWidth: 16.0,
-          borderWidth: 1.1,
-          color: headerBg.withValues(alpha: style.isDark ? 0.86 : 0.90),
-        ),
-        child: menuItemsColumn,
-      );
-    } else {
-      final Color menuBg = blurFilter != null
-          ? BlurUtils.resolveMaterialHudColor(
-              headerBg,
-              isDark: style.isDark,
-              blurEnabled: true,
-              darkAlpha: 0.88,
-              lightAlpha: 0.90,
-            )
-          : headerBg;
-      Widget box = DecoratedBox(
-        decoration: BoxDecoration(
-          color: menuBg,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: blurFilter != null ? style.hudBorder : style.hairlineBorder,
-            width: 0.6,
-          ),
-        ),
-        child: menuItemsColumn,
-      );
-      if (blurFilter != null) {
-        box = BackdropFilter.grouped(filter: blurFilter, child: box);
-      }
-      surface = DecoratedBox(
-        key: const ValueKey('mini_app_overflow_menu'),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: style.floatingShadow,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: box,
-        ),
-      );
-    }
-
-    return Positioned(
-      top: topOffset,
-      right: 10,
-      width: 236,
-      child: ScaleTransition(
-        alignment: Alignment.topRight,
-        scale: CurvedAnimation(
-          parent: _menuAnimController,
-          curve: Curves.easeOutCubic,
-        ).drive(Tween<double>(begin: 0.92, end: 1.0)),
-        child: surface,
       ),
     );
   }

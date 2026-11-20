@@ -131,6 +131,42 @@ void main() {
       expect(find.text('example.org'), findsWidgets);
       expect(launchedExternal, isNull);
 
+      // 2b. Tapping 3-dots morphs the browser menu inside WebViewFloatingHeader, tapping outside closes it
+      await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byType(WebViewFloatingHeader),
+          matching: find.byKey(const ValueKey('in_app_browser_overflow_menu')),
+        ),
+        findsOneWidget,
+      );
+      await tester.tapAt(tester.getCenter(find.byType(InAppBrowserSheet)));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('in_app_browser_overflow_menu')),
+        findsNothing,
+      );
+
+      // 2c. Tapping center title pill opens MiniAppTabsSwitcher with preview content for the browser tab
+      await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('mini_app_tabs_switcher')), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>)
+                  .value
+                  .startsWith('mini_app_tab_preview_'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('example.org').first);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+      expect(find.byKey(const ValueKey('mini_app_tabs_switcher')), findsNothing);
+
       // 3. Minimize browser tab into bottom dock
       await tester.tap(find.byKey(const ValueKey('in_app_browser_minimize_button')));
       await tester.pumpAndSettle();

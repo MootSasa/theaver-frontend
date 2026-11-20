@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.hardware.display.DisplayManager
 import android.media.RingtoneManager
 import android.net.Uri
@@ -20,13 +22,16 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.WebView
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import app.theaver.messenger.notifications.NativeNotificationsChannel
+import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 class MainActivity : FlutterFragmentActivity() {
@@ -39,6 +44,7 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val snapshotExecutor = Executors.newSingleThreadExecutor()
     private val hookedSurfaceHolders: MutableSet<SurfaceHolder> =
         Collections.newSetFromMap(WeakHashMap())
     private var cachedFlutterSurfaceViewRef: WeakReference<SurfaceView>? = null
@@ -107,6 +113,7 @@ class MainActivity : FlutterFragmentActivity() {
         if (currentActivityRef?.get() === this) {
             currentActivityRef = null
         }
+        snapshotExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -136,6 +143,101 @@ class MainActivity : FlutterFragmentActivity() {
                     }
                 }
                 else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.theaver.messenger/webview_snapshot"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "captureWebView" -> {
+                    val urlArg = call.argument<String>("url")
+                    val maxWidth = (call.argument<Int>("maxWidth") ?: 540).coerceIn(120, 1440)
+                    val quality = (call.argument<Int>("quality") ?: 80).coerceIn(20, 95)
+                    runOnUiThread {
+                        var bitmap: Bitmap? = null
+                        try {
+                            val webView = findTargetWebView(window?.decorView, urlArg)
+                            if (webView == null || webView.width <= 0 || webView.height <= 0) {
+                                result.success(null)
+                                return@runOnUiThread
+                            }
+                            val scale = (maxWidth.toFloat() / webView.width.toFloat()).coerceIn(0.15f, 1.0f)
+                            val outW = (webView.width * scale).toInt().coerceAtLeast(1)
+                            val outH = (webView.height * scale).toInt().coerceAtLeast(1)
+                            val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+                            bitmap = bmp
+                            val canvas = Canvas(bmp)
+                            canvas.scale(scale, scale)
+                            canvas.translate(-webView.scrollX.toFloat(), -webView.scrollY.toFloat())
+                            webView.draw(canvas)
+                            snapshotExecutor.execute {
+                                val bytes = try {
+                                    val out = ByteArrayOutputStream()
+                                    bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                                    out.toByteArray()
+                                } catch (_: Throwable) {
+                                    null
+                                } finally {
+                                    if (!bmp.isRecycled) {
+                                        bmp.recycle()
+                                    }
+                                }
+                                mainHandler.post { result.success(bytes) }
+                            }
+                        } catch (_: Throwable) {
+                            bitmap?.let {
+                                if (!it.isRecycled) {
+                                    it.recycle()
+                                }
+                            }
+                            result.success(null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun findTargetWebView(root: View?, targetUrl: String?): WebView? {
+        if (root == null) return null
+        val candidates = ArrayList<WebView>()
+        collectVisibleWebViews(root, candidates)
+        if (candidates.isEmpty()) return null
+        val query = targetUrl?.trim().orEmpty()
+        if (query.isNotEmpty()) {
+            val exact = candidates.firstOrNull { (it.url ?: "") == query }
+            if (exact != null) return exact
+            val queryHost = try {
+                Uri.parse(query).host.orEmpty()
+            } catch (_: Exception) {
+                ""
+            }
+            if (queryHost.isNotEmpty()) {
+                val hostMatch = candidates.firstOrNull {
+                    val host = try {
+                        Uri.parse(it.url ?: "").host.orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    host.equals(queryHost, ignoreCase = true)
+                }
+                if (hostMatch != null) return hostMatch
+            }
+        }
+        return candidates.maxByOrNull { it.width.toLong() * it.height.toLong() }
+    }
+
+    private fun collectVisibleWebViews(view: View, out: MutableList<WebView>) {
+        if (!view.isShown || view.width <= 0 || view.height <= 0) return
+        if (view is WebView) {
+            out.add(view)
+            return
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                collectVisibleWebViews(view.getChildAt(i), out)
             }
         }
     }

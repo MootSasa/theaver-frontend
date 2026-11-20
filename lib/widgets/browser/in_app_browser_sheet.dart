@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -15,7 +14,6 @@ import '../../services/bot_service.dart';
 import '../../services/browser_data_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
-import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
@@ -78,7 +76,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
   late final MiniAppSession _session;
-  late final AnimationController _menuAnimController;
   late final AnimationController _dragResetController;
   final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier<double>(0.0);
   final TextEditingController _findCtrl = TextEditingController();
@@ -134,10 +131,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     super.initState();
     _session = widget.session;
     MiniAppSessionController.instance.registerFullScreenOpen();
-    _menuAnimController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 170),
-    );
     _dragResetController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 180),
@@ -203,7 +196,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     }
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
-    _menuAnimController.dispose();
     _findCtrl.dispose();
     MiniAppSessionController.instance.unregisterFullScreenOpen();
     super.dispose();
@@ -213,11 +205,73 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (_isMinimizing) return;
     _isMinimizing = true;
     _closeMenu();
+    unawaited(_session.capturePreviewSnapshot());
     _setRouteRestingOpaque(false);
     HapticUtils.selection();
     final nav = Navigator.of(context, rootNavigator: true);
     MiniAppSessionController.instance.minimize(_session, navigator: nav);
     nav.pop();
+  }
+
+  Future<void> _openTabsSwitcherFromHeader() async {
+    if (_isMinimizing) return;
+    HapticUtils.selection();
+    _closeMenu();
+    await _session.capturePreviewSnapshot().timeout(
+          const Duration(milliseconds: 90),
+          onTimeout: () {},
+        );
+    if (!mounted) return;
+    if (MinimizedMiniAppHost.isMountedIn(context)) {
+      _isMinimizing = true;
+      _setRouteRestingOpaque(false);
+      final nav = Navigator.of(context, rootNavigator: true);
+      MiniAppSessionController.instance.minimizeAndOpenSwitcher(
+        _session,
+        navigator: nav,
+      );
+      nav.pop();
+      return;
+    }
+
+    final navigator = Navigator.of(context);
+    final sessions = <MiniAppSession>[
+      ...MiniAppSessionController.instance.minimizedSessions
+          .where((s) => !identical(s, _session)),
+      _session,
+    ];
+    await navigator.push<void>(
+      PageRouteBuilder<void>(
+        opaque: false,
+        pageBuilder: (routeCtx, _, __) => MiniAppTabsSwitcher(
+          key: const ValueKey('mini_app_tabs_switcher'),
+          sessions: sessions,
+          onDismiss: () => Navigator.of(routeCtx).maybePop(),
+          onSelectSession: (selected) {
+            Navigator.of(routeCtx).maybePop();
+            if (!identical(selected, _session)) {
+              unawaited(
+                MiniAppSessionController.instance.restoreSession(selected),
+              );
+            }
+          },
+          onCloseSession: (target) {
+            MiniAppSessionController.instance.closeSession(target);
+            Navigator.of(routeCtx).maybePop();
+            if (identical(target, _session) && mounted) {
+              _closeTab();
+            }
+          },
+          onCloseAll: () {
+            MiniAppSessionController.instance.closeAllMinimized();
+            Navigator.of(routeCtx).maybePop();
+            if (mounted) {
+              _closeTab();
+            }
+          },
+        ),
+      ),
+    );
   }
 
   void _closeTab() {
@@ -230,19 +284,13 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   void _toggleMenu() {
     HapticUtils.tap();
-    if (_isMenuOpen) {
-      _closeMenu();
-    } else {
-      setState(() => _isMenuOpen = true);
-      _menuAnimController.forward(from: 0.0);
-    }
+    setState(() => _isMenuOpen = !_isMenuOpen);
   }
 
   void _closeMenu() {
-    if (!_isMenuOpen) return;
-    _menuAnimController.reverse().whenComplete(() {
-      if (mounted) setState(() => _isMenuOpen = false);
-    });
+    if (_isMenuOpen) {
+      setState(() => _isMenuOpen = false);
+    }
   }
 
   Future<void> _goBack() async {
@@ -547,7 +595,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final resolved = MiniAppJsBridge.resolveThemeColors(theme);
-    final style = TheavSurfaceStyle.of(context);
     final mq = MediaQuery.of(context);
     final topInset = mq.padding.top;
     final bottomInset = mq.padding.bottom;
@@ -558,11 +605,85 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final String title = _session.displayTitle;
     final bool bookmarked = BrowserDataService.instance.isBookmarked(currentUrl);
 
+    final Widget expandedMenuContent = Padding(
+      key: const ValueKey('in_app_browser_overflow_menu'),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: SingleChildScrollView(
+        physics: const NeverScrollableScrollPhysics(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _browserMenuItem(
+              icon: Icons.refresh_rounded,
+              label: 'Обновить',
+              fg: resolved.headerFg,
+              onTap: () {
+                _closeMenu();
+                _reloadOrStop();
+              },
+            ),
+            _browserMenuItem(
+              icon: bookmarked
+                  ? Icons.bookmark_rounded
+                  : Icons.bookmark_border_rounded,
+              label: bookmarked ? 'Убрать из закладок' : 'В закладки',
+              fg: resolved.headerFg,
+              onTap: _toggleBookmark,
+            ),
+            _browserMenuItem(
+              icon: Icons.history_rounded,
+              label: 'Закладки и история',
+              fg: resolved.headerFg,
+              onTap: _openBookmarksAndHistorySheet,
+            ),
+            _browserMenuItem(
+              icon: Icons.search_rounded,
+              label: 'Найти на странице',
+              fg: resolved.headerFg,
+              onTap: () {
+                _closeMenu();
+                setState(() => _isFindOpen = true);
+              },
+            ),
+            _browserMenuItem(
+              icon: _session.isDesktopMode
+                  ? Icons.phone_android_rounded
+                  : Icons.desktop_windows_rounded,
+              label: _session.isDesktopMode
+                  ? 'Мобильная версия'
+                  : 'Версия для ПК',
+              fg: resolved.headerFg,
+              onTap: _toggleDesktopMode,
+            ),
+            _browserMenuItem(
+              icon: Icons.copy_rounded,
+              label: 'Копировать ссылку',
+              fg: resolved.headerFg,
+              onTap: _copyCurrentUrl,
+            ),
+            _browserMenuItem(
+              icon: Icons.open_in_browser_rounded,
+              label: 'Открыть во внешнем браузере',
+              fg: resolved.headerFg,
+              onTap: _openExternalBrowser,
+            ),
+          ],
+        ),
+      ),
+    );
+
     final Widget floatingHeader = WebViewFloatingHeader(
       topInset: topInset,
       progressListenable: _session.loadProgressNotifier,
       progressColor: resolved.palette.primary,
-      onCenterTap: _copyCurrentUrl,
+      onCenterTap: _openTabsSwitcherFromHeader,
+      onCenterLongPress: _copyCurrentUrl,
+      isMenuOpen: _isMenuOpen,
+      onDismissMenu: _closeMenu,
+      expandedMenuWidth: 260.0,
+      expandedMenuHeight: 7 * 44.0 + 12.0,
+      expandedMenuChild: expandedMenuContent,
       onVerticalDragStart: _handleHeaderDragStart,
       onVerticalDragUpdate: _handleHeaderDragUpdate,
       onVerticalDragEnd: _handleHeaderDragEnd,
@@ -893,121 +1014,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       ),
     );
 
-    final Widget menuItemsColumn = Material(
-      type: MaterialType.transparency,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _browserMenuItem(
-            icon: Icons.refresh_rounded,
-            label: 'Обновить',
-            fg: resolved.headerFg,
-            onTap: () {
-              _closeMenu();
-              _reloadOrStop();
-            },
-          ),
-          _browserMenuItem(
-            icon: bookmarked
-                ? Icons.bookmark_rounded
-                : Icons.bookmark_border_rounded,
-            label: bookmarked ? 'Убрать из закладок' : 'В закладки',
-            fg: resolved.headerFg,
-            onTap: _toggleBookmark,
-          ),
-          _browserMenuItem(
-            icon: Icons.history_rounded,
-            label: 'Закладки и история',
-            fg: resolved.headerFg,
-            onTap: _openBookmarksAndHistorySheet,
-          ),
-          _browserMenuItem(
-            icon: Icons.search_rounded,
-            label: 'Найти на странице',
-            fg: resolved.headerFg,
-            onTap: () {
-              _closeMenu();
-              setState(() => _isFindOpen = true);
-            },
-          ),
-          _browserMenuItem(
-            icon: _session.isDesktopMode
-                ? Icons.phone_android_rounded
-                : Icons.desktop_windows_rounded,
-            label: _session.isDesktopMode
-                ? 'Мобильная версия'
-                : 'Версия для ПК',
-            fg: resolved.headerFg,
-            onTap: _toggleDesktopMode,
-          ),
-          _browserMenuItem(
-            icon: Icons.copy_rounded,
-            label: 'Копировать ссылку',
-            fg: resolved.headerFg,
-            onTap: _copyCurrentUrl,
-          ),
-          _browserMenuItem(
-            icon: Icons.open_in_browser_rounded,
-            label: 'Открыть во внешнем браузере',
-            fg: resolved.headerFg,
-            onTap: _openExternalBrowser,
-          ),
-        ],
-      ),
-    );
-
-    final blurFilter = style.getMaterialHudBlurFilter(sigma: 10.0);
-    final Widget menuCard;
-    if (style.isGlass && style.glassProvider != null) {
-      menuCard = LiquidGlassLens(
-        style: style.glassProvider!.createStyle(
-          context: context,
-          cornerRadius: 18,
-          isLiteOverride: true,
-          refractionIndex: 1.08,
-          refractionWidth: 16.0,
-          borderWidth: 1.1,
-          color:
-              resolved.headerBg.withValues(alpha: style.isDark ? 0.86 : 0.90),
-        ),
-        child: menuItemsColumn,
-      );
-    } else {
-      final Color menuBg = blurFilter != null
-          ? BlurUtils.resolveMaterialHudColor(
-              resolved.headerBg,
-              isDark: style.isDark,
-              blurEnabled: true,
-              darkAlpha: 0.88,
-              lightAlpha: 0.90,
-            )
-          : resolved.headerBg;
-      Widget box = DecoratedBox(
-        decoration: BoxDecoration(
-          color: menuBg,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: blurFilter != null ? style.hudBorder : style.hairlineBorder,
-            width: 0.6,
-          ),
-        ),
-        child: menuItemsColumn,
-      );
-      if (blurFilter != null) {
-        box = BackdropFilter.grouped(filter: blurFilter, child: box);
-      }
-      menuCard = DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: style.floatingShadow,
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(18),
-          child: box,
-        ),
-      );
-    }
-
     final Widget sheetBody = Material(
       key: const ValueKey('in_app_browser_sheet'),
       color: resolved.bodyBg,
@@ -1015,41 +1021,20 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         fit: StackFit.expand,
         children: [
           Positioned.fill(child: webBody),
+          if (floatingFindBar != null)
+            Positioned(
+              top: topInset + 60.0,
+              left: 0,
+              right: 0,
+              child: floatingFindBar,
+            ),
+          floatingBottomBar,
           Positioned(
             top: 0,
             left: 0,
             right: 0,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                floatingHeader,
-                if (floatingFindBar != null) floatingFindBar,
-              ],
-            ),
+            child: floatingHeader,
           ),
-          floatingBottomBar,
-          if (_isMenuOpen) ...[
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _closeMenu,
-                child: const SizedBox.expand(),
-              ),
-            ),
-            Positioned(
-              top: topInset + 58,
-              right: 12,
-              width: 256,
-              child: ScaleTransition(
-                alignment: Alignment.topRight,
-                scale: CurvedAnimation(
-                  parent: _menuAnimController,
-                  curve: Curves.easeOutCubic,
-                ).drive(Tween<double>(begin: 0.92, end: 1.0)),
-                child: menuCard,
-              ),
-            ),
-          ],
         ],
       ),
     );
