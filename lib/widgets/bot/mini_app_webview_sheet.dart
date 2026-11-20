@@ -442,6 +442,191 @@ class MiniAppSession {
       return isNaN(n) || !isFinite(n) ? null : n;
     }
 
+    function parseTransformTy(rawTransform, refHeight) {
+      if (!rawTransform || typeof rawTransform !== 'string') return 0;
+      var s = rawTransform.trim();
+      if (!s || s === 'none') return 0;
+      if (s.indexOf('matrix3d(') === 0) {
+        var parts3d = s.slice(9, -1).split(',');
+        if (parts3d.length >= 14) {
+          var m3y = parseFloat(parts3d[13]);
+          return isNaN(m3y) ? 0 : m3y;
+        }
+        return 0;
+      }
+      if (s.indexOf('matrix(') === 0) {
+        var parts2d = s.slice(7, -1).split(',');
+        if (parts2d.length >= 6) {
+          var m2y = parseFloat(parts2d[5]);
+          return isNaN(m2y) ? 0 : m2y;
+        }
+        return 0;
+      }
+      var totalY = 0;
+      var matched = false;
+      var fnRe = /(translateY|translate3d|translate)\(\s*([^)]+)\)/gi;
+      var m;
+      while ((m = fnRe.exec(s)) !== null) {
+        var fn = m[1].toLowerCase();
+        var args = m[2].split(',');
+        var yToken = null;
+        if (fn === 'translatey') {
+          yToken = args[0];
+        } else if (args.length >= 2) {
+          yToken = args[1];
+        }
+        if (!yToken) continue;
+        yToken = yToken.trim();
+        var num = parseFloat(yToken);
+        if (isNaN(num) || !isFinite(num)) continue;
+        matched = true;
+        if (yToken.slice(-1) === '%') {
+          totalY += (num / 100) * (refHeight || 0);
+        } else {
+          totalY += num;
+        }
+      }
+      return matched ? totalY : 0;
+    }
+
+    function getTargetTranslateY(el, cs, refHeight) {
+      try {
+        if (el && typeof el.getAnimations === 'function') {
+          var anims = el.getAnimations();
+          for (var ai = anims.length - 1; ai >= 0; ai--) {
+            var anim = anims[ai];
+            if (!anim) continue;
+            var ps = anim.playState;
+            if (ps !== 'running' && ps !== 'pending') continue;
+            var eff = anim.effect;
+            if (!eff || typeof eff.getKeyframes !== 'function') continue;
+            var kfs = eff.getKeyframes();
+            if (!kfs || kfs.length === 0) continue;
+            var lastKf = kfs[kfs.length - 1];
+            if (lastKf && lastKf.transform !== undefined && lastKf.transform !== null) {
+              return parseTransformTy(String(lastKf.transform), refHeight);
+            }
+          }
+        }
+      } catch (e) {}
+      return parseTransformTy((cs && (cs.transform || cs.webkitTransform)) || 'none', refHeight);
+    }
+
+    function isPinnedElementHiding(el, cs, pos, role, effH) {
+      if (role === 'top-pinned') {
+        if (pos === 'fixed' && cs.top !== 'auto') {
+          var liveTop = parseNum(cs.top);
+          if (liveTop !== null && liveTop < -8) return true;
+        }
+        if (getTargetTranslateY(el, cs, effH) < -12) return true;
+        if (el.children && el.children.length === 1) {
+          var tcEl = el.firstElementChild;
+          if (tcEl && tcEl.tagName) {
+            var tcCs = window.getComputedStyle(tcEl);
+            if (tcCs.display !== 'none') {
+              var tcH = Math.max(effH, tcEl.offsetHeight || 0);
+              if (getTargetTranslateY(tcEl, tcCs, tcH) < -12) return true;
+            }
+          }
+        }
+        return false;
+      }
+      if (role === 'bottom-pinned') {
+        if (pos === 'fixed' && cs.bottom !== 'auto') {
+          var liveBot = parseNum(cs.bottom);
+          if (liveBot !== null && liveBot < -8) return true;
+        }
+        if (getTargetTranslateY(el, cs, effH) > 12) return true;
+        if (el.children && el.children.length === 1) {
+          var bcEl = el.firstElementChild;
+          if (bcEl && bcEl.tagName) {
+            var bcCs = window.getComputedStyle(bcEl);
+            if (bcCs.display !== 'none') {
+              var bcH = Math.max(effH, bcEl.offsetHeight || 0);
+              if (getTargetTranslateY(bcEl, bcCs, bcH) > 12) return true;
+            }
+          }
+        }
+        return false;
+      }
+      return false;
+    }
+
+    function applyPinnedOffset(
+      el,
+      cs,
+      pos,
+      role,
+      origTopRaw,
+      origTopNum,
+      origBottomRaw,
+      origBottomNum,
+      effH,
+      tc,
+      bc
+    ) {
+      var hiding = isPinnedElementHiding(el, cs, pos, role, effH);
+      var wasInit = el.dataset.theaverHideInit === '1';
+      var prevHiding = el.dataset.theaverIsHiding === '1';
+      el.dataset.theaverHideInit = '1';
+      el.dataset.theaverIsHiding = hiding ? '1' : '0';
+
+      if (wasInit && prevHiding !== hiding) {
+        if (el.dataset.theaverOrigInlineTrans === undefined) {
+          el.dataset.theaverOrigInlineTrans = el.style.getPropertyValue('transition') || '';
+        }
+        if (el.dataset.theaverAddedTrans === '1') {
+          var savedTrans = el.dataset.theaverOrigInlineTrans || '';
+          if (savedTrans) {
+            el.style.setProperty('transition', savedTrans);
+          } else {
+            el.style.removeProperty('transition');
+          }
+          el.dataset.theaverAddedTrans = '0';
+        }
+        var liveTransCs = window.getComputedStyle(el);
+        var siteTrans = liveTransCs.transition || '';
+        var siteDur = parseFloat(liveTransCs.transitionDuration) || 0;
+        if (
+          siteDur > 0 &&
+          siteTrans.indexOf('all') === -1 &&
+          siteTrans.indexOf('translate') === -1
+        ) {
+          el.style.setProperty(
+            'transition',
+            siteTrans + ', translate 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
+          );
+          el.dataset.theaverAddedTrans = '1';
+        }
+      }
+
+      if (role === 'top-pinned') {
+        if (pos === 'fixed' && origTopRaw !== 'auto-top') {
+          setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + tc + 'px'));
+        } else {
+          var nextTopVal = origTopRaw === 'auto-top' ? tc : Math.round((origTopNum || 0) + tc);
+          setImp(el, 'top', nextTopVal + 'px');
+          setImp(el, 'translate', hiding ? ('0px ' + (-tc) + 'px') : '0px 0px');
+        }
+      } else if (role === 'bottom-pinned') {
+        if (pos === 'fixed' && origBottomRaw !== 'auto-bottom') {
+          setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + (-bc) + 'px'));
+        } else {
+          var nextBotVal = origBottomRaw === 'auto-bottom' ? bc : Math.round((origBottomNum || 0) + bc);
+          setImp(el, 'bottom', nextBotVal + 'px');
+          setImp(el, 'translate', hiding ? ('0px ' + bc + 'px') : '0px 0px');
+        }
+      }
+    }
+
+    function trackPinnedElement(el, pos) {
+      el.dataset.theaverPos = pos;
+      window.__theaverTrackedPinned = window.__theaverTrackedPinned || [];
+      if (window.__theaverTrackedPinned.indexOf(el) === -1) {
+        window.__theaverTrackedPinned.push(el);
+      }
+    }
+
     function getEffectiveSize(el, rect) {
       var effW = Math.max(rect.width || 0, el.offsetWidth || 0);
       var effH = Math.max(rect.height || 0, el.offsetHeight || 0);
@@ -521,6 +706,8 @@ class MiniAppSession {
         var scale = (fvh > 0 && vh > fvh * 1.15) ? (vh / fvh) : 1.0;
         var tc = Math.round(Math.max(0, Number(rawTopClear) || 0) * scale);
         var bc = Math.round(Math.max(0, Number(rawBottomClear) || 0) * scale);
+        window.__theaverScaledTop = tc;
+        window.__theaverScaledBottom = bc;
 
         var rootStyle = document.documentElement.style;
         rootStyle.setProperty('--theaver-header-clearance', tc + 'px');
@@ -781,14 +968,29 @@ class MiniAppSession {
             setImp(el, 'box-sizing', 'border-box');
             setImp(el, 'padding-top', Math.round(origPt + tc) + 'px');
             setImp(el, 'padding-bottom', Math.round(origPb + bc) + 'px');
-          } else if (role === 'top-pinned' || role === 'top-abs') {
+          } else if (role === 'top-pinned' || role === 'bottom-pinned') {
+            trackPinnedElement(el, pos);
+            applyPinnedOffset(
+              el,
+              cs,
+              pos,
+              role,
+              origTopRaw,
+              origTopNum,
+              origBottomRaw,
+              origBottomNum,
+              eff.h,
+              tc,
+              bc
+            );
+            if (role === 'top-pinned') hasPrimaryTopBar = true;
+            if (role === 'bottom-pinned') hasPrimaryBottomBar = true;
+          } else if (role === 'top-abs') {
             var nextTopVal = origTopRaw === 'auto-top' ? tc : Math.round((origTopNum || 0) + tc);
             setImp(el, 'top', nextTopVal + 'px');
-            if (role === 'top-pinned') hasPrimaryTopBar = true;
-          } else if (role === 'bottom-pinned' || role === 'bottom-abs') {
+          } else if (role === 'bottom-abs') {
             var nextBotVal = origBottomRaw === 'auto-bottom' ? bc : Math.round((origBottomNum || 0) + bc);
             setImp(el, 'bottom', nextBotVal + 'px');
-            if (role === 'bottom-pinned') hasPrimaryBottomBar = true;
           }
         }
 
@@ -796,9 +998,26 @@ class MiniAppSession {
           for (var dt = 0; dt < deferredTopBars.length; dt++) {
             var dTopItem = deferredTopBars[dt];
             if (!dTopItem || !dTopItem.el || hasAppliedAncestor(dTopItem.el)) continue;
-            dTopItem.el.dataset.theaverSafeRole = 'top-pinned';
-            dTopItem.el.dataset.theaverSafeZoneApplied = '1';
-            setImp(dTopItem.el, 'top', Math.round(dTopItem.origTop + tc) + 'px');
+            var dTopEl = dTopItem.el;
+            var dTopCs = window.getComputedStyle(dTopEl);
+            var dTopPos = dTopCs.position;
+            var dTopEff = getEffectiveSize(dTopEl, dTopEl.getBoundingClientRect());
+            dTopEl.dataset.theaverSafeRole = 'top-pinned';
+            dTopEl.dataset.theaverSafeZoneApplied = '1';
+            trackPinnedElement(dTopEl, dTopPos);
+            applyPinnedOffset(
+              dTopEl,
+              dTopCs,
+              dTopPos,
+              'top-pinned',
+              dTopEl.dataset.theaverOrigTop || String(dTopItem.origTop),
+              dTopItem.origTop,
+              dTopEl.dataset.theaverOrigBottom || 'auto',
+              null,
+              dTopEff.h,
+              tc,
+              bc
+            );
           }
         }
 
@@ -806,9 +1025,26 @@ class MiniAppSession {
           for (var db = 0; db < deferredBottomBars.length; db++) {
             var dBotItem = deferredBottomBars[db];
             if (!dBotItem || !dBotItem.el || hasAppliedAncestor(dBotItem.el)) continue;
-            dBotItem.el.dataset.theaverSafeRole = 'bottom-pinned';
-            dBotItem.el.dataset.theaverSafeZoneApplied = '1';
-            setImp(dBotItem.el, 'bottom', Math.round(dBotItem.origBottom + bc) + 'px');
+            var dBotEl = dBotItem.el;
+            var dBotCs = window.getComputedStyle(dBotEl);
+            var dBotPos = dBotCs.position;
+            var dBotEff = getEffectiveSize(dBotEl, dBotEl.getBoundingClientRect());
+            dBotEl.dataset.theaverSafeRole = 'bottom-pinned';
+            dBotEl.dataset.theaverSafeZoneApplied = '1';
+            trackPinnedElement(dBotEl, dBotPos);
+            applyPinnedOffset(
+              dBotEl,
+              dBotCs,
+              dBotPos,
+              'bottom-pinned',
+              dBotEl.dataset.theaverOrigTop || 'auto',
+              null,
+              dBotEl.dataset.theaverOrigBottom || String(dBotItem.origBottom),
+              dBotItem.origBottom,
+              dBotEff.h,
+              tc,
+              bc
+            );
           }
         }
 
@@ -843,11 +1079,92 @@ class MiniAppSession {
       }
     };
 
+    window.__theaverRefreshTrackedPinned = function() {
+      if (window.__theaverApplyingSafeZones) return;
+      window.__theaverApplyingSafeZones = true;
+      try {
+        var tc = window.__theaverScaledTop !== undefined
+          ? window.__theaverScaledTop
+          : (Number(window.__theaverTopClear) || 0);
+        var bc = window.__theaverScaledBottom !== undefined
+          ? window.__theaverScaledBottom
+          : (Number(window.__theaverBottomClear) || 0);
+        var list = [];
+        var tracked = window.__theaverTrackedPinned || [];
+        for (var ti = 0; ti < tracked.length; ti++) {
+          var tel = tracked[ti];
+          if (tel && tel.isConnected) {
+            list.push(tel);
+          }
+        }
+        window.__theaverTrackedPinned = list;
+        if (document && document.querySelectorAll) {
+          var queried = document.querySelectorAll(
+            '[data-theaver-safe-role="top-pinned"], [data-theaver-safe-role="bottom-pinned"]'
+          );
+          for (var qi = 0; qi < queried.length; qi++) {
+            if (list.indexOf(queried[qi]) === -1) {
+              list.push(queried[qi]);
+            }
+          }
+        }
+        for (var i = 0; i < list.length; i++) {
+          var el = list[i];
+          if (!el || !el.dataset) continue;
+          var role = el.dataset.theaverSafeRole || '';
+          if (role !== 'top-pinned' && role !== 'bottom-pinned') continue;
+          var cs = window.getComputedStyle(el);
+          if (cs.display === 'none') continue;
+          var pos = el.dataset.theaverPos || cs.position;
+          var origTopRaw = el.dataset.theaverOrigTop || 'auto';
+          var origBottomRaw = el.dataset.theaverOrigBottom || 'auto';
+          var origTopNum = (origTopRaw === 'auto' || origTopRaw === 'auto-top') ? null : parseNum(origTopRaw);
+          var origBottomNum = (origBottomRaw === 'auto' || origBottomRaw === 'auto-bottom') ? null : parseNum(origBottomRaw);
+          var eff = getEffectiveSize(el, el.getBoundingClientRect());
+          if (eff.h <= 0) continue;
+          applyPinnedOffset(
+            el,
+            cs,
+            pos,
+            role,
+            origTopRaw,
+            origTopNum,
+            origBottomRaw,
+            origBottomNum,
+            eff.h,
+            tc,
+            bc
+          );
+        }
+      } catch (e) {
+      } finally {
+        if (window.__theaverSafeZoneObs && typeof window.__theaverSafeZoneObs.takeRecords === 'function') {
+          window.__theaverSafeZoneObs.takeRecords();
+        }
+        window.__theaverApplyingSafeZones = false;
+      }
+    };
+
     var initialMeta = window.__theaverSyncSafeZones(__TOP_PX__, __BOTTOM_PX__, __FLUTTER_VH__);
 
     if (!window.__theaverSafeZoneObserverInstalled) {
       window.__theaverSafeZoneObserverInstalled = true;
       var syncTimer = null;
+      var pinnedRaf = 0;
+      var rafFn = typeof window.requestAnimationFrame === 'function'
+        ? function(cb) { return window.requestAnimationFrame(cb); }
+        : function(cb) { return setTimeout(cb, 16); };
+
+      var schedulePinnedRefresh = function() {
+        if (window.__theaverApplyingSafeZones || pinnedRaf) return;
+        pinnedRaf = rafFn(function() {
+          pinnedRaf = 0;
+          if (typeof window.__theaverRefreshTrackedPinned === 'function') {
+            window.__theaverRefreshTrackedPinned();
+          }
+        });
+      };
+
       var scheduleSync = function() {
         if (window.__theaverApplyingSafeZones || syncTimer) return;
         syncTimer = setTimeout(function() {
@@ -861,8 +1178,40 @@ class MiniAppSession {
           }
         }, 160);
       };
+
+      var isTrackedOrDescendant = function(target) {
+        var cur = target;
+        var steps = 0;
+        while (cur && cur.nodeType === 1 && steps < 5) {
+          var r = cur.dataset && cur.dataset.theaverSafeRole;
+          if (r === 'top-pinned' || r === 'bottom-pinned') {
+            return true;
+          }
+          cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+          steps++;
+        }
+        return false;
+      };
+
       if (typeof MutationObserver === 'function') {
-        var obs = new MutationObserver(scheduleSync);
+        var onDomMutate = function(mutations) {
+          if (window.__theaverApplyingSafeZones) return;
+          var hitTracked = false;
+          if (mutations && mutations.length) {
+            for (var mi = 0; mi < mutations.length; mi++) {
+              var mut = mutations[mi];
+              if (mut && mut.type === 'attributes' && isTrackedOrDescendant(mut.target)) {
+                hitTracked = true;
+                break;
+              }
+            }
+          }
+          if (hitTracked) {
+            schedulePinnedRefresh();
+          }
+          scheduleSync();
+        };
+        var obs = new MutationObserver(onDomMutate);
         window.__theaverSafeZoneObs = obs;
         obs.observe(document.documentElement, {
           childList: true,
@@ -871,9 +1220,24 @@ class MiniAppSession {
           attributeFilter: ['class', 'style']
         });
       }
+
+      var onTransitionEvt = function(ev) {
+        if (window.__theaverApplyingSafeZones) return;
+        if (ev && isTrackedOrDescendant(ev.target)) {
+          schedulePinnedRefresh();
+        }
+      };
+      var onScrollEvt = function() {
+        schedulePinnedRefresh();
+        scheduleSync();
+      };
+
+      document.addEventListener('transitionrun', onTransitionEvt, { passive: true, capture: true });
+      document.addEventListener('transitionstart', onTransitionEvt, { passive: true, capture: true });
+      document.addEventListener('transitionend', onTransitionEvt, { passive: true, capture: true });
       window.addEventListener('resize', scheduleSync, { passive: true });
-      window.addEventListener('scroll', scheduleSync, { passive: true });
-      document.addEventListener('scroll', scheduleSync, { passive: true, capture: true });
+      window.addEventListener('scroll', onScrollEvt, { passive: true });
+      document.addEventListener('scroll', onScrollEvt, { passive: true, capture: true });
     }
     return initialMeta;
   } catch (e) {

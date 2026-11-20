@@ -372,6 +372,13 @@ void main() {
       expect(js, contains('scroll-padding-bottom:'));
       expect(js, contains('getEffectiveSize'));
       expect(js, contains('offsetHeight'));
+      expect(js, contains('parseTransformTy'));
+      expect(js, contains('getTargetTranslateY'));
+      expect(js, contains('getAnimations'));
+      expect(js, contains('isPinnedElementHiding'));
+      expect(js, contains('applyPinnedOffset'));
+      expect(js, contains('transitionrun'));
+      expect(js, contains('__theaverRefreshTrackedPinned'));
       expect(js, contains('theaverScrollContainerPt'));
       expect(js, contains('deferredTopBars'));
       expect(js, contains('deferredBottomBars'));
