@@ -87,6 +87,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
   bool _isTransitionReady = false;
+  bool _didSyncEdgeColorsOnMount = false;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
 
@@ -123,6 +124,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       if (_session.controller != null && shouldRebuild) {
         setState(() {});
       }
+    } else if (!_didSyncEdgeColorsOnMount &&
+        _session.controller != null &&
+        _hasPlatformWebView) {
+      _didSyncEdgeColorsOnMount = true;
+      unawaited(_session.syncBrowserEdgeColors());
     }
   }
 
@@ -148,19 +154,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _updateBrowserSafeClearances({EdgeInsets? paddingOverride}) {
     final size = MediaQuery.sizeOf(context);
     final padding = paddingOverride ?? MediaQuery.paddingOf(context);
-    final double nextTop = padding.top + (_isFindOpen ? 116.0 : 64.0);
-    final double nextBottom = padding.bottom + 72.0;
-    final double nextVh = size.height;
-    final bool clearanceChanged =
-        (nextTop - _session.browserTopClearance).abs() > 0.5 ||
-            (nextBottom - _session.browserBottomClearance).abs() > 0.5 ||
-            (nextVh - _session.browserViewportHeight).abs() > 0.5;
-    _session.browserTopClearance = nextTop;
-    _session.browserBottomClearance = nextBottom;
-    _session.browserViewportHeight = nextVh;
-    if (clearanceChanged && _session.controller != null) {
-      unawaited(_session.injectBrowserSafeInsets());
-    }
+    _session.browserTopClearance = padding.top + (_isFindOpen ? 112.0 : 60.0);
+    _session.browserBottomClearance = padding.bottom + 66.0;
+    _session.browserViewportHeight = size.height;
   }
 
   @override
@@ -608,6 +604,25 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final mq = MediaQuery.of(context);
     final topInset = mq.padding.top;
     final bottomInset = mq.padding.bottom;
+    final double topSafeInset = topInset + (_isFindOpen ? 112.0 : 60.0);
+    final double bottomSafeInset = bottomInset + 66.0;
+    final Color topCapColor = _session.browserTopBarColor ?? resolved.bodyBg;
+    final Color bottomCapColor =
+        _session.browserBottomBarColor ?? _session.browserTopBarColor ?? resolved.bodyBg;
+    final bool isTopCapDark = topCapColor.computeLuminance() <= 0.55;
+    final bool isBottomCapDark = bottomCapColor.computeLuminance() <= 0.55;
+    final SystemUiOverlayStyle overlayStyle =
+        (isTopCapDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+            .copyWith(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness:
+          isTopCapDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness:
+          isTopCapDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness:
+          isBottomCapDark ? Brightness.light : Brightness.dark,
+    );
 
     final String currentUrl = _session.currentUrl;
     final bool isHttps = currentUrl.toLowerCase().startsWith('https://');
@@ -892,12 +907,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           )
         : Center(
             child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(
-                24,
-                topInset + 76,
-                24,
-                bottomInset + 84,
-              ),
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
               child: Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
@@ -949,7 +959,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final Widget floatingBottomBar = Positioned(
       left: 16,
       right: 16,
-      bottom: bottomInset + 10,
+      bottom: bottomInset + 9.0,
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
@@ -1034,7 +1044,62 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Positioned.fill(child: webBody),
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            top: 0,
+            left: 0,
+            right: 0,
+            height: topSafeInset,
+            child: AnimatedContainer(
+              key: const ValueKey('in_app_browser_top_cap'),
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              decoration: BoxDecoration(
+                color: topCapColor,
+                border: _session.browserIsScrolled
+                    ? Border(
+                        bottom: BorderSide(
+                          color: (isTopCapDark ? Colors.white : Colors.black)
+                              .withValues(alpha: 0.08),
+                          width: 0.5,
+                        ),
+                      )
+                    : null,
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            height: bottomSafeInset,
+            child: AnimatedContainer(
+              key: const ValueKey('in_app_browser_bottom_cap'),
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic,
+              decoration: BoxDecoration(
+                color: bottomCapColor,
+                border: Border(
+                  top: BorderSide(
+                    color: (isBottomCapDark ? Colors.white : Colors.black)
+                        .withValues(alpha: 0.06),
+                    width: 0.5,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          AnimatedPositioned(
+            key: const ValueKey('in_app_browser_safe_viewport'),
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            top: topSafeInset,
+            bottom: bottomSafeInset,
+            left: 0,
+            right: 0,
+            child: ClipRect(child: webBody),
+          ),
           if (floatingFindBar != null)
             Positioned(
               top: topInset + 60.0,
@@ -1054,30 +1119,33 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
 
     return BackdropGroup(
-      child: PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) async {
-          if (didPop) return;
-          if (_isMenuOpen) {
-            _closeMenu();
-            return;
-          }
-          if (_hasPlatformWebView && _session.canGoBack) {
-            await _goBack();
-            return;
-          }
-          _setRouteRestingOpaque(false);
-          if (mounted) {
-            Navigator.of(context, rootNavigator: true).pop();
-          }
-        },
-        child: ValueListenableBuilder<double>(
-          valueListenable: _dragOffsetNotifier,
-          builder: (context, offsetY, child) => MiniAppDragOffset(
-            offsetY: offsetY,
-            child: child!,
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: overlayStyle,
+        child: PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (didPop, _) async {
+            if (didPop) return;
+            if (_isMenuOpen) {
+              _closeMenu();
+              return;
+            }
+            if (_hasPlatformWebView && _session.canGoBack) {
+              await _goBack();
+              return;
+            }
+            _setRouteRestingOpaque(false);
+            if (mounted) {
+              Navigator.of(context, rootNavigator: true).pop();
+            }
+          },
+          child: ValueListenableBuilder<double>(
+            valueListenable: _dragOffsetNotifier,
+            builder: (context, offsetY, child) => MiniAppDragOffset(
+              offsetY: offsetY,
+              child: child!,
+            ),
+            child: sheetBody,
           ),
-          child: sheetBody,
         ),
       ),
     );
