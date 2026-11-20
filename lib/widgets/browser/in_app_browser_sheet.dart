@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -163,15 +164,28 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final size = MediaQuery.sizeOf(context);
     final padding = paddingOverride ?? MediaQuery.paddingOf(context);
     final double nextTop = padding.top + (_isFindOpen ? 110.0 : 58.0);
+    final double nextCompactTop = padding.top + (_isFindOpen ? 110.0 : 32.0);
     final double nextBottom = padding.bottom + 64.0;
+    final double nextCompactBottom = padding.bottom;
     final double nextVh = size.height;
+    final bool nextForceExpanded = _isFindOpen;
     final bool clearanceChanged =
         (nextTop - _session.browserTopClearance).abs() > 0.5 ||
+            (nextCompactTop - _session.browserCompactTopClearance).abs() > 0.5 ||
             (nextBottom - _session.browserBottomClearance).abs() > 0.5 ||
-            (nextVh - _session.browserViewportHeight).abs() > 0.5;
+            (nextCompactBottom - _session.browserCompactBottomClearance).abs() >
+                0.5 ||
+            (nextVh - _session.browserViewportHeight).abs() > 0.5 ||
+            nextForceExpanded != _session.browserForceExpanded;
     _session.browserTopClearance = nextTop;
+    _session.browserCompactTopClearance = nextCompactTop;
     _session.browserBottomClearance = nextBottom;
+    _session.browserCompactBottomClearance = nextCompactBottom;
     _session.browserViewportHeight = nextVh;
+    _session.browserForceExpanded = nextForceExpanded;
+    if (nextForceExpanded && _session.browserChromeCollapsed) {
+      _session.browserChromeCollapsed = false;
+    }
     if (clearanceChanged && _session.controller != null) {
       unawaited(_session.injectBrowserSafeInsets());
     }
@@ -306,8 +320,16 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     Navigator.of(context, rootNavigator: true).maybePop();
   }
 
+  void _expandBrowserChrome() {
+    HapticUtils.selection();
+    unawaited(_session.setBrowserChromeCollapsed(false));
+  }
+
   void _toggleMenu() {
     HapticUtils.tap();
+    if (!_isMenuOpen && _session.browserChromeCollapsed) {
+      unawaited(_session.setBrowserChromeCollapsed(false));
+    }
     setState(() => _isMenuOpen = !_isMenuOpen);
   }
 
@@ -640,6 +662,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final String host = BrowserDataService.extractHost(currentUrl);
     final String title = _session.displayTitle;
     final bool bookmarked = BrowserDataService.instance.isBookmarked(currentUrl);
+    final bool isCompact =
+        _session.browserChromeCollapsed && !_isMenuOpen && !_isFindOpen;
+    final Color topPocketBase = _session.browserTopPocketColor ??
+        _session.browserCanvasColor ??
+        resolved.bodyBg;
+    final Color bottomPocketBase = _session.browserBottomPocketColor ??
+        _session.browserCanvasColor ??
+        resolved.bodyBg;
+    final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
 
     final Widget expandedMenuContent = Padding(
       key: const ValueKey('in_app_browser_overflow_menu'),
@@ -681,6 +712,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                 _closeMenu();
                 setState(() => _isFindOpen = true);
                 _updateBrowserSafeClearances();
+                if (_session.browserChromeCollapsed) {
+                  unawaited(_session.setBrowserChromeCollapsed(false));
+                }
               },
             ),
             _browserMenuItem(
@@ -716,6 +750,36 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       progressColor: resolved.palette.primary,
       onCenterTap: _openTabsSwitcherFromHeader,
       onCenterLongPress: _copyCurrentUrl,
+      isCompact: isCompact,
+      onExpandCompact: _expandBrowserChrome,
+      compactCenterChild: Row(
+        key: const ValueKey('in_app_browser_compact_domain_row'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isHttps ? Icons.lock_rounded : Icons.warning_amber_rounded,
+            size: 10.5,
+            color: isHttps
+                ? resolved.palette.primary
+                : resolved.palette.error,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              host,
+              key: const ValueKey('in_app_browser_compact_domain'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12.0,
+                fontWeight: FontWeight.w600,
+                height: 1.1,
+                color: resolved.headerFg,
+              ),
+            ),
+          ),
+        ],
+      ),
       isMenuOpen: _isMenuOpen,
       onDismissMenu: _closeMenu,
       expandedMenuWidth: 260.0,
@@ -972,84 +1036,106 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
           );
 
+    final double bottomExpandTarget = isCompact ? 0.0 : 1.0;
     final Widget floatingBottomBar = Positioned(
       left: 16,
       right: 16,
       bottom: bottomInset + 9.0,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: WebViewFloatingCapsule(
-            key: const ValueKey('in_app_browser_bottom_bar'),
-            height: 48,
-            borderRadius: 24,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                IconButton(
-                  tooltip: 'Назад',
-                  icon: Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    size: 19,
-                    color: _session.canGoBack
-                        ? resolved.headerFg
-                        : resolved.headerFg.withValues(alpha: 0.35),
-                  ),
-                  onPressed: _session.canGoBack ? _goBack : null,
-                ),
-                IconButton(
-                  tooltip: 'Вперёд',
-                  icon: Icon(
-                    Icons.arrow_forward_ios_rounded,
-                    size: 19,
-                    color: _session.canGoForward
-                        ? resolved.headerFg
-                        : resolved.headerFg.withValues(alpha: 0.35),
-                  ),
-                  onPressed: _session.canGoForward ? _goForward : null,
-                ),
-                IconButton(
-                  tooltip: 'Поделиться',
-                  icon: Icon(
-                    Icons.ios_share_rounded,
-                    size: 20,
-                    color: resolved.headerFg,
-                  ),
-                  onPressed: _shareCurrentUrl,
-                ),
-                IconButton(
-                  tooltip: 'Закладки и история',
-                  icon: Icon(
-                    bookmarked
-                        ? Icons.bookmark_rounded
-                        : Icons.bookmarks_outlined,
-                    size: 21,
-                    color:
-                        bookmarked ? resolved.palette.primary : resolved.headerFg,
-                  ),
-                  onPressed: _openBookmarksAndHistorySheet,
-                ),
-                ValueListenableBuilder<double>(
-                  valueListenable: _session.loadProgressNotifier,
-                  builder: (context, progress, _) {
-                    final bool isLoading = progress > 0.0 && progress < 1.0;
-                    return IconButton(
-                      tooltip: isLoading ? 'Стоп' : 'Обновить',
-                      icon: Icon(
-                        isLoading
-                            ? Icons.close_rounded
-                            : Icons.refresh_rounded,
-                        size: 21,
-                        color: resolved.headerFg,
-                      ),
-                      onPressed: _reloadOrStop,
-                    );
-                  },
-                ),
-              ],
-            ),
+      child: IgnorePointer(
+        key: const ValueKey('in_app_browser_bottom_bar_ignore'),
+        ignoring: isCompact,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(
+            begin: bottomExpandTarget,
+            end: bottomExpandTarget,
           ),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          builder: (context, t, _) {
+            final bool visible = t > 0.02;
+            return Transform.translate(
+              offset: Offset(0.0, (bottomInset + 68.0) * (1.0 - t)),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: WebViewFloatingCapsule(
+                    key: const ValueKey('in_app_browser_bottom_bar'),
+                    height: 48,
+                    borderRadius: 24,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    visible: visible,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        IconButton(
+                          tooltip: 'Назад',
+                          icon: Icon(
+                            Icons.arrow_back_ios_new_rounded,
+                            size: 19,
+                            color: _session.canGoBack
+                                ? resolved.headerFg
+                                : resolved.headerFg.withValues(alpha: 0.35),
+                          ),
+                          onPressed: _session.canGoBack ? _goBack : null,
+                        ),
+                        IconButton(
+                          tooltip: 'Вперёд',
+                          icon: Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 19,
+                            color: _session.canGoForward
+                                ? resolved.headerFg
+                                : resolved.headerFg.withValues(alpha: 0.35),
+                          ),
+                          onPressed: _session.canGoForward ? _goForward : null,
+                        ),
+                        IconButton(
+                          tooltip: 'Поделиться',
+                          icon: Icon(
+                            Icons.ios_share_rounded,
+                            size: 20,
+                            color: resolved.headerFg,
+                          ),
+                          onPressed: _shareCurrentUrl,
+                        ),
+                        IconButton(
+                          tooltip: 'Закладки и история',
+                          icon: Icon(
+                            bookmarked
+                                ? Icons.bookmark_rounded
+                                : Icons.bookmarks_outlined,
+                            size: 21,
+                            color: bookmarked
+                                ? resolved.palette.primary
+                                : resolved.headerFg,
+                          ),
+                          onPressed: _openBookmarksAndHistorySheet,
+                        ),
+                        ValueListenableBuilder<double>(
+                          valueListenable: _session.loadProgressNotifier,
+                          builder: (context, progress, _) {
+                            final bool isLoading =
+                                progress > 0.0 && progress < 1.0;
+                            return IconButton(
+                              tooltip: isLoading ? 'Стоп' : 'Обновить',
+                              icon: Icon(
+                                isLoading
+                                    ? Icons.close_rounded
+                                    : Icons.refresh_rounded,
+                                size: 21,
+                                color: resolved.headerFg,
+                              ),
+                              onPressed: _reloadOrStop,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -1061,6 +1147,39 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         fit: StackFit.expand,
         children: [
           Positioned.fill(child: webBody),
+          Positioned(
+            key: const ValueKey('in_app_browser_top_scroll_pocket'),
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: _BrowserScrollPocket(
+                edge: LiquidGlassEdge.top,
+                height: topInset + (isCompact ? 18.0 : 26.0),
+                color: topPocketBase.withValues(alpha: 0.90),
+                blurSigma: allowEdgeBlur ? 3.5 : 0.0,
+              ),
+            ),
+          ),
+          Positioned(
+            key: const ValueKey('in_app_browser_bottom_scroll_pocket'),
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: _BrowserScrollPocket(
+                edge: LiquidGlassEdge.bottom,
+                height: math.max(
+                  isCompact
+                      ? (bottomInset > 0 ? bottomInset + 8.0 : 0.0)
+                      : (bottomInset + 24.0),
+                  0.0,
+                ),
+                color: bottomPocketBase.withValues(alpha: isCompact ? 0.65 : 0.84),
+                blurSigma: allowEdgeBlur ? 3.0 : 0.0,
+              ),
+            ),
+          ),
           if (floatingFindBar != null)
             Positioned(
               top: topInset + 60.0,
@@ -1147,6 +1266,47 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Smoothly adapts Safari iOS 26 style feathered edge "Scroll Pocket" color
+/// and height over the top status bar and bottom gesture area.
+class _BrowserScrollPocket extends StatelessWidget {
+  final LiquidGlassEdge edge;
+  final double height;
+  final Color color;
+  final double blurSigma;
+
+  const _BrowserScrollPocket({
+    required this.edge,
+    required this.height,
+    required this.color,
+    required this.blurSigma,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<Color?>(
+      tween: ColorTween(begin: color, end: color),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      builder: (context, animatedColor, _) {
+        final Color resolvedColor = animatedColor ?? color;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          height: height,
+          child: height <= 0.5
+              ? const SizedBox.shrink()
+              : LiquidGlassScrollEdge(
+                  edge: edge,
+                  color: resolvedColor,
+                  blur: blurSigma,
+                  style: LiquidGlassScrollEdgeStyle.soft,
+                ),
+        );
+      },
     );
   }
 }

@@ -241,11 +241,34 @@ class MiniAppSession {
   bool canGoForward = false;
   bool isDesktopMode = false;
   double browserTopClearance = 58.0;
+  double browserCompactTopClearance = 32.0;
   double browserBottomClearance = 64.0;
+  double browserCompactBottomClearance = 0.0;
   double browserViewportHeight = 0.0;
+  bool browserForceExpanded = false;
+  bool browserChromeCollapsed = false;
   bool? browserTopIsDark;
   Color? browserCanvasColor;
+  Color? browserTopPocketColor;
+  Color? browserBottomPocketColor;
   int _earlyBrowserInsetsStage = 0;
+
+  Future<void> setBrowserChromeCollapsed(bool collapsed) async {
+    if (browserForceExpanded && collapsed) return;
+    if (browserChromeCollapsed != collapsed) {
+      browserChromeCollapsed = collapsed;
+      onSheetStateChanged?.call();
+      MiniAppSessionController.instance.notifySessionUpdated();
+    }
+    final ctrl = controller;
+    if (ctrl != null && isBrowser && WebViewPlatform.instance != null) {
+      try {
+        await ctrl.runJavaScript(
+          'if (window.__theaverSetCollapsedFromHost) { window.__theaverSetCollapsedFromHost(${collapsed ? 'true' : 'false'}); }',
+        );
+      } catch (_) {}
+    }
+  }
 
   VoidCallback? onSheetStateChanged;
   VoidCallback? onPendingLaunchResolved;
@@ -343,26 +366,48 @@ class MiniAppSession {
             : 'Mini App');
   }
 
-  /// Builds an idempotent JS pass + observer that keeps page feeds full-screen
-  /// edge-to-edge while offsetting initial scroll bounds and top/bottom pinned
-  /// elements (`fixed`, `sticky`, slide-in wrappers, `absolute` HUD controls,
-  /// locked-viewport scroll containers, and open Shadow DOM) clear of the
-  /// browser's top and bottom floating capsules without adding synthetic bars.
+  /// Builds an idempotent JS pass + observer matching Safari iOS 26 ("Top")
+  /// ergonomics: keeps feeds full-screen edge-to-edge under the 3 top glass
+  /// capsules, polyfills `env(safe-area-inset-bottom/top)` with dynamic host
+  /// variables, adjusts only root scroll start/end padding and a single primary
+  /// top-0 navbar (no nested `bottom-pinned`, `top-abs`, or drawer shifting),
+  /// detects downward/upward scroll to collapse/expand browser chrome, and
+  /// samples top/bottom pocket background colors.
   static String buildBrowserSafeInsetsScript({
     required int topPx,
     required int bottomPx,
+    int? compactTopPx,
+    int? compactBottomPx,
     int flutterViewportHeight = 0,
+    bool forceExpanded = false,
   }) {
     final int safeTop = topPx.clamp(0, 320);
     final int safeBottom = bottomPx.clamp(0, 320);
+    final int safeCompactTop =
+        (compactTopPx ?? math.max(0, safeTop - 26)).clamp(0, safeTop);
+    final int safeCompactBottom = (compactBottomPx ?? 0).clamp(0, safeBottom);
     final int safeFlutterVh = flutterViewportHeight.clamp(0, 4096);
+    final String forceExpandedLit = forceExpanded ? 'true' : 'false';
     const String template = r'''
 (function() {
   try {
     if (!document || !document.documentElement) return null;
     window.__theaverTopClear = __TOP_PX__;
+    window.__theaverCompactTopClear = __COMPACT_TOP_PX__;
     window.__theaverBottomClear = __BOTTOM_PX__;
+    window.__theaverCompactBottomClear = __COMPACT_BOTTOM_PX__;
     window.__theaverFlutterVh = __FLUTTER_VH__;
+    window.__theaverForceExpanded = __FORCE_EXPANDED__;
+
+    var collapseState = window.__theaverCollapseState;
+    if (!collapseState) {
+      collapseState = window.__theaverCollapseState = {
+        collapsed: false,
+        docLastTop: Math.max(0, window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0),
+        accDy: 0,
+        scrollerTops: typeof WeakMap === 'function' ? new WeakMap() : null
+      };
+    }
 
     function parseCssColor(raw) {
       if (!raw || typeof raw !== 'string') return null;
@@ -422,19 +467,16 @@ class MiniAppSession {
       };
     }
 
+    function formatRgb(c) {
+      if (!c) return 'rgb(255, 255, 255)';
+      return 'rgb(' + Math.round(c.r) + ', ' + Math.round(c.g) + ', ' + Math.round(c.b) + ')';
+    }
+
     function setImp(el, prop, val) {
       if (!el || !el.style) return;
       if (el.style.getPropertyValue(prop) !== val || el.style.getPropertyPriority(prop) !== 'important') {
         el.style.setProperty(prop, val, 'important');
       }
-    }
-
-    function hasOpaqueBg(cs) {
-      var bg = parseCssColor(cs.backgroundColor);
-      if (bg && bg.a > 0.75) return true;
-      var bf = cs.backdropFilter || cs.webkitBackdropFilter || '';
-      if (bf && bf !== 'none') return true;
-      return false;
     }
 
     function parseNum(v) {
@@ -512,66 +554,36 @@ class MiniAppSession {
       return parseTransformTy((cs && (cs.transform || cs.webkitTransform)) || 'none', refHeight);
     }
 
-    function isPinnedElementHiding(el, cs, pos, role, effH) {
-      if (role === 'top-pinned') {
-        if (pos === 'fixed' && cs.top !== 'auto') {
-          var liveTop = parseNum(cs.top);
-          if (liveTop !== null && liveTop < -8) return true;
-        }
-        if (getTargetTranslateY(el, cs, effH) < -12) return true;
-        if (el.children && el.children.length === 1) {
-          var tcEl = el.firstElementChild;
-          if (tcEl && tcEl.tagName) {
-            var tcCs = window.getComputedStyle(tcEl);
-            if (tcCs.display !== 'none') {
-              var tcH = Math.max(effH, tcEl.offsetHeight || 0);
-              if (getTargetTranslateY(tcEl, tcCs, tcH) < -12) return true;
-            }
-          }
-        }
-        return false;
+    function isPinnedElementHiding(el, cs, pos, effH) {
+      if (pos === 'fixed' && cs.top !== 'auto') {
+        var liveTop = parseNum(cs.top);
+        if (liveTop !== null && liveTop < -8) return true;
       }
-      if (role === 'bottom-pinned') {
-        if (pos === 'fixed' && cs.bottom !== 'auto') {
-          var liveBot = parseNum(cs.bottom);
-          if (liveBot !== null && liveBot < -8) return true;
-        }
-        if (getTargetTranslateY(el, cs, effH) > 12) return true;
-        if (el.children && el.children.length === 1) {
-          var bcEl = el.firstElementChild;
-          if (bcEl && bcEl.tagName) {
-            var bcCs = window.getComputedStyle(bcEl);
-            if (bcCs.display !== 'none') {
-              var bcH = Math.max(effH, bcEl.offsetHeight || 0);
-              if (getTargetTranslateY(bcEl, bcCs, bcH) > 12) return true;
-            }
+      if (getTargetTranslateY(el, cs, effH) < -12) return true;
+      if (el.children && el.children.length === 1) {
+        var tcEl = el.firstElementChild;
+        if (tcEl && tcEl.tagName) {
+          var tcCs = window.getComputedStyle(tcEl);
+          if (tcCs.display !== 'none') {
+            var tcH = Math.max(effH, tcEl.offsetHeight || 0);
+            if (getTargetTranslateY(tcEl, tcCs, tcH) < -12) return true;
           }
         }
-        return false;
       }
       return false;
     }
 
-    function applyPinnedOffset(
-      el,
-      cs,
-      pos,
-      role,
-      origTopRaw,
-      origTopNum,
-      origBottomRaw,
-      origBottomNum,
-      effH,
-      tc,
-      bc
-    ) {
-      var hiding = isPinnedElementHiding(el, cs, pos, role, effH);
+    function applyPinnedOffset(el, cs, pos, origTopRaw, origTopNum, effH, activeTop) {
+      var hiding = isPinnedElementHiding(el, cs, pos, effH);
       var wasInit = el.dataset.theaverHideInit === '1';
       var prevHiding = el.dataset.theaverIsHiding === '1';
+      var prevTopOffset = el.dataset.theaverPrevTopOffset;
+      var activeTopStr = String(activeTop);
       el.dataset.theaverHideInit = '1';
       el.dataset.theaverIsHiding = hiding ? '1' : '0';
+      el.dataset.theaverPrevTopOffset = activeTopStr;
 
-      if (wasInit && prevHiding !== hiding) {
+      if (wasInit && (prevHiding !== hiding || prevTopOffset !== activeTopStr)) {
         if (el.dataset.theaverOrigInlineTrans === undefined) {
           el.dataset.theaverOrigInlineTrans = el.style.getPropertyValue('transition') || '';
         }
@@ -594,36 +606,28 @@ class MiniAppSession {
         ) {
           el.style.setProperty(
             'transition',
-            siteTrans + ', translate 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
+            siteTrans + ', translate 0.24s cubic-bezier(0.22, 1, 0.36, 1)'
+          );
+          el.dataset.theaverAddedTrans = '1';
+        } else if (siteDur === 0 && prevTopOffset !== undefined && prevTopOffset !== activeTopStr) {
+          var baseT = siteTrans && siteTrans !== 'none' ? (siteTrans + ', ') : '';
+          el.style.setProperty(
+            'transition',
+            baseT +
+              (pos === 'fixed'
+                ? 'translate 0.22s cubic-bezier(0.22, 1, 0.36, 1)'
+                : 'top 0.22s cubic-bezier(0.22, 1, 0.36, 1), translate 0.22s cubic-bezier(0.22, 1, 0.36, 1)')
           );
           el.dataset.theaverAddedTrans = '1';
         }
       }
 
-      if (role === 'top-pinned') {
-        if (pos === 'fixed' && origTopRaw !== 'auto-top') {
-          setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + tc + 'px'));
-        } else {
-          var nextTopVal = origTopRaw === 'auto-top' ? tc : Math.round((origTopNum || 0) + tc);
-          setImp(el, 'top', nextTopVal + 'px');
-          setImp(el, 'translate', hiding ? ('0px ' + (-tc) + 'px') : '0px 0px');
-        }
-      } else if (role === 'bottom-pinned') {
-        if (pos === 'fixed' && origBottomRaw !== 'auto-bottom') {
-          setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + (-bc) + 'px'));
-        } else {
-          var nextBotVal = origBottomRaw === 'auto-bottom' ? bc : Math.round((origBottomNum || 0) + bc);
-          setImp(el, 'bottom', nextBotVal + 'px');
-          setImp(el, 'translate', hiding ? ('0px ' + bc + 'px') : '0px 0px');
-        }
-      }
-    }
-
-    function trackPinnedElement(el, pos) {
-      el.dataset.theaverPos = pos;
-      window.__theaverTrackedPinned = window.__theaverTrackedPinned || [];
-      if (window.__theaverTrackedPinned.indexOf(el) === -1) {
-        window.__theaverTrackedPinned.push(el);
+      if (pos === 'fixed' && origTopRaw !== 'auto-top') {
+        setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + activeTop + 'px'));
+      } else {
+        var nextTopVal = origTopRaw === 'auto-top' ? activeTop : Math.round((origTopNum || 0) + activeTop);
+        setImp(el, 'top', nextTopVal + 'px');
+        setImp(el, 'translate', hiding ? ('0px ' + (-activeTop) + 'px') : '0px 0px');
       }
     }
 
@@ -656,17 +660,6 @@ class MiniAppSession {
       return { w: effW, h: effH };
     }
 
-    function hasAppliedAncestor(node) {
-      var cur = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
-      while (cur && cur.nodeType === 1) {
-        if (cur.dataset && cur.dataset.theaverSafeZoneApplied === '1') {
-          return true;
-        }
-        cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
-      }
-      return false;
-    }
-
     function collectCandidates(root, outList) {
       if (!root) return;
       var kids = root.children;
@@ -693,46 +686,302 @@ class MiniAppSession {
       }
     }
 
-    window.__theaverSyncSafeZones = function(rawTopClear, rawBottomClear, rawFlutterVh) {
+    function replaceSafeAreaEnvStr(cssStr) {
+      if (!cssStr) return cssStr;
+      var out = cssStr;
+      if (out.indexOf('safe-area-inset-bottom') !== -1) {
+        out = out.replace(
+          /(?:env|constant)\(\s*safe-area-inset-bottom(?:\s*,\s*([^()]+(?:\([^()]*\)[^()]*)*))?\s*\)/gi,
+          function(_, fb) {
+            return 'var(--theaver-safe-bottom, ' + (fb ? fb.trim() : '0px') + ')';
+          }
+        );
+      }
+      if (out.indexOf('safe-area-inset-top') !== -1) {
+        out = out.replace(
+          /(?:env|constant)\(\s*safe-area-inset-top(?:\s*,\s*([^()]+(?:\([^()]*\)[^()]*)*))?\s*\)/gi,
+          function(_, fb) {
+            return 'var(--theaver-top-obscured, ' + (fb ? fb.trim() : '0px') + ')';
+          }
+        );
+      }
+      return out;
+    }
+
+    function markSelectorEnvTop(selectorText) {
+      if (!selectorText) return;
+      try {
+        var matched = document.querySelectorAll(selectorText);
+        for (var i = 0; i < matched.length; i++) {
+          if (matched[i] && matched[i].dataset) {
+            matched[i].dataset.theaverUsesEnvTop = '1';
+          }
+        }
+      } catch (e) {}
+    }
+
+    function scanStyleRulesForEnv(ruleList) {
+      if (!ruleList) return;
+      for (var ri = 0; ri < ruleList.length; ri++) {
+        var rule = ruleList[ri];
+        if (!rule) continue;
+        if (rule.style) {
+          var csTxt = '';
+          try {
+            csTxt = rule.style.cssText || '';
+          } catch (e) {
+            csTxt = '';
+          }
+          if (csTxt.indexOf('safe-area-inset-bottom') !== -1 || csTxt.indexOf('safe-area-inset-top') !== -1) {
+            if (csTxt.indexOf('safe-area-inset-top') !== -1 && rule.selectorText) {
+              markSelectorEnvTop(rule.selectorText);
+            }
+            for (var pi = 0; pi < rule.style.length; pi++) {
+              var prop = rule.style.item(pi);
+              if (!prop) continue;
+              var val = rule.style.getPropertyValue(prop);
+              if (!val || (val.indexOf('safe-area-inset-bottom') === -1 && val.indexOf('safe-area-inset-top') === -1)) {
+                continue;
+              }
+              var prio = rule.style.getPropertyPriority(prop);
+              var repl = replaceSafeAreaEnvStr(val);
+              if (repl !== val) {
+                rule.style.setProperty(prop, repl, prio);
+              }
+            }
+          } else if (csTxt.indexOf('--theaver-top-obscured') !== -1 && rule.selectorText) {
+            markSelectorEnvTop(rule.selectorText);
+          }
+        } else if (rule.cssRules) {
+          try {
+            scanStyleRulesForEnv(rule.cssRules);
+          } catch (e) {}
+        }
+      }
+    }
+
+    function polyfillSafeAreaEnv() {
+      var styleNodes = document.querySelectorAll ? document.querySelectorAll('style') : [];
+      for (var si = 0; si < styleNodes.length; si++) {
+        var sNode = styleNodes[si];
+        if (!sNode || sNode.id === '__theaver_browser_insets') continue;
+        if (sNode.dataset && sNode.dataset.theaverEnvPolyfilled === '1') continue;
+        var txt = sNode.textContent || '';
+        if (txt.indexOf('safe-area-inset-bottom') !== -1 || txt.indexOf('safe-area-inset-top') !== -1) {
+          var nextTxt = replaceSafeAreaEnvStr(txt);
+          if (nextTxt !== txt) {
+            sNode.textContent = nextTxt;
+          }
+        }
+        if (sNode.dataset) {
+          sNode.dataset.theaverEnvPolyfilled = '1';
+        }
+      }
+      var sheets = document.styleSheets || [];
+      for (var ji = 0; ji < sheets.length; ji++) {
+        var sheet = sheets[ji];
+        if (!sheet || sheet.__theaverEnvPolyfilled) continue;
+        if (sheet.ownerNode && sheet.ownerNode.id === '__theaver_browser_insets') {
+          sheet.__theaverEnvPolyfilled = true;
+          continue;
+        }
+        try {
+          var rules = sheet.cssRules;
+          if (rules) {
+            scanStyleRulesForEnv(rules);
+          }
+        } catch (e) {
+          // Cross-origin CSSStyleSheet raises SecurityError; intentionally skipped.
+        }
+        sheet.__theaverEnvPolyfilled = true;
+      }
+    }
+
+    function getScaledMetrics() {
+      var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+      var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      var fvh = Number(window.__theaverFlutterVh) || 0;
+      var scale = (fvh > 0 && vh > fvh * 1.15) ? (vh / fvh) : 1.0;
+      var tc = Math.round(Math.max(0, Number(window.__theaverTopClear) || 0) * scale);
+      var ctc = Math.round(Math.max(0, Number(window.__theaverCompactTopClear) || 0) * scale);
+      var bc = Math.round(Math.max(0, Number(window.__theaverBottomClear) || 0) * scale);
+      var cbc = Math.round(Math.max(0, Number(window.__theaverCompactBottomClear) || 0) * scale);
+      var isCol = !!(collapseState && collapseState.collapsed && !window.__theaverForceExpanded);
+      return {
+        vw: vw,
+        vh: vh,
+        tc: tc,
+        ctc: ctc,
+        bc: bc,
+        cbc: cbc,
+        collapsed: isCol,
+        activeTop: isCol ? ctc : tc,
+        activeBottom: isCol ? cbc : bc
+      };
+    }
+
+    function applyCssInsetVariables(m) {
+      var rootStyle = document.documentElement.style;
+      rootStyle.setProperty('--theaver-top-obscured', m.activeTop + 'px');
+      rootStyle.setProperty('--theaver-safe-bottom', m.activeBottom + 'px');
+      rootStyle.setProperty('--theaver-header-clearance', m.tc + 'px');
+      rootStyle.setProperty('--theaver-bottom-clearance', m.bc + 'px');
+      rootStyle.setProperty('--tg-safe-area-inset-top', m.activeTop + 'px');
+      rootStyle.setProperty('--tg-safe-area-inset-bottom', m.activeBottom + 'px');
+
+      var st = document.getElementById('__theaver_browser_insets');
+      if (!st && document.head) {
+        st = document.createElement('style');
+        st.id = '__theaver_browser_insets';
+        document.head.appendChild(st);
+      }
+      var insetCss =
+        ':root { ' +
+          '--theaver-top-obscured: ' + m.activeTop + 'px; ' +
+          '--theaver-safe-bottom: ' + m.activeBottom + 'px; ' +
+          '--theaver-header-clearance: ' + m.tc + 'px; ' +
+          '--theaver-bottom-clearance: ' + m.bc + 'px; ' +
+          '--tg-safe-area-inset-top: ' + m.activeTop + 'px; ' +
+          '--tg-safe-area-inset-bottom: ' + m.activeBottom + 'px; ' +
+        '} ' +
+        'html { scroll-padding-top: var(--theaver-top-obscured) !important; scroll-padding-bottom: var(--theaver-safe-bottom) !important; }';
+      if (st && st.textContent !== insetCss) {
+        st.textContent = insetCss;
+      }
+    }
+
+    function sampleBandColor(vw, yPx, fallbackBg) {
+      var result = fallbackBg;
+      var hitWide = false;
+      if (typeof document.elementsFromPoint === 'function' && vw > 0) {
+        try {
+          var stack = document.elementsFromPoint(Math.round(vw * 0.5), yPx) || [];
+          var layers = [];
+          for (var si = 0; si < stack.length; si++) {
+            var el = stack[si];
+            if (!el || !el.tagName) continue;
+            var tag = el.tagName;
+            if (tag === 'HTML' || tag === 'SCRIPT' || tag === 'STYLE') continue;
+            var r = el.getBoundingClientRect();
+            if (r.width >= vw * 0.65 && r.height >= 28) {
+              var cs = window.getComputedStyle(el);
+              var c = parseCssColor(cs.backgroundColor);
+              if (c) {
+                layers.push(c);
+                hitWide = true;
+                if (c.a >= 0.96) break;
+              }
+            }
+          }
+          for (var li = layers.length - 1; li >= 0; li--) {
+            result = blendOver(layers[li], result);
+          }
+        } catch (e) {}
+      }
+      return { color: result, hitWide: hitWide };
+    }
+
+    function computePageMeta(m) {
+      if (!document.body) return null;
+      var htmlCs = window.getComputedStyle(document.documentElement);
+      var bodyCs = window.getComputedStyle(document.body);
+      var scheme = (htmlCs.colorScheme || '').toLowerCase();
+      var baseTheme = scheme.indexOf('dark') !== -1 && scheme.indexOf('light') === -1
+        ? { r: 18, g: 18, b: 18, a: 1 }
+        : { r: 255, g: 255, b: 255, a: 1 };
+      var canvasBg = blendOver(parseCssColor(htmlCs.backgroundColor), baseTheme);
+      canvasBg = blendOver(parseCssColor(bodyCs.backgroundColor), canvasBg);
+
+      var vw = m.vw || window.innerWidth || document.documentElement.clientWidth || 0;
+      var vh = m.vh || window.innerHeight || document.documentElement.clientHeight || 0;
+      var scrollY = Math.max(0, window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0);
+
+      var topProbe = sampleBandColor(vw, 6, canvasBg);
+      var topColorObj = topProbe.color;
+      if (!topProbe.hitWide && scrollY <= 8 && document.querySelectorAll) {
+        try {
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          for (var mi = 0; mi < metas.length; mi++) {
+            var metaEl = metas[mi];
+            var mediaAttr = metaEl.getAttribute('media');
+            if (mediaAttr && typeof window.matchMedia === 'function') {
+              if (!window.matchMedia(mediaAttr).matches) continue;
+            }
+            var mc = parseCssColor(metaEl.getAttribute('content'));
+            if (mc) {
+              topColorObj = blendOver(mc, canvasBg);
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+      var bottomProbe = vh > 12 ? sampleBandColor(vw, Math.max(0, vh - 6), canvasBg) : { color: canvasBg };
+      var lum = (0.2126 * topColorObj.r + 0.7152 * topColorObj.g + 0.0722 * topColorObj.b) / 255;
+
+      return JSON.stringify({
+        collapsed: !!m.collapsed,
+        topIsDark: lum <= 0.55,
+        topColor: formatRgb(topColorObj),
+        bottomColor: formatRgb(bottomProbe.color),
+        canvasColor: formatRgb(canvasBg)
+      });
+    }
+
+    function emitPageMeta(m) {
+      var metaPayload = computePageMeta(m || getScaledMetrics());
+      if (!metaPayload) return null;
+      if (
+        window.TheaverBrowserTheme &&
+        typeof window.TheaverBrowserTheme.postMessage === 'function' &&
+        window.__theaverLastPageMeta !== metaPayload
+      ) {
+        window.__theaverLastPageMeta = metaPayload;
+        window.TheaverBrowserTheme.postMessage(metaPayload);
+      }
+      return metaPayload;
+    }
+
+    function usesEnvTopVar(el) {
+      if (!el || !el.dataset) return false;
+      if (el.dataset.theaverUsesEnvTop === '1') return true;
+      var inlineStyle = (el.getAttribute && el.getAttribute('style')) || '';
+      if (inlineStyle.indexOf('--theaver-top-obscured') !== -1 || inlineStyle.indexOf('safe-area-inset-top') !== -1) {
+        return true;
+      }
+      if (el.querySelector && el.querySelector('[data-theaver-uses-env-top="1"]')) {
+        return true;
+      }
+      return false;
+    }
+
+    window.__theaverSyncSafeZones = function(
+      rawTopClear,
+      rawBottomClear,
+      rawFlutterVh,
+      rawCompactTopClear,
+      rawCompactBottomClear,
+      rawForceExpanded
+    ) {
       if (window.__theaverApplyingSafeZones) return null;
       window.__theaverApplyingSafeZones = true;
       try {
         if (!document || !document.documentElement) return null;
+        if (rawTopClear !== undefined) window.__theaverTopClear = rawTopClear;
+        if (rawBottomClear !== undefined) window.__theaverBottomClear = rawBottomClear;
+        if (rawFlutterVh !== undefined) window.__theaverFlutterVh = rawFlutterVh;
+        if (rawCompactTopClear !== undefined) window.__theaverCompactTopClear = rawCompactTopClear;
+        if (rawCompactBottomClear !== undefined) window.__theaverCompactBottomClear = rawCompactBottomClear;
+        if (rawForceExpanded !== undefined) window.__theaverForceExpanded = !!rawForceExpanded;
+        if (window.__theaverForceExpanded && collapseState) {
+          collapseState.collapsed = false;
+          collapseState.accDy = 0;
+        }
+
         var vw = window.innerWidth || document.documentElement.clientWidth || 0;
         var vh = window.innerHeight || document.documentElement.clientHeight || 0;
         if (!document.body || vw <= 0 || vh <= 0) return null;
 
-        var fvh = Number(rawFlutterVh) || 0;
-        var scale = (fvh > 0 && vh > fvh * 1.15) ? (vh / fvh) : 1.0;
-        var tc = Math.round(Math.max(0, Number(rawTopClear) || 0) * scale);
-        var bc = Math.round(Math.max(0, Number(rawBottomClear) || 0) * scale);
-        window.__theaverScaledTop = tc;
-        window.__theaverScaledBottom = bc;
-
-        var rootStyle = document.documentElement.style;
-        rootStyle.setProperty('--theaver-header-clearance', tc + 'px');
-        rootStyle.setProperty('--theaver-bottom-clearance', bc + 'px');
-        rootStyle.setProperty('--tg-safe-area-inset-top', tc + 'px');
-        rootStyle.setProperty('--tg-safe-area-inset-bottom', bc + 'px');
-
-        var st = document.getElementById('__theaver_browser_insets');
-        if (!st && document.head) {
-          st = document.createElement('style');
-          st.id = '__theaver_browser_insets';
-          document.head.appendChild(st);
-        }
-        var insetCss =
-          ':root { ' +
-            '--theaver-header-clearance: ' + tc + 'px; ' +
-            '--theaver-bottom-clearance: ' + bc + 'px; ' +
-            '--tg-safe-area-inset-top: ' + tc + 'px; ' +
-            '--tg-safe-area-inset-bottom: ' + bc + 'px; ' +
-          '} ' +
-          'html { scroll-padding-top: ' + tc + 'px !important; scroll-padding-bottom: ' + bc + 'px !important; }';
-        if (st && st.textContent !== insetCss) {
-          st.textContent = insetCss;
-        }
-
+        var m = getScaledMetrics();
         var body = document.body;
         var htmlCs = window.getComputedStyle(document.documentElement);
         var bodyCs = window.getComputedStyle(body);
@@ -740,18 +989,43 @@ class MiniAppSession {
           (htmlCs.overflowY === 'hidden' || bodyCs.overflowY === 'hidden') &&
           document.documentElement.scrollHeight <= vh + 8;
 
+        if (!isLockedViewport && body.dataset.theaverBasePt === undefined) {
+          body.dataset.theaverBasePt = String(parseFloat(bodyCs.paddingTop) || 0);
+          body.dataset.theaverBasePb = String(parseFloat(bodyCs.paddingBottom) || 0);
+        }
+
         var all = [];
         collectCandidates(body, all);
 
-        if (!isLockedViewport) {
-          if (body.dataset.theaverBasePt === undefined) {
-            body.dataset.theaverBasePt = String(parseFloat(bodyCs.paddingTop) || 0);
-            body.dataset.theaverBasePb = String(parseFloat(bodyCs.paddingBottom) || 0);
+        if (isLockedViewport) {
+          for (var li = 0; li < all.length; li++) {
+            var lel = all[li];
+            if (!lel || !lel.tagName) continue;
+            var lcs = window.getComputedStyle(lel);
+            if (lcs.display === 'none') continue;
+            var loy = lcs.overflowY;
+            if (loy !== 'auto' && loy !== 'scroll' && loy !== 'overlay') continue;
+            var lrect = lel.getBoundingClientRect();
+            var lsz = getEffectiveSize(lel, lrect);
+            if (lsz.w >= vw * 0.75 && lsz.h >= vh * 0.70) {
+              if (lel.dataset.theaverScrollContainerPt === undefined) {
+                lel.dataset.theaverScrollContainerPt = String(parseFloat(lcs.paddingTop) || 0);
+                lel.dataset.theaverScrollContainerPb = String(parseFloat(lcs.paddingBottom) || 0);
+              }
+              lel.dataset.theaverPrimaryScroller = '1';
+              var lpt = parseFloat(lel.dataset.theaverScrollContainerPt) || 0;
+              var lpb = parseFloat(lel.dataset.theaverScrollContainerPb) || 0;
+              setImp(lel, 'box-sizing', 'border-box');
+              setImp(lel, 'padding-top', Math.round(lpt <= 180 ? lpt + m.tc : Math.max(lpt, m.tc)) + 'px');
+              setImp(lel, 'padding-bottom', Math.round(lpb <= 180 ? lpb + m.bc : Math.max(lpb, m.bc)) + 'px');
+              break;
+            }
           }
+        } else {
           var basePt = parseFloat(body.dataset.theaverBasePt) || 0;
           var basePb = parseFloat(body.dataset.theaverBasePb) || 0;
-          var nextPt = basePt <= 180 ? basePt + tc : Math.max(basePt, tc);
-          var nextPb = basePb <= 180 ? basePb + bc : Math.max(basePb, bc);
+          var nextPt = basePt <= 180 ? basePt + m.tc : Math.max(basePt, m.tc);
+          var nextPb = basePb <= 180 ? basePb + m.bc : Math.max(basePb, m.bc);
           setImp(body, 'box-sizing', 'border-box');
           setImp(body, 'padding-top', Math.round(nextPt) + 'px');
           setImp(body, 'padding-bottom', Math.round(nextPb) + 'px');
@@ -772,303 +1046,87 @@ class MiniAppSession {
                 if (kBg && kBg.a > 0.75) {
                   body.dataset.theaverMirroredBg = '1';
                   setImp(body, 'background-color', kCs.backgroundColor);
-                  bodyCs = window.getComputedStyle(body);
                   break;
                 }
               }
             }
           }
-        } else {
-          for (var li = 0; li < all.length; li++) {
-            var lel = all[li];
-            if (!lel || !lel.tagName) continue;
-            var lcs = window.getComputedStyle(lel);
-            if (lcs.display === 'none') continue;
-            var loy = lcs.overflowY;
-            if (loy !== 'auto' && loy !== 'scroll' && loy !== 'overlay') continue;
-            var lrect = lel.getBoundingClientRect();
-            var lsz = getEffectiveSize(lel, lrect);
-            if (lsz.w >= vw * 0.75 && lsz.h >= vh * 0.70) {
-              if (lel.dataset.theaverScrollContainerPt === undefined) {
-                lel.dataset.theaverScrollContainerPt = String(parseFloat(lcs.paddingTop) || 0);
-                lel.dataset.theaverScrollContainerPb = String(parseFloat(lcs.paddingBottom) || 0);
+        }
+
+        applyCssInsetVariables(m);
+        polyfillSafeAreaEnv();
+
+        var primaryTop = window.__theaverPrimaryTopNav || null;
+        if (primaryTop && (!primaryTop.isConnected || window.getComputedStyle(primaryTop).display === 'none')) {
+          primaryTop = null;
+          window.__theaverPrimaryTopNav = null;
+        }
+
+        if (!primaryTop) {
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (!el || !el.tagName) continue;
+            var cs = window.getComputedStyle(el);
+            if (cs.display === 'none') continue;
+            var pos = cs.position;
+            if (pos !== 'fixed' && pos !== 'sticky') continue;
+            if (cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
+            if (usesEnvTopVar(el)) continue;
+
+            var rect = el.getBoundingClientRect();
+            var eff = getEffectiveSize(el, rect);
+            if (eff.w < vw * 0.70 || rect.left > vw * 0.15) continue;
+            if (eff.h < 24 || eff.h > 88) continue;
+
+            if (el.dataset.theaverOrigRecorded !== '1') {
+              var inlineTopNum = parseNum(el.style.top || '');
+              if (inlineTopNum !== null && inlineTopNum < -12) continue;
+
+              var origTopStr = 'auto';
+              if (cs.top !== 'auto') {
+                var topVal = parseNum(cs.top);
+                if (topVal !== null) origTopStr = String(topVal);
+              } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= 4) {
+                origTopStr = 'auto-top';
               }
-              var lpt = parseFloat(lel.dataset.theaverScrollContainerPt) || 0;
-              var lpb = parseFloat(lel.dataset.theaverScrollContainerPb) || 0;
-              setImp(lel, 'box-sizing', 'border-box');
-              setImp(lel, 'padding-top', Math.round(lpt <= 180 ? lpt + tc : Math.max(lpt, tc)) + 'px');
-              setImp(lel, 'padding-bottom', Math.round(lpb <= 180 ? lpb + bc : Math.max(lpb, bc)) + 'px');
-              break;
-            }
-          }
-        }
 
-        var bodyAddedPt = isLockedViewport
-          ? tc
-          : Math.max(0, (parseFloat(body.style.paddingTop) || 0) - (parseFloat(body.dataset.theaverBasePt) || 0));
-        var scrollY = window.scrollY || window.pageYOffset || 0;
-        var hasPrimaryTopBar = false;
-        var hasPrimaryBottomBar = false;
-        var deferredTopBars = [];
-        var deferredBottomBars = [];
-
-        for (var i = 0; i < all.length; i++) {
-          var el = all[i];
-          if (!el || !el.tagName) continue;
-          var tag = el.tagName;
-          if (hasAppliedAncestor(el)) continue;
-
-          var cs = window.getComputedStyle(el);
-          if (cs.display === 'none') continue;
-
-          var pos = cs.position;
-          var existingRole = el.dataset.theaverSafeRole || '';
-          if (!existingRole && pos !== 'fixed' && pos !== 'sticky' && pos !== 'absolute') {
-            continue;
-          }
-
-          var rect = el.getBoundingClientRect();
-          var eff = getEffectiveSize(el, rect);
-          if (eff.w <= 0 || eff.h <= 0) continue;
-
-          if (el.dataset.theaverOrigRecorded !== '1') {
-            var inlineTopNum = parseNum(el.style.top || '');
-            if (inlineTopNum !== null && inlineTopNum < -12 && pos !== 'static') {
-              continue;
-            }
-            var origTopStr = 'auto';
-            if (cs.top !== 'auto') {
-              var topVal = parseNum(cs.top);
-              if (topVal !== null) origTopStr = String(topVal);
-            } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -4 && rect.top < tc + 96) {
-              origTopStr = 'auto-top';
-            }
-
-            var origBottomStr = 'auto';
-            if (cs.bottom !== 'auto') {
-              var botVal = parseNum(cs.bottom);
-              if (botVal !== null) origBottomStr = String(botVal);
-            } else if (pos === 'fixed' && cs.top === 'auto' && rect.bottom >= vh - 4 && rect.top > vh * 0.45) {
-              origBottomStr = 'auto-bottom';
-            }
-
-            el.dataset.theaverOrigRecorded = '1';
-            el.dataset.theaverOrigTop = origTopStr;
-            el.dataset.theaverOrigBottom = origBottomStr;
-            el.dataset.theaverOrigPt = String(parseFloat(cs.paddingTop) || 0);
-            el.dataset.theaverOrigPb = String(parseFloat(cs.paddingBottom) || 0);
-          }
-
-          var origTopRaw = el.dataset.theaverOrigTop || 'auto';
-          var origBottomRaw = el.dataset.theaverOrigBottom || 'auto';
-          var origTopNum = (origTopRaw === 'auto' || origTopRaw === 'auto-top') ? null : parseNum(origTopRaw);
-          var origBottomNum = (origBottomRaw === 'auto' || origBottomRaw === 'auto-bottom') ? null : parseNum(origBottomRaw);
-          var origPt = parseFloat(el.dataset.theaverOrigPt) || 0;
-          var origPb = parseFloat(el.dataset.theaverOrigPb) || 0;
-
-          var role = existingRole;
-          if (!role) {
-            if (pos === 'fixed' || pos === 'sticky') {
-              if (
-                pos === 'fixed' &&
-                eff.h >= vh * 0.65 &&
-                origTopNum !== null &&
-                origTopNum <= 4 &&
-                ((origBottomNum !== null && origBottomNum <= 4) || rect.bottom >= vh - 4) &&
-                el.children.length > 0 &&
-                tag !== 'VIDEO' &&
-                tag !== 'CANVAS' &&
-                tag !== 'IMG' &&
-                hasOpaqueBg(cs) &&
-                cs.pointerEvents !== 'none'
-              ) {
-                role = 'full-drawer';
-              } else if (eff.h >= 12 && eff.h < vh * 0.55) {
-                if (origTopRaw === 'auto-top') {
-                  role = 'top-pinned';
-                } else if (origTopNum !== null && origTopNum >= -4 && origTopNum < tc && origBottomNum === null) {
-                  role = 'top-pinned';
-                } else if (origTopNum !== null && origTopNum >= tc && origTopNum < tc + 96 && origBottomNum === null) {
-                  deferredTopBars.push({ el: el, origTop: origTopNum });
-                  continue;
-                } else if (origBottomRaw === 'auto-bottom') {
-                  role = 'bottom-pinned';
-                } else if (
-                  origBottomNum !== null &&
-                  origBottomNum >= -4 &&
-                  origBottomNum < bc &&
-                  (origTopNum === null || origTopNum > vh * 0.40)
-                ) {
-                  role = 'bottom-pinned';
-                } else if (
-                  origBottomNum !== null &&
-                  origBottomNum >= bc &&
-                  origBottomNum < bc + 96 &&
-                  (origTopNum === null || origTopNum > vh * 0.40)
-                ) {
-                  deferredBottomBars.push({ el: el, origBottom: origBottomNum });
-                  continue;
-                }
+              var origBottomStr = 'auto';
+              if (cs.bottom !== 'auto') {
+                var botVal = parseNum(cs.bottom);
+                if (botVal !== null) origBottomStr = String(botVal);
               }
-            } else if (
-              pos === 'absolute' &&
-              eff.h >= 16 &&
-              eff.h < vh * 0.42 &&
-              tag !== 'IMG' &&
-              tag !== 'VIDEO' &&
-              tag !== 'CANVAS' &&
-              tag !== 'PICTURE'
-            ) {
-              var hasInteractiveChild =
-                el.querySelector('button, a, input, select, [role="button"], [tabindex]') !== null;
-              var zNum = parseInt(cs.zIndex, 10) || 0;
-              var isUiControl =
-                (cs.pointerEvents !== 'none' || hasInteractiveChild) &&
-                (tag === 'HEADER' ||
-                  tag === 'NAV' ||
-                  tag === 'FORM' ||
-                  tag === 'BUTTON' ||
-                  tag === 'A' ||
-                  tag === 'INPUT' ||
-                  hasInteractiveChild ||
-                  zNum >= 1);
-              if (isUiControl) {
-                var op = el.offsetParent || el.parentElement;
-                var opRect = op ? op.getBoundingClientRect() : null;
-                var opDocTop = opRect ? (opRect.top + scrollY) : 0;
-                var elDocTop = rect.top + scrollY;
-                if (
-                  origTopNum !== null &&
-                  origTopNum >= -4 &&
-                  origTopNum < tc &&
-                  opDocTop <= 16 &&
-                  elDocTop >= -4 &&
-                  elDocTop < tc + bodyAddedPt
-                ) {
-                  role = 'top-abs';
-                } else if (origBottomNum !== null && origBottomNum >= -4 && origBottomNum < bc) {
-                  var opCs = op ? window.getComputedStyle(op) : null;
-                  var inFixedOrLocked =
-                    isLockedViewport ||
-                    (opCs && opCs.position === 'fixed') ||
-                    (opRect && opRect.height >= vh - 8);
-                  if (inFixedOrLocked) {
-                    role = 'bottom-abs';
-                  }
-                }
-              }
+
+              var tNum = origTopStr === 'auto' || origTopStr === 'auto-top' ? null : parseNum(origTopStr);
+              var bNum = origBottomStr === 'auto' ? null : parseNum(origBottomStr);
+              if (bNum !== null) continue;
+              if (origTopStr !== 'auto-top' && (tNum === null || tNum < -2 || tNum > 4)) continue;
+
+              el.dataset.theaverOrigRecorded = '1';
+              el.dataset.theaverOrigTop = origTopStr;
+              el.dataset.theaverPos = pos;
+            }
+
+            el.dataset.theaverSafeRole = 'top-pinned';
+            primaryTop = el;
+            window.__theaverPrimaryTopNav = el;
+            break;
+          }
+        }
+
+        if (primaryTop) {
+          var pCs = window.getComputedStyle(primaryTop);
+          if (pCs.display !== 'none') {
+            var pPos = primaryTop.dataset.theaverPos || pCs.position;
+            var pOrigTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
+            var pOrigTopNum = pOrigTopRaw === 'auto' || pOrigTopRaw === 'auto-top' ? null : parseNum(pOrigTopRaw);
+            var pEff = getEffectiveSize(primaryTop, primaryTop.getBoundingClientRect());
+            if (pEff.h > 0) {
+              applyPinnedOffset(primaryTop, pCs, pPos, pOrigTopRaw, pOrigTopNum, pEff.h, m.activeTop);
             }
           }
-
-          if (!role) continue;
-          el.dataset.theaverSafeRole = role;
-          el.dataset.theaverSafeZoneApplied = '1';
-
-          if (role === 'full-drawer') {
-            setImp(el, 'box-sizing', 'border-box');
-            setImp(el, 'padding-top', Math.round(origPt + tc) + 'px');
-            setImp(el, 'padding-bottom', Math.round(origPb + bc) + 'px');
-          } else if (role === 'top-pinned' || role === 'bottom-pinned') {
-            trackPinnedElement(el, pos);
-            applyPinnedOffset(
-              el,
-              cs,
-              pos,
-              role,
-              origTopRaw,
-              origTopNum,
-              origBottomRaw,
-              origBottomNum,
-              eff.h,
-              tc,
-              bc
-            );
-            if (role === 'top-pinned') hasPrimaryTopBar = true;
-            if (role === 'bottom-pinned') hasPrimaryBottomBar = true;
-          } else if (role === 'top-abs') {
-            var nextTopVal = origTopRaw === 'auto-top' ? tc : Math.round((origTopNum || 0) + tc);
-            setImp(el, 'top', nextTopVal + 'px');
-          } else if (role === 'bottom-abs') {
-            var nextBotVal = origBottomRaw === 'auto-bottom' ? bc : Math.round((origBottomNum || 0) + bc);
-            setImp(el, 'bottom', nextBotVal + 'px');
-          }
         }
 
-        if (hasPrimaryTopBar && deferredTopBars.length > 0) {
-          for (var dt = 0; dt < deferredTopBars.length; dt++) {
-            var dTopItem = deferredTopBars[dt];
-            if (!dTopItem || !dTopItem.el || hasAppliedAncestor(dTopItem.el)) continue;
-            var dTopEl = dTopItem.el;
-            var dTopCs = window.getComputedStyle(dTopEl);
-            var dTopPos = dTopCs.position;
-            var dTopEff = getEffectiveSize(dTopEl, dTopEl.getBoundingClientRect());
-            dTopEl.dataset.theaverSafeRole = 'top-pinned';
-            dTopEl.dataset.theaverSafeZoneApplied = '1';
-            trackPinnedElement(dTopEl, dTopPos);
-            applyPinnedOffset(
-              dTopEl,
-              dTopCs,
-              dTopPos,
-              'top-pinned',
-              dTopEl.dataset.theaverOrigTop || String(dTopItem.origTop),
-              dTopItem.origTop,
-              dTopEl.dataset.theaverOrigBottom || 'auto',
-              null,
-              dTopEff.h,
-              tc,
-              bc
-            );
-          }
-        }
-
-        if (hasPrimaryBottomBar && deferredBottomBars.length > 0) {
-          for (var db = 0; db < deferredBottomBars.length; db++) {
-            var dBotItem = deferredBottomBars[db];
-            if (!dBotItem || !dBotItem.el || hasAppliedAncestor(dBotItem.el)) continue;
-            var dBotEl = dBotItem.el;
-            var dBotCs = window.getComputedStyle(dBotEl);
-            var dBotPos = dBotCs.position;
-            var dBotEff = getEffectiveSize(dBotEl, dBotEl.getBoundingClientRect());
-            dBotEl.dataset.theaverSafeRole = 'bottom-pinned';
-            dBotEl.dataset.theaverSafeZoneApplied = '1';
-            trackPinnedElement(dBotEl, dBotPos);
-            applyPinnedOffset(
-              dBotEl,
-              dBotCs,
-              dBotPos,
-              'bottom-pinned',
-              dBotEl.dataset.theaverOrigTop || 'auto',
-              null,
-              dBotEl.dataset.theaverOrigBottom || String(dBotItem.origBottom),
-              dBotItem.origBottom,
-              dBotEff.h,
-              tc,
-              bc
-            );
-          }
-        }
-
-        var scheme = (htmlCs.colorScheme || '').toLowerCase();
-        var canvasBg = scheme.indexOf('dark') !== -1 && scheme.indexOf('light') === -1
-          ? { r: 18, g: 18, b: 18, a: 1 }
-          : { r: 255, g: 255, b: 255, a: 1 };
-        canvasBg = blendOver(parseCssColor(htmlCs.backgroundColor), canvasBg);
-        canvasBg = blendOver(parseCssColor(bodyCs.backgroundColor), canvasBg);
-
-        var lum = (0.2126 * canvasBg.r + 0.7152 * canvasBg.g + 0.0722 * canvasBg.b) / 255;
-        var metaPayload = JSON.stringify({
-          topIsDark: lum <= 0.55,
-          canvasColor: 'rgb(' + Math.round(canvasBg.r) + ', ' + Math.round(canvasBg.g) + ', ' + Math.round(canvasBg.b) + ')'
-        });
-        if (
-          window.TheaverBrowserTheme &&
-          typeof window.TheaverBrowserTheme.postMessage === 'function' &&
-          window.__theaverLastPageMeta !== metaPayload
-        ) {
-          window.__theaverLastPageMeta = metaPayload;
-          window.TheaverBrowserTheme.postMessage(metaPayload);
-        }
-        return metaPayload;
+        return emitPageMeta(m);
       } catch (e) {
         return null;
       } finally {
@@ -1083,58 +1141,27 @@ class MiniAppSession {
       if (window.__theaverApplyingSafeZones) return;
       window.__theaverApplyingSafeZones = true;
       try {
-        var tc = window.__theaverScaledTop !== undefined
-          ? window.__theaverScaledTop
-          : (Number(window.__theaverTopClear) || 0);
-        var bc = window.__theaverScaledBottom !== undefined
-          ? window.__theaverScaledBottom
-          : (Number(window.__theaverBottomClear) || 0);
-        var list = [];
-        var tracked = window.__theaverTrackedPinned || [];
-        for (var ti = 0; ti < tracked.length; ti++) {
-          var tel = tracked[ti];
-          if (tel && tel.isConnected) {
-            list.push(tel);
-          }
+        var primaryTop = window.__theaverPrimaryTopNav || null;
+        if (
+          (!primaryTop || !primaryTop.isConnected) &&
+          document &&
+          document.querySelector
+        ) {
+          primaryTop = document.querySelector('[data-theaver-safe-role="top-pinned"]');
+          window.__theaverPrimaryTopNav = primaryTop || null;
         }
-        window.__theaverTrackedPinned = list;
-        if (document && document.querySelectorAll) {
-          var queried = document.querySelectorAll(
-            '[data-theaver-safe-role="top-pinned"], [data-theaver-safe-role="bottom-pinned"]'
-          );
-          for (var qi = 0; qi < queried.length; qi++) {
-            if (list.indexOf(queried[qi]) === -1) {
-              list.push(queried[qi]);
+        if (primaryTop && primaryTop.isConnected) {
+          var cs = window.getComputedStyle(primaryTop);
+          if (cs.display !== 'none') {
+            var m = getScaledMetrics();
+            var pos = primaryTop.dataset.theaverPos || cs.position;
+            var origTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
+            var origTopNum = origTopRaw === 'auto' || origTopRaw === 'auto-top' ? null : parseNum(origTopRaw);
+            var eff = getEffectiveSize(primaryTop, primaryTop.getBoundingClientRect());
+            if (eff.h > 0) {
+              applyPinnedOffset(primaryTop, cs, pos, origTopRaw, origTopNum, eff.h, m.activeTop);
             }
           }
-        }
-        for (var i = 0; i < list.length; i++) {
-          var el = list[i];
-          if (!el || !el.dataset) continue;
-          var role = el.dataset.theaverSafeRole || '';
-          if (role !== 'top-pinned' && role !== 'bottom-pinned') continue;
-          var cs = window.getComputedStyle(el);
-          if (cs.display === 'none') continue;
-          var pos = el.dataset.theaverPos || cs.position;
-          var origTopRaw = el.dataset.theaverOrigTop || 'auto';
-          var origBottomRaw = el.dataset.theaverOrigBottom || 'auto';
-          var origTopNum = (origTopRaw === 'auto' || origTopRaw === 'auto-top') ? null : parseNum(origTopRaw);
-          var origBottomNum = (origBottomRaw === 'auto' || origBottomRaw === 'auto-bottom') ? null : parseNum(origBottomRaw);
-          var eff = getEffectiveSize(el, el.getBoundingClientRect());
-          if (eff.h <= 0) continue;
-          applyPinnedOffset(
-            el,
-            cs,
-            pos,
-            role,
-            origTopRaw,
-            origTopNum,
-            origBottomRaw,
-            origBottomNum,
-            eff.h,
-            tc,
-            bc
-          );
         }
       } catch (e) {
       } finally {
@@ -1145,7 +1172,98 @@ class MiniAppSession {
       }
     };
 
-    var initialMeta = window.__theaverSyncSafeZones(__TOP_PX__, __BOTTOM_PX__, __FLUTTER_VH__);
+    function setCollapsed(nextFlag) {
+      var effective = window.__theaverForceExpanded ? false : !!nextFlag;
+      if (!!collapseState.collapsed === effective) return false;
+      collapseState.collapsed = effective;
+      var m = getScaledMetrics();
+      window.__theaverApplyingSafeZones = true;
+      try {
+        applyCssInsetVariables(m);
+      } finally {
+        if (window.__theaverSafeZoneObs && typeof window.__theaverSafeZoneObs.takeRecords === 'function') {
+          window.__theaverSafeZoneObs.takeRecords();
+        }
+        window.__theaverApplyingSafeZones = false;
+      }
+      window.__theaverRefreshTrackedPinned();
+      emitPageMeta(m);
+      return true;
+    }
+
+    window.__theaverSetCollapsedFromHost = function(flag) {
+      collapseState.accDy = 0;
+      return setCollapsed(!!flag);
+    };
+
+    function onScrollCollapseCheck(ev) {
+      if (window.__theaverApplyingSafeZones) return;
+      var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+      var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (vw <= 0 || vh <= 0) return;
+
+      var target = ev ? ev.target : document;
+      var isDocTarget = !target || target === window || target === document || target === document.documentElement || target === document.body;
+      var curTop = 0;
+      var prevTop = 0;
+      var maxScroll = 0;
+
+      if (isDocTarget) {
+        curTop = Math.max(0, window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0);
+        maxScroll = Math.max(0, (document.documentElement.scrollHeight || 0) - vh);
+        prevTop = collapseState.docLastTop || 0;
+        collapseState.docLastTop = curTop;
+      } else if (
+        target.nodeType === 1 &&
+        target.clientHeight >= vh * 0.45 &&
+        target.clientWidth >= vw * 0.60 &&
+        target.scrollHeight > target.clientHeight + 40
+      ) {
+        curTop = Math.max(0, target.scrollTop || 0);
+        maxScroll = Math.max(0, target.scrollHeight - target.clientHeight);
+        if (collapseState.scrollerTops) {
+          prevTop = collapseState.scrollerTops.has(target) ? collapseState.scrollerTops.get(target) : curTop;
+          collapseState.scrollerTops.set(target, curTop);
+        } else {
+          prevTop = parseNum(target.dataset && target.dataset.theaverPrevScrollTop) || curTop;
+          if (target.dataset) target.dataset.theaverPrevScrollTop = String(curTop);
+        }
+      } else {
+        return;
+      }
+
+      if (maxScroll > 0 && curTop > maxScroll + 2) return;
+
+      if (window.__theaverForceExpanded || curTop <= 20) {
+        collapseState.accDy = 0;
+        setCollapsed(false);
+        return;
+      }
+
+      var dy = curTop - prevTop;
+      if (Math.abs(dy) < 1.5) return;
+      if ((dy > 0 && collapseState.accDy < 0) || (dy < 0 && collapseState.accDy > 0)) {
+        collapseState.accDy = 0;
+      }
+      collapseState.accDy += dy;
+
+      if (!collapseState.collapsed && curTop > 36 && collapseState.accDy >= 22) {
+        collapseState.accDy = 0;
+        setCollapsed(true);
+      } else if (collapseState.collapsed && collapseState.accDy <= -18) {
+        collapseState.accDy = 0;
+        setCollapsed(false);
+      }
+    }
+
+    var initialMeta = window.__theaverSyncSafeZones(
+      __TOP_PX__,
+      __BOTTOM_PX__,
+      __FLUTTER_VH__,
+      __COMPACT_TOP_PX__,
+      __COMPACT_BOTTOM_PX__,
+      __FORCE_EXPANDED__
+    );
 
     if (!window.__theaverSafeZoneObserverInstalled) {
       window.__theaverSafeZoneObserverInstalled = true;
@@ -1173,7 +1291,10 @@ class MiniAppSession {
             window.__theaverSyncSafeZones(
               window.__theaverTopClear || 0,
               window.__theaverBottomClear || 0,
-              window.__theaverFlutterVh || 0
+              window.__theaverFlutterVh || 0,
+              window.__theaverCompactTopClear || 0,
+              window.__theaverCompactBottomClear || 0,
+              !!window.__theaverForceExpanded
             );
           }
         }, 160);
@@ -1183,8 +1304,7 @@ class MiniAppSession {
         var cur = target;
         var steps = 0;
         while (cur && cur.nodeType === 1 && steps < 5) {
-          var r = cur.dataset && cur.dataset.theaverSafeRole;
-          if (r === 'top-pinned' || r === 'bottom-pinned') {
+          if (cur.dataset && cur.dataset.theaverSafeRole === 'top-pinned') {
             return true;
           }
           cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
@@ -1227,7 +1347,8 @@ class MiniAppSession {
           schedulePinnedRefresh();
         }
       };
-      var onScrollEvt = function() {
+      var onScrollEvt = function(ev) {
+        onScrollCollapseCheck(ev);
         schedulePinnedRefresh();
         scheduleSync();
       };
@@ -1247,12 +1368,16 @@ class MiniAppSession {
 ''';
     return template
         .replaceAll('__TOP_PX__', safeTop.toString())
+        .replaceAll('__COMPACT_TOP_PX__', safeCompactTop.toString())
         .replaceAll('__BOTTOM_PX__', safeBottom.toString())
-        .replaceAll('__FLUTTER_VH__', safeFlutterVh.toString());
+        .replaceAll('__COMPACT_BOTTOM_PX__', safeCompactBottom.toString())
+        .replaceAll('__FLUTTER_VH__', safeFlutterVh.toString())
+        .replaceAll('__FORCE_EXPANDED__', forceExpandedLit);
   }
 
-  /// Parses and applies top-luminance and canvas metadata returned by
-  /// [buildBrowserSafeInsetsScript] or posted via `TheaverBrowserTheme`.
+  /// Parses and applies scroll-collapse, top-luminance, and Scroll Pocket
+  /// background metadata returned by [buildBrowserSafeInsetsScript] or posted
+  /// via `TheaverBrowserTheme`.
   void applyBrowserPageMetaPayload(dynamic rawResult) {
     try {
       dynamic decoded = rawResult;
@@ -1266,21 +1391,44 @@ class MiniAppSession {
       }
       if (decoded is! Map) return;
       final map = Map<String, dynamic>.from(decoded);
+      final dynamic rawCollapsed = map['collapsed'];
+      final bool? nextCollapsed = browserForceExpanded
+          ? false
+          : (rawCollapsed is bool ? rawCollapsed : null);
       final dynamic rawDark = map['topIsDark'];
       final bool? nextDark = rawDark is bool ? rawDark : null;
       final Color? nextCanvas =
           _parseCssColor(map['canvasColor']?.toString())?.withValues(alpha: 1.0);
+      final Color? nextTopPocket =
+          _parseCssColor(map['topColor']?.toString())?.withValues(alpha: 1.0) ??
+              nextCanvas;
+      final Color? nextBottomPocket =
+          _parseCssColor(map['bottomColor']?.toString())?.withValues(alpha: 1.0) ??
+              nextCanvas;
 
       final bool changed =
-          (nextDark != null && nextDark != browserTopIsDark) ||
-              (nextCanvas != null && nextCanvas != browserCanvasColor);
+          (nextCollapsed != null && nextCollapsed != browserChromeCollapsed) ||
+              (nextDark != null && nextDark != browserTopIsDark) ||
+              (nextCanvas != null && nextCanvas != browserCanvasColor) ||
+              (nextTopPocket != null && nextTopPocket != browserTopPocketColor) ||
+              (nextBottomPocket != null &&
+                  nextBottomPocket != browserBottomPocketColor);
       if (!changed) return;
 
+      if (nextCollapsed != null) {
+        browserChromeCollapsed = nextCollapsed;
+      }
       if (nextDark != null) {
         browserTopIsDark = nextDark;
       }
       if (nextCanvas != null) {
         browserCanvasColor = nextCanvas;
+      }
+      if (nextTopPocket != null) {
+        browserTopPocketColor = nextTopPocket;
+      }
+      if (nextBottomPocket != null) {
+        browserBottomPocketColor = nextBottomPocket;
       }
       onSheetStateChanged?.call();
       MiniAppSessionController.instance.notifySessionUpdated();
@@ -1291,12 +1439,18 @@ class MiniAppSession {
     final ctrl = controller;
     if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
     final int topPx = browserTopClearance.round().clamp(0, 320);
+    final int compactTopPx = browserCompactTopClearance.round().clamp(0, 320);
     final int bottomPx = browserBottomClearance.round().clamp(0, 320);
+    final int compactBottomPx =
+        browserCompactBottomClearance.round().clamp(0, 320);
     final int vhPx = browserViewportHeight.round().clamp(0, 4096);
     final js = buildBrowserSafeInsetsScript(
       topPx: topPx,
+      compactTopPx: compactTopPx,
       bottomPx: bottomPx,
+      compactBottomPx: compactBottomPx,
       flutterViewportHeight: vhPx,
+      forceExpanded: browserForceExpanded,
     );
     try {
       final raw = await ctrl.runJavaScriptReturningResult(js);
@@ -1351,6 +1505,7 @@ class MiniAppSession {
             },
             onPageStarted: (urlStr) {
               _earlyBrowserInsetsStage = 0;
+              browserChromeCollapsed = false;
               final nextUrl = urlStr.trim();
               if (nextUrl.isNotEmpty) {
                 final prevHost = BrowserDataService.extractHost(currentUrl);
@@ -1358,6 +1513,8 @@ class MiniAppSession {
                 if (prevHost != nextHost) {
                   browserTopIsDark = null;
                   browserCanvasColor = null;
+                  browserTopPocketColor = null;
+                  browserBottomPocketColor = null;
                 }
                 currentUrl = nextUrl;
               }
@@ -4131,6 +4288,82 @@ class RenderMiniAppDragOffset extends RenderShiftedBox {
   }
 }
 
+/// Shrink-wraps width to [child] while ensuring a minimum vertical layout budget
+/// ([minContentHeight]) so a cross-fading two-line pill never overflows during
+/// height transitions between expanded (`44dp`) and compact (`26dp`) states.
+class _ShrinkWrapVerticalClip extends SingleChildRenderObjectWidget {
+  final double minContentHeight;
+
+  const _ShrinkWrapVerticalClip({
+    required this.minContentHeight,
+    required super.child,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderShrinkWrapVerticalClip(minContentHeight);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderShrinkWrapVerticalClip renderObject,
+  ) {
+    renderObject.minContentHeight = minContentHeight;
+  }
+}
+
+class _RenderShrinkWrapVerticalClip extends RenderShiftedBox {
+  _RenderShrinkWrapVerticalClip(this._minContentHeight) : super(null);
+
+  double _minContentHeight;
+  double get minContentHeight => _minContentHeight;
+  set minContentHeight(double value) {
+    if (_minContentHeight == value) return;
+    _minContentHeight = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void performLayout() {
+    final RenderBox? child = this.child;
+    if (child == null) {
+      size = constraints.smallest;
+      return;
+    }
+    final double boundedH = constraints.hasBoundedHeight
+        ? math.max(constraints.maxHeight, minContentHeight)
+        : double.infinity;
+    child.layout(
+      BoxConstraints(
+        minWidth: constraints.minWidth,
+        maxWidth: constraints.maxWidth,
+        minHeight: 0.0,
+        maxHeight: boundedH,
+      ),
+      parentUsesSize: true,
+    );
+    size = constraints.constrain(child.size);
+    final double dy = (size.height - child.size.height) * 0.5;
+    (child.parentData! as BoxParentData).offset = Offset(0.0, dy);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final RenderBox? child = this.child;
+    if (child == null) return;
+    if (child.size.height > size.height + 0.01) {
+      context.pushClipRect(
+        needsCompositing,
+        offset,
+        Offset.zero & size,
+        super.paint,
+      );
+    } else {
+      super.paint(context, offset);
+    }
+  }
+}
+
 /// Floating oval HUD capsule shared between [MiniAppWebViewSheet] and [InAppBrowserSheet].
 ///
 /// Renders lightweight `isLiteOverride` [LiquidGlassLens] islands in glass mode,
@@ -4144,6 +4377,7 @@ class WebViewFloatingCapsule extends StatelessWidget {
   final double? height;
   final EdgeInsetsGeometry? padding;
   final Color? colorOverride;
+  final bool visible;
 
   const WebViewFloatingCapsule({
     super.key,
@@ -4153,6 +4387,7 @@ class WebViewFloatingCapsule extends StatelessWidget {
     this.height = 44.0,
     this.padding,
     this.colorOverride,
+    this.visible = true,
   });
 
   @override
@@ -4181,6 +4416,7 @@ class WebViewFloatingCapsule extends StatelessWidget {
             )
           : style.hudFill;
       return LiquidGlassLens(
+        visibility: visible,
         style: style.glassProvider!.createStyle(
           context: context,
           cornerRadius: borderRadius,
@@ -4194,6 +4430,10 @@ class WebViewFloatingCapsule extends StatelessWidget {
           child: content,
         ),
       );
+    }
+
+    if (!visible) {
+      return SizedBox(width: minWidth, height: height);
     }
 
     final blurFilter = style.getMaterialHudBlurFilter(sigma: 10.0);
@@ -4249,7 +4489,8 @@ class WebViewFloatingCapsule extends StatelessWidget {
 
 /// Three-island floating oval header (`[close/back]`, `[title/domain + progress]`,
 /// `[minimize | more]`) matching the floating chat chrome aesthetic, with an
-/// inline morphing right menu (`LiquidGlassMorph` / animated Material morph).
+/// inline morphing right menu (`LiquidGlassMorph` / animated Material morph)
+/// and optional Safari iOS 26 compact domain-pill mode.
 class WebViewFloatingHeader extends StatelessWidget {
   final double topInset;
   final Widget leadingChild;
@@ -4260,6 +4501,9 @@ class WebViewFloatingHeader extends StatelessWidget {
   final Color? progressColor;
   final VoidCallback? onCenterTap;
   final VoidCallback? onCenterLongPress;
+  final bool isCompact;
+  final VoidCallback? onExpandCompact;
+  final Widget? compactCenterChild;
   final bool isMenuOpen;
   final VoidCallback? onDismissMenu;
   final Widget? expandedMenuChild;
@@ -4282,6 +4526,9 @@ class WebViewFloatingHeader extends StatelessWidget {
     this.progressColor,
     this.onCenterTap,
     this.onCenterLongPress,
+    this.isCompact = false,
+    this.onExpandCompact,
+    this.compactCenterChild,
     this.isMenuOpen = false,
     this.onDismissMenu,
     this.expandedMenuChild,
@@ -4293,6 +4540,61 @@ class WebViewFloatingHeader extends StatelessWidget {
     this.onVerticalDragEnd,
     this.onVerticalDragCancel,
   });
+
+  Widget _buildPillBody(
+    Widget inner, {
+    required double horizontalPad,
+    required Color barAccent,
+  }) {
+    final Widget centered = _ShrinkWrapVerticalClip(
+      minContentHeight: 40.0,
+      child: Center(
+        widthFactor: 1.0,
+        child: inner,
+      ),
+    );
+    if (progressListenable == null) {
+      return Padding(
+        padding: EdgeInsets.symmetric(horizontal: horizontalPad),
+        child: centered,
+      );
+    }
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: horizontalPad),
+          child: centered,
+        ),
+        Positioned(
+          left: 10,
+          right: 10,
+          bottom: 0,
+          child: ValueListenableBuilder<double>(
+            valueListenable: progressListenable!,
+            builder: (context, value, _) {
+              if (value <= 0.0 || value >= 1.0) {
+                return const SizedBox.shrink();
+              }
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: value.clamp(0.06, 1.0),
+                    child: SizedBox(
+                      height: 2.2,
+                      child: ColoredBox(color: barAccent),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -4307,54 +4609,29 @@ class WebViewFloatingHeader extends StatelessWidget {
       math.max(collapsedRightWidth + 40.0, screenWidth - 24.0),
     );
     final bool menuExpanded = isMenuOpen && expandedMenuChild != null;
+    final bool effectiveCompact = isCompact && !menuExpanded;
     final double normalHeight = topInset + 60.0;
+    final double compactHeight = topInset + 34.0;
 
-    Widget titlePillBody = Center(
-      widthFactor: 1.0,
-      child: centerChild,
+    final Widget expandedPillBody = KeyedSubtree(
+      key: const ValueKey('webview_center_expanded'),
+      child: _buildPillBody(
+        centerChild,
+        horizontalPad: 14.0,
+        barAccent: barAccent,
+      ),
     );
-    if (progressListenable != null) {
-      titlePillBody = Stack(
-        alignment: Alignment.center,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: titlePillBody,
-          ),
-          Positioned(
-            left: 10,
-            right: 10,
-            bottom: 0,
-            child: ValueListenableBuilder<double>(
-              valueListenable: progressListenable!,
-              builder: (context, value, _) {
-                if (value <= 0.0 || value >= 1.0) {
-                  return const SizedBox.shrink();
-                }
-                return ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      widthFactor: value.clamp(0.06, 1.0),
-                      child: SizedBox(
-                        height: 2.2,
-                        child: ColoredBox(color: barAccent),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      );
-    } else {
-      titlePillBody = Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        child: titlePillBody,
-      );
-    }
+    final Widget compactPillBody = KeyedSubtree(
+      key: const ValueKey('webview_center_compact'),
+      child: _buildPillBody(
+        compactCenterChild ?? centerChild,
+        horizontalPad: 11.0,
+        barAccent: barAccent,
+      ),
+    );
+    final Widget activeCenterContent = (effectiveCompact && compactCenterChild != null)
+        ? compactPillBody
+        : expandedPillBody;
 
     final Widget collapsedBox = SizedBox(
       key: const ValueKey('webview_right_pill_collapsed'),
@@ -4399,54 +4676,9 @@ class WebViewFloatingHeader extends StatelessWidget {
           )
         : collapsedBox;
 
-    final Widget leftWidget = Positioned(
-      key: const ValueKey('webview_header_left_pos'),
-      top: topInset + 8,
-      left: 12,
-      width: 44,
-      height: 44,
-      child: WebViewFloatingCapsule(
-        minWidth: 44,
-        height: 44,
-        borderRadius: 22,
-        colorOverride: capsuleColorOverride,
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: Center(child: leadingChild),
-        ),
-      ),
-    );
-
-    final Widget centerWidget = Positioned(
-      key: const ValueKey('webview_header_center_pos'),
-      top: topInset + 8,
-      left: 12 + 44 + 8,
-      right: 12 + collapsedRightWidth + 8,
-      height: 44,
-      child: Center(
-        child: GestureDetector(
-          key: const ValueKey('webview_header_center_pill'),
-          behavior: HitTestBehavior.opaque,
-          onTap: onCenterTap,
-          onLongPress: onCenterLongPress,
-          onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
-          onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
-          onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
-          onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
-          child: WebViewFloatingCapsule(
-            height: 44,
-            borderRadius: 22,
-            colorOverride: capsuleColorOverride,
-            child: titlePillBody,
-          ),
-        ),
-      ),
-    );
-
     final bool useGlass = style.isGlass && style.glassProvider != null;
     final LiquidGlassStyle? morphStyle;
-    final Widget rightWidget;
+    final Widget rightMorphChild;
 
     if (useGlass) {
       final Color glassFill = capsuleColorOverride != null
@@ -4465,21 +4697,16 @@ class WebViewFloatingHeader extends StatelessWidget {
         borderWidth: 1.1,
         color: glassFill,
       );
-      rightWidget = Positioned(
-        key: const ValueKey('webview_header_right_pos'),
-        top: topInset + 8,
-        right: 12,
-        child: SizedBox(
-          width: adaptiveMenuWidth,
-          height: expandedMenuHeight,
-          child: LiquidGlassMorph(
-            key: const ValueKey('webview_right_morph'),
-            alignment: Alignment.topRight,
-            motion: LiquidGlassMorphMotion.fluid,
-            smoothness: 28,
-            style: morphStyle,
-            child: menuExpanded ? expandedBox : collapsedBox,
-          ),
+      rightMorphChild = SizedBox(
+        width: adaptiveMenuWidth,
+        height: expandedMenuHeight,
+        child: LiquidGlassMorph(
+          key: const ValueKey('webview_right_morph'),
+          alignment: Alignment.topRight,
+          motion: LiquidGlassMorphMotion.fluid,
+          smoothness: 28,
+          style: morphStyle,
+          child: menuExpanded ? expandedBox : collapsedBox,
         ),
       );
     } else {
@@ -4537,69 +4764,194 @@ class WebViewFloatingHeader extends StatelessWidget {
           child: surfaceBox,
         );
       }
-      rightWidget = Positioned(
-        key: const ValueKey('webview_header_right_pos'),
-        top: topInset + 8,
-        right: 12,
-        child: AnimatedContainer(
-          key: const ValueKey('webview_right_matte_morph'),
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-          width: menuExpanded ? adaptiveMenuWidth : collapsedRightWidth,
-          height: menuExpanded ? expandedMenuHeight : 44.0,
-          alignment: Alignment.topRight,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22.0),
-              boxShadow: style.floatingShadow,
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(22.0),
-              child: surfaceBox,
-            ),
+      rightMorphChild = AnimatedContainer(
+        key: const ValueKey('webview_right_matte_morph'),
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        width: menuExpanded ? adaptiveMenuWidth : collapsedRightWidth,
+        height: menuExpanded ? expandedMenuHeight : 44.0,
+        alignment: Alignment.topRight,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22.0),
+            boxShadow: style.floatingShadow,
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(22.0),
+            child: surfaceBox,
           ),
         ),
       );
     }
 
-    final Widget stackContent = Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Positioned.fill(
-          key: const ValueKey('webview_header_menu_backdrop'),
+    final Widget leadingBox = SizedBox(
+      width: 44,
+      height: 44,
+      child: Center(child: leadingChild),
+    );
+    final Widget centerGesture = AnimatedSwitcher(
+      duration: const Duration(milliseconds: 160),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeOutCubic,
+      child: activeCenterContent,
+    );
+
+    const double expandedLeft = 12.0 + 44.0 + 8.0;
+    final double expandedRight = 12.0 + collapsedRightWidth + 8.0;
+    const double compactHoriz = 44.0;
+    const double baseLeft = compactHoriz;
+    final double baseRight = math.min(compactHoriz, expandedRight);
+    final double expandTarget = effectiveCompact ? 0.0 : 1.0;
+
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: expandTarget, end: expandTarget),
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      builder: (context, t, _) {
+        final double headerHeight = menuExpanded
+            ? fullHeight
+            : ui.lerpDouble(compactHeight, normalHeight, t)!;
+        final double pillHeight = ui.lerpDouble(26.0, 44.0, t)!;
+        final double pillRadius = pillHeight * 0.5;
+        final double topPad = 5.0 * t;
+        final double leftPad = ui.lerpDouble(compactHoriz - baseLeft, expandedLeft - baseLeft, t)!;
+        final double rightPad = ui.lerpDouble(compactHoriz - baseRight, expandedRight - baseRight, t)!;
+        final bool sideVisible = t > 0.02;
+
+        final Widget leftWidget = Positioned(
+          key: const ValueKey('webview_header_left_pos'),
+          top: topInset + 8,
+          left: 12,
+          width: 44,
+          height: 44,
           child: IgnorePointer(
-            ignoring: !menuExpanded,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onDismissMenu,
+            key: const ValueKey('webview_header_left_ignore'),
+            ignoring: effectiveCompact,
+            child: Transform.translate(
+              offset: Offset(-56.0 * (1.0 - t), -8.0 * (1.0 - t)),
+              child: Transform.scale(
+                scale: 0.72 + 0.28 * t,
+                alignment: Alignment.topLeft,
+                child: WebViewFloatingCapsule(
+                  minWidth: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  colorOverride: capsuleColorOverride,
+                  visible: sideVisible,
+                  child: leadingBox,
+                ),
+              ),
             ),
           ),
-        ),
-        leftWidget,
-        centerWidget,
-        rightWidget,
-      ],
-    );
+        );
 
-    final Widget framedHeader = SizedBox(
-      width: double.infinity,
-      height: menuExpanded ? fullHeight : normalHeight,
-      child: morphStyle != null
-          ? LiquidGlassBlender(
-              smoothness: 0,
-              style: morphStyle,
-              child: stackContent,
-            )
-          : stackContent,
-    );
+        final Widget centerWidget = Positioned(
+          key: const ValueKey('webview_header_center_pos'),
+          top: topInset + 3.0,
+          left: baseLeft,
+          right: baseRight,
+          height: 49.0,
+          child: Padding(
+            padding: EdgeInsets.only(
+              top: topPad,
+              left: leftPad,
+              right: rightPad,
+            ),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: GestureDetector(
+                key: const ValueKey('webview_header_center_pill'),
+                behavior: HitTestBehavior.opaque,
+                onTap: effectiveCompact
+                    ? (onExpandCompact ?? onCenterTap)
+                    : onCenterTap,
+                onLongPress: onCenterLongPress,
+                onVerticalDragStart:
+                    (menuExpanded || effectiveCompact) ? null : onVerticalDragStart,
+                onVerticalDragUpdate:
+                    (menuExpanded || effectiveCompact) ? null : onVerticalDragUpdate,
+                onVerticalDragEnd:
+                    (menuExpanded || effectiveCompact) ? null : onVerticalDragEnd,
+                onVerticalDragCancel:
+                    (menuExpanded || effectiveCompact) ? null : onVerticalDragCancel,
+                child: WebViewFloatingCapsule(
+                  height: pillHeight,
+                  borderRadius: pillRadius,
+                  colorOverride: capsuleColorOverride,
+                  child: centerGesture,
+                ),
+              ),
+            ),
+          ),
+        );
 
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
-      onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
-      onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
-      onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
-      child: framedHeader,
+        final Widget rightWidget = Positioned(
+          key: const ValueKey('webview_header_right_pos'),
+          top: topInset + 8,
+          right: 12,
+          child: IgnorePointer(
+            key: const ValueKey('webview_header_right_ignore'),
+            ignoring: effectiveCompact,
+            child: sideVisible
+                ? Transform.translate(
+                    offset: Offset(
+                      (collapsedRightWidth + 24.0) * (1.0 - t),
+                      -8.0 * (1.0 - t),
+                    ),
+                    child: Transform.scale(
+                      scale: 0.72 + 0.28 * t,
+                      alignment: Alignment.topRight,
+                      child: rightMorphChild,
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
+        );
+
+        final Widget stackContent = Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              key: const ValueKey('webview_header_menu_backdrop'),
+              child: IgnorePointer(
+                ignoring: !menuExpanded,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onDismissMenu,
+                ),
+              ),
+            ),
+            leftWidget,
+            centerWidget,
+            rightWidget,
+          ],
+        );
+
+        final Widget framedHeader = SizedBox(
+          width: double.infinity,
+          height: headerHeight,
+          child: morphStyle != null
+              ? LiquidGlassBlender(
+                  smoothness: 0,
+                  style: morphStyle,
+                  child: stackContent,
+                )
+              : stackContent,
+        );
+
+        return GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragStart:
+              (menuExpanded || effectiveCompact) ? null : onVerticalDragStart,
+          onVerticalDragUpdate:
+              (menuExpanded || effectiveCompact) ? null : onVerticalDragUpdate,
+          onVerticalDragEnd:
+              (menuExpanded || effectiveCompact) ? null : onVerticalDragEnd,
+          onVerticalDragCancel:
+              (menuExpanded || effectiveCompact) ? null : onVerticalDragCancel,
+          child: framedHeader,
+        );
+      },
     );
   }
 }

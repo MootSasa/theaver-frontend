@@ -354,20 +354,29 @@ void main() {
       expect(find.text('@walt • mini app'), findsOneWidget);
     });
 
-    test('MiniAppSession.buildBrowserSafeInsetsScript & applyBrowserPageMetaPayload offset pinned controls without caps', () {
+    test('MiniAppSession.buildBrowserSafeInsetsScript & applyBrowserPageMetaPayload support Safari iOS 26 scroll pocket and collapse', () {
       final js = MiniAppSession.buildBrowserSafeInsetsScript(
         topPx: 82,
+        compactTopPx: 56,
         bottomPx: 80,
+        compactBottomPx: 16,
         flutterViewportHeight: 800,
       );
       expect(js, contains('window.__theaverTopClear = 82;'));
+      expect(js, contains('window.__theaverCompactTopClear = 56;'));
       expect(js, contains('window.__theaverBottomClear = 80;'));
+      expect(js, contains('window.__theaverCompactBottomClear = 16;'));
       expect(js, contains('window.__theaverFlutterVh = 800;'));
-      expect(js, contains('window.__theaverSyncSafeZones(82, 80, 800)'));
+      expect(js, contains('window.__theaverSyncSafeZones('));
+      expect(js, contains('--theaver-top-obscured'));
+      expect(js, contains('--theaver-safe-bottom'));
       expect(js, contains('--theaver-header-clearance'));
       expect(js, contains('--theaver-bottom-clearance'));
       expect(js, contains('--tg-safe-area-inset-top'));
       expect(js, contains('--tg-safe-area-inset-bottom'));
+      expect(js, contains('safe-area-inset-bottom'));
+      expect(js, contains('__theaverSetCollapsedFromHost'));
+      expect(js, contains('elementsFromPoint'));
       expect(js, contains('scroll-padding-top:'));
       expect(js, contains('scroll-padding-bottom:'));
       expect(js, contains('getEffectiveSize'));
@@ -380,18 +389,17 @@ void main() {
       expect(js, contains('transitionrun'));
       expect(js, contains('__theaverRefreshTrackedPinned'));
       expect(js, contains('theaverScrollContainerPt'));
-      expect(js, contains('deferredTopBars'));
-      expect(js, contains('deferredBottomBars'));
       expect(js, contains("'top-pinned'"));
-      expect(js, contains("'bottom-pinned'"));
-      expect(js, contains("'top-abs'"));
-      expect(js, contains("'bottom-abs'"));
-      expect(js, contains("'full-drawer'"));
       expect(js, contains('takeRecords'));
       expect(js, contains('TheaverBrowserTheme'));
       expect(js, isNot(contains("visibility === 'hidden'")));
       expect(js, isNot(contains('__theaver_top_cap')));
       expect(js, isNot(contains('__theaver_bottom_cap')));
+      expect(js, isNot(contains("'bottom-pinned'")));
+      expect(js, isNot(contains("'top-abs'")));
+      expect(js, isNot(contains("'bottom-abs'")));
+      expect(js, isNot(contains("'full-drawer'")));
+      expect(js, isNot(contains('deferredBottomBars')));
 
       final session = MiniAppSession(
         launchData: const MiniAppLaunchData(
@@ -405,29 +413,35 @@ void main() {
 
       // Double-encoded string mirrors Android WebView runJavaScriptReturningResult output.
       session.applyBrowserPageMetaPayload(
-        r'"{\"topIsDark\":true,\"canvasColor\":\"rgb(239, 240, 242)\"}"',
+        r'"{\"collapsed\":true,\"topIsDark\":true,\"topColor\":\"rgb(32, 32, 34)\",\"bottomColor\":\"rgb(24, 24, 26)\",\"canvasColor\":\"rgb(24, 24, 26)\"}"',
       );
+      expect(session.browserChromeCollapsed, isTrue);
       expect(session.browserTopIsDark, isTrue);
-      expect(session.browserCanvasColor, const Color(0xFFEFF0F2));
+      expect(session.browserTopPocketColor, const Color(0xFF202022));
+      expect(session.browserBottomPocketColor, const Color(0xFF18181A));
+      expect(session.browserCanvasColor, const Color(0xFF18181A));
       expect(sheetChanges, 1);
 
       // Identical payload must be deduplicated without triggering extra rebuilds.
       session.applyBrowserPageMetaPayload(
-        '{"topIsDark":true,"canvasColor":"rgb(239, 240, 242)"}',
+        '{"collapsed":true,"topIsDark":true,"topColor":"rgb(32, 32, 34)","bottomColor":"rgb(24, 24, 26)","canvasColor":"rgb(24, 24, 26)"}',
       );
       expect(sheetChanges, 1);
 
-      // Luminance transition notifies once.
+      // Collapse + luminance/color transition notifies once.
       session.applyBrowserPageMetaPayload(
-        '{"topIsDark":false,"canvasColor":"rgb(255, 255, 255)"}',
+        '{"collapsed":false,"topIsDark":false,"topColor":"rgb(255, 255, 255)","bottomColor":"rgb(239, 240, 242)","canvasColor":"rgb(239, 240, 242)"}',
       );
+      expect(session.browserChromeCollapsed, isFalse);
       expect(session.browserTopIsDark, isFalse);
-      expect(session.browserCanvasColor, const Color(0xFFFFFFFF));
+      expect(session.browserTopPocketColor, const Color(0xFFFFFFFF));
+      expect(session.browserBottomPocketColor, const Color(0xFFEFF0F2));
+      expect(session.browserCanvasColor, const Color(0xFFEFF0F2));
       expect(sheetChanges, 2);
     });
 
     testWidgets(
-      'InAppBrowserSheet keeps body edge-to-edge without bars and dynamically updates browserTopClearance',
+      'InAppBrowserSheet keeps body edge-to-edge with scroll pockets and dynamically updates browserTopClearance',
       (tester) async {
         tester.view.physicalSize = const Size(400, 800);
         tester.view.devicePixelRatio = 1.0;
@@ -457,6 +471,8 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_top_cap')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_bottom_cap')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_safe_viewport')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_top_scroll_pocket')), findsOneWidget);
+        expect(find.byKey(const ValueKey('in_app_browser_bottom_scroll_pocket')), findsOneWidget);
 
         final sheetFinder = find.byKey(const ValueKey('in_app_browser_sheet'));
         expect(tester.getRect(sheetFinder), const Rect.fromLTWH(0, 0, 400, 800));
@@ -474,16 +490,20 @@ void main() {
         );
 
         expect(session.browserTopClearance, closeTo(82.0, 0.01));
+        expect(session.browserCompactTopClearance, closeTo(56.0, 0.01));
         expect(session.browserBottomClearance, closeTo(80.0, 0.01));
+        expect(session.browserCompactBottomClearance, closeTo(16.0, 0.01));
         expect(session.browserViewportHeight, closeTo(800.0, 0.01));
+        expect(session.browserForceExpanded, isFalse);
 
-        // Opening Find-in-Page lowers top clearance below the find capsule.
+        // Opening Find-in-Page lowers top clearance below the find capsule and forces expanded chrome.
         await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Найти на странице'));
         await tester.pumpAndSettle();
 
         expect(session.browserTopClearance, closeTo(134.0, 0.01));
+        expect(session.browserForceExpanded, isTrue);
 
         // Closing Find-in-Page restores normal top clearance.
         final findCapsuleFinder = find.ancestor(
@@ -497,6 +517,122 @@ void main() {
         await tester.tap(findBarCloseFinder);
         await tester.pumpAndSettle();
         expect(session.browserTopClearance, closeTo(82.0, 0.01));
+        expect(session.browserForceExpanded, isFalse);
+      },
+    );
+
+    testWidgets(
+      'InAppBrowserSheet collapses 3 top capsules into compact domain pill and hides bottom bar on downward scroll, expanding on domain tap',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(400, 800),
+                padding: EdgeInsets.only(top: 24, bottom: 16),
+              ),
+              child: InAppBrowserSheet(session: session),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Expanded initial state: 3 top capsules + bottom navigation capsule.
+        expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsOneWidget);
+        expect(find.byKey(const ValueKey('in_app_browser_minimize_button')), findsOneWidget);
+        expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsOneWidget);
+        expect(
+          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
+          closeTo(44.0, 0.5),
+        );
+        expect(
+          tester
+              .widget<IgnorePointer>(
+                find.byKey(const ValueKey('in_app_browser_bottom_bar_ignore')),
+              )
+              .ignoring,
+          isFalse,
+        );
+        expect(find.byKey(const ValueKey('in_app_browser_bottom_bar')), findsOneWidget);
+
+        // Downward scroll collapses browser chrome Safari iOS 26 style.
+        session.applyBrowserPageMetaPayload(
+          '{"collapsed":true,"topIsDark":false,"topColor":"rgb(239, 240, 242)","bottomColor":"rgb(239, 240, 242)","canvasColor":"rgb(239, 240, 242)"}',
+        );
+        await tester.pumpAndSettle();
+
+        expect(session.browserChromeCollapsed, isTrue);
+        expect(session.browserTopPocketColor, const Color(0xFFEFF0F2));
+        expect(
+          tester
+              .widget<IgnorePointer>(
+                find.byKey(const ValueKey('in_app_browser_bottom_bar_ignore')),
+              )
+              .ignoring,
+          isTrue,
+        );
+        expect(
+          tester
+              .widget<IgnorePointer>(
+                find.byKey(const ValueKey('webview_header_left_ignore')),
+              )
+              .ignoring,
+          isTrue,
+        );
+        expect(
+          tester
+              .widget<IgnorePointer>(
+                find.byKey(const ValueKey('webview_header_right_ignore')),
+              )
+              .ignoring,
+          isTrue,
+        );
+        expect(find.byKey(const ValueKey('in_app_browser_minimize_button')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
+        expect(
+          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
+          closeTo(26.0, 0.5),
+        );
+
+        // Tapping compact center domain pill expands all 3 top capsules & bottom bar.
+        await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+        await tester.pumpAndSettle();
+
+        expect(session.browserChromeCollapsed, isFalse);
+        expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsOneWidget);
+        expect(find.byKey(const ValueKey('in_app_browser_minimize_button')), findsOneWidget);
+        expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsOneWidget);
+        expect(
+          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
+          closeTo(44.0, 0.5),
+        );
+        expect(
+          tester
+              .widget<IgnorePointer>(
+                find.byKey(const ValueKey('in_app_browser_bottom_bar_ignore')),
+              )
+              .ignoring,
+          isFalse,
+        );
+
+        // Overflow menu morph still opens smoothly after expanding back.
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_overflow_menu')), findsOneWidget);
       },
     );
   });
