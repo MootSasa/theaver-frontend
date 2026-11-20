@@ -154,6 +154,7 @@ class MainActivity : FlutterFragmentActivity() {
                     val urlArg = call.argument<String>("url")
                     val maxWidth = (call.argument<Int>("maxWidth") ?: 540).coerceIn(120, 1440)
                     val quality = (call.argument<Int>("quality") ?: 80).coerceIn(20, 95)
+                    val topCropDp = (call.argument<Number>("topCropDp")?.toDouble() ?: 0.0).coerceAtLeast(0.0)
                     runOnUiThread {
                         var bitmap: Bitmap? = null
                         try {
@@ -163,13 +164,16 @@ class MainActivity : FlutterFragmentActivity() {
                                 return@runOnUiThread
                             }
                             val scale = (maxWidth.toFloat() / webView.width.toFloat()).coerceIn(0.15f, 1.0f)
+                            val rawTopCropPx = (topCropDp * resources.displayMetrics.density).toInt()
+                            val effectiveTopCropPx = (rawTopCropPx - webView.scrollY).coerceIn(0, (webView.height * 0.35f).toInt())
+                            val visibleHeight = (webView.height - effectiveTopCropPx).coerceAtLeast(1)
                             val outW = (webView.width * scale).toInt().coerceAtLeast(1)
-                            val outH = (webView.height * scale).toInt().coerceAtLeast(1)
+                            val outH = (visibleHeight * scale).toInt().coerceAtLeast(1)
                             val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
                             bitmap = bmp
                             val canvas = Canvas(bmp)
                             canvas.scale(scale, scale)
-                            canvas.translate(-webView.scrollX.toFloat(), -webView.scrollY.toFloat())
+                            canvas.translate(-webView.scrollX.toFloat(), -(webView.scrollY + effectiveTopCropPx).toFloat())
                             webView.draw(canvas)
                             snapshotExecutor.execute {
                                 val bytes = try {

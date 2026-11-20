@@ -757,10 +757,37 @@ void main() {
           );
         }
 
+        final morphKey = ValueKey(
+          expectGlass ? 'webview_right_morph' : 'webview_right_matte_morph',
+        );
+        final State rightMorphStateBefore = tester.state(
+          find.descendant(of: headerFinder, matching: find.byKey(morphKey)),
+        );
+
         // Opening overflow menu morphs inline out of WebViewFloatingHeader's right capsule.
         await tester.tap(
           find.byKey(const ValueKey('mini_app_more_menu_button')),
         );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 70));
+
+        expect(
+          identical(
+            tester.state(
+              find.descendant(of: headerFinder, matching: find.byKey(morphKey)),
+            ),
+            rightMorphStateBefore,
+          ),
+          isTrue,
+        );
+        if (!expectGlass) {
+          final midOpenSize = tester.getSize(find.byKey(morphKey));
+          expect(midOpenSize.width, greaterThan(84.5));
+          expect(midOpenSize.width, lessThan(243.5));
+          expect(midOpenSize.height, greaterThan(44.5));
+          expect(midOpenSize.height, lessThan(187.5));
+        }
+
         await tester.pumpAndSettle();
 
         final menuFinder = find.descendant(
@@ -769,8 +796,26 @@ void main() {
         );
         expect(menuFinder, findsOneWidget);
 
-        // Dismiss overflow menu before tapping downward chevron to minimize.
+        // Dismiss overflow menu smoothly before tapping downward chevron to minimize.
         await tester.tapAt(tester.getCenter(sheetFinder));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 70));
+        expect(
+          identical(
+            tester.state(
+              find.descendant(of: headerFinder, matching: find.byKey(morphKey)),
+            ),
+            rightMorphStateBefore,
+          ),
+          isTrue,
+        );
+        if (!expectGlass) {
+          final midCloseSize = tester.getSize(find.byKey(morphKey));
+          expect(midCloseSize.width, greaterThan(84.5));
+          expect(midCloseSize.width, lessThan(243.5));
+          expect(midCloseSize.height, greaterThan(44.5));
+          expect(midCloseSize.height, lessThan(187.5));
+        }
         await tester.pumpAndSettle();
         expect(menuFinder, findsNothing);
 
@@ -1325,6 +1370,15 @@ void main() {
 
     final switcherFinder = find.byKey(const ValueKey('mini_app_tabs_switcher'));
     expect(switcherFinder, findsOneWidget);
+    final scrollRect = tester.getRect(
+      find
+          .descendant(
+            of: switcherFinder,
+            matching: find.byType(SingleChildScrollView),
+          )
+          .first,
+    );
+    expect(scrollRect.top, lessThanOrEqualTo(0.5));
     expect(
       find.byKey(const ValueKey('mini_app_tab_preview_tab_studio_dom')),
       findsOneWidget,
@@ -1333,6 +1387,18 @@ void main() {
       find.byKey(const ValueKey('mini_app_tab_preview_tab_wallet_img')),
       findsOneWidget,
     );
+    final studioRect = tester.getRect(
+      find.byKey(const ValueKey('mini_app_tab_card_tab_studio_dom')),
+    );
+    final walletPreviewRect = tester.getRect(
+      find.byKey(const ValueKey('mini_app_tab_preview_tab_wallet_img')),
+    );
+    final studioPreviewRect = tester.getRect(
+      find.byKey(const ValueKey('mini_app_tab_preview_tab_studio_dom')),
+    );
+    expect(walletPreviewRect.height, greaterThan(100.0));
+    expect(studioPreviewRect.height, greaterThan(100.0));
+    expect(studioRect.top - walletPreviewRect.top, greaterThan(100.0));
     // Live DOM snapshot renders extracted bot studio rows inside the preview card.
     expect(find.text('My Bot Studio'), findsOneWidget);
     expect(find.text('Active bots & tokens'), findsOneWidget);

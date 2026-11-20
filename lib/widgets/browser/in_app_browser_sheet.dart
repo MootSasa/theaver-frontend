@@ -201,11 +201,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     super.dispose();
   }
 
-  void _minimizeToDock() {
+  Future<void> _minimizeToDock() async {
     if (_isMinimizing) return;
     _isMinimizing = true;
     _closeMenu();
-    unawaited(_session.capturePreviewSnapshot());
+    await _session.capturePreviewSnapshot().timeout(
+          const Duration(milliseconds: 90),
+          onTimeout: () {},
+        );
+    if (!mounted) return;
     _setRouteRestingOpaque(false);
     HapticUtils.selection();
     final nav = Navigator.of(context, rootNavigator: true);

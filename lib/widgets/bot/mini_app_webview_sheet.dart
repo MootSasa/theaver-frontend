@@ -196,7 +196,7 @@ class MiniAppSession {
   bool isWebContentReady = false;
   Uint8List? previewImageBytes;
   MiniAppDomPreview? domPreview;
-  bool _snapshotInFlight = false;
+  Future<void>? _activeSnapshotFuture;
   bool allowVerticalSwipe = true;
   bool backButtonVisible = false;
   bool settingsButtonVisible = false;
@@ -415,11 +415,13 @@ class MiniAppSession {
               await refreshBrowserNavState();
               await BrowserDataService.instance
                   .recordVisit(currentUrl, displayTitle);
-              Future<void>.delayed(const Duration(milliseconds: 350), () {
-                if (controller != null) {
-                  unawaited(capturePreviewSnapshot());
-                }
-              });
+              for (final delayMs in const [350, 1200]) {
+                Future<void>.delayed(Duration(milliseconds: delayMs), () {
+                  if (controller != null) {
+                    unawaited(capturePreviewSnapshot());
+                  }
+                });
+              }
             },
             onNavigationRequest: (req) {
               final targetUri = Uri.tryParse(req.url);
@@ -465,11 +467,13 @@ class MiniAppSession {
             isWebContentReady = true;
             onSheetStateChanged?.call();
             onRequestBridgeInjection?.call();
-            Future<void>.delayed(const Duration(milliseconds: 350), () {
-              if (controller != null) {
-                unawaited(capturePreviewSnapshot());
-              }
-            });
+            for (final delayMs in const [350, 1200]) {
+              Future<void>.delayed(Duration(milliseconds: delayMs), () {
+                if (controller != null) {
+                  unawaited(capturePreviewSnapshot());
+                }
+              });
+            }
           },
           onNavigationRequest: (req) {
             final targetUri = Uri.tryParse(req.url);
@@ -547,12 +551,26 @@ class MiniAppSession {
 
   /// Captures a live viewport snapshot via the native Android WebView channel and/or
   /// visible DOM content metadata so [MiniAppTabsSwitcher] shows actual app contents.
-  Future<void> capturePreviewSnapshot() async {
-    if (_snapshotInFlight) return;
-    _snapshotInFlight = true;
+  Future<void> capturePreviewSnapshot() {
+    final existing = _activeSnapshotFuture;
+    if (existing != null) return existing;
+    late final Future<void> run;
+    run = _performCapturePreviewSnapshot().whenComplete(() {
+      if (identical(_activeSnapshotFuture, run)) {
+        _activeSnapshotFuture = null;
+      }
+    });
+    _activeSnapshotFuture = run;
+    return run;
+  }
+
+  Future<void> _performCapturePreviewSnapshot() async {
+    final ctrl = controller;
+    if (ctrl == null || WebViewPlatform.instance == null) return;
+
     bool updated = false;
-    try {
-      final String targetUrl = isBrowser ? currentUrl : launchData.url;
+    final String targetUrl = isBrowser ? currentUrl : launchData.url;
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       try {
         final bytes = await _snapshotChannel.invokeMethod<Uint8List>(
           'captureWebView',
@@ -560,6 +578,7 @@ class MiniAppSession {
             'url': targetUrl,
             'maxWidth': 540,
             'quality': 80,
+            'topCropDp': isBrowser ? browserTopClearance : 66.0,
           },
         );
         if (bytes != null && bytes.isNotEmpty) {
@@ -571,10 +590,9 @@ class MiniAppSession {
       } on PlatformException {
         // Native bitmap draw unavailable on current surface.
       } catch (_) {}
+    }
 
-      final ctrl = controller;
-      if (ctrl != null && WebViewPlatform.instance != null) {
-        const String js = r'''
+    const String js = r'''
 (function() {
   try {
     if (!document || !document.body) return null;
@@ -585,7 +603,8 @@ class MiniAppSession {
       bg = rootStyle.backgroundColor || '';
     }
     var accent = rootStyle.getPropertyValue('--tg-theme-button-color') || rootStyle.getPropertyValue('--btn') || '';
-    var vh = window.innerHeight || 720;
+    var vh = window.innerHeight || 0;
+    var hasLayout = vh > 100 && document.body.clientHeight > 40;
     var selectors = '.hero, .bot-row, .asset-row, .tx-row, .user-row, .card, h1, h2, h3, article, section, button, .btn, p';
     var nodes = document.querySelectorAll(selectors);
     var blocks = [];
@@ -598,8 +617,13 @@ class MiniAppSession {
       }
       var cs = getComputedStyle(el);
       if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) continue;
-      var rect = el.getBoundingClientRect();
-      if (rect.height < 14 || rect.width < 60 || rect.bottom <= 44 || rect.top >= vh) continue;
+      if (hasLayout) {
+        var rect = el.getBoundingClientRect();
+        if (rect.height < 14 || rect.width < 60 || rect.bottom <= 44 || rect.top >= vh) continue;
+      } else {
+        var rawCheck = (el.innerText || '').trim();
+        if (rawCheck.length < 2) continue;
+      }
 
       var title = '';
       var subtitle = '';
@@ -663,61 +687,57 @@ class MiniAppSession {
   }
 })();
 ''';
-        try {
-          final dynamic rawResult = await ctrl.runJavaScriptReturningResult(js);
-          dynamic decoded = rawResult;
+    try {
+      final dynamic rawResult = await ctrl.runJavaScriptReturningResult(js);
+      dynamic decoded = rawResult;
+      if (decoded is String) {
+        final trimmed = decoded.trim();
+        if (trimmed.isNotEmpty && trimmed != 'null') {
+          decoded = jsonDecode(trimmed);
           if (decoded is String) {
-            final trimmed = decoded.trim();
-            if (trimmed.isNotEmpty && trimmed != 'null') {
-              decoded = jsonDecode(trimmed);
-              if (decoded is String) {
-                decoded = jsonDecode(decoded);
-              }
-            } else {
-              decoded = null;
-            }
+            decoded = jsonDecode(decoded);
           }
-          if (decoded is Map) {
-            final map = Map<String, dynamic>.from(decoded);
-            final rawBlocks = map['blocks'];
-            final parsedBlocks = <MiniAppDomBlock>[];
-            if (rawBlocks is List) {
-              for (final item in rawBlocks) {
-                if (item is Map) {
-                  final b = Map<String, dynamic>.from(item);
-                  final t = (b['title'] ?? '').toString().trim();
-                  if (t.isEmpty) continue;
-                  parsedBlocks.add(
-                    MiniAppDomBlock(
-                      kind: (b['kind'] ?? 'card').toString(),
-                      title: t,
-                      subtitle: (b['subtitle'] ?? '').toString().trim(),
-                      trailing: (b['trailing'] ?? '').toString().trim(),
-                      leadingBadge: (b['leadingBadge'] ?? '').toString().trim(),
-                      cardColor: _parseCssColor(b['cardColor']?.toString()),
-                      fgColor: _parseCssColor(b['fgColor']?.toString()),
-                    ),
-                  );
-                }
-              }
-            }
-            if (parsedBlocks.isNotEmpty) {
-              domPreview = MiniAppDomPreview(
-                bgColor: _parseCssColor(map['bgColor']?.toString()),
-                textColor: _parseCssColor(map['textColor']?.toString()),
-                accentColor: _parseCssColor(map['accentColor']?.toString()),
-                blocks: parsedBlocks,
+        } else {
+          decoded = null;
+        }
+      }
+      if (decoded is Map) {
+        final map = Map<String, dynamic>.from(decoded);
+        final rawBlocks = map['blocks'];
+        final parsedBlocks = <MiniAppDomBlock>[];
+        if (rawBlocks is List) {
+          for (final item in rawBlocks) {
+            if (item is Map) {
+              final b = Map<String, dynamic>.from(item);
+              final t = (b['title'] ?? '').toString().trim();
+              if (t.isEmpty) continue;
+              parsedBlocks.add(
+                MiniAppDomBlock(
+                  kind: (b['kind'] ?? 'card').toString(),
+                  title: t,
+                  subtitle: (b['subtitle'] ?? '').toString().trim(),
+                  trailing: (b['trailing'] ?? '').toString().trim(),
+                  leadingBadge: (b['leadingBadge'] ?? '').toString().trim(),
+                  cardColor: _parseCssColor(b['cardColor']?.toString()),
+                  fgColor: _parseCssColor(b['fgColor']?.toString()),
+                ),
               );
-              updated = true;
             }
           }
-        } catch (_) {}
+        }
+        if (parsedBlocks.isNotEmpty) {
+          domPreview = MiniAppDomPreview(
+            bgColor: _parseCssColor(map['bgColor']?.toString()),
+            textColor: _parseCssColor(map['textColor']?.toString()),
+            accentColor: _parseCssColor(map['accentColor']?.toString()),
+            blocks: parsedBlocks,
+          );
+          updated = true;
+        }
       }
-      if (updated) {
-        MiniAppSessionController.instance.notifySessionUpdated();
-      }
-    } finally {
-      _snapshotInFlight = false;
+    } catch (_) {}
+    if (updated) {
+      MiniAppSessionController.instance.notifySessionUpdated();
     }
   }
 }
@@ -1557,7 +1577,7 @@ class MinimizedMiniAppBar extends StatelessWidget {
 
 /// Telegram-style full-screen 3D perspective card switcher for multiple open
 /// minimized Mini Apps with a top `Закрыть все вкладки` pill.
-class MiniAppTabsSwitcher extends StatelessWidget {
+class MiniAppTabsSwitcher extends StatefulWidget {
   final List<MiniAppSession> sessions;
   final VoidCallback onDismiss;
   final ValueChanged<MiniAppSession> onSelectSession;
@@ -1574,18 +1594,61 @@ class MiniAppTabsSwitcher extends StatelessWidget {
   });
 
   @override
+  State<MiniAppTabsSwitcher> createState() => _MiniAppTabsSwitcherState();
+}
+
+class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher> {
+  @override
+  void initState() {
+    super.initState();
+    MiniAppSessionController.instance.addListener(_onControllerUpdated);
+    _captureMissingPreviews();
+  }
+
+  @override
+  void didUpdateWidget(covariant MiniAppTabsSwitcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _captureMissingPreviews();
+  }
+
+  @override
+  void dispose() {
+    MiniAppSessionController.instance.removeListener(_onControllerUpdated);
+    super.dispose();
+  }
+
+  void _onControllerUpdated() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _captureMissingPreviews() {
+    for (final s in widget.sessions) {
+      if (s.previewImageBytes == null &&
+          s.domPreview == null &&
+          s.controller != null) {
+        unawaited(s.capturePreviewSnapshot());
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final resolved = MiniAppJsBridge.resolveThemeColors(theme);
     final style = TheavSurfaceStyle.of(context);
     final mq = MediaQuery.of(context);
-    final blurFilter = style.getBlurFilter(sigma: 16.0);
+    final bool allowBlur = BlurUtils.shouldBlurMaterialHud(context);
+    final blurFilter =
+        allowBlur ? BlurUtils.createDownsampledBlur(22.0, scale: 0.35) : null;
 
-    final Color dimTint =
-        resolved.bodyBg.withValues(alpha: style.isDark ? 0.74 : 0.64);
+    final Color dimTint = resolved.bodyBg.withValues(
+      alpha: blurFilter != null ? (style.isDark ? 0.84 : 0.78) : 0.95,
+    );
     Widget backdrop = GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onDismiss,
+      onTap: widget.onDismiss,
       child: ColoredBox(color: dimTint),
     );
     if (blurFilter != null) {
@@ -1604,7 +1667,7 @@ class MiniAppTabsSwitcher extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         onTap: () {
           HapticUtils.tap();
-          onCloseAll();
+          widget.onCloseAll();
         },
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
@@ -1648,38 +1711,27 @@ class MiniAppTabsSwitcher extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         Positioned.fill(child: backdrop),
-        Positioned(
-          top: mq.padding.top + 18,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: SizedBox(height: 36, child: closeAllPill),
-          ),
-        ),
-        Positioned(
-          top: mq.padding.top + 72,
-          left: 0,
-          right: 0,
-          bottom: 0,
+        Positioned.fill(
           child: LayoutBuilder(
             builder: (context, constraints) {
               final double availH = constraints.maxHeight;
-              final double cardHeight = (availH * 0.56).clamp(220.0, 390.0);
-              final int n = sessions.length;
+              final double cardHeight = (availH * 0.56).clamp(240.0, 380.0);
+              final int n = widget.sessions.length;
               final double stepY = n <= 1
                   ? 0.0
-                  : ((availH - cardHeight - 28.0) / (n - 1))
-                      .clamp(132.0, 220.0);
+                  : ((availH - cardHeight - 24.0) / (n - 1))
+                      .clamp(200.0, 268.0);
               final double stackHeight = cardHeight + (n - 1) * stepY;
               final double topPad =
-                  ((availH - stackHeight) * 0.45).clamp(8.0, 64.0);
+                  ((availH - mq.padding.top - 72.0 - stackHeight) * 0.30)
+                      .clamp(4.0, 48.0);
 
               return SingleChildScrollView(
                 padding: EdgeInsets.fromLTRB(
                   16,
-                  topPad,
+                  mq.padding.top + 64 + topPad,
                   16,
-                  math.max(20.0, mq.padding.bottom + 12),
+                  math.max(24.0, mq.padding.bottom + 16),
                 ),
                 child: SizedBox(
                   height: stackHeight,
@@ -1690,7 +1742,7 @@ class MiniAppTabsSwitcher extends StatelessWidget {
                       for (int i = 0; i < n; i++)
                         _buildStackedCard(
                           context,
-                          session: sessions[i],
+                          session: widget.sessions[i],
                           top: i * stepY,
                           cardHeight: cardHeight,
                           resolved: resolved,
@@ -1701,6 +1753,14 @@ class MiniAppTabsSwitcher extends StatelessWidget {
                 ),
               );
             },
+          ),
+        ),
+        Positioned(
+          top: mq.padding.top + 14,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: SizedBox(height: 36, child: closeAllPill),
           ),
         ),
       ],
@@ -1756,7 +1816,7 @@ class MiniAppTabsSwitcher extends StatelessWidget {
       child: Dismissible(
         key: ValueKey('mini_app_tab_dismiss_${session.id}'),
         direction: DismissDirection.horizontal,
-        onDismissed: (_) => onCloseSession(session),
+        onDismissed: (_) => widget.onCloseSession(session),
         child: Transform(
           alignment: Alignment.topCenter,
           transform: tiltMatrix,
@@ -1765,7 +1825,7 @@ class MiniAppTabsSwitcher extends StatelessWidget {
             behavior: HitTestBehavior.opaque,
             onTap: () {
               HapticUtils.selection();
-              onSelectSession(session);
+              widget.onSelectSession(session);
             },
             child: Container(
               decoration: BoxDecoration(
@@ -1807,7 +1867,7 @@ class MiniAppTabsSwitcher extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(24),
                                 onTap: () {
                                   HapticUtils.tap();
-                                  onCloseSession(session);
+                                  widget.onCloseSession(session);
                                 },
                                 child: Center(
                                   child: Icon(
@@ -2697,10 +2757,9 @@ class WebViewFloatingCapsule extends StatelessWidget {
         style: style.glassProvider!.createStyle(
           context: context,
           cornerRadius: borderRadius,
-          isLiteOverride: true,
-          refractionIndex: 1.06,
-          refractionWidth: 12.0,
-          borderWidth: 1.0,
+          refractionIndex: 1.1,
+          refractionWidth: 22.0,
+          borderWidth: 1.1,
           color: glassFill,
         ),
         child: Material(
@@ -2914,6 +2973,7 @@ class WebViewFloatingHeader extends StatelessWidget {
         : collapsedBox;
 
     final Widget leftWidget = Positioned(
+      key: const ValueKey('webview_header_left_pos'),
       top: topInset + 8,
       left: 12,
       width: 44,
@@ -2932,6 +2992,7 @@ class WebViewFloatingHeader extends StatelessWidget {
     );
 
     final Widget centerWidget = Positioned(
+      key: const ValueKey('webview_header_center_pos'),
       top: topInset + 8,
       left: 12 + 44 + 8,
       right: 12 + collapsedRightWidth + 8,
@@ -2972,13 +3033,13 @@ class WebViewFloatingHeader extends StatelessWidget {
       morphStyle = style.glassProvider!.createStyle(
         context: context,
         cornerRadius: 22.0,
-        isLiteOverride: true,
-        refractionIndex: 1.08,
-        refractionWidth: 18.0,
-        borderWidth: 1.05,
+        refractionIndex: 1.1,
+        refractionWidth: 22.0,
+        borderWidth: 1.1,
         color: glassFill,
       );
       rightWidget = Positioned(
+        key: const ValueKey('webview_header_right_pos'),
         top: topInset + 8,
         right: 12,
         child: SizedBox(
@@ -3024,6 +3085,14 @@ class WebViewFloatingHeader extends StatelessWidget {
           type: MaterialType.transparency,
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 170),
+            transitionBuilder: (child, anim) => FadeTransition(
+              opacity: anim,
+              child: ScaleTransition(
+                alignment: Alignment.topRight,
+                scale: Tween<double>(begin: 0.92, end: 1.0).animate(anim),
+                child: child,
+              ),
+            ),
             layoutBuilder: (currentChild, previousChildren) => Stack(
               alignment: Alignment.topRight,
               children: [
@@ -3042,11 +3111,12 @@ class WebViewFloatingHeader extends StatelessWidget {
         );
       }
       rightWidget = Positioned(
+        key: const ValueKey('webview_header_right_pos'),
         top: topInset + 8,
         right: 12,
         child: AnimatedContainer(
           key: const ValueKey('webview_right_matte_morph'),
-          duration: const Duration(milliseconds: 240),
+          duration: const Duration(milliseconds: 250),
           curve: Curves.easeOutCubic,
           width: menuExpanded ? adaptiveMenuWidth : collapsedRightWidth,
           height: menuExpanded ? expandedMenuHeight : 44.0,
@@ -3079,13 +3149,8 @@ class WebViewFloatingHeader extends StatelessWidget {
           ),
         ),
         leftWidget,
-        if (menuExpanded) ...[
-          centerWidget,
-          rightWidget,
-        ] else ...[
-          rightWidget,
-          centerWidget,
-        ],
+        centerWidget,
+        rightWidget,
       ],
     );
 
@@ -3101,16 +3166,12 @@ class WebViewFloatingHeader extends StatelessWidget {
           : stackContent,
     );
 
-    if (menuExpanded) {
-      return framedHeader;
-    }
-
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onVerticalDragStart: onVerticalDragStart,
-      onVerticalDragUpdate: onVerticalDragUpdate,
-      onVerticalDragEnd: onVerticalDragEnd,
-      onVerticalDragCancel: onVerticalDragCancel,
+      onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
+      onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
+      onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
+      onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
       child: framedHeader,
     );
   }
@@ -3606,9 +3667,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         if (!_session.isWebContentReady && mounted) {
           setState(() => _session.isWebContentReady = true);
         }
-        if (_session.controller != null) {
-          unawaited(_session.capturePreviewSnapshot());
-        }
+        Future<void>.delayed(const Duration(milliseconds: 400), () {
+          if (mounted && _session.controller != null) {
+            unawaited(_session.capturePreviewSnapshot());
+          }
+        });
         break;
 
       case 'web_app_expand':
@@ -3711,6 +3774,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           setState(
             () => _session.backButtonVisible = data['is_visible'] == true,
           );
+          Future<void>.delayed(const Duration(milliseconds: 400), () {
+            if (mounted && _session.controller != null) {
+              unawaited(_session.capturePreviewSnapshot());
+            }
+          });
         }
         break;
 
@@ -3735,6 +3803,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_setup_main_button':
         if (mounted) {
           setState(() => _applyButtonSetup(_session.mainButton, data));
+          Future<void>.delayed(const Duration(milliseconds: 400), () {
+            if (mounted && _session.controller != null) {
+              unawaited(_session.capturePreviewSnapshot());
+            }
+          });
         }
         break;
 
@@ -3991,19 +4064,24 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
-  void _minimizeMiniApp() {
+  Future<void> _minimizeMiniApp() async {
+    if (_isMinimizing) return;
     HapticUtils.selection();
     _closeMenu();
-    unawaited(_session.capturePreviewSnapshot());
+    await _session.capturePreviewSnapshot().timeout(
+          const Duration(milliseconds: 90),
+          onTimeout: () {},
+        );
+    if (!mounted) return;
     _setRouteRestingOpaque(false);
     if (_MinimizedMiniAppHostScope.maybeOf(context)) {
       _isMinimizing = true;
       _releaseFullScreenRegistration();
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimize(_session, navigator: nav);
-      nav.maybePop();
+      await nav.maybePop();
     } else {
-      Navigator.of(context).maybePop();
+      await Navigator.of(context).maybePop();
     }
   }
 

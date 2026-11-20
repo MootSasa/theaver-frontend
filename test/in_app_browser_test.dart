@@ -133,6 +133,14 @@ void main() {
 
       // 2b. Tapping 3-dots morphs the browser menu inside WebViewFloatingHeader, tapping outside closes it
       await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 70));
+      final morphMidSize = tester.getSize(
+        find.byKey(const ValueKey('webview_right_matte_morph')),
+      );
+      expect(morphMidSize.width, greaterThan(88.0));
+      expect(morphMidSize.width, lessThan(252.0));
+      expect(morphMidSize.height, greaterThan(44.0));
       await tester.pumpAndSettle();
       expect(
         find.descendant(
