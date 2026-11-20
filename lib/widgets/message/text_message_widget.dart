@@ -3,19 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/settings/profile_screen.dart';
-import '../../screens/settings/theme_preview_screen.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/search_service.dart';
-import '../../services/theav_theme_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/link_opener.dart';
 import '../../utils/swipe_back_route.dart';
 import 'code_block_widget.dart';
 import 'collapsible_blockquote_widget.dart';
@@ -436,31 +434,8 @@ class _DirectEntityMessageRendererState
 
   Future<void> _handleLinkTap(String rawHref) async {
     final trimmed = rawHref.trim();
-    if (trimmed.isEmpty) return;
-
-    final normalized = EntityParser.normalizeUrl(trimmed);
-    final themeCode = TheavThemeService.extractThemeCode(normalized);
-    if (themeCode != null) {
-      if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ThemePreviewScreen(themeCode: themeCode),
-        ),
-      );
-      return;
-    }
-
-    final uri = Uri.tryParse(normalized);
-    if (uri != null) {
-      try {
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        }
-      } catch (e) {
-        debugPrint('Error launching URL $uri: $e');
-      }
-    }
+    if (trimmed.isEmpty || !mounted) return;
+    await LinkOpener.openUrl(context, trimmed);
   }
 
   void _handleCodeCopy(String codeText) {

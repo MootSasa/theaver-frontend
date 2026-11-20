@@ -12,10 +12,15 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../services/bot_service.dart';
+import '../../services/browser_data_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
+import '../browser/in_app_browser_sheet.dart';
 import '../design_system/theav_design_system.dart';
+import 'thv_invoice_sheet.dart';
 
 /// Launches a bot Mini App (or restores a matching minimized [MiniAppSession])
 /// full-screen over the root navigator while preserving any other minimized sessions.
@@ -36,6 +41,7 @@ Future<void> openMiniAppSheet(
   final sessionCtrl = MiniAppSessionController.instance;
   final normalizedId = botId.replaceFirst(RegExp(r'^@+'), '').toLowerCase();
   for (final existing in sessionCtrl.minimizedSessions.reversed) {
+    if (existing.isBrowser) continue;
     final sameBot = existing.launchData.botId == botId ||
         (normalizedId.isNotEmpty &&
             existing.botUsername.toLowerCase() == normalizedId);
@@ -144,6 +150,13 @@ class MiniAppSession {
   bool isMinimized = false;
   NavigatorState? lastNavigator;
 
+  final bool isBrowser;
+  String currentUrl;
+  String pageTitle = '';
+  bool canGoBack = false;
+  bool canGoForward = false;
+  bool isDesktopMode = false;
+
   VoidCallback? onSheetStateChanged;
   VoidCallback? onRequestBridgeInjection;
   ValueChanged<String>? onInboundBridgeMessage;
@@ -158,18 +171,101 @@ class MiniAppSession {
     this.mode = 'menu',
     this.buttonText = '',
     this.onSwitchInlineQuery,
-  }) : id = id ?? 'mini_app_${++_nextSessionSeq}';
+    this.isBrowser = false,
+    String? initialUrl,
+  })  : id = id ?? '${isBrowser ? 'browser_tab' : 'mini_app'}_${++_nextSessionSeq}',
+        currentUrl = (initialUrl != null && initialUrl.trim().isNotEmpty)
+            ? initialUrl.trim()
+            : launchData.url;
 
-  String get displayTitle => botName.isNotEmpty
-      ? botName
-      : (launchData.botDisplayName.isNotEmpty
-          ? launchData.botDisplayName
-          : 'Mini App');
+  String get displayTitle {
+    if (isBrowser) {
+      if (pageTitle.trim().isNotEmpty) return pageTitle.trim();
+      return BrowserDataService.extractHost(currentUrl);
+    }
+    return botName.isNotEmpty
+        ? botName
+        : (launchData.botDisplayName.isNotEmpty
+            ? launchData.botDisplayName
+            : 'Mini App');
+  }
+
+  Future<void> refreshBrowserNavState() async {
+    final ctrl = controller;
+    if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
+    try {
+      canGoBack = await ctrl.canGoBack();
+      canGoForward = await ctrl.canGoForward();
+      final t = await ctrl.getTitle();
+      if (t != null && t.trim().isNotEmpty) {
+        pageTitle = t.trim();
+      }
+      onSheetStateChanged?.call();
+      MiniAppSessionController.instance.notifySessionUpdated();
+    } catch (_) {}
+  }
 
   void ensureWebViewInitialized() {
     if (controller != null || WebViewPlatform.instance == null) return;
-    final uri = Uri.tryParse(launchData.url);
+    final uri = Uri.tryParse(isBrowser ? currentUrl : launchData.url);
     if (uri == null) return;
+
+    if (isBrowser) {
+      final ctrl = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setNavigationDelegate(
+          NavigationDelegate(
+            onProgress: (p) {
+              loadProgress = p / 100.0;
+              onSheetStateChanged?.call();
+            },
+            onPageStarted: (urlStr) {
+              if (urlStr.trim().isNotEmpty) {
+                currentUrl = urlStr.trim();
+              }
+              loadProgress = 0.08;
+              onSheetStateChanged?.call();
+            },
+            onUrlChange: (change) {
+              final next = change.url?.trim() ?? '';
+              if (next.isNotEmpty && next != currentUrl) {
+                currentUrl = next;
+                onSheetStateChanged?.call();
+                MiniAppSessionController.instance.notifySessionUpdated();
+              }
+            },
+            onPageFinished: (urlStr) async {
+              if (urlStr.trim().isNotEmpty) {
+                currentUrl = urlStr.trim();
+              }
+              loadProgress = 1.0;
+              isWebContentReady = true;
+              await refreshBrowserNavState();
+              await BrowserDataService.instance
+                  .recordVisit(currentUrl, displayTitle);
+            },
+            onNavigationRequest: (req) {
+              final targetUri = Uri.tryParse(req.url);
+              if (targetUri == null) return NavigationDecision.prevent;
+              if (DeepLinkService.parseUri(targetUri) != null) {
+                DeepLinkService().handleLink(targetUri);
+                return NavigationDecision.prevent;
+              }
+              final sch = targetUri.scheme.toLowerCase();
+              if (sch == 'http' || sch == 'https') {
+                return NavigationDecision.navigate;
+              }
+              try {
+                launchUrl(targetUri, mode: LaunchMode.externalApplication);
+              } catch (_) {}
+              return NavigationDecision.prevent;
+            },
+          ),
+        );
+      ctrl.loadRequest(uri);
+      controller = ctrl;
+      return;
+    }
 
     final ctrl = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -312,18 +408,26 @@ class MiniAppSessionController extends ChangeNotifier {
     _minimizedSessions.removeWhere(
       (s) =>
           identical(s, session) ||
-          (session.launchData.botId.isNotEmpty &&
+          (!session.isBrowser &&
+              !s.isBrowser &&
+              session.launchData.botId.isNotEmpty &&
               s.launchData.botId == session.launchData.botId &&
-              s.launchData.url == session.launchData.url),
+              s.launchData.url == session.launchData.url) ||
+          (session.isBrowser &&
+              s.isBrowser &&
+              s.currentUrl.isNotEmpty &&
+              s.currentUrl == session.currentUrl),
     );
     _minimizedSessions.add(session);
     _isSwitcherOpen = false;
-    session.dispatchEvent('deactivated');
-    session.dispatchEvent('viewport_changed', const {
-      'height': 0,
-      'is_expanded': false,
-      'is_state_stable': true,
-    });
+    if (!session.isBrowser) {
+      session.dispatchEvent('deactivated');
+      session.dispatchEvent('viewport_changed', const {
+        'height': 0,
+        'is_expanded': false,
+        'is_state_stable': true,
+      });
+    }
     notifyListeners();
   }
 
@@ -390,24 +494,28 @@ class MiniAppSessionController extends ChangeNotifier {
     session.isMinimized = false;
     _isSwitcherOpen = false;
     notifyListeners();
-    session.dispatchEvent('activated');
+    if (!session.isBrowser) {
+      session.dispatchEvent('activated');
+    }
 
     await showTheavModalSheet<void>(
       context: restoreContext,
       enableDrag: false,
       barrierDismissible: true,
       useRootNavigator: true,
-      customSheetBuilder: (_) => MiniAppWebViewSheet(
-        launchData: session.launchData,
-        botName: session.botName,
-        botUsername: session.botUsername,
-        isVerified: session.isVerified,
-        chatId: session.chatId,
-        mode: session.mode,
-        buttonText: session.buttonText,
-        onSwitchInlineQuery: session.onSwitchInlineQuery,
-        session: session,
-      ),
+      customSheetBuilder: (_) => session.isBrowser
+          ? InAppBrowserSheet(session: session)
+          : MiniAppWebViewSheet(
+              launchData: session.launchData,
+              botName: session.botName,
+              botUsername: session.botUsername,
+              isVerified: session.isVerified,
+              chatId: session.chatId,
+              mode: session.mode,
+              buttonText: session.buttonText,
+              onSwitchInlineQuery: session.onSwitchInlineQuery,
+              session: session,
+            ),
       builder: (_) => const SizedBox.shrink(),
     );
   }
@@ -887,6 +995,16 @@ class MinimizedMiniAppBar extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (front.isBrowser) ...[
+                          Icon(
+                            front.currentUrl.toLowerCase().startsWith('https://')
+                                ? Icons.lock_outline_rounded
+                                : Icons.public_rounded,
+                            size: 16,
+                            color: barFg.withValues(alpha: 0.78),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
                         Flexible(
                           child: Text(
                             front.displayTitle,
@@ -1204,10 +1322,12 @@ class MiniAppTabsSwitcher extends StatelessWidget {
             : session.launchData.botUsername)
         .toLowerCase()
         .trim();
-    final bool isVerified = session.isVerified ||
-        session.launchData.botIsVerified ||
-        unameLower == 'botmother' ||
-        unameLower == 'botfather';
+    final bool isVerified = !session.isBrowser &&
+        (session.isVerified ||
+            session.launchData.botIsVerified ||
+            unameLower == 'botmother' ||
+            unameLower == 'botfather' ||
+            unameLower == 'walt');
 
     final Matrix4 tiltMatrix = Matrix4.identity()
       ..setEntry(3, 2, 0.0010)
@@ -1290,6 +1410,18 @@ class MiniAppTabsSwitcher extends StatelessWidget {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
+                                  if (session.isBrowser) ...[
+                                    Icon(
+                                      session.currentUrl
+                                              .toLowerCase()
+                                              .startsWith('https://')
+                                          ? Icons.lock_outline_rounded
+                                          : Icons.public_rounded,
+                                      size: 16,
+                                      color: cardHeaderFg.withValues(alpha: 0.78),
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
                                   Flexible(
                                     child: Text(
                                       session.displayTitle,
@@ -1321,7 +1453,34 @@ class MiniAppTabsSwitcher extends StatelessWidget {
                     ),
                   ),
                   Expanded(
-                    child: ColoredBox(color: cardBodyBg),
+                    child: session.isBrowser
+                        ? ColoredBox(
+                            color: cardBodyBg,
+                            child: Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.public_rounded,
+                                    size: 32,
+                                    color: cardHeaderFg.withValues(alpha: 0.35),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    BrowserDataService.extractHost(
+                                        session.currentUrl),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color:
+                                          cardHeaderFg.withValues(alpha: 0.55),
+                                      decoration: TextDecoration.none,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : ColoredBox(color: cardBodyBg),
                   ),
                 ],
               ),
@@ -1844,13 +2003,34 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_open_link':
-      case 'web_app_open_tg_link':
-        final url = (data['url'] ?? '').toString().trim();
-        final uri = Uri.tryParse(url);
-        if (uri != null &&
-            (uri.scheme == 'http' || uri.scheme == 'https')) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        final linkUrl = (data['url'] ?? '').toString().trim();
+        if (linkUrl.isNotEmpty && mounted) {
+          await LinkOpener.openUrl(
+            context,
+            linkUrl,
+            forceInApp: data['try_instant_view'] == true,
+          );
         }
+        break;
+
+      case 'web_app_open_tg_link':
+        final tgUrl = (data['url'] ?? '').toString().trim();
+        if (tgUrl.isNotEmpty && mounted) {
+          await LinkOpener.openUrl(context, tgUrl);
+        }
+        break;
+
+      case 'web_app_open_invoice':
+        final invUrl = (data['url'] ?? '').toString().trim();
+        String invStatus = 'cancelled';
+        if (invUrl.isNotEmpty && mounted) {
+          invStatus = await openThvInvoiceSheet(context, slugOrUrl: invUrl);
+        }
+        await _dispatchEventToWebView(
+          'invoice_closed',
+          {'url': invUrl, 'status': invStatus},
+          evt.reqId,
+        );
         break;
 
       case 'web_app_set_header_color':
@@ -2276,7 +2456,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final bool effectiveIsVerified = _session.isVerified ||
         _session.launchData.botIsVerified ||
         unameLower == 'botmother' ||
-        unameLower == 'botfather';
+        unameLower == 'botfather' ||
+        unameLower == 'walt';
 
     final Widget headerBlock = GestureDetector(
       behavior: HitTestBehavior.opaque,

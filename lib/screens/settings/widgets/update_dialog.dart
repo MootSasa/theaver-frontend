@@ -4,13 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../services/update_service.dart';
 import '../../../theme/theav_theme.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../utils/link_opener.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 
@@ -360,12 +360,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
                     selectable: true,
                     onTapLink: (text, href, title) {
                       if (href != null && href.isNotEmpty) {
-                        unawaited(
-                          launchUrl(
-                            Uri.parse(href),
-                            mode: LaunchMode.externalApplication,
-                          ),
-                        );
+                        unawaited(LinkOpener.openUrl(context, href));
                       }
                     },
                     styleSheet: MarkdownStyleSheet.fromTheme(theme).copyWith(

@@ -557,6 +557,14 @@ class MiniAppJsBridge {
     openTelegramLink: function(url) {
       _postToNative('web_app_open_tg_link', { url: String(url || '') }, '');
     },
+    openInvoice: function(url, cb) {
+      var invUrl = String(url || '');
+      return _invokeAsync('web_app_open_invoice', { url: invUrl }, cb, function(res) {
+        var st = (res && res.status) ? String(res.status) : 'cancelled';
+        _emit('invoiceClosed', { url: invUrl, status: st });
+        return st;
+      });
+    },
     showPopup: function(params, cb) {
       return _invokeAsync('web_app_open_popup', params || {}, cb, function(res) { return res ? res.button_id : null; });
     },

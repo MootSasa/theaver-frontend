@@ -9,11 +9,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/update_service.dart';
 import '../../theme/theav_theme.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/design_system/theav_design_system.dart';
@@ -147,13 +147,8 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
 
   Future<void> _openLink(String rawUrl) async {
     HapticUtils.tap();
-    final uri = Uri.tryParse(rawUrl.trim());
-    if (uri == null) return;
-    if (DeepLinkService.parseUri(uri) != null) {
-      await DeepLinkService().handleLink(uri);
-      return;
-    }
-    await _openExternalUri(uri);
+    if (!mounted) return;
+    await LinkOpener.openUrl(context, rawUrl);
   }
 
   Future<void> _openExternalUri(Uri uri) async {
@@ -170,10 +165,8 @@ class _AboutTheaverScreenState extends State<AboutTheaverScreen> {
     final url = commit.isNotEmpty
         ? '${AppConfig.sourceCodeUrl}/commit/$commit'
         : AppConfig.sourceCodeUrl;
-    final uri = Uri.tryParse(url);
-    if (uri != null) {
-      await _openExternalUri(uri);
-    }
+    if (!mounted) return;
+    await LinkOpener.openUrl(context, url);
   }
 
   void _showPrivacySheet() {

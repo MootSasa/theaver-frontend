@@ -16,6 +16,7 @@ import '../../widgets/design_system/theav_design_system.dart';
 import 'pinned_messages_screen.dart';
 import 'scheduled_messages_screen.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 import '../../services/chat_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
@@ -1491,7 +1492,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Future<void> _refreshGroupBotCommands(List<ChatParticipant> participants) async {
     final bots = participants
         .where(
-          (p) => p.isBot || p.username.toLowerCase().endsWith('bot'),
+          (p) =>
+              p.isBot ||
+              p.username.toLowerCase().endsWith('bot') ||
+              p.username.toLowerCase() == 'botmother' ||
+              p.username.toLowerCase() == 'walt',
         )
         .take(5)
         .toList();
@@ -1804,10 +1809,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final showAlert = event.data['show_alert'] == true;
     final url = event.data['url']?.toString();
     if (url != null && url.isNotEmpty) {
-      final uri = Uri.tryParse(url);
-      if (uri != null) {
-        launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
+      unawaited(LinkOpener.openUrl(context, url));
     }
     if (text == null || text.isEmpty) return;
     if (showAlert) {
@@ -7254,7 +7256,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     avatarUrl: p.avatarUrl,
                     isBot: p.isBot ||
                         p.username.toLowerCase().endsWith('bot') ||
-                        p.username.toLowerCase() == 'botmother',
+                        p.username.toLowerCase() == 'botmother' ||
+                        p.username.toLowerCase() == 'walt',
                     roleLabel: p.role == 'owner'
                         ? 'Владелец'
                         : (p.role == 'admin' ? 'Админ' : null),

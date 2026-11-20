@@ -10,6 +10,7 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../widgets/bot/mini_app_webview_sheet.dart';
+import '../../widgets/bot/thv_invoice_sheet.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../chat/private_chat_screen.dart';
@@ -63,10 +64,20 @@ class _BotsAndMiniAppsScreenState extends State<BotsAndMiniAppsScreen> {
     return null;
   }
 
+  BotInfo? get _waltBot {
+    for (final b in _directory) {
+      if ((b.username ?? '').toLowerCase() == 'walt') {
+        return b;
+      }
+    }
+    return null;
+  }
+
   List<BotInfo> get _featuredAppsAndInlineBots {
     return _directory.where((b) {
-      final isMother = (b.username ?? '').toLowerCase() == 'botmother';
-      return !isMother && (b.hasAnyWebApp || b.supportsInlineQueries);
+      final uname = (b.username ?? '').toLowerCase();
+      final isSystem = uname == 'botmother' || uname == 'walt';
+      return !isSystem && (b.hasAnyWebApp || b.supportsInlineQueries);
     }).toList();
   }
 
@@ -643,6 +654,7 @@ class _BotsAndMiniAppsScreenState extends State<BotsAndMiniAppsScreen> {
   Widget build(BuildContext context) {
     final palette = context.theav;
     final mother = _botMother;
+    final walt = _waltBot;
     final directoryBots = _featuredAppsAndInlineBots;
 
     return SettingsFloatingScaffold(
@@ -720,6 +732,49 @@ class _BotsAndMiniAppsScreenState extends State<BotsAndMiniAppsScreen> {
                         ),
                     ],
                   ),
+                  if (walt != null)
+                    TheavInsetGroup(
+                      header: 'Кошелёк и Theav (THV)',
+                      footer:
+                          'Официальный мультивалютный кошелёк @walt: внутренняя валюта Theav (THV), криптоактивы USDT/TON/BTC/ETH, переводы и чеки.',
+                      children: [
+                        TheavListRow(
+                          leading: Icon(
+                            Icons.account_balance_wallet_outlined,
+                            size: 22,
+                            color: palette.primary,
+                          ),
+                          title: '@walt',
+                          subtitle: 'Чат с ботом кошелька, чеки и уведомления',
+                          showChevron: true,
+                          onTap: () => _openBotChat(walt),
+                        ),
+                        TheavListRow(
+                          leading: ThvCrystalIcon(
+                            size: 22,
+                            color: palette.primary,
+                          ),
+                          title: 'Walt Кошелёк (Mini App)',
+                          subtitle: 'Балансы THV и криптоактивов, переводы и обмен',
+                          trailing: TheavFloatingPillButton(
+                            label: 'Открыть',
+                            height: 32,
+                            isPrimary: true,
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            onTap: () => _launchBotMiniApp(
+                              walt,
+                              shortName: 'wallet',
+                              mode: 'menu',
+                            ),
+                          ),
+                          onTap: () => _launchBotMiniApp(
+                            walt,
+                            shortName: 'wallet',
+                            mode: 'menu',
+                          ),
+                        ),
+                      ],
+                    ),
                   if (directoryBots.isNotEmpty)
                     TheavInsetGroup(
                       header: 'Mini Apps и Inline-боты',

@@ -5875,7 +5875,8 @@ class _ChannelScreenState extends State<ChannelScreen>
                     avatarUrl: p.avatarUrl,
                     isBot: p.isBot ||
                         p.username.toLowerCase().endsWith('bot') ||
-                        p.username.toLowerCase() == 'botmother',
+                        p.username.toLowerCase() == 'botmother' ||
+                        p.username.toLowerCase() == 'walt',
                   ),
                 )
                 .toList(),

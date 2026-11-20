@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart'
     show RenderAbstractViewport, ScrollDirection;
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../../utils/link_opener.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -1064,10 +1065,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final showAlert = event.data['show_alert'] == true;
     final url = event.data['url']?.toString();
     if (url != null && url.isNotEmpty) {
-      final uri = Uri.tryParse(url);
-      if (uri != null) {
-        launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
+      unawaited(LinkOpener.openUrl(context, url));
     }
     if (text != null && text.isNotEmpty) {
       if (showAlert) {
@@ -3113,9 +3111,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           final isBotPeer = participant.isBot ||
               unameLower == 'botmother' ||
               dnameLower == 'botmother' ||
+              unameLower == 'walt' ||
+              dnameLower == 'walt' ||
               unameLower.endsWith('bot');
-          final isVerifiedPeer =
-              participant.isVerified || chat.isVerified || unameLower == 'botmother';
+          final isVerifiedPeer = participant.isVerified ||
+              chat.isVerified ||
+              unameLower == 'botmother' ||
+              unameLower == 'walt';
           setState(() {
             _chatName = participant.displayName.isNotEmpty
                 ? participant.displayName

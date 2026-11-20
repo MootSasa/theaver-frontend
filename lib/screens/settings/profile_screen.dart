@@ -938,10 +938,11 @@ class ProfileScreenState extends State<ProfileScreen>
                   .toLowerCase();
           _peerIsBot = (u['is_bot'] == true) ||
               unameLower == 'botmother' ||
+              unameLower == 'walt' ||
               unameLower.endsWith('bot');
           if (u['is_verified'] is bool) {
             _peerIsVerified = u['is_verified'] as bool;
-          } else if (unameLower == 'botmother') {
+          } else if (unameLower == 'botmother' || unameLower == 'walt') {
             _peerIsVerified = true;
           }
           if (u['last_seen'] != null) {

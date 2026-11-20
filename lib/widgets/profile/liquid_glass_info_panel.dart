@@ -5,13 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 
 /// Чистая информационная карточка профиля в стиле Telegram (без боковых иконок слева).
 ///
@@ -439,10 +439,7 @@ class _InfoRowWidget extends StatelessWidget {
             recognizer: TapGestureRecognizer()
               ..onTap = () async {
                 HapticUtils.tap();
-                final uri = Uri.tryParse(normalized);
-                if (uri != null) {
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                }
+                await LinkOpener.openUrl(context, normalized);
               },
           ),
         );

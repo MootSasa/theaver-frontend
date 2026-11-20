@@ -33,6 +33,7 @@ class SettingsService {
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
   static const String _sendByEnterKey = 'chat_send_by_enter';
   static const String _raiseToListenKey = 'chat_raise_to_listen';
+  static const String _inAppBrowserKey = 'chat_in_app_browser';
 
   // Кэшированные данные
   UserProfile? _cachedProfile;
@@ -47,6 +48,7 @@ class SettingsService {
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
   final ValueNotifier<bool> sendByEnterNotifier = ValueNotifier<bool>(true);
   final ValueNotifier<bool> raiseToListenNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> inAppBrowserNotifier = ValueNotifier<bool>(true);
 
   /// Инициализация сервиса
   Future<void> init() async {
@@ -198,6 +200,7 @@ class SettingsService {
 
     sendByEnterNotifier.value = _prefs.getBool(_k(_sendByEnterKey)) ?? true;
     raiseToListenNotifier.value = _prefs.getBool(_k(_raiseToListenKey)) ?? true;
+    inAppBrowserNotifier.value = _prefs.getBool(_k(_inAppBrowserKey)) ?? true;
   }
 
   // ============ Профиль ============
@@ -544,6 +547,17 @@ class SettingsService {
     } catch (_) {}
   }
 
+  /// Открывать ли внешние веб-ссылки во встроенном браузере Theaver по умолчанию
+  bool get inAppBrowser => inAppBrowserNotifier.value;
+
+  /// Сохранить настройку способа открытия ссылок
+  Future<void> setInAppBrowser(bool value) async {
+    inAppBrowserNotifier.value = value;
+    try {
+      await _prefs.setBool(_k(_inAppBrowserKey), value);
+    } catch (_) {}
+  }
+
   /// Очистить все настройки (при выходе из аккаунта)
   Future<void> clearAllSettings() async {
     _cachedProfile = null;
@@ -558,6 +572,7 @@ class SettingsService {
     _cachedChatNotificationSettings = null;
     sendByEnterNotifier.value = true;
     raiseToListenNotifier.value = true;
+    inAppBrowserNotifier.value = true;
     await _prefs.remove(_k(_profileKey));
     await _prefs.remove(_k(_foldersKey));
     await _prefs.remove(_k(_storageSettingsKey));
@@ -570,6 +585,7 @@ class SettingsService {
     await _prefs.remove(_k(_chatNotificationSettingsKey));
     await _prefs.remove(_k(_sendByEnterKey));
     await _prefs.remove(_k(_raiseToListenKey));
+    await _prefs.remove(_k(_inAppBrowserKey));
   }
 }
 

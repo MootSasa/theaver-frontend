@@ -13,6 +13,7 @@ import 'websocket_service.dart';
 import 'notification_service.dart';
 import 'settings_service.dart';
 import '../screens/auth/login_screen.dart';
+import '../widgets/bot/mini_app_webview_sheet.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
 
@@ -200,6 +201,8 @@ class AuthService {
   /// Logs out the current user by invalidating the session and cleaning local data.
   static Future<void> logout() async {
     try {
+      MiniAppSessionController.instance.closeAllMinimized();
+
       // 1. Disconnect WebSocket immediately
       try {
         WebSocketService().disconnect();
@@ -313,6 +316,7 @@ class AuthService {
 
     try {
       debugPrint('AuthService: Session terminated. Reason: $reason');
+      MiniAppSessionController.instance.closeAllMinimized();
 
       // 1. Disconnect WebSocket
       try {

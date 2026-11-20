@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/bot_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
 
@@ -70,10 +70,7 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
 
     final urlStr = btn['url']?.toString();
     if (urlStr != null && urlStr.isNotEmpty) {
-      final uri = Uri.tryParse(urlStr);
-      if (uri != null) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
+      await LinkOpener.openUrl(context, urlStr);
       return;
     }
 
@@ -97,10 +94,7 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
           onSwitchInlineQuery: widget.onSwitchInlineQuery ?? widget.onInsertText,
         );
       } else {
-        final uri = Uri.tryParse(webAppUrl);
-        if (uri != null) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        }
+        await LinkOpener.openUrl(context, webAppUrl);
       }
       return;
     }
@@ -126,8 +120,8 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
               ],
             ) ??
             false;
-        if (confirmed) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
+        if (confirmed && mounted) {
+          await LinkOpener.openUrl(context, loginUrl);
         }
       }
       return;
@@ -171,10 +165,7 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
       final answerUrl = answer['url']?.toString();
 
       if (answerUrl != null && answerUrl.isNotEmpty) {
-        final uri = Uri.tryParse(answerUrl);
-        if (uri != null) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        }
+        await LinkOpener.openUrl(context, answerUrl);
       }
 
       if (answerText != null && answerText.isNotEmpty && mounted) {

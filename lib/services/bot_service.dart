@@ -783,9 +783,12 @@ class BotService {
       );
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body);
-        if (decoded is Map && decoded['items'] is Map) {
+        final rawItems = decoded is Map
+            ? (decoded['items'] is Map ? decoded['items'] : decoded['values'])
+            : null;
+        if (rawItems is Map) {
           final items = <String, String>{};
-          (decoded['items'] as Map).forEach((k, v) {
+          rawItems.forEach((k, v) {
             items[k.toString()] = v?.toString() ?? '';
           });
           return items;
@@ -1295,5 +1298,53 @@ class BotService {
       debugPrint('BotService.deleteBotWebApp error: $e');
     }
     return {'success': false, 'message': 'Не удалось удалить Mini App'};
+  }
+
+  /// Fetches THV invoice details and caller's current THV balance (`GET /api/invoices/:slug`).
+  static Future<Map<String, dynamic>> getInvoice(String slug) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final cleanSlug = Uri.encodeComponent(slug.trim());
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/invoices/$cleanSlug'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (e) {
+      debugPrint('BotService.getInvoice error: $e');
+    }
+    return {'success': false, 'message': 'Не удалось загрузить счёт'};
+  }
+
+  /// Pays a THV invoice atomically (`POST /api/invoices/:slug/pay`).
+  static Future<Map<String, dynamic>> payInvoice(String slug) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final cleanSlug = Uri.encodeComponent(slug.trim());
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/invoices/$cleanSlug/pay'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: '{}',
+      );
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (e) {
+      debugPrint('BotService.payInvoice error: $e');
+    }
+    return {'success': false, 'message': 'Не удалось оплатить счёт'};
   }
 }

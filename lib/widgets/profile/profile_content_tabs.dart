@@ -18,6 +18,7 @@ import '../../services/media_playback_coordinator.dart';
 import '../../services/voice_playback_service.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 import '../design_system/theav_design_system.dart';
 import '../user/avatar_with_status.dart';
 import 'avatar_gallery_viewer.dart';
@@ -882,10 +883,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                 behavior: HitTestBehavior.opaque,
                 onTap: () async {
                   HapticUtils.tap();
-                  final uri = Uri.tryParse(primaryUrl);
-                  if (uri != null) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  }
+                  await LinkOpener.openUrl(context, primaryUrl);
                 },
                 onSecondaryTapUp: (details) {
                   HapticUtils.selection();

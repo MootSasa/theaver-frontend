@@ -15,6 +15,7 @@ import 'privacy_settings_provider.dart';
 import 'settings_service.dart';
 import 'tiling_layout_controller.dart';
 import 'unread_count_provider.dart';
+import '../widgets/bot/mini_app_webview_sheet.dart';
 
 enum AccountSwitchStatus {
   alreadyActive,
@@ -109,6 +110,7 @@ class AccountSwitchOrchestrator {
       }
 
       TilingLayoutController.instance.closeAllChats();
+      MiniAppSessionController.instance.closeAllMinimized();
 
       await _accountManager.setCurrentAccount(account.userId);
       AppDatabase.setActiveUser(account.userId);
