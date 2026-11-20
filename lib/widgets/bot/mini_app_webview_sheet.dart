@@ -240,13 +240,12 @@ class MiniAppSession {
   bool canGoBack = false;
   bool canGoForward = false;
   bool isDesktopMode = false;
-  double browserTopClearance = 60.0;
-  double browserBottomClearance = 66.0;
+  double browserTopClearance = 58.0;
+  double browserBottomClearance = 64.0;
   double browserViewportHeight = 0.0;
-  Color? browserTopBarColor;
-  Color? browserBottomBarColor;
-  bool browserIsScrolled = false;
-  bool _earlyBrowserColorsSampled = false;
+  bool? browserTopIsDark;
+  Color? browserCanvasColor;
+  int _earlyBrowserInsetsStage = 0;
 
   VoidCallback? onSheetStateChanged;
   VoidCallback? onPendingLaunchResolved;
@@ -344,14 +343,26 @@ class MiniAppSession {
             : 'Mini App');
   }
 
-  /// Builds a pure read-only JS probe + throttled observer that samples the
-  /// webpage's rendered top/bottom edge colors and scroll state without mutating
-  /// the DOM layout, posting updates via `TheaverBrowserTheme`.
-  static String buildBrowserEdgeColorScript() {
-    return r'''
+  /// Builds an idempotent JS pass + observer that keeps page feeds full-screen
+  /// edge-to-edge while offsetting initial scroll bounds and top/bottom pinned
+  /// elements (`fixed`, `sticky`, slide-in wrappers, `absolute` HUD controls,
+  /// locked-viewport scroll containers, and open Shadow DOM) clear of the
+  /// browser's top and bottom floating capsules without adding synthetic bars.
+  static String buildBrowserSafeInsetsScript({
+    required int topPx,
+    required int bottomPx,
+    int flutterViewportHeight = 0,
+  }) {
+    final int safeTop = topPx.clamp(0, 320);
+    final int safeBottom = bottomPx.clamp(0, 320);
+    final int safeFlutterVh = flutterViewportHeight.clamp(0, 4096);
+    const String template = r'''
 (function() {
   try {
     if (!document || !document.documentElement) return null;
+    window.__theaverTopClear = __TOP_PX__;
+    window.__theaverBottomClear = __BOTTOM_PX__;
+    window.__theaverFlutterVh = __FLUTTER_VH__;
 
     function parseCssColor(raw) {
       if (!raw || typeof raw !== 'string') return null;
@@ -411,194 +422,474 @@ class MiniAppSession {
       };
     }
 
-    function extractGradientColor(bgImg) {
-      if (!bgImg || bgImg === 'none') return null;
-      var m = bgImg.match(/rgba?\(\s*[\d.]+\s*[,\s]\s*[\d.]+\s*[,\s]\s*[\d.]+(?:\s*[,/]\s*[\d.]+)?\s*\)|#[0-9a-f]{3,8}/i);
-      return m ? parseCssColor(m[0]) : null;
+    function setImp(el, prop, val) {
+      if (!el || !el.style) return;
+      if (el.style.getPropertyValue(prop) !== val || el.style.getPropertyPriority(prop) !== 'important') {
+        el.style.setProperty(prop, val, 'important');
+      }
     }
 
-    function extractPaintedColor(cs) {
-      if (!cs) return null;
-      var c = parseCssColor(cs.backgroundColor);
-      if (c && c.a > 0.04) return c;
-      return extractGradientColor(cs.backgroundImage);
+    function hasOpaqueBg(cs) {
+      var bg = parseCssColor(cs.backgroundColor);
+      if (bg && bg.a > 0.75) return true;
+      var bf = cs.backdropFilter || cs.webkitBackdropFilter || '';
+      if (bf && bf !== 'none') return true;
+      return false;
     }
 
-    function formatRgb(c) {
-      if (!c) return null;
-      return 'rgb(' + Math.round(c.r) + ', ' + Math.round(c.g) + ', ' + Math.round(c.b) + ')';
+    function parseNum(v) {
+      var n = parseFloat(v);
+      return isNaN(n) || !isFinite(n) ? null : n;
     }
 
-    window.__theaverSampleEdgeColors = function() {
+    function getEffectiveSize(el, rect) {
+      var effW = Math.max(rect.width || 0, el.offsetWidth || 0);
+      var effH = Math.max(rect.height || 0, el.offsetHeight || 0);
+      if (effH >= 16 && effW >= 16) {
+        return { w: effW, h: effH };
+      }
+      var stack = [];
+      var c1 = el.children || [];
+      for (var i = 0; i < c1.length; i++) {
+        stack.push({ node: c1[i], depth: 1 });
+      }
+      while (stack.length > 0) {
+        var cur = stack.shift();
+        var child = cur.node;
+        if (!child || !child.tagName) continue;
+        var cCs = window.getComputedStyle(child);
+        if (cCs.display === 'none') continue;
+        var cRect = child.getBoundingClientRect();
+        effW = Math.max(effW, cRect.width || 0, child.offsetWidth || 0);
+        effH = Math.max(effH, cRect.height || 0, child.offsetHeight || 0);
+        if (cur.depth < 2 && child.children) {
+          for (var j = 0; j < child.children.length; j++) {
+            stack.push({ node: child.children[j], depth: cur.depth + 1 });
+          }
+        }
+      }
+      return { w: effW, h: effH };
+    }
+
+    function hasAppliedAncestor(node) {
+      var cur = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
+      while (cur && cur.nodeType === 1) {
+        if (cur.dataset && cur.dataset.theaverSafeZoneApplied === '1') {
+          return true;
+        }
+        cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+      }
+      return false;
+    }
+
+    function collectCandidates(root, outList) {
+      if (!root) return;
+      var kids = root.children;
+      if (!kids) return;
+      for (var k = 0; k < kids.length; k++) {
+        var node = kids[k];
+        if (!node || !node.tagName) continue;
+        var t = node.tagName;
+        if (
+          t === 'SCRIPT' ||
+          t === 'STYLE' ||
+          t === 'LINK' ||
+          t === 'META' ||
+          t === 'SVG' ||
+          t === 'PATH'
+        ) {
+          continue;
+        }
+        outList.push(node);
+        if (node.shadowRoot) {
+          collectCandidates(node.shadowRoot, outList);
+        }
+        collectCandidates(node, outList);
+      }
+    }
+
+    window.__theaverSyncSafeZones = function(rawTopClear, rawBottomClear, rawFlutterVh) {
+      if (window.__theaverApplyingSafeZones) return null;
+      window.__theaverApplyingSafeZones = true;
       try {
         if (!document || !document.documentElement) return null;
         var vw = window.innerWidth || document.documentElement.clientWidth || 0;
         var vh = window.innerHeight || document.documentElement.clientHeight || 0;
-        if (vw <= 0 || vh <= 0) return null;
+        if (!document.body || vw <= 0 || vh <= 0) return null;
 
+        var fvh = Number(rawFlutterVh) || 0;
+        var scale = (fvh > 0 && vh > fvh * 1.15) ? (vh / fvh) : 1.0;
+        var tc = Math.round(Math.max(0, Number(rawTopClear) || 0) * scale);
+        var bc = Math.round(Math.max(0, Number(rawBottomClear) || 0) * scale);
+
+        var rootStyle = document.documentElement.style;
+        rootStyle.setProperty('--theaver-header-clearance', tc + 'px');
+        rootStyle.setProperty('--theaver-bottom-clearance', bc + 'px');
+        rootStyle.setProperty('--tg-safe-area-inset-top', tc + 'px');
+        rootStyle.setProperty('--tg-safe-area-inset-bottom', bc + 'px');
+
+        var st = document.getElementById('__theaver_browser_insets');
+        if (!st && document.head) {
+          st = document.createElement('style');
+          st.id = '__theaver_browser_insets';
+          document.head.appendChild(st);
+        }
+        var insetCss =
+          ':root { ' +
+            '--theaver-header-clearance: ' + tc + 'px; ' +
+            '--theaver-bottom-clearance: ' + bc + 'px; ' +
+            '--tg-safe-area-inset-top: ' + tc + 'px; ' +
+            '--tg-safe-area-inset-bottom: ' + bc + 'px; ' +
+          '} ' +
+          'html { scroll-padding-top: ' + tc + 'px !important; scroll-padding-bottom: ' + bc + 'px !important; }';
+        if (st && st.textContent !== insetCss) {
+          st.textContent = insetCss;
+        }
+
+        var body = document.body;
         var htmlCs = window.getComputedStyle(document.documentElement);
+        var bodyCs = window.getComputedStyle(body);
+        var isLockedViewport =
+          (htmlCs.overflowY === 'hidden' || bodyCs.overflowY === 'hidden') &&
+          document.documentElement.scrollHeight <= vh + 8;
+
+        var all = [];
+        collectCandidates(body, all);
+
+        if (!isLockedViewport) {
+          if (body.dataset.theaverBasePt === undefined) {
+            body.dataset.theaverBasePt = String(parseFloat(bodyCs.paddingTop) || 0);
+            body.dataset.theaverBasePb = String(parseFloat(bodyCs.paddingBottom) || 0);
+          }
+          var basePt = parseFloat(body.dataset.theaverBasePt) || 0;
+          var basePb = parseFloat(body.dataset.theaverBasePb) || 0;
+          var nextPt = basePt <= 180 ? basePt + tc : Math.max(basePt, tc);
+          var nextPb = basePb <= 180 ? basePb + bc : Math.max(basePb, bc);
+          setImp(body, 'box-sizing', 'border-box');
+          setImp(body, 'padding-top', Math.round(nextPt) + 'px');
+          setImp(body, 'padding-bottom', Math.round(nextPb) + 'px');
+
+          var htmlColRaw = parseCssColor(htmlCs.backgroundColor);
+          var bodyColRaw = parseCssColor(bodyCs.backgroundColor);
+          if (!htmlColRaw && !bodyColRaw && body.dataset.theaverMirroredBg !== '1') {
+            var kids = body.children || [];
+            for (var bk = 0; bk < kids.length; bk++) {
+              var kEl = kids[bk];
+              if (!kEl || !kEl.tagName) continue;
+              if (kEl.tagName === 'SCRIPT' || kEl.tagName === 'STYLE') continue;
+              var kCs = window.getComputedStyle(kEl);
+              if (kCs.display === 'none') continue;
+              var kRect = kEl.getBoundingClientRect();
+              if (kRect.width >= vw * 0.90) {
+                var kBg = parseCssColor(kCs.backgroundColor);
+                if (kBg && kBg.a > 0.75) {
+                  body.dataset.theaverMirroredBg = '1';
+                  setImp(body, 'background-color', kCs.backgroundColor);
+                  bodyCs = window.getComputedStyle(body);
+                  break;
+                }
+              }
+            }
+          }
+        } else {
+          for (var li = 0; li < all.length; li++) {
+            var lel = all[li];
+            if (!lel || !lel.tagName) continue;
+            var lcs = window.getComputedStyle(lel);
+            if (lcs.display === 'none') continue;
+            var loy = lcs.overflowY;
+            if (loy !== 'auto' && loy !== 'scroll' && loy !== 'overlay') continue;
+            var lrect = lel.getBoundingClientRect();
+            var lsz = getEffectiveSize(lel, lrect);
+            if (lsz.w >= vw * 0.75 && lsz.h >= vh * 0.70) {
+              if (lel.dataset.theaverScrollContainerPt === undefined) {
+                lel.dataset.theaverScrollContainerPt = String(parseFloat(lcs.paddingTop) || 0);
+                lel.dataset.theaverScrollContainerPb = String(parseFloat(lcs.paddingBottom) || 0);
+              }
+              var lpt = parseFloat(lel.dataset.theaverScrollContainerPt) || 0;
+              var lpb = parseFloat(lel.dataset.theaverScrollContainerPb) || 0;
+              setImp(lel, 'box-sizing', 'border-box');
+              setImp(lel, 'padding-top', Math.round(lpt <= 180 ? lpt + tc : Math.max(lpt, tc)) + 'px');
+              setImp(lel, 'padding-bottom', Math.round(lpb <= 180 ? lpb + bc : Math.max(lpb, bc)) + 'px');
+              break;
+            }
+          }
+        }
+
+        var bodyAddedPt = isLockedViewport
+          ? tc
+          : Math.max(0, (parseFloat(body.style.paddingTop) || 0) - (parseFloat(body.dataset.theaverBasePt) || 0));
+        var scrollY = window.scrollY || window.pageYOffset || 0;
+        var hasPrimaryTopBar = false;
+        var hasPrimaryBottomBar = false;
+        var deferredTopBars = [];
+        var deferredBottomBars = [];
+
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          if (!el || !el.tagName) continue;
+          var tag = el.tagName;
+          if (hasAppliedAncestor(el)) continue;
+
+          var cs = window.getComputedStyle(el);
+          if (cs.display === 'none') continue;
+
+          var pos = cs.position;
+          var existingRole = el.dataset.theaverSafeRole || '';
+          if (!existingRole && pos !== 'fixed' && pos !== 'sticky' && pos !== 'absolute') {
+            continue;
+          }
+
+          var rect = el.getBoundingClientRect();
+          var eff = getEffectiveSize(el, rect);
+          if (eff.w <= 0 || eff.h <= 0) continue;
+
+          if (el.dataset.theaverOrigRecorded !== '1') {
+            var inlineTopNum = parseNum(el.style.top || '');
+            if (inlineTopNum !== null && inlineTopNum < -12 && pos !== 'static') {
+              continue;
+            }
+            var origTopStr = 'auto';
+            if (cs.top !== 'auto') {
+              var topVal = parseNum(cs.top);
+              if (topVal !== null) origTopStr = String(topVal);
+            } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -4 && rect.top < tc + 96) {
+              origTopStr = 'auto-top';
+            }
+
+            var origBottomStr = 'auto';
+            if (cs.bottom !== 'auto') {
+              var botVal = parseNum(cs.bottom);
+              if (botVal !== null) origBottomStr = String(botVal);
+            } else if (pos === 'fixed' && cs.top === 'auto' && rect.bottom >= vh - 4 && rect.top > vh * 0.45) {
+              origBottomStr = 'auto-bottom';
+            }
+
+            el.dataset.theaverOrigRecorded = '1';
+            el.dataset.theaverOrigTop = origTopStr;
+            el.dataset.theaverOrigBottom = origBottomStr;
+            el.dataset.theaverOrigPt = String(parseFloat(cs.paddingTop) || 0);
+            el.dataset.theaverOrigPb = String(parseFloat(cs.paddingBottom) || 0);
+          }
+
+          var origTopRaw = el.dataset.theaverOrigTop || 'auto';
+          var origBottomRaw = el.dataset.theaverOrigBottom || 'auto';
+          var origTopNum = (origTopRaw === 'auto' || origTopRaw === 'auto-top') ? null : parseNum(origTopRaw);
+          var origBottomNum = (origBottomRaw === 'auto' || origBottomRaw === 'auto-bottom') ? null : parseNum(origBottomRaw);
+          var origPt = parseFloat(el.dataset.theaverOrigPt) || 0;
+          var origPb = parseFloat(el.dataset.theaverOrigPb) || 0;
+
+          var role = existingRole;
+          if (!role) {
+            if (pos === 'fixed' || pos === 'sticky') {
+              if (
+                pos === 'fixed' &&
+                eff.h >= vh * 0.65 &&
+                origTopNum !== null &&
+                origTopNum <= 4 &&
+                ((origBottomNum !== null && origBottomNum <= 4) || rect.bottom >= vh - 4) &&
+                el.children.length > 0 &&
+                tag !== 'VIDEO' &&
+                tag !== 'CANVAS' &&
+                tag !== 'IMG' &&
+                hasOpaqueBg(cs) &&
+                cs.pointerEvents !== 'none'
+              ) {
+                role = 'full-drawer';
+              } else if (eff.h >= 12 && eff.h < vh * 0.55) {
+                if (origTopRaw === 'auto-top') {
+                  role = 'top-pinned';
+                } else if (origTopNum !== null && origTopNum >= -4 && origTopNum < tc && origBottomNum === null) {
+                  role = 'top-pinned';
+                } else if (origTopNum !== null && origTopNum >= tc && origTopNum < tc + 96 && origBottomNum === null) {
+                  deferredTopBars.push({ el: el, origTop: origTopNum });
+                  continue;
+                } else if (origBottomRaw === 'auto-bottom') {
+                  role = 'bottom-pinned';
+                } else if (
+                  origBottomNum !== null &&
+                  origBottomNum >= -4 &&
+                  origBottomNum < bc &&
+                  (origTopNum === null || origTopNum > vh * 0.40)
+                ) {
+                  role = 'bottom-pinned';
+                } else if (
+                  origBottomNum !== null &&
+                  origBottomNum >= bc &&
+                  origBottomNum < bc + 96 &&
+                  (origTopNum === null || origTopNum > vh * 0.40)
+                ) {
+                  deferredBottomBars.push({ el: el, origBottom: origBottomNum });
+                  continue;
+                }
+              }
+            } else if (
+              pos === 'absolute' &&
+              eff.h >= 16 &&
+              eff.h < vh * 0.42 &&
+              tag !== 'IMG' &&
+              tag !== 'VIDEO' &&
+              tag !== 'CANVAS' &&
+              tag !== 'PICTURE'
+            ) {
+              var hasInteractiveChild =
+                el.querySelector('button, a, input, select, [role="button"], [tabindex]') !== null;
+              var zNum = parseInt(cs.zIndex, 10) || 0;
+              var isUiControl =
+                (cs.pointerEvents !== 'none' || hasInteractiveChild) &&
+                (tag === 'HEADER' ||
+                  tag === 'NAV' ||
+                  tag === 'FORM' ||
+                  tag === 'BUTTON' ||
+                  tag === 'A' ||
+                  tag === 'INPUT' ||
+                  hasInteractiveChild ||
+                  zNum >= 1);
+              if (isUiControl) {
+                var op = el.offsetParent || el.parentElement;
+                var opRect = op ? op.getBoundingClientRect() : null;
+                var opDocTop = opRect ? (opRect.top + scrollY) : 0;
+                var elDocTop = rect.top + scrollY;
+                if (
+                  origTopNum !== null &&
+                  origTopNum >= -4 &&
+                  origTopNum < tc &&
+                  opDocTop <= 16 &&
+                  elDocTop >= -4 &&
+                  elDocTop < tc + bodyAddedPt
+                ) {
+                  role = 'top-abs';
+                } else if (origBottomNum !== null && origBottomNum >= -4 && origBottomNum < bc) {
+                  var opCs = op ? window.getComputedStyle(op) : null;
+                  var inFixedOrLocked =
+                    isLockedViewport ||
+                    (opCs && opCs.position === 'fixed') ||
+                    (opRect && opRect.height >= vh - 8);
+                  if (inFixedOrLocked) {
+                    role = 'bottom-abs';
+                  }
+                }
+              }
+            }
+          }
+
+          if (!role) continue;
+          el.dataset.theaverSafeRole = role;
+          el.dataset.theaverSafeZoneApplied = '1';
+
+          if (role === 'full-drawer') {
+            setImp(el, 'box-sizing', 'border-box');
+            setImp(el, 'padding-top', Math.round(origPt + tc) + 'px');
+            setImp(el, 'padding-bottom', Math.round(origPb + bc) + 'px');
+          } else if (role === 'top-pinned' || role === 'top-abs') {
+            var nextTopVal = origTopRaw === 'auto-top' ? tc : Math.round((origTopNum || 0) + tc);
+            setImp(el, 'top', nextTopVal + 'px');
+            if (role === 'top-pinned') hasPrimaryTopBar = true;
+          } else if (role === 'bottom-pinned' || role === 'bottom-abs') {
+            var nextBotVal = origBottomRaw === 'auto-bottom' ? bc : Math.round((origBottomNum || 0) + bc);
+            setImp(el, 'bottom', nextBotVal + 'px');
+            if (role === 'bottom-pinned') hasPrimaryBottomBar = true;
+          }
+        }
+
+        if (hasPrimaryTopBar && deferredTopBars.length > 0) {
+          for (var dt = 0; dt < deferredTopBars.length; dt++) {
+            var dTopItem = deferredTopBars[dt];
+            if (!dTopItem || !dTopItem.el || hasAppliedAncestor(dTopItem.el)) continue;
+            dTopItem.el.dataset.theaverSafeRole = 'top-pinned';
+            dTopItem.el.dataset.theaverSafeZoneApplied = '1';
+            setImp(dTopItem.el, 'top', Math.round(dTopItem.origTop + tc) + 'px');
+          }
+        }
+
+        if (hasPrimaryBottomBar && deferredBottomBars.length > 0) {
+          for (var db = 0; db < deferredBottomBars.length; db++) {
+            var dBotItem = deferredBottomBars[db];
+            if (!dBotItem || !dBotItem.el || hasAppliedAncestor(dBotItem.el)) continue;
+            dBotItem.el.dataset.theaverSafeRole = 'bottom-pinned';
+            dBotItem.el.dataset.theaverSafeZoneApplied = '1';
+            setImp(dBotItem.el, 'bottom', Math.round(dBotItem.origBottom + bc) + 'px');
+          }
+        }
+
         var scheme = (htmlCs.colorScheme || '').toLowerCase();
         var canvasBg = scheme.indexOf('dark') !== -1 && scheme.indexOf('light') === -1
           ? { r: 18, g: 18, b: 18, a: 1 }
           : { r: 255, g: 255, b: 255, a: 1 };
+        canvasBg = blendOver(parseCssColor(htmlCs.backgroundColor), canvasBg);
+        canvasBg = blendOver(parseCssColor(bodyCs.backgroundColor), canvasBg);
 
-        canvasBg = blendOver(extractPaintedColor(htmlCs), canvasBg);
-        if (document.body) {
-          var bodyCs = window.getComputedStyle(document.body);
-          canvasBg = blendOver(extractPaintedColor(bodyCs), canvasBg);
-        }
-
-        function findWideEdgeColor(isTop) {
-          var probeY = isTop ? Math.min(4, Math.max(0, vh - 1)) : Math.max(0, vh - 4);
-          var xs = [vw * 0.15, vw * 0.50, vw * 0.85];
-
-          for (var xi = 0; xi < xs.length; xi++) {
-            var px = Math.max(0, Math.min(vw - 1, Math.round(xs[xi])));
-            var stack = [];
-            if (typeof document.elementsFromPoint === 'function') {
-              stack = document.elementsFromPoint(px, probeY) || [];
-            } else if (typeof document.elementFromPoint === 'function') {
-              var hit = document.elementFromPoint(px, probeY);
-              while (hit && hit.nodeType === 1) {
-                stack.push(hit);
-                hit = hit.parentElement;
-              }
-            }
-            for (var si = 0; si < stack.length; si++) {
-              var el = stack[si];
-              if (!el || !el.tagName) continue;
-              var tag = el.tagName;
-              if (tag === 'HTML' || tag === 'BODY') continue;
-              var rect = el.getBoundingClientRect();
-              if (rect.width < vw * 0.65) continue;
-              if (isTop ? (rect.top > 14 || rect.bottom < 18) : (rect.bottom < vh - 14 || rect.height < 20)) {
-                continue;
-              }
-              var cs = window.getComputedStyle(el);
-              if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) <= 0.05) {
-                continue;
-              }
-              var painted = extractPaintedColor(cs);
-              if (painted && painted.a > 0.04) {
-                return blendOver(painted, canvasBg);
-              }
-            }
-          }
-
-          var candidates = document.querySelectorAll(
-            'header, nav, footer, [role="banner"], body > *, #root > *, #__next > *, #app > *'
-          );
-          for (var ci = 0; ci < candidates.length; ci++) {
-            var cel = candidates[ci];
-            if (!cel || !cel.tagName) continue;
-            var crect = cel.getBoundingClientRect();
-            if (crect.width < vw * 0.65) continue;
-            if (isTop ? (crect.top > 14 || crect.bottom < 18) : (crect.bottom < vh - 14 || crect.height < 20)) {
-              continue;
-            }
-            var ccs = window.getComputedStyle(cel);
-            if (ccs.display === 'none' || ccs.visibility === 'hidden' || parseFloat(ccs.opacity) <= 0.05) {
-              continue;
-            }
-            var cpainted = extractPaintedColor(ccs);
-            if (cpainted && cpainted.a > 0.04) {
-              return blendOver(cpainted, canvasBg);
-            }
-          }
-          return null;
-        }
-
-        function resolveMetaThemeColor() {
-          var metas = document.querySelectorAll('meta[name="theme-color"]');
-          var fallbackMeta = null;
-          for (var mi = 0; mi < metas.length; mi++) {
-            var meta = metas[mi];
-            var content = meta.getAttribute('content');
-            var parsed = parseCssColor(content);
-            if (!parsed) continue;
-            var mediaAttr = (meta.getAttribute('media') || '').trim();
-            if (mediaAttr && typeof window.matchMedia === 'function') {
-              try {
-                if (window.matchMedia(mediaAttr).matches) {
-                  return blendOver(parsed, canvasBg);
-                }
-                continue;
-              } catch (e) {}
-            }
-            if (!fallbackMeta) {
-              fallbackMeta = blendOver(parsed, canvasBg);
-            }
-          }
-          return fallbackMeta;
-        }
-
-        var scrollY = window.scrollY || window.pageYOffset || 0;
-        var topCol = findWideEdgeColor(true);
-        if (!topCol && scrollY <= 8) {
-          topCol = resolveMetaThemeColor();
-        }
-        if (!topCol) {
-          topCol = canvasBg;
-        }
-
-        var bottomCol = findWideEdgeColor(false) || canvasBg;
-        var payload = JSON.stringify({
-          topColor: formatRgb(topCol),
-          bottomColor: formatRgb(bottomCol),
-          scrolled: scrollY > 2
+        var lum = (0.2126 * canvasBg.r + 0.7152 * canvasBg.g + 0.0722 * canvasBg.b) / 255;
+        var metaPayload = JSON.stringify({
+          topIsDark: lum <= 0.55,
+          canvasColor: 'rgb(' + Math.round(canvasBg.r) + ', ' + Math.round(canvasBg.g) + ', ' + Math.round(canvasBg.b) + ')'
         });
-
         if (
           window.TheaverBrowserTheme &&
           typeof window.TheaverBrowserTheme.postMessage === 'function' &&
-          window.__theaverLastEdgePayload !== payload
+          window.__theaverLastPageMeta !== metaPayload
         ) {
-          window.__theaverLastEdgePayload = payload;
-          window.TheaverBrowserTheme.postMessage(payload);
+          window.__theaverLastPageMeta = metaPayload;
+          window.TheaverBrowserTheme.postMessage(metaPayload);
         }
-        return payload;
+        return metaPayload;
       } catch (e) {
         return null;
+      } finally {
+        if (window.__theaverSafeZoneObs && typeof window.__theaverSafeZoneObs.takeRecords === 'function') {
+          window.__theaverSafeZoneObs.takeRecords();
+        }
+        window.__theaverApplyingSafeZones = false;
       }
     };
 
-    if (!window.__theaverEdgeColorObserverInstalled) {
-      window.__theaverEdgeColorObserverInstalled = true;
-      var edgeTimer = null;
-      var scheduleEdgeSample = function() {
-        if (edgeTimer) return;
-        edgeTimer = setTimeout(function() {
-          edgeTimer = null;
-          if (typeof window.__theaverSampleEdgeColors === 'function') {
-            window.__theaverSampleEdgeColors();
+    var initialMeta = window.__theaverSyncSafeZones(__TOP_PX__, __BOTTOM_PX__, __FLUTTER_VH__);
+
+    if (!window.__theaverSafeZoneObserverInstalled) {
+      window.__theaverSafeZoneObserverInstalled = true;
+      var syncTimer = null;
+      var scheduleSync = function() {
+        if (window.__theaverApplyingSafeZones || syncTimer) return;
+        syncTimer = setTimeout(function() {
+          syncTimer = null;
+          if (typeof window.__theaverSyncSafeZones === 'function') {
+            window.__theaverSyncSafeZones(
+              window.__theaverTopClear || 0,
+              window.__theaverBottomClear || 0,
+              window.__theaverFlutterVh || 0
+            );
           }
-        }, 140);
+        }, 160);
       };
       if (typeof MutationObserver === 'function') {
-        var edgeObs = new MutationObserver(scheduleEdgeSample);
-        edgeObs.observe(document.documentElement, {
+        var obs = new MutationObserver(scheduleSync);
+        window.__theaverSafeZoneObs = obs;
+        obs.observe(document.documentElement, {
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ['class', 'style', 'data-theme']
+          attributeFilter: ['class', 'style']
         });
       }
-      window.addEventListener('resize', scheduleEdgeSample, { passive: true });
-      window.addEventListener('scroll', scheduleEdgeSample, { passive: true });
-      document.addEventListener('scroll', scheduleEdgeSample, { passive: true, capture: true });
+      window.addEventListener('resize', scheduleSync, { passive: true });
+      window.addEventListener('scroll', scheduleSync, { passive: true });
+      document.addEventListener('scroll', scheduleSync, { passive: true, capture: true });
     }
-
-    return window.__theaverSampleEdgeColors();
+    return initialMeta;
   } catch (e) {
     return null;
   }
 })();
 ''';
+    return template
+        .replaceAll('__TOP_PX__', safeTop.toString())
+        .replaceAll('__BOTTOM_PX__', safeBottom.toString())
+        .replaceAll('__FLUTTER_VH__', safeFlutterVh.toString());
   }
 
-  /// Parses and applies an edge-color payload returned from
-  /// [buildBrowserEdgeColorScript] or posted via `TheaverBrowserTheme`.
-  void applyBrowserEdgeColorPayload(dynamic rawResult) {
+  /// Parses and applies top-luminance and canvas metadata returned by
+  /// [buildBrowserSafeInsetsScript] or posted via `TheaverBrowserTheme`.
+  void applyBrowserPageMetaPayload(dynamic rawResult) {
     try {
       dynamic decoded = rawResult;
       for (int i = 0; i < 2 && decoded is String; i++) {
@@ -611,38 +902,41 @@ class MiniAppSession {
       }
       if (decoded is! Map) return;
       final map = Map<String, dynamic>.from(decoded);
-      final Color? nextTop =
-          _parseCssColor(map['topColor']?.toString())?.withValues(alpha: 1.0);
-      final Color? nextBottom =
-          _parseCssColor(map['bottomColor']?.toString())?.withValues(alpha: 1.0);
-      final bool nextScrolled = map['scrolled'] == true;
+      final dynamic rawDark = map['topIsDark'];
+      final bool? nextDark = rawDark is bool ? rawDark : null;
+      final Color? nextCanvas =
+          _parseCssColor(map['canvasColor']?.toString())?.withValues(alpha: 1.0);
 
       final bool changed =
-          (nextTop != null && nextTop != browserTopBarColor) ||
-              (nextBottom != null && nextBottom != browserBottomBarColor) ||
-              nextScrolled != browserIsScrolled;
+          (nextDark != null && nextDark != browserTopIsDark) ||
+              (nextCanvas != null && nextCanvas != browserCanvasColor);
       if (!changed) return;
 
-      if (nextTop != null) {
-        browserTopBarColor = nextTop;
+      if (nextDark != null) {
+        browserTopIsDark = nextDark;
       }
-      if (nextBottom != null) {
-        browserBottomBarColor = nextBottom;
+      if (nextCanvas != null) {
+        browserCanvasColor = nextCanvas;
       }
-      browserIsScrolled = nextScrolled;
       onSheetStateChanged?.call();
       MiniAppSessionController.instance.notifySessionUpdated();
     } catch (_) {}
   }
 
-  Future<void> syncBrowserEdgeColors() async {
+  Future<void> injectBrowserSafeInsets() async {
     final ctrl = controller;
     if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
+    final int topPx = browserTopClearance.round().clamp(0, 320);
+    final int bottomPx = browserBottomClearance.round().clamp(0, 320);
+    final int vhPx = browserViewportHeight.round().clamp(0, 4096);
+    final js = buildBrowserSafeInsetsScript(
+      topPx: topPx,
+      bottomPx: bottomPx,
+      flutterViewportHeight: vhPx,
+    );
     try {
-      final raw = await ctrl.runJavaScriptReturningResult(
-        buildBrowserEdgeColorScript(),
-      );
-      applyBrowserEdgeColorPayload(raw);
+      final raw = await ctrl.runJavaScriptReturningResult(js);
+      applyBrowserPageMetaPayload(raw);
     } catch (_) {}
   }
 
@@ -676,28 +970,30 @@ class MiniAppSession {
         ..addJavaScriptChannel(
           'TheaverBrowserTheme',
           onMessageReceived: (JavaScriptMessage msg) {
-            applyBrowserEdgeColorPayload(msg.message);
+            applyBrowserPageMetaPayload(msg.message);
           },
         )
         ..setNavigationDelegate(
           NavigationDelegate(
             onProgress: (p) {
               updateLoadProgress(p);
-              if (p >= 45 && !_earlyBrowserColorsSampled) {
-                _earlyBrowserColorsSampled = true;
-                unawaited(syncBrowserEdgeColors());
+              if (p >= 35 && _earlyBrowserInsetsStage < 1) {
+                _earlyBrowserInsetsStage = 1;
+                unawaited(injectBrowserSafeInsets());
+              } else if (p >= 75 && _earlyBrowserInsetsStage < 2) {
+                _earlyBrowserInsetsStage = 2;
+                unawaited(injectBrowserSafeInsets());
               }
             },
             onPageStarted: (urlStr) {
-              _earlyBrowserColorsSampled = false;
-              browserIsScrolled = false;
+              _earlyBrowserInsetsStage = 0;
               final nextUrl = urlStr.trim();
               if (nextUrl.isNotEmpty) {
                 final prevHost = BrowserDataService.extractHost(currentUrl);
                 final nextHost = BrowserDataService.extractHost(nextUrl);
                 if (prevHost != nextHost) {
-                  browserTopBarColor = null;
-                  browserBottomBarColor = null;
+                  browserTopIsDark = null;
+                  browserCanvasColor = null;
                 }
                 currentUrl = nextUrl;
               }
@@ -712,7 +1008,7 @@ class MiniAppSession {
                 MiniAppSessionController.instance.notifySessionUpdated();
                 Future<void>.delayed(const Duration(milliseconds: 150), () {
                   if (controller != null) {
-                    unawaited(syncBrowserEdgeColors());
+                    unawaited(injectBrowserSafeInsets());
                   }
                 });
               }
@@ -723,14 +1019,20 @@ class MiniAppSession {
               }
               loadProgress = 1.0;
               isWebContentReady = true;
-              await syncBrowserEdgeColors();
+              await injectBrowserSafeInsets();
               await refreshBrowserNavState();
               await BrowserDataService.instance
                   .recordVisit(currentUrl, displayTitle);
+              for (final delayMs in const [250, 800, 1600]) {
+                Future<void>.delayed(Duration(milliseconds: delayMs), () {
+                  if (controller != null) {
+                    unawaited(injectBrowserSafeInsets());
+                  }
+                });
+              }
               for (final delayMs in const [350, 1200]) {
                 Future<void>.delayed(Duration(milliseconds: delayMs), () {
                   if (controller != null) {
-                    unawaited(syncBrowserEdgeColors());
                     unawaited(capturePreviewSnapshot());
                   }
                 });
@@ -891,7 +1193,7 @@ class MiniAppSession {
             'url': targetUrl,
             'maxWidth': 540,
             'quality': 80,
-            'topCropDp': isBrowser ? 0.0 : 66.0,
+            'topCropDp': isBrowser ? browserTopClearance : 66.0,
           },
         );
         if (bytes != null && bytes.isNotEmpty) {
@@ -2715,7 +3017,7 @@ class _MiniAppSessionCardPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final Color cardBg = session.domPreview?.bgColor ??
-        session.browserTopBarColor ??
+        session.browserCanvasColor ??
         session.customBackgroundColor ??
         resolved.bodyBg;
     final ImageProvider? provider = session.previewImageProvider;

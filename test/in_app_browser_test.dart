@@ -354,16 +354,37 @@ void main() {
       expect(find.text('@walt • mini app'), findsOneWidget);
     });
 
-    test('MiniAppSession.buildBrowserEdgeColorScript & applyBrowserEdgeColorPayload sample edge colors without DOM mutation', () {
-      final js = MiniAppSession.buildBrowserEdgeColorScript();
-      expect(js, contains('window.__theaverSampleEdgeColors'));
-      expect(js, contains('elementsFromPoint'));
-      expect(js, contains('meta[name="theme-color"]'));
+    test('MiniAppSession.buildBrowserSafeInsetsScript & applyBrowserPageMetaPayload offset pinned controls without caps', () {
+      final js = MiniAppSession.buildBrowserSafeInsetsScript(
+        topPx: 82,
+        bottomPx: 80,
+        flutterViewportHeight: 800,
+      );
+      expect(js, contains('window.__theaverTopClear = 82;'));
+      expect(js, contains('window.__theaverBottomClear = 80;'));
+      expect(js, contains('window.__theaverFlutterVh = 800;'));
+      expect(js, contains('window.__theaverSyncSafeZones(82, 80, 800)'));
+      expect(js, contains('--theaver-header-clearance'));
+      expect(js, contains('--theaver-bottom-clearance'));
+      expect(js, contains('--tg-safe-area-inset-top'));
+      expect(js, contains('--tg-safe-area-inset-bottom'));
+      expect(js, contains('scroll-padding-top:'));
+      expect(js, contains('scroll-padding-bottom:'));
+      expect(js, contains('getEffectiveSize'));
+      expect(js, contains('offsetHeight'));
+      expect(js, contains('theaverScrollContainerPt'));
+      expect(js, contains('deferredTopBars'));
+      expect(js, contains('deferredBottomBars'));
+      expect(js, contains("'top-pinned'"));
+      expect(js, contains("'bottom-pinned'"));
+      expect(js, contains("'top-abs'"));
+      expect(js, contains("'bottom-abs'"));
+      expect(js, contains("'full-drawer'"));
+      expect(js, contains('takeRecords'));
       expect(js, contains('TheaverBrowserTheme'));
-      expect(js, contains('window.__theaverEdgeColorObserverInstalled'));
-      expect(js, contains('MutationObserver'));
-      expect(js, isNot(contains('padding-top')));
-      expect(js, isNot(contains('theaverSafeZoneApplied')));
+      expect(js, isNot(contains("visibility === 'hidden'")));
+      expect(js, isNot(contains('__theaver_top_cap')));
+      expect(js, isNot(contains('__theaver_bottom_cap')));
 
       final session = MiniAppSession(
         launchData: const MiniAppLaunchData(
@@ -376,30 +397,30 @@ void main() {
       session.onSheetStateChanged = () => sheetChanges++;
 
       // Double-encoded string mirrors Android WebView runJavaScriptReturningResult output.
-      session.applyBrowserEdgeColorPayload(
-        r'"{\"topColor\":\"rgb(25, 25, 27)\",\"bottomColor\":\"rgb(255, 255, 255)\",\"scrolled\":false}"',
+      session.applyBrowserPageMetaPayload(
+        r'"{\"topIsDark\":true,\"canvasColor\":\"rgb(239, 240, 242)\"}"',
       );
-      expect(session.browserTopBarColor, const Color(0xFF19191B));
-      expect(session.browserBottomBarColor, const Color(0xFFFFFFFF));
-      expect(session.browserIsScrolled, isFalse);
+      expect(session.browserTopIsDark, isTrue);
+      expect(session.browserCanvasColor, const Color(0xFFEFF0F2));
       expect(sheetChanges, 1);
 
       // Identical payload must be deduplicated without triggering extra rebuilds.
-      session.applyBrowserEdgeColorPayload(
-        '{"topColor":"rgb(25, 25, 27)","bottomColor":"rgb(255, 255, 255)","scrolled":false}',
+      session.applyBrowserPageMetaPayload(
+        '{"topIsDark":true,"canvasColor":"rgb(239, 240, 242)"}',
       );
       expect(sheetChanges, 1);
 
-      // Scroll transition notifies once.
-      session.applyBrowserEdgeColorPayload(
-        '{"topColor":"rgb(25, 25, 27)","bottomColor":"rgb(255, 255, 255)","scrolled":true}',
+      // Luminance transition notifies once.
+      session.applyBrowserPageMetaPayload(
+        '{"topIsDark":false,"canvasColor":"rgb(255, 255, 255)"}',
       );
-      expect(session.browserIsScrolled, isTrue);
+      expect(session.browserTopIsDark, isFalse);
+      expect(session.browserCanvasColor, const Color(0xFFFFFFFF));
       expect(sheetChanges, 2);
     });
 
     testWidgets(
-      'InAppBrowserSheet isolates web viewport from status bar and HUD pills and adapts chameleon caps',
+      'InAppBrowserSheet keeps body edge-to-edge without bars and dynamically updates browserTopClearance',
       (tester) async {
         tester.view.physicalSize = const Size(400, 800);
         tester.view.devicePixelRatio = 1.0;
@@ -426,67 +447,49 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(session.browserTopClearance, closeTo(84.0, 0.01));
-        expect(session.browserBottomClearance, closeTo(82.0, 0.01));
+        expect(find.byKey(const ValueKey('in_app_browser_top_cap')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_bottom_cap')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_safe_viewport')), findsNothing);
+
+        final sheetFinder = find.byKey(const ValueKey('in_app_browser_sheet'));
+        expect(tester.getRect(sheetFinder), const Rect.fromLTWH(0, 0, 400, 800));
+        final sheetStack = tester.widget<Stack>(
+          find.descendant(of: sheetFinder, matching: find.byType(Stack)).first,
+        );
+        final firstLayer = sheetStack.children.first as Positioned;
+        expect(firstLayer.left, 0.0);
+        expect(firstLayer.right, 0.0);
+        expect(firstLayer.top, 0.0);
+        expect(firstLayer.bottom, 0.0);
+        expect(
+          tester.getRect(find.byWidget(firstLayer)),
+          const Rect.fromLTWH(0, 0, 400, 800),
+        );
+
+        expect(session.browserTopClearance, closeTo(82.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(80.0, 0.01));
         expect(session.browserViewportHeight, closeTo(800.0, 0.01));
 
-        final viewportFinder =
-            find.byKey(const ValueKey('in_app_browser_safe_viewport'));
-        final headerCenterFinder =
-            find.byKey(const ValueKey('webview_header_center_pill'));
-        final bottomBarFinder =
-            find.byKey(const ValueKey('in_app_browser_bottom_bar'));
-
-        final Rect initialViewport = tester.getRect(viewportFinder);
-        final Rect headerRect = tester.getRect(headerCenterFinder);
-        final Rect bottomBarRect = tester.getRect(bottomBarFinder);
-
-        expect(initialViewport.top, closeTo(84.0, 0.01));
-        expect(initialViewport.bottom, closeTo(718.0, 0.01));
-        expect(headerRect.top, greaterThanOrEqualTo(24.0));
-        expect(headerRect.bottom, lessThanOrEqualTo(initialViewport.top));
-        expect(bottomBarRect.top, greaterThanOrEqualTo(initialViewport.bottom));
-        expect(bottomBarRect.bottom, lessThanOrEqualTo(800.0 - 16.0));
-
-        // Opening Find-in-Page lowers the safe viewport below the find capsule.
+        // Opening Find-in-Page lowers top clearance below the find capsule.
         await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Найти на странице'));
         await tester.pumpAndSettle();
 
-        expect(session.browserTopClearance, closeTo(136.0, 0.01));
-        final Rect findViewport = tester.getRect(viewportFinder);
+        expect(session.browserTopClearance, closeTo(134.0, 0.01));
+
+        // Closing Find-in-Page restores normal top clearance.
         final findCapsuleFinder = find.ancestor(
           of: find.byType(TextField),
           matching: find.byType(WebViewFloatingCapsule),
         );
-        final Rect findRect = tester.getRect(findCapsuleFinder);
-        expect(findViewport.top, closeTo(136.0, 0.01));
-        expect(findRect.bottom, lessThanOrEqualTo(findViewport.top));
-
-        // Closing Find-in-Page restores normal top clearance.
         final findBarCloseFinder = find.descendant(
           of: findCapsuleFinder,
           matching: find.byIcon(Icons.close_rounded),
         );
         await tester.tap(findBarCloseFinder);
         await tester.pumpAndSettle();
-        expect(session.browserTopClearance, closeTo(84.0, 0.01));
-
-        // Sampling page edge colors updates the chameleon top & bottom caps.
-        session.applyBrowserEdgeColorPayload(
-          '{"topColor":"rgb(25, 25, 27)","bottomColor":"rgb(255, 255, 255)","scrolled":false}',
-        );
-        await tester.pumpAndSettle();
-
-        final topCap = tester.widget<AnimatedContainer>(
-          find.byKey(const ValueKey('in_app_browser_top_cap')),
-        );
-        final bottomCap = tester.widget<AnimatedContainer>(
-          find.byKey(const ValueKey('in_app_browser_bottom_cap')),
-        );
-        expect((topCap.decoration as BoxDecoration).color, const Color(0xFF19191B));
-        expect((bottomCap.decoration as BoxDecoration).color, const Color(0xFFFFFFFF));
+        expect(session.browserTopClearance, closeTo(82.0, 0.01));
       },
     );
   });

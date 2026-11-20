@@ -87,7 +87,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
   bool _isTransitionReady = false;
-  bool _didSyncEdgeColorsOnMount = false;
+  bool _didInjectInsetsOnMount = false;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
 
@@ -124,11 +124,19 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       if (_session.controller != null && shouldRebuild) {
         setState(() {});
       }
-    } else if (!_didSyncEdgeColorsOnMount &&
+    } else if (!_didInjectInsetsOnMount &&
         _session.controller != null &&
         _hasPlatformWebView) {
-      _didSyncEdgeColorsOnMount = true;
-      unawaited(_session.syncBrowserEdgeColors());
+      _didInjectInsetsOnMount = true;
+      unawaited(_session.injectBrowserSafeInsets());
+    }
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    if (_session.controller != null && _hasPlatformWebView) {
+      unawaited(_session.injectBrowserSafeInsets());
     }
   }
 
@@ -154,9 +162,19 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _updateBrowserSafeClearances({EdgeInsets? paddingOverride}) {
     final size = MediaQuery.sizeOf(context);
     final padding = paddingOverride ?? MediaQuery.paddingOf(context);
-    _session.browserTopClearance = padding.top + (_isFindOpen ? 112.0 : 60.0);
-    _session.browserBottomClearance = padding.bottom + 66.0;
-    _session.browserViewportHeight = size.height;
+    final double nextTop = padding.top + (_isFindOpen ? 110.0 : 58.0);
+    final double nextBottom = padding.bottom + 64.0;
+    final double nextVh = size.height;
+    final bool clearanceChanged =
+        (nextTop - _session.browserTopClearance).abs() > 0.5 ||
+            (nextBottom - _session.browserBottomClearance).abs() > 0.5 ||
+            (nextVh - _session.browserViewportHeight).abs() > 0.5;
+    _session.browserTopClearance = nextTop;
+    _session.browserBottomClearance = nextBottom;
+    _session.browserViewportHeight = nextVh;
+    if (clearanceChanged && _session.controller != null) {
+      unawaited(_session.injectBrowserSafeInsets());
+    }
   }
 
   @override
@@ -601,27 +619,20 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final resolved = MiniAppJsBridge.resolveThemeColors(theme);
+    final style = TheavSurfaceStyle.of(context);
     final mq = MediaQuery.of(context);
     final topInset = mq.padding.top;
     final bottomInset = mq.padding.bottom;
-    final double topSafeInset = topInset + (_isFindOpen ? 112.0 : 60.0);
-    final double bottomSafeInset = bottomInset + 66.0;
-    final Color topCapColor = _session.browserTopBarColor ?? resolved.bodyBg;
-    final Color bottomCapColor =
-        _session.browserBottomBarColor ?? _session.browserTopBarColor ?? resolved.bodyBg;
-    final bool isTopCapDark = topCapColor.computeLuminance() <= 0.55;
-    final bool isBottomCapDark = bottomCapColor.computeLuminance() <= 0.55;
+    final bool isTopDark = _session.browserTopIsDark ?? style.isDark;
     final SystemUiOverlayStyle overlayStyle =
-        (isTopCapDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+        (isTopDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
             .copyWith(
       statusBarColor: Colors.transparent,
-      statusBarIconBrightness:
-          isTopCapDark ? Brightness.light : Brightness.dark,
-      statusBarBrightness:
-          isTopCapDark ? Brightness.dark : Brightness.light,
+      statusBarIconBrightness: isTopDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isTopDark ? Brightness.dark : Brightness.light,
       systemNavigationBarColor: Colors.transparent,
       systemNavigationBarIconBrightness:
-          isBottomCapDark ? Brightness.light : Brightness.dark,
+          isTopDark ? Brightness.light : Brightness.dark,
     );
 
     final String currentUrl = _session.currentUrl;
@@ -907,7 +918,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           )
         : Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+              padding: EdgeInsets.fromLTRB(
+                24,
+                topInset + (_isFindOpen ? 124 : 72),
+                24,
+                bottomInset + 80,
+              ),
               child: Container(
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
@@ -1044,62 +1060,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            top: 0,
-            left: 0,
-            right: 0,
-            height: topSafeInset,
-            child: AnimatedContainer(
-              key: const ValueKey('in_app_browser_top_cap'),
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              decoration: BoxDecoration(
-                color: topCapColor,
-                border: _session.browserIsScrolled
-                    ? Border(
-                        bottom: BorderSide(
-                          color: (isTopCapDark ? Colors.white : Colors.black)
-                              .withValues(alpha: 0.08),
-                          width: 0.5,
-                        ),
-                      )
-                    : null,
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            height: bottomSafeInset,
-            child: AnimatedContainer(
-              key: const ValueKey('in_app_browser_bottom_cap'),
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              decoration: BoxDecoration(
-                color: bottomCapColor,
-                border: Border(
-                  top: BorderSide(
-                    color: (isBottomCapDark ? Colors.white : Colors.black)
-                        .withValues(alpha: 0.06),
-                    width: 0.5,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          AnimatedPositioned(
-            key: const ValueKey('in_app_browser_safe_viewport'),
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            top: topSafeInset,
-            bottom: bottomSafeInset,
-            left: 0,
-            right: 0,
-            child: ClipRect(child: webBody),
-          ),
+          Positioned.fill(child: webBody),
           if (floatingFindBar != null)
             Positioned(
               top: topInset + 60.0,
