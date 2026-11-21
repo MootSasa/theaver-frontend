@@ -92,8 +92,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
   bool _allowRoutePop = false;
+  bool _hasFullScreenRegistration = false;
+  bool _hasSettledRegistration = false;
   bool _isTransitionReady = false;
+  bool _isWebViewSurfacePainted = false;
   bool _didInjectInsetsOnMount = false;
+  Timer? _earlyWebViewWarmupTimer;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
 
@@ -109,32 +113,98 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     TheavSheetRoutePerfControl.setRestingOpaque(context, opaque);
   }
 
+  void _markRouteSettled(bool settled) {
+    if (settled) {
+      if (!_hasSettledRegistration) {
+        _hasSettledRegistration = true;
+        MiniAppSessionController.instance.markFullScreenSettled();
+      }
+    } else {
+      if (_hasSettledRegistration) {
+        _hasSettledRegistration = false;
+        MiniAppSessionController.instance.unmarkFullScreenSettled();
+      }
+    }
+  }
+
+  void _releaseFullScreenRegistration() {
+    _markRouteSettled(false);
+    if (_hasFullScreenRegistration) {
+      _hasFullScreenRegistration = false;
+      MiniAppSessionController.instance.unregisterFullScreenOpen();
+    }
+  }
+
+  void _scheduleEarlyWebViewWarmup() {
+    if (!_hasPlatformWebView ||
+        _isTransitionReady ||
+        _session.isLaunchPending ||
+        _session.controller != null ||
+        _earlyWebViewWarmupTimer != null) {
+      return;
+    }
+    _earlyWebViewWarmupTimer = Timer(const Duration(milliseconds: 48), () {
+      _earlyWebViewWarmupTimer = null;
+      if (!mounted ||
+          !_hasPlatformWebView ||
+          _session.isLaunchPending ||
+          _session.controller != null) {
+        return;
+      }
+      _session.ensureWebViewInitialized();
+    });
+  }
+
+  void _scheduleWebViewSurfacePainted() {
+    if (_isWebViewSurfacePainted || !_hasPlatformWebView) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _isWebViewSurfacePainted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _isWebViewSurfacePainted) return;
+        setState(() => _isWebViewSurfacePainted = true);
+      });
+    });
+  }
+
   void _onRouteAnimationStatusChanged(AnimationStatus status) {
     if (!mounted) return;
     if (status == AnimationStatus.completed) {
+      _earlyWebViewWarmupTimer?.cancel();
+      _earlyWebViewWarmupTimer = null;
       _isTransitionReady = true;
+      _markRouteSettled(true);
       _maybeInitWebView();
       if (_dragOffsetNotifier.value <= 0.5 && !_isMinimizing) {
         _setRouteRestingOpaque(true);
       }
     } else if (status == AnimationStatus.reverse ||
         status == AnimationStatus.dismissed) {
+      _markRouteSettled(false);
       _setRouteRestingOpaque(false);
     }
   }
 
   void _maybeInitWebView({bool shouldRebuild = true}) {
-    if (!mounted) return;
-    if (_session.controller == null && _isTransitionReady && _hasPlatformWebView) {
+    if (!mounted || !_isTransitionReady || !_hasPlatformWebView) return;
+    if (_session.controller == null) {
       _session.ensureWebViewInitialized();
-      if (_session.controller != null && shouldRebuild) {
+      if (_session.controller != null) {
+        _didInjectInsetsOnMount = true;
+        _scheduleWebViewSurfacePainted();
+        unawaited(_session.injectBrowserSafeInsets());
+        if (shouldRebuild) {
+          setState(() {});
+        }
+      }
+    } else {
+      _scheduleWebViewSurfacePainted();
+      if (!_didInjectInsetsOnMount) {
+        _didInjectInsetsOnMount = true;
+        unawaited(_session.injectBrowserSafeInsets());
+      }
+      if (shouldRebuild) {
         setState(() {});
       }
-    } else if (!_didInjectInsetsOnMount &&
-        _session.controller != null &&
-        _hasPlatformWebView) {
-      _didInjectInsetsOnMount = true;
-      unawaited(_session.injectBrowserSafeInsets());
     }
   }
 
@@ -150,6 +220,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void initState() {
     super.initState();
     _session = widget.session;
+    _hasFullScreenRegistration = true;
     MiniAppSessionController.instance.registerFullScreenOpen();
     _dragResetController = AnimationController(
       vsync: this,
@@ -196,7 +267,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (nextForceExpanded && _session.browserChromeCollapsed) {
       _session.browserChromeCollapsed = false;
     }
-    if (clearanceChanged && _session.controller != null) {
+    if (clearanceChanged && _isTransitionReady && _session.controller != null) {
       unawaited(_session.injectBrowserSafeInsets());
     }
   }
@@ -212,7 +283,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       _routeAnimation = nextRouteAnim;
       if (nextRouteAnim == null ||
           nextRouteAnim.status == AnimationStatus.completed) {
+        _earlyWebViewWarmupTimer?.cancel();
+        _earlyWebViewWarmupTimer = null;
         _isTransitionReady = true;
+        _markRouteSettled(true);
         _maybeInitWebView(shouldRebuild: false);
         if (_dragOffsetNotifier.value <= 0.5 && !_isMinimizing) {
           _setRouteRestingOpaque(true);
@@ -220,6 +294,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       } else {
         if (!_hasPlatformWebView) {
           _isTransitionReady = true;
+        } else {
+          _scheduleEarlyWebViewWarmup();
         }
         nextRouteAnim.addStatusListener(_onRouteAnimationStatusChanged);
       }
@@ -232,6 +308,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   @override
   void dispose() {
+    _earlyWebViewWarmupTimer?.cancel();
+    _earlyWebViewWarmupTimer = null;
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
     _routeAnimation = null;
     BrowserDataService.instance.removeListener(_onBrowserDataChanged);
@@ -244,22 +322,34 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
     _findCtrl.dispose();
-    MiniAppSessionController.instance.unregisterFullScreenOpen();
+    _releaseFullScreenRegistration();
     super.dispose();
   }
 
-  Future<void> _minimizeToDock() async {
+  Future<void> _minimizeToDock({
+    double dragOffsetPx = 0.0,
+    double velocityPxPerSec = 0.0,
+  }) async {
     if (_isMinimizing) return;
     _isMinimizing = true;
     _closeMenu();
     _closeSiteInfoPopover();
-    await _session.capturePreviewSnapshot().timeout(
-          const Duration(milliseconds: 90),
-          onTimeout: () {},
-        );
     if (!mounted) return;
+    _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     HapticUtils.selection();
+    if (dragOffsetPx > 0.5) {
+      final double sheetH = MediaQuery.sizeOf(context).height;
+      if (TheavSheetRoutePerfControl.prepareDragDismiss(
+        context,
+        dragOffsetPx: dragOffsetPx,
+        sheetHeight: sheetH,
+        velocityPxPerSec: velocityPxPerSec,
+      )) {
+        _dragOffsetNotifier.value = 0.0;
+      }
+    }
+    _releaseFullScreenRegistration();
     _allowRoutePop = true;
     final nav = Navigator.of(context, rootNavigator: true);
     MiniAppSessionController.instance.minimize(_session, navigator: nav);
@@ -273,14 +363,20 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     HapticUtils.selection();
     _closeMenu();
     _closeSiteInfoPopover();
-    await _session.capturePreviewSnapshot().timeout(
-          const Duration(milliseconds: 90),
-          onTimeout: () {},
-        );
+    if (_session.previewImageBytes == null) {
+      await _session.capturePreviewSnapshot().timeout(
+            const Duration(milliseconds: 45),
+            onTimeout: () {},
+          );
+    } else {
+      unawaited(_session.capturePreviewSnapshot());
+    }
     if (!mounted) return;
+    _markRouteSettled(false);
     if (MinimizedMiniAppHost.isMountedIn(context)) {
       _isMinimizing = true;
       _setRouteRestingOpaque(false);
+      _releaseFullScreenRegistration();
       _allowRoutePop = true;
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimizeAndOpenSwitcher(
@@ -336,6 +432,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _closeTab() {
     _closeMenu();
     _closeSiteInfoPopover();
+    _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     HapticUtils.tap();
     MiniAppSessionController.instance.closeSession(_session);
@@ -727,7 +824,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final double vy = details.primaryVelocity ?? 0.0;
     _dragAccumulated = 0.0;
     if (dy >= 90 || vy >= 450) {
-      _minimizeToDock();
+      unawaited(
+        _minimizeToDock(
+          dragOffsetPx: _dragOffsetNotifier.value,
+          velocityPxPerSec: math.max(0.0, vy),
+        ),
+      );
       return;
     }
     _resetDragOffset();
@@ -1080,18 +1182,37 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           )
         : null;
 
+    final ImageProvider? standInSnapshot =
+        (!_isTransitionReady || !_isWebViewSurfacePainted)
+            ? _session.fullViewportPreviewProvider
+            : null;
+    final bool mountWebView = _isTransitionReady && _session.controller != null;
+
     final Widget webBody = _hasPlatformWebView
         ? Stack(
             fit: StackFit.expand,
             children: [
-              if (_session.controller != null)
-                RepaintBoundary(
-                  child: ColoredBox(
-                    color: resolved.bodyBg,
-                    child: WebViewWidget(controller: _session.controller!),
+              if (standInSnapshot != null)
+                Positioned.fill(
+                  key: const ValueKey('in_app_browser_restore_snapshot'),
+                  child: Image(
+                    image: standInSnapshot,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.topCenter,
+                    filterQuality: FilterQuality.medium,
+                    gaplessPlayback: true,
                   ),
-                )
-              else
+                ),
+              if (mountWebView)
+                RepaintBoundary(
+                  child: standInSnapshot != null
+                      ? WebViewWidget(controller: _session.controller!)
+                      : ColoredBox(
+                          color: resolved.bodyBg,
+                          child: WebViewWidget(controller: _session.controller!),
+                        ),
+                ),
+              if (standInSnapshot == null && !mountWebView)
                 Positioned.fill(
                   child: ColoredBox(
                     color: resolved.bodyBg,
@@ -1267,68 +1388,33 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       ),
     );
 
-    final Widget sheetBody = Material(
-      key: const ValueKey('in_app_browser_sheet'),
-      color: resolved.bodyBg,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Positioned.fill(child: webBody),
+    final Widget hudOverlayStack = Stack(
+      fit: StackFit.expand,
+      clipBehavior: Clip.none,
+      children: [
+        if (floatingFindBar != null)
           Positioned(
-            key: const ValueKey('in_app_browser_top_scroll_pocket'),
-            top: 0,
+            top: topInset + 60.0,
             left: 0,
             right: 0,
-            child: IgnorePointer(
-              child: _BrowserScrollPocket(
-                edge: LiquidGlassEdge.top,
-                height: topInset + (isCompact ? 22.0 : 26.0),
-                color: topPocketBase.withValues(alpha: 0.90),
-                blurSigma: allowEdgeBlur ? 3.5 : 0.0,
-              ),
+            child: floatingFindBar,
+          ),
+        floatingBottomBar,
+        if (_isSiteInfoOpen) ...[
+          Positioned.fill(
+            key: const ValueKey('in_app_browser_site_info_backdrop'),
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _closeSiteInfoPopover,
             ),
           ),
           Positioned(
-            key: const ValueKey('in_app_browser_bottom_scroll_pocket'),
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              child: _BrowserScrollPocket(
-                edge: LiquidGlassEdge.bottom,
-                height: math.max(
-                  isCompact
-                      ? (bottomInset > 0 ? bottomInset + 8.0 : 0.0)
-                      : (bottomInset + 24.0),
-                  0.0,
-                ),
-                color: bottomPocketBase.withValues(alpha: isCompact ? 0.65 : 0.84),
-                blurSigma: allowEdgeBlur ? 3.0 : 0.0,
-              ),
-            ),
-          ),
-          if (floatingFindBar != null)
-            Positioned(
-              top: topInset + 60.0,
-              left: 0,
-              right: 0,
-              child: floatingFindBar,
-            ),
-          floatingBottomBar,
-          if (_isSiteInfoOpen) ...[
-            Positioned.fill(
-              key: const ValueKey('in_app_browser_site_info_backdrop'),
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: _closeSiteInfoPopover,
-              ),
-            ),
-            Positioned(
-              top: topInset + 58.0,
-              left: 16.0,
-              right: 16.0,
-              child: Align(
-                alignment: Alignment.topCenter,
+            top: topInset + 58.0,
+            left: 16.0,
+            right: 16.0,
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: LiquidGlassBatch.exclude(
                 child: TweenAnimationBuilder<double>(
                   tween: Tween<double>(begin: 0.0, end: 1.0),
                   duration: const Duration(milliseconds: 220),
@@ -1385,12 +1471,61 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                 ),
               ),
             ),
-          ],
+          ),
+        ],
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: floatingHeader,
+        ),
+      ],
+    );
+
+    final Widget sheetBody = Material(
+      key: const ValueKey('in_app_browser_sheet'),
+      color: resolved.bodyBg,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(child: webBody),
           Positioned(
+            key: const ValueKey('in_app_browser_top_scroll_pocket'),
             top: 0,
             left: 0,
             right: 0,
-            child: floatingHeader,
+            child: IgnorePointer(
+              child: _BrowserScrollPocket(
+                edge: LiquidGlassEdge.top,
+                height: topInset + (isCompact ? 22.0 : 26.0),
+                color: topPocketBase.withValues(alpha: 0.90),
+                blurSigma: allowEdgeBlur ? 3.5 : 0.0,
+              ),
+            ),
+          ),
+          Positioned(
+            key: const ValueKey('in_app_browser_bottom_scroll_pocket'),
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: _BrowserScrollPocket(
+                edge: LiquidGlassEdge.bottom,
+                height: math.max(
+                  isCompact
+                      ? (bottomInset > 0 ? bottomInset + 8.0 : 0.0)
+                      : (bottomInset + 24.0),
+                  0.0,
+                ),
+                color: bottomPocketBase.withValues(alpha: isCompact ? 0.65 : 0.84),
+                blurSigma: allowEdgeBlur ? 3.0 : 0.0,
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: style.isGlass
+                ? LiquidGlassBatch(child: hudOverlayStack)
+                : hudOverlayStack,
           ),
         ],
       ),

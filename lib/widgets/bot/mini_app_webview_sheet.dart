@@ -395,9 +395,11 @@ class MiniAppSession {
   Future<void>? _activeSnapshotFuture;
   Uint8List? _cachedPreviewBytesRef;
   ImageProvider? _cachedPreviewProvider;
+  Uint8List? _cachedFullPreviewBytesRef;
+  ImageProvider? _cachedFullPreviewProvider;
 
-  /// Cached downscaled [ImageProvider] for [previewImageBytes] so scroll frames
-  /// reuse decoded raster textures instead of recreating [MemoryImage] instances.
+  /// Cached downscaled [ImageProvider] for [previewImageBytes] so 3D switcher
+  /// cards reuse decoded raster textures instead of recreating [MemoryImage] instances.
   ImageProvider? get previewImageProvider {
     final bytes = previewImageBytes;
     if (bytes == null || bytes.isEmpty) {
@@ -412,6 +414,23 @@ class MiniAppSession {
           ResizeImage.resizeIfNeeded(540, null, MemoryImage(bytes));
     }
     return _cachedPreviewProvider;
+  }
+
+  /// Cached full-resolution [ImageProvider] for [previewImageBytes] used as a
+  /// zero-stutter viewport stand-in during sheet restore and surface warmup.
+  ImageProvider? get fullViewportPreviewProvider {
+    final bytes = previewImageBytes;
+    if (bytes == null || bytes.isEmpty) {
+      _cachedFullPreviewBytesRef = null;
+      _cachedFullPreviewProvider = null;
+      return null;
+    }
+    if (!identical(_cachedFullPreviewBytesRef, bytes) ||
+        _cachedFullPreviewProvider == null) {
+      _cachedFullPreviewBytesRef = bytes;
+      _cachedFullPreviewProvider = MemoryImage(bytes);
+    }
+    return _cachedFullPreviewProvider;
   }
   bool allowVerticalSwipe = true;
   bool backButtonVisible = false;
@@ -2168,20 +2187,16 @@ class MiniAppSession {
               await refreshBrowserNavState();
               await BrowserDataService.instance
                   .recordVisit(currentUrl, displayTitle);
-              for (final delayMs in const [250, 800, 1600]) {
-                Future<void>.delayed(Duration(milliseconds: delayMs), () {
-                  if (controller != null) {
-                    unawaited(injectBrowserSafeInsets());
-                  }
-                });
-              }
-              for (final delayMs in const [350, 1200]) {
-                Future<void>.delayed(Duration(milliseconds: delayMs), () {
-                  if (controller != null) {
-                    unawaited(capturePreviewSnapshot());
-                  }
-                });
-              }
+              Future<void>.delayed(const Duration(milliseconds: 300), () {
+                if (controller != null && !isMinimized) {
+                  unawaited(injectBrowserSafeInsets());
+                }
+              });
+              Future<void>.delayed(const Duration(milliseconds: 500), () {
+                if (controller != null && !isMinimized) {
+                  unawaited(capturePreviewSnapshot());
+                }
+              });
             },
             onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
             onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
@@ -2225,13 +2240,11 @@ class MiniAppSession {
             isWebContentReady = true;
             onSheetStateChanged?.call();
             onRequestBridgeInjection?.call();
-            for (final delayMs in const [350, 1200]) {
-              Future<void>.delayed(Duration(milliseconds: delayMs), () {
-                if (controller != null) {
-                  unawaited(capturePreviewSnapshot());
-                }
-              });
-            }
+            Future<void>.delayed(const Duration(milliseconds: 500), () {
+              if (controller != null && !isMinimized) {
+                unawaited(capturePreviewSnapshot());
+              }
+            });
           },
           onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
           onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
@@ -2332,9 +2345,9 @@ class MiniAppSession {
           'captureWebView',
           <String, dynamic>{
             'url': targetUrl,
-            'maxWidth': 540,
-            'quality': 80,
-            'topCropDp': isBrowser ? browserTopClearance : 66.0,
+            'maxWidth': 960,
+            'quality': 86,
+            'topCropDp': 0.0,
           },
         );
         if (bytes != null && bytes.isNotEmpty) {
@@ -2348,7 +2361,8 @@ class MiniAppSession {
       } catch (_) {}
     }
 
-    const String js = r'''
+    if (!updated) {
+      const String js = r'''
 (function() {
   try {
     if (!document || !document.body) return null;
@@ -2443,55 +2457,56 @@ class MiniAppSession {
   }
 })();
 ''';
-    try {
-      final dynamic rawResult = await ctrl.runJavaScriptReturningResult(js);
-      dynamic decoded = rawResult;
-      if (decoded is String) {
-        final trimmed = decoded.trim();
-        if (trimmed.isNotEmpty && trimmed != 'null') {
-          decoded = jsonDecode(trimmed);
-          if (decoded is String) {
-            decoded = jsonDecode(decoded);
+      try {
+        final dynamic rawResult = await ctrl.runJavaScriptReturningResult(js);
+        dynamic decoded = rawResult;
+        if (decoded is String) {
+          final trimmed = decoded.trim();
+          if (trimmed.isNotEmpty && trimmed != 'null') {
+            decoded = jsonDecode(trimmed);
+            if (decoded is String) {
+              decoded = jsonDecode(decoded);
+            }
+          } else {
+            decoded = null;
           }
-        } else {
-          decoded = null;
         }
-      }
-      if (decoded is Map) {
-        final map = Map<String, dynamic>.from(decoded);
-        final rawBlocks = map['blocks'];
-        final parsedBlocks = <MiniAppDomBlock>[];
-        if (rawBlocks is List) {
-          for (final item in rawBlocks) {
-            if (item is Map) {
-              final b = Map<String, dynamic>.from(item);
-              final t = (b['title'] ?? '').toString().trim();
-              if (t.isEmpty) continue;
-              parsedBlocks.add(
-                MiniAppDomBlock(
-                  kind: (b['kind'] ?? 'card').toString(),
-                  title: t,
-                  subtitle: (b['subtitle'] ?? '').toString().trim(),
-                  trailing: (b['trailing'] ?? '').toString().trim(),
-                  leadingBadge: (b['leadingBadge'] ?? '').toString().trim(),
-                  cardColor: _parseCssColor(b['cardColor']?.toString()),
-                  fgColor: _parseCssColor(b['fgColor']?.toString()),
-                ),
-              );
+        if (decoded is Map) {
+          final map = Map<String, dynamic>.from(decoded);
+          final rawBlocks = map['blocks'];
+          final parsedBlocks = <MiniAppDomBlock>[];
+          if (rawBlocks is List) {
+            for (final item in rawBlocks) {
+              if (item is Map) {
+                final b = Map<String, dynamic>.from(item);
+                final t = (b['title'] ?? '').toString().trim();
+                if (t.isEmpty) continue;
+                parsedBlocks.add(
+                  MiniAppDomBlock(
+                    kind: (b['kind'] ?? 'card').toString(),
+                    title: t,
+                    subtitle: (b['subtitle'] ?? '').toString().trim(),
+                    trailing: (b['trailing'] ?? '').toString().trim(),
+                    leadingBadge: (b['leadingBadge'] ?? '').toString().trim(),
+                    cardColor: _parseCssColor(b['cardColor']?.toString()),
+                    fgColor: _parseCssColor(b['fgColor']?.toString()),
+                  ),
+                );
+              }
             }
           }
+          if (parsedBlocks.isNotEmpty) {
+            domPreview = MiniAppDomPreview(
+              bgColor: _parseCssColor(map['bgColor']?.toString()),
+              textColor: _parseCssColor(map['textColor']?.toString()),
+              accentColor: _parseCssColor(map['accentColor']?.toString()),
+              blocks: parsedBlocks,
+            );
+            updated = true;
+          }
         }
-        if (parsedBlocks.isNotEmpty) {
-          domPreview = MiniAppDomPreview(
-            bgColor: _parseCssColor(map['bgColor']?.toString()),
-            textColor: _parseCssColor(map['textColor']?.toString()),
-            accentColor: _parseCssColor(map['accentColor']?.toString()),
-            blocks: parsedBlocks,
-          );
-          updated = true;
-        }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     if (updated) {
       MiniAppSessionController.instance.notifySessionUpdated();
     }
@@ -2519,6 +2534,9 @@ class MiniAppSessionController extends ChangeNotifier {
   final List<MiniAppSession> _minimizedSessions = <MiniAppSession>[];
   bool _isSwitcherOpen = false;
   int _activeFullScreenCount = 0;
+  int _settledFullScreenCount = 0;
+  bool _pendingSheetMinimizeFastLayout = false;
+  bool _pendingRestoreTransition = false;
   DateTime? _lastMinimizeToSwitcherAt;
   bool _backObserverRegistered = false;
   late final _MiniAppSwitcherBackObserver _backObserver =
@@ -2577,6 +2595,18 @@ class MiniAppSessionController extends ChangeNotifier {
 
   int get activeFullScreenCount => _activeFullScreenCount;
 
+  int get settledFullScreenCount => _settledFullScreenCount;
+
+  bool get isFullScreenTransitioningIn =>
+      _pendingRestoreTransition ||
+      _activeFullScreenCount > _settledFullScreenCount;
+
+  bool consumeSheetMinimizeFastLayout() {
+    final bool value = _pendingSheetMinimizeFastLayout;
+    _pendingSheetMinimizeFastLayout = false;
+    return value;
+  }
+
   bool get shouldShowMinimizedBar =>
       _minimizedSessions.isNotEmpty &&
       _activeFullScreenCount == 0 &&
@@ -2595,19 +2625,31 @@ class MiniAppSessionController extends ChangeNotifier {
   }
 
   void registerFullScreenOpen() {
+    _pendingRestoreTransition = false;
     _activeFullScreenCount += 1;
     if (_minimizedSessions.isNotEmpty) {
       _notifySafely();
     }
   }
 
+  void markFullScreenSettled() {
+    _pendingRestoreTransition = false;
+    _settledFullScreenCount += 1;
+    _notifySafely();
+  }
+
+  void unmarkFullScreenSettled() {
+    if (_settledFullScreenCount > 0) {
+      _settledFullScreenCount -= 1;
+    }
+  }
+
   void unregisterFullScreenOpen() {
+    _pendingRestoreTransition = false;
     if (_activeFullScreenCount > 0) {
       _activeFullScreenCount -= 1;
     }
-    if (_minimizedSessions.isNotEmpty) {
-      _notifySafely();
-    }
+    _notifySafely();
   }
 
   void minimize(MiniAppSession session, {NavigatorState? navigator}) {
@@ -2630,6 +2672,9 @@ class MiniAppSessionController extends ChangeNotifier {
     );
     _minimizedSessions.add(session);
     _isSwitcherOpen = false;
+    if (navigator != null) {
+      _pendingSheetMinimizeFastLayout = true;
+    }
     if (!session.isBrowser) {
       session.dispatchEvent('deactivated');
       session.dispatchEvent('viewport_changed', const {
@@ -2739,31 +2784,36 @@ class MiniAppSessionController extends ChangeNotifier {
     _minimizedSessions.removeWhere((s) => identical(s, session));
     session.isMinimized = false;
     _isSwitcherOpen = false;
+    _pendingRestoreTransition = true;
     notifyListeners();
     if (!session.isBrowser) {
       session.dispatchEvent('activated');
     }
 
-    await showTheavModalSheet<void>(
-      context: restoreContext,
-      enableDrag: false,
-      barrierDismissible: true,
-      useRootNavigator: true,
-      customSheetBuilder: (_) => session.isBrowser
-          ? InAppBrowserSheet(session: session)
-          : MiniAppWebViewSheet(
-              launchData: session.launchData,
-              botName: session.botName,
-              botUsername: session.botUsername,
-              isVerified: session.isVerified,
-              chatId: session.chatId,
-              mode: session.mode,
-              buttonText: session.buttonText,
-              onSwitchInlineQuery: session.onSwitchInlineQuery,
-              session: session,
-            ),
-      builder: (_) => const SizedBox.shrink(),
-    );
+    try {
+      await showTheavModalSheet<void>(
+        context: restoreContext,
+        enableDrag: false,
+        barrierDismissible: true,
+        useRootNavigator: true,
+        customSheetBuilder: (_) => session.isBrowser
+            ? InAppBrowserSheet(session: session)
+            : MiniAppWebViewSheet(
+                launchData: session.launchData,
+                botName: session.botName,
+                botUsername: session.botUsername,
+                isVerified: session.isVerified,
+                chatId: session.chatId,
+                mode: session.mode,
+                buttonText: session.buttonText,
+                onSwitchInlineQuery: session.onSwitchInlineQuery,
+                session: session,
+              ),
+        builder: (_) => const SizedBox.shrink(),
+      );
+    } finally {
+      _pendingRestoreTransition = false;
+    }
   }
 
   void closeSession(MiniAppSession session) {
@@ -2803,6 +2853,9 @@ class MiniAppSessionController extends ChangeNotifier {
     _minimizedSessions.clear();
     _isSwitcherOpen = false;
     _activeFullScreenCount = 0;
+    _settledFullScreenCount = 0;
+    _pendingSheetMinimizeFastLayout = false;
+    _pendingRestoreTransition = false;
     notifyListeners();
   }
 }
@@ -2871,6 +2924,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   late final Animation<double> _curvedAnim;
   late final Animation<Offset> _slideAnim;
   List<MiniAppSession> _displayedSessions = const [];
+  bool _snapLayoutFull = false;
   final GlobalKey _backdropBoundaryKey = GlobalKey();
   ui.Image? _frozenBackdropImage;
   Timer? _backdropCaptureTimer;
@@ -3018,19 +3072,46 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
       _disposeFrozenBackdrop();
     }
     if (ctrl.shouldShowMinimizedBar) {
+      final bool fastLayout = ctrl.consumeSheetMinimizeFastLayout();
+      final bool willRunForward =
+          _animController.status != AnimationStatus.forward &&
+              _animController.status != AnimationStatus.completed;
       setState(() {
         _displayedSessions = ctrl.minimizedSessions;
+        if (willRunForward) {
+          _snapLayoutFull = fastLayout;
+        }
       });
-      if (_animController.status != AnimationStatus.forward &&
-          _animController.status != AnimationStatus.completed) {
-        _animController.forward();
+      if (willRunForward) {
+        _animController
+            .forward(from: fastLayout ? 0.0 : null)
+            .whenComplete(() {
+          if (mounted && _snapLayoutFull) {
+            _snapLayoutFull = false;
+          }
+        });
       }
     } else if (_displayedSessions.isNotEmpty) {
+      // Keep the underlying screen layout rock-steady while a full-screen sheet
+      // slides up over it, avoiding 20+ full chat tree relayout passes.
+      if (ctrl.isFullScreenTransitioningIn && !ctrl.isSwitcherOpen) {
+        return;
+      }
+      // Once covered by a settled full-screen sheet or the tabs switcher,
+      // collapse immediately in a single frame without animating layout behind it.
+      if (ctrl.settledFullScreenCount > 0 || ctrl.isSwitcherOpen) {
+        _snapLayoutFull = false;
+        _animController.value = 0.0;
+        setState(() => _displayedSessions = const []);
+        return;
+      }
+      _snapLayoutFull = false;
       if (_animController.status == AnimationStatus.dismissed) {
         setState(() => _displayedSessions = const []);
       } else if (_animController.status != AnimationStatus.reverse) {
         _animController.reverse().whenComplete(() {
           if (mounted && !MiniAppSessionController.instance.shouldShowMinimizedBar) {
+            _snapLayoutFull = false;
             setState(() => _displayedSessions = const []);
           }
         });
@@ -3038,6 +3119,7 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
         setState(() {});
       }
     } else {
+      _snapLayoutFull = false;
       setState(() {});
     }
   }
@@ -3100,60 +3182,81 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
 
     final resolved = MiniAppJsBridge.resolveThemeColors(Theme.of(context));
     final mq = MediaQuery.of(context);
-    final bool keyboardVisible = mq.viewInsets.bottom > 0;
-    final double barBottomInset = math.max(6.0, mq.padding.bottom + 4.0);
+    final double effectiveSafeBottom =
+        math.max(mq.padding.bottom, mq.viewPadding.bottom);
+    final double barBottomInset = math.max(6.0, effectiveSafeBottom + 4.0);
     const double topPad = 6.0;
 
     return _MinimizedMiniAppHostScope(
       child: AnimatedBuilder(
         animation: _curvedAnim,
-        builder: (context, _) {
+        child: widget.child,
+        builder: (context, staticChild) {
           final double rawT = _curvedAnim.value.clamp(0.0, 1.0);
-          final double effectiveT = keyboardVisible ? 0.0 : rawT;
-          final double insetFactor = (1.0 - effectiveT).clamp(0.0, 1.0);
+          final double layoutT = _snapLayoutFull ? 1.0 : rawT;
+          final double insetFactor = (1.0 - layoutT).clamp(0.0, 1.0);
 
-          final Widget adjustedChild = (!keyboardVisible && effectiveT > 0.001)
-              ? MediaQuery(
-                  data: mq.copyWith(
-                    padding: mq.padding.copyWith(
-                      bottom: mq.padding.bottom * insetFactor,
-                    ),
-                    viewPadding: mq.viewPadding.copyWith(
-                      bottom: mq.viewPadding.bottom * insetFactor,
-                    ),
-                  ),
-                  child: widget.child,
-                )
-              : widget.child;
+          final int extraCount = math.max(0, _displayedSessions.length - 1);
+          final double deckOffset =
+              extraCount >= 2 ? 12.0 : (extraCount == 1 ? 7.0 : 0.0);
+          final double dockFullHeight =
+              topPad + deckOffset + 48.0 + barBottomInset;
+          final double dockLayoutHeight =
+              _displayedSessions.isNotEmpty ? (dockFullHeight * layoutT) : 0.0;
+          final double childViewInsetsBottom =
+              math.max(0.0, mq.viewInsets.bottom - dockLayoutHeight);
 
-          final double cornerRadius = 14.0 * effectiveT;
-          final Widget? dockRegion = (!keyboardVisible &&
-                  _displayedSessions.isNotEmpty &&
-                  effectiveT > 0.0)
-              ? ClipRect(
-                  clipBehavior: effectiveT < 0.999 ? Clip.hardEdge : Clip.none,
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    heightFactor: effectiveT,
-                    child: SlideTransition(
-                      position: _slideAnim,
-                      child: ColoredBox(
-                        key: const ValueKey('minimized_mini_app_dock_region'),
-                        color: resolved.dockBg,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            top: topPad,
-                            bottom: barBottomInset,
-                          ),
-                          child: MinimizedMiniAppBar(
-                            key: const ValueKey('minimized_mini_app_bar'),
-                            sessions: _displayedSessions,
-                            onActivate: () => MiniAppSessionController.instance
-                                .onMinimizedBarActivate(
-                              fallbackNavigatorKey: widget.navigatorKey,
+          final Widget adjustedChild =
+              (_displayedSessions.isNotEmpty && layoutT > 0.001)
+                  ? MediaQuery(
+                      data: mq.copyWith(
+                        padding: mq.padding.copyWith(
+                          bottom: mq.padding.bottom * insetFactor,
+                        ),
+                        viewPadding: mq.viewPadding.copyWith(
+                          bottom: mq.viewPadding.bottom * insetFactor,
+                        ),
+                        viewInsets: mq.viewInsets.copyWith(
+                          bottom: childViewInsetsBottom,
+                        ),
+                      ),
+                      child: staticChild!,
+                    )
+                  : staticChild!;
+
+          final double cornerRadius = 14.0 * layoutT;
+          final bool hidePointerBehindKeyboard =
+              mq.viewInsets.bottom > dockLayoutHeight * 0.4;
+          final Widget? dockRegion = (_displayedSessions.isNotEmpty &&
+                  layoutT > 0.0)
+              ? IgnorePointer(
+                  ignoring: hidePointerBehindKeyboard,
+                  child: ClipRect(
+                    clipBehavior:
+                        (layoutT < 0.999 || rawT < 0.999) ? Clip.hardEdge : Clip.none,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      heightFactor: layoutT,
+                      child: SlideTransition(
+                        position: _slideAnim,
+                        child: ColoredBox(
+                          key: const ValueKey('minimized_mini_app_dock_region'),
+                          color: resolved.dockBg,
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              top: topPad,
+                              bottom: barBottomInset,
                             ),
-                            onClose: () =>
-                                _handleCloseSession(_displayedSessions.last),
+                            child: MinimizedMiniAppBar(
+                              key: const ValueKey('minimized_mini_app_bar'),
+                              sessions: _displayedSessions,
+                              onActivate: () => MiniAppSessionController.instance
+                                  .onMinimizedBarActivate(
+                                fallbackNavigatorKey: widget.navigatorKey,
+                              ),
+                              onClose: () =>
+                                  _handleCloseSession(_displayedSessions.last),
+                            ),
                           ),
                         ),
                       ),
@@ -4893,27 +4996,67 @@ class MiniAppDragOffset extends SingleChildRenderObjectWidget {
   }
 }
 
-class RenderMiniAppDragOffset extends RenderShiftedBox {
-  RenderMiniAppDragOffset(this._offsetY) : super(null);
+class RenderMiniAppDragOffset extends RenderProxyBox {
+  RenderMiniAppDragOffset(this._offsetY);
+
+  final LayerHandle<TransformLayer> _transformHandle =
+      LayerHandle<TransformLayer>();
 
   double _offsetY;
   double get offsetY => _offsetY;
   set offsetY(double value) {
-    if (_offsetY == value) return;
+    if ((_offsetY - value).abs() < 0.001) return;
     _offsetY = value;
-    markNeedsLayout();
+    markNeedsPaint();
   }
 
   @override
-  void performLayout() {
-    final RenderBox? child = this.child;
-    if (child == null) {
-      size = constraints.smallest;
+  bool get alwaysNeedsCompositing => _offsetY.abs() > 0.01;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (_offsetY.abs() <= 0.01) {
+      _transformHandle.layer = null;
+      super.paint(context, offset);
       return;
     }
-    child.layout(constraints, parentUsesSize: true);
-    size = constraints.constrain(child.size);
-    (child.parentData! as BoxParentData).offset = Offset(0.0, _offsetY);
+    _transformHandle.layer = context.pushTransform(
+      needsCompositing,
+      offset,
+      Matrix4.translationValues(0.0, _offsetY, 0.0),
+      super.paint,
+      oldLayer: _transformHandle.layer,
+    );
+  }
+
+  @override
+  void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    if (_offsetY.abs() > 0.01) {
+      transform.translateByDouble(0.0, _offsetY, 0.0, 1.0);
+    }
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) =>
+      hitTestChildren(result, position: position);
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    if (_offsetY.abs() <= 0.01) {
+      return super.hitTestChildren(result, position: position);
+    }
+    return result.addWithPaintOffset(
+      offset: Offset(0.0, _offsetY),
+      position: position,
+      hitTest: (BoxHitTestResult r, Offset p) =>
+          super.hitTestChildren(r, position: p),
+    );
+  }
+
+  @override
+  void dispose() {
+    _transformHandle.layer = null;
+    super.dispose();
   }
 }
 
@@ -5315,16 +5458,18 @@ class WebViewFloatingHeader extends StatelessWidget {
         borderWidth: 1.1,
         color: glassFill,
       );
-      rightMorphChild = SizedBox(
-        width: adaptiveMenuWidth,
-        height: expandedMenuHeight,
-        child: LiquidGlassMorph(
-          key: const ValueKey('webview_right_morph'),
-          alignment: Alignment.topRight,
-          motion: LiquidGlassMorphMotion.fluid,
-          smoothness: 28,
-          style: morphStyle,
-          child: menuExpanded ? expandedBox : collapsedBox,
+      rightMorphChild = LiquidGlassBatch.exclude(
+        child: SizedBox(
+          width: adaptiveMenuWidth,
+          height: expandedMenuHeight,
+          child: LiquidGlassMorph(
+            key: const ValueKey('webview_right_morph'),
+            alignment: Alignment.topRight,
+            motion: LiquidGlassMorphMotion.fluid,
+            smoothness: 28,
+            style: morphStyle,
+            child: menuExpanded ? expandedBox : collapsedBox,
+          ),
         ),
       );
     } else {
@@ -6010,7 +6155,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   bool _isMinimizing = false;
   bool _allowRoutePop = false;
   bool _hasFullScreenRegistration = false;
+  bool _hasSettledRegistration = false;
   bool _isTransitionReady = false;
+  bool _isWebViewSurfacePainted = false;
+  Timer? _earlyWebViewWarmupTimer;
 
   final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier<double>(0.0);
   double _dragResetFrom = 0.0;
@@ -6049,7 +6197,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   void _onPendingLaunchResolved() {
     if (!mounted) return;
-    _maybeInitWebView();
+    if (_isTransitionReady) {
+      _maybeInitWebView();
+    } else {
+      _scheduleEarlyWebViewWarmup();
+    }
   }
 
   void _setRouteRestingOpaque(bool opaque) {
@@ -6058,29 +6210,86 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     TheavSheetRoutePerfControl.setRestingOpaque(context, opaque);
   }
 
+  void _markRouteSettled(bool settled) {
+    if (settled) {
+      if (!_hasSettledRegistration) {
+        _hasSettledRegistration = true;
+        MiniAppSessionController.instance.markFullScreenSettled();
+      }
+    } else {
+      if (_hasSettledRegistration) {
+        _hasSettledRegistration = false;
+        MiniAppSessionController.instance.unmarkFullScreenSettled();
+      }
+    }
+  }
+
+  void _scheduleEarlyWebViewWarmup() {
+    if (!_hasPlatformWebView ||
+        _isTransitionReady ||
+        _session.isLaunchPending ||
+        _session.controller != null ||
+        _earlyWebViewWarmupTimer != null) {
+      return;
+    }
+    _earlyWebViewWarmupTimer = Timer(const Duration(milliseconds: 48), () {
+      _earlyWebViewWarmupTimer = null;
+      if (!mounted ||
+          !_hasPlatformWebView ||
+          _session.isLaunchPending ||
+          _session.controller != null) {
+        return;
+      }
+      _session.ensureWebViewInitialized();
+      _syncWebViewBg();
+    });
+  }
+
+  void _scheduleWebViewSurfacePainted() {
+    if (_isWebViewSurfacePainted || !_hasPlatformWebView) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _isWebViewSurfacePainted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _isWebViewSurfacePainted) return;
+        setState(() => _isWebViewSurfacePainted = true);
+      });
+    });
+  }
+
   void _onRouteAnimationStatusChanged(AnimationStatus status) {
     if (!mounted) return;
     if (status == AnimationStatus.completed) {
+      _earlyWebViewWarmupTimer?.cancel();
+      _earlyWebViewWarmupTimer = null;
       _isTransitionReady = true;
+      _markRouteSettled(true);
       _maybeInitWebView();
       if (_dragOffsetNotifier.value <= 0.5 && !_isMinimizing) {
         _setRouteRestingOpaque(true);
       }
     } else if (status == AnimationStatus.reverse ||
         status == AnimationStatus.dismissed) {
+      _markRouteSettled(false);
       _setRouteRestingOpaque(false);
     }
   }
 
   void _maybeInitWebView({bool shouldRebuild = true}) {
-    if (!mounted || _session.isLaunchPending) return;
-    if (_session.controller == null && _isTransitionReady && _hasPlatformWebView) {
+    if (!mounted || _session.isLaunchPending || !_isTransitionReady) return;
+    if (_session.controller == null && _hasPlatformWebView) {
       _session.ensureWebViewInitialized();
       if (_session.controller != null) {
         _syncWebViewBg();
+        _scheduleWebViewSurfacePainted();
         if (shouldRebuild) {
           setState(() {});
         }
+      }
+    } else if (_session.controller != null && _hasPlatformWebView) {
+      _syncWebViewBg();
+      _scheduleWebViewSurfacePainted();
+      if (shouldRebuild) {
+        setState(() {});
       }
     }
   }
@@ -6124,6 +6333,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   void _releaseFullScreenRegistration() {
+    _markRouteSettled(false);
     if (_hasFullScreenRegistration) {
       _hasFullScreenRegistration = false;
       MiniAppSessionController.instance.unregisterFullScreenOpen();
@@ -6146,7 +6356,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       _routeAnimation = nextRouteAnim;
       if (nextRouteAnim == null ||
           nextRouteAnim.status == AnimationStatus.completed) {
+        _earlyWebViewWarmupTimer?.cancel();
+        _earlyWebViewWarmupTimer = null;
         _isTransitionReady = true;
+        _markRouteSettled(true);
         _maybeInitWebView(shouldRebuild: false);
         if (_dragOffsetNotifier.value <= 0.5 && !_isMinimizing) {
           _setRouteRestingOpaque(true);
@@ -6154,6 +6367,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       } else {
         if (!_hasPlatformWebView) {
           _isTransitionReady = true;
+        } else {
+          _scheduleEarlyWebViewWarmup();
         }
         nextRouteAnim.addStatusListener(_onRouteAnimationStatusChanged);
       }
@@ -6163,6 +6378,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   @override
   void dispose() {
+    _earlyWebViewWarmupTimer?.cancel();
+    _earlyWebViewWarmupTimer = null;
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
     _routeAnimation = null;
     _releaseFullScreenRegistration();
@@ -6685,6 +6902,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       if (!confirm || !mounted) return;
     }
     _isMinimizing = false;
+    _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     MiniAppSessionController.instance.closeMinimized(_session);
     if (mounted) {
@@ -6692,16 +6910,27 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
-  Future<void> _minimizeMiniApp() async {
+  Future<void> _minimizeMiniApp({
+    double dragOffsetPx = 0.0,
+    double velocityPxPerSec = 0.0,
+  }) async {
     if (_isMinimizing) return;
     HapticUtils.selection();
     _closeMenu();
-    await _session.capturePreviewSnapshot().timeout(
-          const Duration(milliseconds: 90),
-          onTimeout: () {},
-        );
     if (!mounted) return;
+    _markRouteSettled(false);
     _setRouteRestingOpaque(false);
+    if (dragOffsetPx > 0.5) {
+      final double sheetH = MediaQuery.sizeOf(context).height;
+      if (TheavSheetRoutePerfControl.prepareDragDismiss(
+        context,
+        dragOffsetPx: dragOffsetPx,
+        sheetHeight: sheetH,
+        velocityPxPerSec: velocityPxPerSec,
+      )) {
+        _dragOffsetNotifier.value = 0.0;
+      }
+    }
     if (_MinimizedMiniAppHostScope.maybeOf(context)) {
       _isMinimizing = true;
       _releaseFullScreenRegistration();
@@ -6716,11 +6945,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   Future<void> _openTabsSwitcherFromHeader() async {
     HapticUtils.selection();
     _closeMenu();
-    await _session.capturePreviewSnapshot().timeout(
-          const Duration(milliseconds: 90),
-          onTimeout: () {},
-        );
+    if (_session.previewImageBytes == null) {
+      await _session.capturePreviewSnapshot().timeout(
+            const Duration(milliseconds: 45),
+            onTimeout: () {},
+          );
+    } else {
+      unawaited(_session.capturePreviewSnapshot());
+    }
     if (!mounted) return;
+    _markRouteSettled(false);
     if (_MinimizedMiniAppHostScope.maybeOf(context)) {
       _isMinimizing = true;
       _setRouteRestingOpaque(false);
@@ -6840,7 +7074,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _dragAccumulated = 0.0;
 
     if (dy >= 90 || vy >= 620) {
-      _minimizeMiniApp();
+      unawaited(
+        _minimizeMiniApp(
+          dragOffsetPx: _dragOffsetNotifier.value,
+          velocityPxPerSec: math.max(0.0, vy),
+        ),
+      );
       return;
     }
     _resetDragOffset();
@@ -7137,17 +7376,37 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         ),
       );
     } else if (_hasPlatformWebView) {
+      final ImageProvider? standInSnapshot =
+          (!_isTransitionReady || !_isWebViewSurfacePainted)
+              ? _session.fullViewportPreviewProvider
+              : null;
+      final bool mountWebView =
+          _isTransitionReady && _session.controller != null;
       viewportContent = Stack(
         fit: StackFit.expand,
         children: [
-          if (_session.controller != null)
-            RepaintBoundary(
-              child: ColoredBox(
-                color: bodyBg,
-                child: WebViewWidget(controller: _session.controller!),
+          if (standInSnapshot != null)
+            Positioned.fill(
+              key: const ValueKey('mini_app_restore_snapshot'),
+              child: Image(
+                image: standInSnapshot,
+                fit: BoxFit.cover,
+                alignment: Alignment.topCenter,
+                filterQuality: FilterQuality.medium,
+                gaplessPlayback: true,
               ),
             ),
-          if (_session.controller == null || !_session.isWebContentReady)
+          if (mountWebView)
+            RepaintBoundary(
+              child: standInSnapshot != null
+                  ? WebViewWidget(controller: _session.controller!)
+                  : ColoredBox(
+                      color: bodyBg,
+                      child: WebViewWidget(controller: _session.controller!),
+                    ),
+            ),
+          if (standInSnapshot == null &&
+              (!mountWebView || !_session.isWebContentReady))
             Positioned.fill(
               child: ColoredBox(
                 color: bodyBg,
@@ -7182,6 +7441,59 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       ),
     );
 
+    final Widget hudOverlayStack = Stack(
+      fit: StackFit.expand,
+      clipBehavior: Clip.none,
+      children: [
+        if (_session.mainButton.isVisible ||
+            _session.secondaryButton.isVisible)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: media.padding.bottom + 10,
+            child: Row(
+              children: [
+                if (_session.secondaryButton.isVisible)
+                  Expanded(
+                    child: _buildActionButton(
+                      _session.secondaryButton,
+                      defaultBg: palette.primary.withValues(alpha: 0.14),
+                      defaultFg: palette.primary,
+                      onPressed: () => _dispatchEventToWebView(
+                        'secondary_button_pressed',
+                      ),
+                      style: style,
+                      isSecondaryGlassCandidate: true,
+                    ),
+                  ),
+                if (_session.secondaryButton.isVisible &&
+                    _session.mainButton.isVisible)
+                  const SizedBox(width: 10),
+                if (_session.mainButton.isVisible)
+                  Expanded(
+                    child: _buildActionButton(
+                      _session.mainButton,
+                      defaultBg: palette.primary,
+                      defaultFg: theme.colorScheme.onPrimary,
+                      onPressed: () => _dispatchEventToWebView(
+                        'main_button_pressed',
+                      ),
+                      style: style,
+                      isSecondaryGlassCandidate: false,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: floatingHeader,
+        ),
+      ],
+    );
+
     final Widget sheetStackChild = Material(
       color: bodyBg,
       child: SizedBox(
@@ -7192,51 +7504,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(child: viewportBody),
-            if (_session.mainButton.isVisible ||
-                _session.secondaryButton.isVisible)
-              Positioned(
-                left: 12,
-                right: 12,
-                bottom: media.padding.bottom + 10,
-                child: Row(
-                  children: [
-                    if (_session.secondaryButton.isVisible)
-                      Expanded(
-                        child: _buildActionButton(
-                          _session.secondaryButton,
-                          defaultBg: palette.primary.withValues(alpha: 0.14),
-                          defaultFg: palette.primary,
-                          onPressed: () => _dispatchEventToWebView(
-                            'secondary_button_pressed',
-                          ),
-                          style: style,
-                          isSecondaryGlassCandidate: true,
-                        ),
-                      ),
-                    if (_session.secondaryButton.isVisible &&
-                        _session.mainButton.isVisible)
-                      const SizedBox(width: 10),
-                    if (_session.mainButton.isVisible)
-                      Expanded(
-                        child: _buildActionButton(
-                          _session.mainButton,
-                          defaultBg: palette.primary,
-                          defaultFg: theme.colorScheme.onPrimary,
-                          onPressed: () => _dispatchEventToWebView(
-                            'main_button_pressed',
-                          ),
-                          style: style,
-                          isSecondaryGlassCandidate: false,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: floatingHeader,
+            Positioned.fill(
+              child: style.isGlass
+                  ? LiquidGlassBatch(child: hudOverlayStack)
+                  : hudOverlayStack,
             ),
           ],
         ),

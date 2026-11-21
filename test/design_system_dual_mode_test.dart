@@ -1619,4 +1619,162 @@ void main() {
     expect(find.text('Chat Screen'), findsNothing);
     expect(find.text('OpenChat'), findsOneWidget);
   });
+
+  testWidgets(
+      'MinimizedMiniAppHost keeps minimized bar rendered beneath soft keyboard without jump on open/close',
+      (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(() => MiniAppSessionController.instance.resetForTesting());
+
+    EdgeInsets mqViewInsets = EdgeInsets.zero;
+    EdgeInsets mqPadding = const EdgeInsets.only(bottom: 24);
+    late StateSetter outerSetState;
+    double? lastInnerViewInsetsBottom;
+
+    final session = MiniAppSession(
+      id: 'kb_dock_session',
+      launchData: const MiniAppLaunchData(
+        url: 'https://api.theaver.app/api/miniapps/studio',
+        initData: 'hash=kb',
+        botId: 'bot_kb',
+        botUsername: 'studio_bot',
+        botDisplayName: 'Studio',
+      ),
+      botName: 'Studio',
+      botUsername: 'studio_bot',
+    );
+
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState) {
+          outerSetState = setState;
+          return MediaQuery(
+            data: MediaQueryData(
+              size: const Size(400, 800),
+              padding: mqPadding,
+              viewPadding: const EdgeInsets.only(bottom: 24),
+              viewInsets: mqViewInsets,
+            ),
+            child: ChangeNotifierProvider<LiquidGlassProvider>.value(
+              value: _TestLiquidGlassProvider(GlassMode.lite),
+              child: MaterialApp(
+                theme: ThemeData.dark(useMaterial3: true),
+                builder: (context, appChild) => MinimizedMiniAppHost(
+                  child: appChild ?? const SizedBox.shrink(),
+                ),
+                home: Builder(
+                  builder: (innerCtx) {
+                    lastInnerViewInsetsBottom =
+                        MediaQuery.viewInsetsOf(innerCtx).bottom;
+                    return Scaffold(
+                      body: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            bottom: MediaQuery.viewInsetsOf(innerCtx).bottom,
+                          ),
+                          child: const SizedBox(
+                            key: ValueKey('chat_composer_box'),
+                            height: 48,
+                            child: Text('Composer'),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    MiniAppSessionController.instance.minimize(session);
+    await tester.pumpAndSettle();
+
+    final barFinder = find.byKey(const ValueKey('minimized_mini_app_bar'));
+    final dockFinder =
+        find.byKey(const ValueKey('minimized_mini_app_dock_region'));
+    expect(barFinder, findsOneWidget);
+    expect(dockFinder, findsOneWidget);
+
+    final double initialDockHeight = tester.getSize(dockFinder).height;
+    final double initialScaffoldHeight =
+        tester.getSize(find.byType(Scaffold)).height;
+    expect(initialDockHeight, closeTo(82.0, 1.0));
+    expect(lastInnerViewInsetsBottom, closeTo(0.0, 0.01));
+
+    void updateKeyboard(double imeBottom) {
+      outerSetState(() {
+        mqViewInsets = EdgeInsets.only(bottom: imeBottom);
+        mqPadding = EdgeInsets.only(
+          bottom: (24.0 - imeBottom).clamp(0.0, 24.0),
+        );
+      });
+    }
+
+    // Opening keyboard in stages (24 -> 72 -> 300): dock remains mounted and
+    // keeps constant height while IME rises smoothly over it.
+    for (final double ime in const <double>[24.0, 72.0]) {
+      updateKeyboard(ime);
+      await tester.pump();
+      expect(barFinder, findsOneWidget);
+      expect(dockFinder, findsOneWidget);
+      expect(tester.getSize(dockFinder).height,
+          closeTo(initialDockHeight, 0.5));
+      expect(tester.getSize(find.byType(Scaffold)).height,
+          closeTo(initialScaffoldHeight, 0.5));
+      expect(lastInnerViewInsetsBottom, closeTo(0.0, 0.01));
+    }
+
+    updateKeyboard(300.0);
+    await tester.pump();
+    expect(barFinder, findsOneWidget);
+    expect(dockFinder, findsOneWidget);
+    expect(
+      lastInnerViewInsetsBottom,
+      closeTo(300.0 - initialDockHeight, 0.5),
+    );
+    // Taps through IME zone are ignored while full keyboard covers dock.
+    expect(
+      tester
+          .widget<IgnorePointer>(
+            find.ancestor(
+              of: dockFinder,
+              matching: find.byType(IgnorePointer),
+            ).first,
+          )
+          .ignoring,
+      isTrue,
+    );
+
+    // Closing keyboard (72 -> 16 -> 0): zero height jump at 16 -> 0 boundary.
+    updateKeyboard(72.0);
+    await tester.pump();
+    expect(barFinder, findsOneWidget);
+    final double scaffoldHeightAt72 =
+        tester.getSize(find.byType(Scaffold)).height;
+
+    updateKeyboard(16.0);
+    await tester.pump();
+    expect(barFinder, findsOneWidget);
+    final double scaffoldHeightAt16 =
+        tester.getSize(find.byType(Scaffold)).height;
+
+    updateKeyboard(0.0);
+    await tester.pump();
+    expect(barFinder, findsOneWidget);
+    final double scaffoldHeightAt0 =
+        tester.getSize(find.byType(Scaffold)).height;
+
+    expect((scaffoldHeightAt72 - initialScaffoldHeight).abs(), lessThan(0.5));
+    expect((scaffoldHeightAt16 - scaffoldHeightAt0).abs(), lessThan(0.5));
+    expect(tester.getSize(dockFinder).height, closeTo(initialDockHeight, 0.5));
+    expect(lastInnerViewInsetsBottom, closeTo(0.0, 0.01));
+  });
 }

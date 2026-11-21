@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -68,31 +69,6 @@ Future<T?> showTheavModalSheet<T>({
   );
 }
 
-class _TheavSheetSlideLayout extends SingleChildLayoutDelegate {
-  final double progress;
-
-  const _TheavSheetSlideLayout({required this.progress});
-
-  @override
-  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
-      BoxConstraints(
-        minWidth: constraints.maxWidth,
-        maxWidth: constraints.maxWidth,
-        minHeight: 0.0,
-        maxHeight: constraints.maxHeight,
-      );
-
-  @override
-  Offset getPositionForChild(Size size, Size childSize) {
-    final double dy = childSize.height * (1.0 - progress.clamp(0.0, 1.0));
-    return Offset(0.0, size.height - childSize.height + dy);
-  }
-
-  @override
-  bool shouldRelayout(_TheavSheetSlideLayout oldDelegate) =>
-      oldDelegate.progress != progress;
-}
-
 class _SheetVerticalOffset extends SingleChildRenderObjectWidget {
   final double offsetY;
 
@@ -114,33 +90,70 @@ class _SheetVerticalOffset extends SingleChildRenderObjectWidget {
   }
 }
 
-class _RenderSheetVerticalOffset extends RenderShiftedBox {
-  _RenderSheetVerticalOffset(this._offsetY) : super(null);
+class _RenderSheetVerticalOffset extends RenderProxyBox {
+  _RenderSheetVerticalOffset(this._offsetY);
+
+  final LayerHandle<TransformLayer> _transformHandle =
+      LayerHandle<TransformLayer>();
 
   double _offsetY;
   double get offsetY => _offsetY;
   set offsetY(double value) {
-    if (_offsetY == value) return;
+    if ((_offsetY - value).abs() < 0.001) return;
     _offsetY = value;
-    markNeedsLayout();
+    markNeedsPaint();
   }
 
   @override
-  void performLayout() {
-    final RenderBox? child = this.child;
-    if (child == null) {
-      size = constraints.smallest;
+  bool get alwaysNeedsCompositing => _offsetY.abs() > 0.01;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (_offsetY.abs() <= 0.01) {
+      _transformHandle.layer = null;
+      super.paint(context, offset);
       return;
     }
-    child.layout(constraints, parentUsesSize: true);
-    size = constraints.constrain(child.size);
-    (child.parentData! as BoxParentData).offset = Offset(0.0, _offsetY);
+    _transformHandle.layer = context.pushTransform(
+      needsCompositing,
+      offset,
+      Matrix4.translationValues(0.0, _offsetY, 0.0),
+      super.paint,
+      oldLayer: _transformHandle.layer,
+    );
+  }
+
+  @override
+  void applyPaintTransform(RenderObject child, Matrix4 transform) {
+    if (_offsetY.abs() > 0.01) {
+      transform.translateByDouble(0.0, _offsetY, 0.0, 1.0);
+    }
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    if (_offsetY.abs() <= 0.01) {
+      return super.hitTestChildren(result, position: position);
+    }
+    return result.addWithPaintOffset(
+      offset: Offset(0.0, _offsetY),
+      position: position,
+      hitTest: (BoxHitTestResult r, Offset p) =>
+          super.hitTestChildren(r, position: p),
+    );
+  }
+
+  @override
+  void dispose() {
+    _transformHandle.layer = null;
+    super.dispose();
   }
 }
 
 /// Performance helper allowing edge-to-edge custom routes (e.g. WebView sheets)
 /// to toggle overlay opaque culling while resting so Flutter skips painting
-/// underlying routes behind the full-screen surface.
+/// underlying routes behind the full-screen surface, and to hand off active
+/// downward drag offsets/velocities cleanly into route dismissal.
 abstract final class TheavSheetRoutePerfControl {
   static void setRestingOpaque(BuildContext context, bool opaque) {
     final route = ModalRoute.of(context);
@@ -148,9 +161,29 @@ abstract final class TheavSheetRoutePerfControl {
       route.setRestingOpaque(opaque);
     }
   }
+
+  static bool prepareDragDismiss(
+    BuildContext context, {
+    required double dragOffsetPx,
+    required double sheetHeight,
+    required double velocityPxPerSec,
+  }) {
+    final route = ModalRoute.of(context);
+    if (route is _TheavModalSheetRoute) {
+      return route.prepareDragDismiss(
+        dragOffsetPx: dragOffsetPx,
+        sheetHeight: sheetHeight,
+        velocityPxPerSec: velocityPxPerSec,
+      );
+    }
+    return false;
+  }
 }
 
 class _TheavModalSheetRoute<T> extends PopupRoute<T> {
+  static const Cubic _kSheetEnterCurve = Cubic(0.32, 0.72, 0.0, 1.0);
+  static const Cubic _kSheetExitCurve = Cubic(0.24, 0.84, 0.36, 1.0);
+
   final WidgetBuilder builder;
   final WidgetBuilder? customSheetBuilder;
   final CapturedThemes capturedThemes;
@@ -168,6 +201,12 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   bool _restingOpaque = false;
   bool _overlaySyncScheduled = false;
   bool _isDisposed = false;
+  bool _dismissingFromDrag = false;
+  double _dragDismissUnitVelocity = 2.6;
+  double _dragDismissStartProgress = 1.0;
+  double _dragDismissStartOffsetPx = 0.0;
+  CurvedAnimation? _curvedAnimation;
+  Animation<double>? _curvedParent;
 
   _TheavModalSheetRoute({
     required this.builder,
@@ -183,14 +222,55 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     required this.barrierLabel,
   });
 
+  CurvedAnimation _obtainCurvedAnimation(Animation<double> parent) {
+    if (_curvedAnimation != null && identical(_curvedParent, parent)) {
+      return _curvedAnimation!;
+    }
+    _curvedAnimation?.dispose();
+    _curvedParent = parent;
+    _curvedAnimation = CurvedAnimation(
+      parent: parent,
+      curve: _kSheetEnterCurve,
+      reverseCurve: _kSheetExitCurve,
+    );
+    return _curvedAnimation!;
+  }
+
+  bool prepareDragDismiss({
+    required double dragOffsetPx,
+    required double sheetHeight,
+    required double velocityPxPerSec,
+  }) {
+    final ctrl = controller;
+    if (_isDisposed ||
+        ctrl == null ||
+        sheetHeight <= 1.0 ||
+        dragOffsetPx <= 0.5) {
+      return false;
+    }
+    final double startVal =
+        (1.0 - (dragOffsetPx / sheetHeight)).clamp(0.01, 1.0);
+    _dismissingFromDrag = true;
+    _dragDismissStartProgress = startVal;
+    _dragDismissStartOffsetPx = dragOffsetPx;
+    _dragDismissUnitVelocity =
+        (velocityPxPerSec / sheetHeight).clamp(2.2, 8.5);
+    ctrl.value = startVal;
+    return true;
+  }
+
   void setRestingOpaque(bool value) {
     if (_isDisposed || _restingOpaque == value) return;
     _restingOpaque = value;
     _scheduleOrSyncOverlayOpaque();
   }
 
-  void _handleRouteStatusChanged(AnimationStatus _) {
-    if (_isDisposed || !_restingOpaque) return;
+  void _handleRouteStatusChanged(AnimationStatus status) {
+    if (_isDisposed) return;
+    if (status == AnimationStatus.completed) {
+      _dismissingFromDrag = false;
+    }
+    if (!_restingOpaque) return;
     _scheduleOrSyncOverlayOpaque();
   }
 
@@ -226,9 +306,31 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   }
 
   @override
+  Simulation? createSimulation({required bool forward}) {
+    final ctrl = controller;
+    if (!forward && _dismissingFromDrag && ctrl != null) {
+      return SpringSimulation(
+        SpringDescription.withDampingRatio(
+          mass: 1.0,
+          stiffness: 420.0,
+          ratio: 1.0,
+        ),
+        ctrl.value,
+        -0.001,
+        -_dragDismissUnitVelocity,
+        tolerance: const Tolerance(velocity: 0.01, distance: 0.001),
+      );
+    }
+    return super.createSimulation(forward: forward);
+  }
+
+  @override
   void dispose() {
     _isDisposed = true;
     animation?.removeStatusListener(_handleRouteStatusChanged);
+    _curvedAnimation?.dispose();
+    _curvedAnimation = null;
+    _curvedParent = null;
     super.dispose();
   }
 
@@ -274,24 +376,38 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   ) {
     final disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     if (disableAnim) {
-      return CustomSingleChildLayout(
-        delegate: const _TheavSheetSlideLayout(progress: 1.0),
-        child: child,
+      return Align(
+        alignment: Alignment.bottomCenter,
+        child: SizedBox(width: double.infinity, child: child),
       );
     }
 
-    final curved = CurvedAnimation(
-      parent: animation,
-      curve: Curves.easeOutCubic,
-      reverseCurve: Curves.easeInCubic,
-    );
-    return AnimatedBuilder(
-      animation: curved,
-      builder: (context, innerChild) => CustomSingleChildLayout(
-        delegate: _TheavSheetSlideLayout(progress: curved.value),
-        child: innerChild,
+    final curved = _obtainCurvedAnimation(animation);
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: AnimatedBuilder(
+        animation: animation,
+        builder: (context, innerChild) {
+          if (_dismissingFromDrag) {
+            final double curHeight = MediaQuery.sizeOf(context).height;
+            final double denom = math.max(0.01, _dragDismissStartProgress);
+            final double ratio = (animation.value / denom).clamp(0.0, 1.0);
+            final double offsetPx =
+                curHeight + (_dragDismissStartOffsetPx - curHeight) * ratio;
+            return _SheetVerticalOffset(
+              offsetY: offsetPx,
+              child: innerChild!,
+            );
+          }
+          final double progress = curved.value.clamp(0.0, 1.0);
+          return FractionalTranslation(
+            translation: Offset(0.0, 1.0 - progress),
+            transformHitTests: true,
+            child: innerChild,
+          );
+        },
+        child: SizedBox(width: double.infinity, child: child),
       ),
-      child: child,
     );
   }
 }

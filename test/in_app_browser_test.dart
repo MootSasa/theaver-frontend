@@ -1387,5 +1387,89 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      'InAppBrowserSheet downward header swipe hands off offset & velocity seamlessly without frame-0 jump',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        final navKey = GlobalKey<NavigatorState>();
+        late BuildContext homeCtx;
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              navigatorKey: navKey,
+              builder: (context, child) => MinimizedMiniAppHost(
+                navigatorKey: navKey,
+                child: child ?? const SizedBox.shrink(),
+              ),
+              home: Builder(
+                builder: (context) {
+                  homeCtx = context;
+                  return const Scaffold(
+                    body: Center(child: Text('HomeForSwipe')),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        unawaited(LinkOpener.openUrl(homeCtx, 'https://dzen.ru/'));
+        await tester.pumpAndSettle();
+
+        final sheetFinder = find.byKey(const ValueKey('in_app_browser_sheet'));
+        final pillFinder = find.byKey(const ValueKey('webview_header_center_pill'));
+        expect(sheetFinder, findsOneWidget);
+        expect(pillFinder, findsOneWidget);
+        expect(tester.getTopLeft(sheetFinder).dy, closeTo(0.0, 0.5));
+
+        final Offset pillCenter = tester.getCenter(pillFinder);
+        final TestGesture drag = await tester.startGesture(pillCenter);
+        await drag.moveBy(
+          const Offset(0.0, 20.0),
+          timeStamp: const Duration(milliseconds: 16),
+        );
+        await drag.moveBy(
+          const Offset(0.0, 55.0),
+          timeStamp: const Duration(milliseconds: 32),
+        );
+        await drag.moveBy(
+          const Offset(0.0, 55.0),
+          timeStamp: const Duration(milliseconds: 48),
+        );
+        await tester.pump();
+
+        final double draggedDy = tester.getTopLeft(sheetFinder).dy;
+        expect(draggedDy, closeTo(110.0, 2.0));
+
+        await drag.up();
+        await tester.pump();
+
+        // Route dismissal must continue directly from >= ~108px without snapping back to y=0.
+        final double releaseFrameDy = tester.getTopLeft(sheetFinder).dy;
+        expect(releaseFrameDy, greaterThanOrEqualTo(108.0));
+
+        // Minimize dock bar starts appearing immediately without waiting on snapshot timeout.
+        expect(
+          find.byKey(const ValueKey('minimized_mini_app_bar')),
+          findsOneWidget,
+        );
+
+        await tester.pumpAndSettle();
+        expect(sheetFinder, findsNothing);
+        expect(
+          find.byKey(const ValueKey('minimized_mini_app_dock_region')),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }

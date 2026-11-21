@@ -152,8 +152,8 @@ class MainActivity : FlutterFragmentActivity() {
             when (call.method) {
                 "captureWebView" -> {
                     val urlArg = call.argument<String>("url")
-                    val maxWidth = (call.argument<Int>("maxWidth") ?: 540).coerceIn(120, 1440)
-                    val quality = (call.argument<Int>("quality") ?: 80).coerceIn(20, 95)
+                    val maxWidth = (call.argument<Int>("maxWidth") ?: 960).coerceIn(120, 1080)
+                    val quality = (call.argument<Int>("quality") ?: 86).coerceIn(20, 95)
                     val topCropDp = (call.argument<Number>("topCropDp")?.toDouble() ?: 0.0).coerceAtLeast(0.0)
                     runOnUiThread {
                         var bitmap: Bitmap? = null
