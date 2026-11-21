@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/browser_data_service.dart';
@@ -12,9 +13,11 @@ import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/utils/link_opener.dart';
+import 'package:theaver/utils/safari_url_safety.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/bot/thv_invoice_sheet.dart';
 import 'package:theaver/widgets/browser/in_app_browser_sheet.dart';
+import 'package:theaver/widgets/browser/safari_browser_dialogs.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
 
 class _TestLiquidGlassProvider extends LiquidGlassProvider {
@@ -1016,6 +1019,372 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('mini_app_close_or_back_button')));
         await tester.pumpAndSettle();
         expect(find.byType(MiniAppWebViewSheet), findsNothing);
+      },
+    );
+  });
+
+  group('Safari iOS 26 Browser Alerts, Security Analysis & Site Info Popover', () {
+    test('SafariUrlSafetyAnalyzer decodes Punycode, flags homographs, upgrades HTTP, and classifies schemes', () {
+      final dzen = SafariUrlSafetyAnalyzer.analyzeUrl('https://dzen.ru/news');
+      expect(dzen.securityLevel, SafariConnectionSecurityLevel.secureHttps);
+      expect(dzen.isSuspiciousHomograph, isFalse);
+      expect(dzen.displayHost, 'dzen.ru');
+
+      final sslWarn = SafariUrlSafetyAnalyzer.analyzeUrl(
+        'https://expired.badssl.com/',
+        hasSslWarning: true,
+      );
+      expect(sslWarn.securityLevel, SafariConnectionSecurityLevel.sslCertificateWarning);
+
+      final httpInfo = SafariUrlSafetyAnalyzer.analyzeUrl('http://neverssl.com/');
+      expect(httpInfo.securityLevel, SafariConnectionSecurityLevel.insecureHttp);
+      expect(
+        SafariUrlSafetyAnalyzer.tryBuildHttpsUpgrade('http://neverssl.com:80/test?a=1#b'),
+        'https://neverssl.com/test?a=1#b',
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.tryBuildHttpsUpgrade('https://dzen.ru/'),
+        isNull,
+      );
+
+      final localInfo = SafariUrlSafetyAnalyzer.analyzeUrl('http://localhost:8080/app');
+      expect(localInfo.securityLevel, SafariConnectionSecurityLevel.secureHttps);
+
+      final yandexRu = SafariUrlSafetyAnalyzer.analyzeUrl('https://xn--d1acpjx3f.xn--p1ai/');
+      expect(yandexRu.isInternationalized, isTrue);
+      expect(yandexRu.unicodeHost, 'яндекс.рф');
+      expect(yandexRu.isSuspiciousHomograph, isFalse);
+
+      final mixedHomograph = SafariUrlSafetyAnalyzer.analyzeUrl('https://xn--pple-43d.com/');
+      expect(mixedHomograph.unicodeHost, 'аpple.com');
+      expect(mixedHomograph.isSuspiciousHomograph, isTrue);
+
+      final lookalikeAllCyrillic = SafariUrlSafetyAnalyzer.analyzeUrl('https://xn--80ak6aa92e.com/');
+      expect(lookalikeAllCyrillic.unicodeHost, 'аррӏе.com');
+      expect(lookalikeAllCyrillic.isSuspiciousHomograph, isTrue);
+
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('tel:+79991112233')).kind,
+        ExternalSchemeKind.tel,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('mailto:a@b.ru')).kind,
+        ExternalSchemeKind.mailto,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('tg://resolve?domain=theaver')).kind,
+        ExternalSchemeKind.telegram,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('intent://scan/#Intent')).kind,
+        ExternalSchemeKind.appIntent,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('javascript:alert(1)')).kind,
+        ExternalSchemeKind.blocked,
+      );
+    });
+
+    testWidgets(
+      'showSafariWebAlert uses LiquidGlassLens without Fade/Opacity in GlassMode.full and handles JS, SSL, Auth, Permission, External prompts',
+      (tester) async {
+        late BuildContext hostCtx;
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) {
+                  hostCtx = context;
+                  return const Scaffold(body: SizedBox.shrink());
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 1. SSL Warning -> LiquidGlassLens with 0 BackdropFilter and 0 Opacity/FadeTransition ancestors.
+        final Future<bool> sslFuture1 = showSafariSslWarningDialog(
+          hostCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+
+        final sslDialogFinder = find.byKey(const ValueKey('safari_ssl_warning_dialog'));
+        expect(sslDialogFinder, findsOneWidget);
+        final lensFinder = find.descendant(
+          of: sslDialogFinder,
+          matching: find.byType(LiquidGlassLens),
+        );
+        expect(lensFinder, findsOneWidget);
+        expect(
+          find.descendant(
+            of: sslDialogFinder,
+            matching: find.byType(BackdropFilter),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.ancestor(
+            of: lensFinder,
+            matching: find.byType(FadeTransition),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.ancestor(
+            of: lensFinder,
+            matching: find.byType(Opacity),
+          ),
+          findsNothing,
+        );
+
+        await tester.tap(find.byKey(const ValueKey('safari_ssl_go_back_btn')));
+        await tester.pumpAndSettle();
+        expect(await sslFuture1, isFalse);
+
+        final Future<bool> sslFuture2 = showSafariSslWarningDialog(
+          hostCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('safari_ssl_proceed_btn')));
+        await tester.pumpAndSettle();
+        expect(await sslFuture2, isTrue);
+
+        // 2. JS Prompt + Mute checkbox
+        final promptFuture = showSafariJsPromptDialog(
+          hostCtx,
+          originHost: 'dzen.ru',
+          isSecure: true,
+          message: 'Введите код:',
+          defaultText: '123',
+          offerMuteOption: true,
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const ValueKey('safari_js_prompt_input')),
+          '4242',
+        );
+        await tester.tap(find.byKey(const ValueKey('safari_js_mute_checkbox')));
+        await tester.tap(find.byKey(const ValueKey('safari_js_prompt_ok_btn')));
+        await tester.pumpAndSettle();
+        final promptRes = await promptFuture;
+        expect(promptRes.value, '4242');
+        expect(promptRes.muteHost, isTrue);
+
+        // 3. JS Confirm + Alert
+        final confirmFuture = showSafariJsConfirmDialog(
+          hostCtx,
+          originHost: 'dzen.ru',
+          isSecure: true,
+          message: 'Удалить черновик?',
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('safari_js_confirm_cancel_btn')));
+        await tester.pumpAndSettle();
+        expect((await confirmFuture).confirmed, isFalse);
+
+        // 4. HTTP Auth
+        final authFuture = showSafariHttpAuthDialog(
+          hostCtx,
+          host: 'intranet.example.com',
+          realm: 'Staff Area',
+        );
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const ValueKey('safari_http_auth_user')),
+          'admin',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('safari_http_auth_password')),
+          'secret',
+        );
+        await tester.tap(find.byKey(const ValueKey('safari_http_auth_submit_btn')));
+        await tester.pumpAndSettle();
+        final authRes = await authFuture;
+        expect(authRes, isNotNull);
+        expect(authRes!.user, 'admin');
+        expect(authRes.password, 'secret');
+
+        // 5. Permission & External App prompts
+        final permFuture = showSafariPermissionDialog(
+          hostCtx,
+          host: 'meet.example.com',
+          types: const {
+            WebViewPermissionResourceType.camera,
+            WebViewPermissionResourceType.microphone,
+          },
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Доступ к камере и микрофону'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('safari_permission_allow_btn')));
+        await tester.pumpAndSettle();
+        expect(await permFuture, isTrue);
+
+        final extFuture = showSafariExternalAppDialog(
+          hostCtx,
+          uri: Uri.parse('tel:+79990001122'),
+          sourceHost: 'dzen.ru',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Позвонить по номеру?'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('safari_external_confirm_btn')));
+        await tester.pumpAndSettle();
+        expect(await extFuture, isTrue);
+      },
+    );
+
+    testWidgets(
+      'InAppBrowserSheet opens SafariSiteInfoPopover from security icon and menu, upgrades HTTP, and closes on Back without exiting browser',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'http://neverssl.com/login',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'NeverSSL';
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 800),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: InAppBrowserSheet(session: session),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Tap warning badge in center pill -> opens Site Info Popover with HTTP warning & HTTPS upgrade.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_security_badge_button')),
+        );
+        await tester.pumpAndSettle();
+
+        final popoverFinder = find.byKey(const ValueKey('in_app_browser_site_info_popover'));
+        expect(popoverFinder, findsOneWidget);
+        expect(find.text('Соединение не защищено'), findsOneWidget);
+        expect(find.byKey(const ValueKey('safari_site_info_upgrade_https')), findsOneWidget);
+
+        // System Back dismisses only the popover and leaves browser open.
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(popoverFinder, findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+
+        // Re-open via overflow menu "Сведения о сайте" and tap HTTPS upgrade pill.
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Сведения о сайте'));
+        await tester.pumpAndSettle();
+        expect(popoverFinder, findsOneWidget);
+
+        await tester.tap(find.byKey(const ValueKey('safari_site_info_upgrade_https')));
+        await tester.pumpAndSettle();
+        expect(popoverFinder, findsNothing);
+        expect(session.currentUrl, 'https://neverssl.com/login');
+
+        // Re-open on upgraded HTTPS page -> shows "Соединение защищено".
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_security_badge_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Соединение защищено'), findsOneWidget);
+        expect(find.byKey(const ValueKey('safari_site_info_upgrade_https')), findsNothing);
+
+        // When SSL warning is active on current page, popover displays SSL warning + reset button.
+        session.currentPageHasSslWarning = true;
+        session.acceptedSslWarningHosts.add('neverssl.com');
+        session.onSheetStateChanged?.call();
+        await tester.pumpAndSettle();
+        expect(find.text('Сертификат не проверен'), findsOneWidget);
+        expect(find.byKey(const ValueKey('safari_site_info_reset_permissions')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'LinkOpener warns on suspicious homograph domains and minimized MiniAppSession fails closed on JS/SSL requests',
+      (tester) async {
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        late BuildContext homeCtx;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) {
+                homeCtx = context;
+                return const Scaffold(body: SizedBox.shrink());
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Suspicious homograph shows warning dialog; cancelling keeps InAppBrowserSheet closed.
+        final openFuture = LinkOpener.openUrl(homeCtx, 'https://xn--pple-43d.com/');
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('safari_suspicious_link_dialog')), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('safari_suspicious_cancel_btn')));
+        await tester.pumpAndSettle();
+        await openFuture;
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsNothing);
+
+        // Minimized MiniAppSession without active dialog delegate fails closed immediately.
+        final minimized = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://example.org/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..isMinimized = true;
+
+        expect(
+          await minimized.handleJavaScriptConfirm(
+            const JavaScriptConfirmDialogRequest(
+              message: 'Confirm?',
+              url: 'https://example.org/',
+            ),
+          ),
+          isFalse,
+        );
+        expect(
+          await minimized.handleJavaScriptPrompt(
+            const JavaScriptTextInputDialogRequest(
+              message: 'Prompt?',
+              url: 'https://example.org/',
+              defaultText: 'def',
+            ),
+          ),
+          '',
+        );
+
+        final t0 = DateTime(2026, 11, 21, 12, 0, 0);
+        expect(minimized.recordJsDialogAndShouldOfferMute(t0), isFalse);
+        expect(
+          minimized.recordJsDialogAndShouldOfferMute(
+            t0.add(const Duration(milliseconds: 400)),
+          ),
+          isFalse,
+        );
+        expect(
+          minimized.recordJsDialogAndShouldOfferMute(
+            t0.add(const Duration(milliseconds: 900)),
+          ),
+          isTrue,
+        );
       },
     );
   });

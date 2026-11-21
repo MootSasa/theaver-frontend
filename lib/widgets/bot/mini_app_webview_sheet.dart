@@ -10,6 +10,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -22,7 +23,9 @@ import '../../services/mini_app_js_bridge.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
+import '../../utils/safari_url_safety.dart';
 import '../browser/in_app_browser_sheet.dart';
+import '../browser/safari_browser_dialogs.dart';
 import '../design_system/theav_design_system.dart';
 import 'thv_invoice_sheet.dart';
 
@@ -174,6 +177,197 @@ class MiniAppDomPreview {
   });
 }
 
+/// UI delegate connecting a live [MiniAppSession] WebView to Safari-style
+/// security warnings, permissions, JS dialogs, and HTTP auth prompts.
+abstract interface class BrowserUiDialogDelegate {
+  bool get isDialogHostMounted;
+
+  Future<bool> onSslAuthWarning({required String host});
+
+  Future<bool> onSuspiciousHostWarning({required SafariHostSafetyInfo info});
+
+  Future<bool> onExternalSchemeRequest({
+    required Uri uri,
+    String? sourceHost,
+  });
+
+  Future<bool> onSitePermissionRequest({
+    required String host,
+    required Set<WebViewPermissionResourceType> types,
+  });
+
+  Future<void> onSystemPermissionBlocked({required String resourceLabel});
+
+  Future<void> onJsAlert({
+    required String host,
+    required bool isSecure,
+    required String message,
+    required bool offerMute,
+    required VoidCallback onMuteHost,
+  });
+
+  Future<bool> onJsConfirm({
+    required String host,
+    required bool isSecure,
+    required String message,
+    required bool offerMute,
+    required VoidCallback onMuteHost,
+  });
+
+  Future<String> onJsPrompt({
+    required String host,
+    required bool isSecure,
+    required String message,
+    String? defaultText,
+    required bool offerMute,
+    required VoidCallback onMuteHost,
+  });
+
+  Future<WebViewCredential?> onHttpAuthRequest({
+    required String host,
+    String? realm,
+  });
+}
+
+/// Shared Safari-styled [BrowserUiDialogDelegate] implementation used by both
+/// [InAppBrowserSheet] and [MiniAppWebViewSheet].
+class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
+  final BuildContext Function() contextResolver;
+  final bool Function() mountedResolver;
+
+  const SheetBrowserUiDialogDelegate({
+    required this.contextResolver,
+    required this.mountedResolver,
+  });
+
+  @override
+  bool get isDialogHostMounted => mountedResolver();
+
+  @override
+  Future<bool> onSslAuthWarning({required String host}) {
+    if (!isDialogHostMounted) return Future<bool>.value(false);
+    return showSafariSslWarningDialog(contextResolver(), host: host);
+  }
+
+  @override
+  Future<bool> onSuspiciousHostWarning({required SafariHostSafetyInfo info}) {
+    if (!isDialogHostMounted) return Future<bool>.value(false);
+    return showSafariSuspiciousLinkDialog(contextResolver(), info: info);
+  }
+
+  @override
+  Future<bool> onExternalSchemeRequest({
+    required Uri uri,
+    String? sourceHost,
+  }) {
+    if (!isDialogHostMounted) return Future<bool>.value(false);
+    return showSafariExternalAppDialog(
+      contextResolver(),
+      uri: uri,
+      sourceHost: sourceHost,
+    );
+  }
+
+  @override
+  Future<bool> onSitePermissionRequest({
+    required String host,
+    required Set<WebViewPermissionResourceType> types,
+  }) {
+    if (!isDialogHostMounted) return Future<bool>.value(false);
+    return showSafariPermissionDialog(
+      contextResolver(),
+      host: host,
+      types: types,
+    );
+  }
+
+  @override
+  Future<void> onSystemPermissionBlocked({required String resourceLabel}) {
+    if (!isDialogHostMounted) return Future<void>.value();
+    return showSafariSystemPermissionDeniedDialog(
+      contextResolver(),
+      resourceLabel: resourceLabel,
+      onOpenSettings: openAppSettings,
+    );
+  }
+
+  @override
+  Future<void> onJsAlert({
+    required String host,
+    required bool isSecure,
+    required String message,
+    required bool offerMute,
+    required VoidCallback onMuteHost,
+  }) async {
+    if (!isDialogHostMounted) return;
+    final res = await showSafariJsAlertDialog(
+      contextResolver(),
+      originHost: host,
+      isSecure: isSecure,
+      message: message,
+      offerMuteOption: offerMute,
+    );
+    if (res.muteHost) onMuteHost();
+  }
+
+  @override
+  Future<bool> onJsConfirm({
+    required String host,
+    required bool isSecure,
+    required String message,
+    required bool offerMute,
+    required VoidCallback onMuteHost,
+  }) async {
+    if (!isDialogHostMounted) return false;
+    final res = await showSafariJsConfirmDialog(
+      contextResolver(),
+      originHost: host,
+      isSecure: isSecure,
+      message: message,
+      offerMuteOption: offerMute,
+    );
+    if (res.muteHost) onMuteHost();
+    return res.confirmed;
+  }
+
+  @override
+  Future<String> onJsPrompt({
+    required String host,
+    required bool isSecure,
+    required String message,
+    String? defaultText,
+    required bool offerMute,
+    required VoidCallback onMuteHost,
+  }) async {
+    if (!isDialogHostMounted) return '';
+    final res = await showSafariJsPromptDialog(
+      contextResolver(),
+      originHost: host,
+      isSecure: isSecure,
+      message: message,
+      defaultText: defaultText,
+      offerMuteOption: offerMute,
+    );
+    if (res.muteHost) onMuteHost();
+    return res.value ?? '';
+  }
+
+  @override
+  Future<WebViewCredential?> onHttpAuthRequest({
+    required String host,
+    String? realm,
+  }) async {
+    if (!isDialogHostMounted) return null;
+    final res = await showSafariHttpAuthDialog(
+      contextResolver(),
+      host: host,
+      realm: realm,
+    );
+    if (res == null) return null;
+    return WebViewCredential(user: res.user, password: res.password);
+  }
+}
+
 /// Persistent live Mini App state retained across full-screen <-> minimized dock
 /// bar <-> tabs switcher transitions so the underlying `WebViewController` and JS session never reload.
 class MiniAppSession {
@@ -274,6 +468,332 @@ class MiniAppSession {
   VoidCallback? onPendingLaunchResolved;
   VoidCallback? onRequestBridgeInjection;
   ValueChanged<String>? onInboundBridgeMessage;
+  BrowserUiDialogDelegate? uiDialogDelegate;
+
+  final Set<String> acceptedSslWarningHosts = <String>{};
+  final Set<String> acceptedSuspiciousHosts = <String>{};
+  bool currentPageHasSslWarning = false;
+  final Map<String, Map<String, bool>> sessionSitePermissions =
+      <String, Map<String, bool>>{};
+  final Set<String> mutedJsDialogHosts = <String>{};
+  final List<DateTime> _recentJsDialogAt = <DateTime>[];
+
+  String _hostKeyForUrl(String? rawUrl) {
+    final target = (rawUrl ?? '').trim().isNotEmpty
+        ? rawUrl!.trim()
+        : (isBrowser ? currentUrl : launchData.url);
+    final info = SafariUrlSafetyAnalyzer.analyzeUrl(target);
+    if (info.asciiHost.isNotEmpty) return info.asciiHost.toLowerCase();
+    return BrowserDataService.extractHost(target).toLowerCase();
+  }
+
+  ({String label, bool isSecure, String hostKey}) _resolveDialogOrigin(
+    String? rawUrl,
+  ) {
+    final target = (rawUrl ?? '').trim().isNotEmpty
+        ? rawUrl!.trim()
+        : (isBrowser ? currentUrl : launchData.url);
+    final info = SafariUrlSafetyAnalyzer.analyzeUrl(
+      target,
+      hasSslWarning: currentPageHasSslWarning,
+    );
+    final String hostKey = info.asciiHost.isNotEmpty
+        ? info.asciiHost.toLowerCase()
+        : BrowserDataService.extractHost(target).toLowerCase();
+    final bool isSecure =
+        info.securityLevel == SafariConnectionSecurityLevel.secureHttps;
+    final String label;
+    if (!isBrowser && botUsername.trim().isNotEmpty) {
+      label = '@${botUsername.trim()}';
+    } else if (info.displayHost.isNotEmpty) {
+      label = info.displayHost;
+    } else {
+      label = displayTitle;
+    }
+    return (label: label, isSecure: isSecure, hostKey: hostKey);
+  }
+
+  /// Records a JS dialog attempt and returns `true` if the page triggered
+  /// 3+ dialogs within 3 seconds (activating the Safari mute toggle option).
+  bool recordJsDialogAndShouldOfferMute([DateTime? now]) {
+    final DateTime ts = now ?? DateTime.now();
+    _recentJsDialogAt.removeWhere(
+      (prev) => ts.difference(prev).inMilliseconds > 3000,
+    );
+    _recentJsDialogAt.add(ts);
+    return _recentJsDialogAt.length >= 3;
+  }
+
+  List<String> grantedPermissionLabelsForUrl(String rawUrl) {
+    final hostKey = _hostKeyForUrl(rawUrl);
+    final perms = sessionSitePermissions[hostKey];
+    if (perms == null || perms.isEmpty) return const [];
+    final labels = <String>[];
+    if (perms[WebViewPermissionResourceType.camera.name] == true) {
+      labels.add('Камера');
+    }
+    if (perms[WebViewPermissionResourceType.microphone.name] == true) {
+      labels.add('Микрофон');
+    }
+    return labels;
+  }
+
+  bool hasMutedJsDialogsForUrl(String rawUrl) =>
+      mutedJsDialogHosts.contains(_hostKeyForUrl(rawUrl));
+
+  bool hasAcceptedSslWarningForUrl(String rawUrl) =>
+      acceptedSslWarningHosts.contains(_hostKeyForUrl(rawUrl));
+
+  void resetSessionPermissionsForUrl(String rawUrl) {
+    final hostKey = _hostKeyForUrl(rawUrl);
+    sessionSitePermissions.remove(hostKey);
+    mutedJsDialogHosts.remove(hostKey);
+    acceptedSslWarningHosts.remove(hostKey);
+    acceptedSuspiciousHosts.remove(hostKey);
+    if (_hostKeyForUrl(currentUrl) == hostKey) {
+      currentPageHasSslWarning = false;
+    }
+    onSheetStateChanged?.call();
+    MiniAppSessionController.instance.notifySessionUpdated();
+  }
+
+  bool get _hasActiveDialogHost =>
+      !isMinimized &&
+      uiDialogDelegate != null &&
+      uiDialogDelegate!.isDialogHostMounted;
+
+  Future<void> handleSslAuthError(SslAuthError error) async {
+    final origin = _resolveDialogOrigin(null);
+    if (!_hasActiveDialogHost) {
+      try {
+        await error.cancel();
+      } catch (_) {}
+      return;
+    }
+    if (origin.hostKey.isNotEmpty &&
+        acceptedSslWarningHosts.contains(origin.hostKey)) {
+      currentPageHasSslWarning = true;
+      onSheetStateChanged?.call();
+      try {
+        await error.proceed();
+      } catch (_) {}
+      return;
+    }
+    final bool proceed = await uiDialogDelegate!.onSslAuthWarning(
+      host: origin.label,
+    );
+    if (proceed) {
+      if (origin.hostKey.isNotEmpty) {
+        acceptedSslWarningHosts.add(origin.hostKey);
+      }
+      currentPageHasSslWarning = true;
+      onSheetStateChanged?.call();
+      try {
+        await error.proceed();
+      } catch (_) {}
+    } else {
+      try {
+        await error.cancel();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> handleWebPermissionRequest(
+    WebViewPermissionRequest request,
+  ) async {
+    if (!_hasActiveDialogHost) {
+      try {
+        await request.deny();
+      } catch (_) {}
+      return;
+    }
+    final origin = _resolveDialogOrigin(null);
+    final hostPerms = sessionSitePermissions.putIfAbsent(
+      origin.hostKey,
+      () => <String, bool>{},
+    );
+
+    bool hasAllCachedGrants = request.types.isNotEmpty;
+    bool hasAnyCachedDeny = false;
+    for (final t in request.types) {
+      final cached = hostPerms[t.name];
+      if (cached == false) {
+        hasAnyCachedDeny = true;
+      }
+      if (cached != true) {
+        hasAllCachedGrants = false;
+      }
+    }
+    if (hasAnyCachedDeny) {
+      try {
+        await request.deny();
+      } catch (_) {}
+      return;
+    }
+
+    if (!hasAllCachedGrants) {
+      final bool siteAllowed = await uiDialogDelegate!.onSitePermissionRequest(
+        host: origin.label,
+        types: request.types,
+      );
+      for (final t in request.types) {
+        hostPerms[t.name] = siteAllowed;
+      }
+      onSheetStateChanged?.call();
+      if (!siteAllowed) {
+        try {
+          await request.deny();
+        } catch (_) {}
+        return;
+      }
+    }
+
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
+      final neededOs = <Permission>[];
+      if (request.types.contains(WebViewPermissionResourceType.camera)) {
+        neededOs.add(Permission.camera);
+      }
+      if (request.types.contains(WebViewPermissionResourceType.microphone)) {
+        neededOs.add(Permission.microphone);
+      }
+      if (neededOs.isNotEmpty) {
+        try {
+          final statuses = await neededOs.request();
+          bool allOk = true;
+          bool anyPermanentlyDenied = false;
+          for (final perm in neededOs) {
+            final st = statuses[perm];
+            if (st == null || (!st.isGranted && !st.isLimited)) {
+              allOk = false;
+              if (st?.isPermanentlyDenied == true) {
+                anyPermanentlyDenied = true;
+              }
+            }
+          }
+          if (!allOk) {
+            for (final t in request.types) {
+              hostPerms[t.name] = false;
+            }
+            onSheetStateChanged?.call();
+            if (anyPermanentlyDenied && _hasActiveDialogHost) {
+              final label = neededOs.length > 1
+                  ? 'камере и микрофону'
+                  : (neededOs.contains(Permission.microphone)
+                      ? 'микрофону'
+                      : 'камере');
+              await uiDialogDelegate!.onSystemPermissionBlocked(
+                resourceLabel: label,
+              );
+            }
+            try {
+              await request.deny();
+            } catch (_) {}
+            return;
+          }
+        } catch (_) {
+          // Platform channel unavailable in test/desktop environments.
+        }
+      }
+    }
+
+    try {
+      await request.grant();
+    } catch (_) {}
+  }
+
+  Future<void> handleJavaScriptAlert(
+    JavaScriptAlertDialogRequest request,
+  ) async {
+    final origin = _resolveDialogOrigin(request.url);
+    if (!_hasActiveDialogHost ||
+        (origin.hostKey.isNotEmpty &&
+            mutedJsDialogHosts.contains(origin.hostKey))) {
+      return;
+    }
+    final bool offerMute = recordJsDialogAndShouldOfferMute();
+    await uiDialogDelegate!.onJsAlert(
+      host: origin.label,
+      isSecure: origin.isSecure,
+      message: request.message,
+      offerMute: offerMute,
+      onMuteHost: () {
+        if (origin.hostKey.isNotEmpty) {
+          mutedJsDialogHosts.add(origin.hostKey);
+          onSheetStateChanged?.call();
+        }
+      },
+    );
+  }
+
+  Future<bool> handleJavaScriptConfirm(
+    JavaScriptConfirmDialogRequest request,
+  ) async {
+    final origin = _resolveDialogOrigin(request.url);
+    if (!_hasActiveDialogHost ||
+        (origin.hostKey.isNotEmpty &&
+            mutedJsDialogHosts.contains(origin.hostKey))) {
+      return false;
+    }
+    final bool offerMute = recordJsDialogAndShouldOfferMute();
+    return uiDialogDelegate!.onJsConfirm(
+      host: origin.label,
+      isSecure: origin.isSecure,
+      message: request.message,
+      offerMute: offerMute,
+      onMuteHost: () {
+        if (origin.hostKey.isNotEmpty) {
+          mutedJsDialogHosts.add(origin.hostKey);
+          onSheetStateChanged?.call();
+        }
+      },
+    );
+  }
+
+  Future<String> handleJavaScriptPrompt(
+    JavaScriptTextInputDialogRequest request,
+  ) async {
+    final origin = _resolveDialogOrigin(request.url);
+    if (!_hasActiveDialogHost ||
+        (origin.hostKey.isNotEmpty &&
+            mutedJsDialogHosts.contains(origin.hostKey))) {
+      return '';
+    }
+    final bool offerMute = recordJsDialogAndShouldOfferMute();
+    return uiDialogDelegate!.onJsPrompt(
+      host: origin.label,
+      isSecure: origin.isSecure,
+      message: request.message,
+      defaultText: request.defaultText,
+      offerMute: offerMute,
+      onMuteHost: () {
+        if (origin.hostKey.isNotEmpty) {
+          mutedJsDialogHosts.add(origin.hostKey);
+          onSheetStateChanged?.call();
+        }
+      },
+    );
+  }
+
+  Future<void> handleHttpAuth(HttpAuthRequest request) async {
+    if (!_hasActiveDialogHost) {
+      request.onCancel();
+      return;
+    }
+    final String cleanHost = request.host.trim().isNotEmpty
+        ? request.host.trim()
+        : _resolveDialogOrigin(null).label;
+    final WebViewCredential? cred = await uiDialogDelegate!.onHttpAuthRequest(
+      host: cleanHost,
+      realm: request.realm,
+    );
+    if (cred != null) {
+      request.onProceed(cred);
+    } else {
+      request.onCancel();
+    }
+  }
 
   int _lastReportedPercent = -1;
 
@@ -1507,6 +2027,67 @@ class MiniAppSession {
     return false;
   }
 
+  NavigationDecision _evaluateNavigationDecision(
+    NavigationRequest req, {
+    required bool handleDeepLinks,
+  }) {
+    final targetUri = Uri.tryParse(req.url);
+    if (targetUri == null) return NavigationDecision.prevent;
+
+    final schemeInfo = SafariUrlSafetyAnalyzer.classifyExternalUri(targetUri);
+    if (schemeInfo.kind == ExternalSchemeKind.blocked) {
+      return NavigationDecision.prevent;
+    }
+
+    if (handleDeepLinks && DeepLinkService.parseUri(targetUri) != null) {
+      DeepLinkService().handleLink(targetUri);
+      return NavigationDecision.prevent;
+    }
+
+    final sch = targetUri.scheme.toLowerCase();
+    if (sch == 'http' || sch == 'https') {
+      final safety = SafariUrlSafetyAnalyzer.analyzeUrl(req.url);
+      final hostKey = safety.asciiHost.toLowerCase();
+      if (safety.isSuspiciousHomograph &&
+          !acceptedSuspiciousHosts.contains(hostKey)) {
+        Future<void>(() async {
+          if (!_hasActiveDialogHost) return;
+          final ok = await uiDialogDelegate!.onSuspiciousHostWarning(info: safety);
+          if (ok && controller != null) {
+            acceptedSuspiciousHosts.add(hostKey);
+            try {
+              await controller!.loadRequest(targetUri);
+            } catch (_) {}
+          }
+        });
+        return NavigationDecision.prevent;
+      }
+      return NavigationDecision.navigate;
+    }
+
+    Future<void>(() async {
+      if (!_hasActiveDialogHost) return;
+      final origin = _resolveDialogOrigin(null);
+      final ok = await uiDialogDelegate!.onExternalSchemeRequest(
+        uri: targetUri,
+        sourceHost: origin.label,
+      );
+      if (ok) {
+        try {
+          await launchUrl(targetUri, mode: LaunchMode.externalApplication);
+        } catch (_) {}
+      }
+    });
+    return NavigationDecision.prevent;
+  }
+
+  void _attachSharedDialogCallbacks(WebViewController ctrl) {
+    ctrl
+      ..setOnJavaScriptAlertDialog(handleJavaScriptAlert)
+      ..setOnJavaScriptConfirmDialog(handleJavaScriptConfirm)
+      ..setOnJavaScriptTextInputDialog(handleJavaScriptPrompt);
+  }
+
   void ensureWebViewInitialized() {
     if (controller != null || isLaunchPending || WebViewPlatform.instance == null) {
       return;
@@ -1517,7 +2098,9 @@ class MiniAppSession {
     if (uri == null) return;
 
     if (isBrowser) {
-      final ctrl = WebViewController()
+      final ctrl = WebViewController(
+        onPermissionRequest: (req) => unawaited(handleWebPermissionRequest(req)),
+      )
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..addJavaScriptChannel(
           'TheaverBrowserTheme',
@@ -1552,6 +2135,8 @@ class MiniAppSession {
                 }
                 currentUrl = nextUrl;
               }
+              currentPageHasSslWarning =
+                  acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
               loadProgress = 0.08;
               onSheetStateChanged?.call();
               unawaited(refreshBrowserNavState());
@@ -1560,6 +2145,8 @@ class MiniAppSession {
               final next = change.url?.trim() ?? '';
               if (next.isNotEmpty && next != currentUrl) {
                 currentUrl = next;
+                currentPageHasSslWarning =
+                    acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
                 onSheetStateChanged?.call();
                 MiniAppSessionController.instance.notifySessionUpdated();
                 unawaited(refreshBrowserNavState());
@@ -1596,30 +2183,23 @@ class MiniAppSession {
                 });
               }
             },
-            onNavigationRequest: (req) {
-              final targetUri = Uri.tryParse(req.url);
-              if (targetUri == null) return NavigationDecision.prevent;
-              if (DeepLinkService.parseUri(targetUri) != null) {
-                DeepLinkService().handleLink(targetUri);
-                return NavigationDecision.prevent;
-              }
-              final sch = targetUri.scheme.toLowerCase();
-              if (sch == 'http' || sch == 'https') {
-                return NavigationDecision.navigate;
-              }
-              try {
-                launchUrl(targetUri, mode: LaunchMode.externalApplication);
-              } catch (_) {}
-              return NavigationDecision.prevent;
-            },
+            onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
+            onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
+            onNavigationRequest: (req) => _evaluateNavigationDecision(
+              req,
+              handleDeepLinks: true,
+            ),
           ),
         );
+      _attachSharedDialogCallbacks(ctrl);
       ctrl.loadRequest(uri);
       controller = ctrl;
       return;
     }
 
-    final ctrl = WebViewController()
+    final ctrl = WebViewController(
+      onPermissionRequest: (req) => unawaited(handleWebPermissionRequest(req)),
+    )
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel(
         'TheaverWebAppBridge',
@@ -1632,7 +2212,12 @@ class MiniAppSession {
           onProgress: (p) {
             updateLoadProgress(p);
           },
-          onPageStarted: (_) {
+          onPageStarted: (urlStr) {
+            if (urlStr.trim().isNotEmpty) {
+              currentUrl = urlStr.trim();
+            }
+            currentPageHasSslWarning =
+                acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
             onRequestBridgeInjection?.call();
           },
           onPageFinished: (_) {
@@ -1648,17 +2233,15 @@ class MiniAppSession {
               });
             }
           },
-          onNavigationRequest: (req) {
-            final targetUri = Uri.tryParse(req.url);
-            if (targetUri == null) return NavigationDecision.prevent;
-            final sch = targetUri.scheme.toLowerCase();
-            if (sch == 'http' || sch == 'https') {
-              return NavigationDecision.navigate;
-            }
-            return NavigationDecision.prevent;
-          },
+          onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
+          onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
+          onNavigationRequest: (req) => _evaluateNavigationDecision(
+            req,
+            handleDeepLinks: false,
+          ),
         ),
       );
+    _attachSharedDialogCallbacks(ctrl);
     ctrl.loadRequest(uri);
     controller = ctrl;
   }
@@ -2224,6 +2807,32 @@ class MiniAppSessionController extends ChangeNotifier {
   }
 }
 
+Future<bool> _confirmMiniAppCloseDialog(
+  BuildContext context, {
+  bool closeAll = false,
+  String? originLabel,
+}) async {
+  return await showSafariWebAlert<bool>(
+        context: context,
+        tone: SafariAlertTone.securityWarning,
+        iconOverride: Icons.warning_amber_rounded,
+        originLabel: (originLabel != null && originLabel.trim().isNotEmpty)
+            ? originLabel.trim()
+            : null,
+        title: closeAll ? 'Закрыть все Mini Apps?' : 'Закрыть Mini App?',
+        message: 'Внесённые изменения могут не сохраниться.',
+        actions: [
+          const SafariAlertAction<bool>(label: 'Остаться', result: false),
+          SafariAlertAction<bool>(
+            label: closeAll ? 'Закрыть все' : 'Закрыть',
+            result: true,
+            isDestructive: true,
+          ),
+        ],
+      ) ??
+      false;
+}
+
 class _MinimizedMiniAppHostScope extends InheritedWidget {
   const _MinimizedMiniAppHostScope({required super.child});
 
@@ -2449,20 +3058,13 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
     if (session.closingConfirmation) {
       final BuildContext? dialogCtx = _resolveNavigatorFor(session)?.overlay?.context;
       if (dialogCtx != null && dialogCtx.mounted) {
-        final confirm = await showTheavDialog<bool>(
-              context: dialogCtx,
-              title: 'Закрыть Mini App?',
-              message: 'Внесённые изменения могут не сохраниться.',
-              actions: const [
-                TheavDialogAction<bool>(label: 'Остаться', result: false),
-                TheavDialogAction<bool>(
-                  label: 'Закрыть',
-                  result: true,
-                  isDestructive: true,
-                ),
-              ],
-            ) ??
-            false;
+        final String origin = session.botUsername.trim().isNotEmpty
+            ? '@${session.botUsername.trim()}'
+            : session.displayTitle;
+        final confirm = await _confirmMiniAppCloseDialog(
+          dialogCtx,
+          originLabel: origin,
+        );
         if (!confirm || !mounted) return;
       }
     }
@@ -2476,20 +3078,10 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
       final BuildContext? dialogCtx =
           _resolveNavigatorFor(sessions.last)?.overlay?.context;
       if (dialogCtx != null && dialogCtx.mounted) {
-        final confirm = await showTheavDialog<bool>(
-              context: dialogCtx,
-              title: 'Закрыть все Mini Apps?',
-              message: 'Внесённые изменения могут не сохраниться.',
-              actions: const [
-                TheavDialogAction<bool>(label: 'Остаться', result: false),
-                TheavDialogAction<bool>(
-                  label: 'Закрыть все',
-                  result: true,
-                  isDestructive: true,
-                ),
-              ],
-            ) ??
-            false;
+        final confirm = await _confirmMiniAppCloseDialog(
+          dialogCtx,
+          closeAll: true,
+        );
         if (!confirm || !mounted) return;
       }
     }
@@ -5413,6 +6005,7 @@ class MiniAppWebViewSheet extends StatefulWidget {
 class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     with TickerProviderStateMixin {
   late final MiniAppSession _session;
+  late final BrowserUiDialogDelegate _dialogDelegate;
   bool _isMenuOpen = false;
   bool _isMinimizing = false;
   bool _allowRoutePop = false;
@@ -5517,6 +6110,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         _dragOffsetNotifier.value = next;
       });
 
+    _dialogDelegate = SheetBrowserUiDialogDelegate(
+      contextResolver: () => context,
+      mountedResolver: () => mounted,
+    );
+    _session.uiDialogDelegate = _dialogDelegate;
     _session.onSheetStateChanged = _onSessionStateChanged;
     _session.onPendingLaunchResolved = _onPendingLaunchResolved;
     _session.onRequestBridgeInjection = _injectBridge;
@@ -5568,6 +6166,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
     _routeAnimation = null;
     _releaseFullScreenRegistration();
+    if (identical(_session.uiDialogDelegate, _dialogDelegate)) {
+      _session.uiDialogDelegate = null;
+    }
     if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
       _session.onSheetStateChanged = null;
     }
@@ -5713,6 +6314,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             context,
             linkUrl,
             forceInApp: data['try_instant_view'] == true,
+            confirmExternalApp: true,
           );
         }
         break;
@@ -5720,7 +6322,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_open_tg_link':
         final tgUrl = (data['url'] ?? '').toString().trim();
         if (tgUrl.isNotEmpty && mounted) {
-          await LinkOpener.openUrl(context, tgUrl);
+          await LinkOpener.openUrl(
+            context,
+            tgUrl,
+            confirmExternalApp: true,
+          );
         }
         break;
 
@@ -5835,14 +6441,20 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_request_write_access':
-        final allowed = await showTheavDialog<bool>(
+        final botHandle = _session.botUsername.isNotEmpty
+            ? _session.botUsername
+            : _session.launchData.botUsername;
+        final allowed = await showSafariWebAlert<bool>(
               context: context,
+              tone: SafariAlertTone.permission,
+              iconOverride: Icons.mark_chat_unread_rounded,
+              originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
               title: 'Разрешить сообщения?',
               message:
-                  'Бот @${_session.botUsername.isNotEmpty ? _session.botUsername : _session.launchData.botUsername} запрашивает разрешение отправлять вам сообщения.',
+                  'Бот @$botHandle запрашивает разрешение отправлять вам сообщения.',
               actions: const [
-                TheavDialogAction<bool>(label: 'Запретить', result: false),
-                TheavDialogAction<bool>(
+                SafariAlertAction<bool>(label: 'Запретить', result: false),
+                SafariAlertAction<bool>(
                   label: 'Разрешить',
                   result: true,
                   isPrimary: true,
@@ -5864,13 +6476,19 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_request_phone':
-        final sent = await showTheavDialog<bool>(
+        final botHandle = _session.botUsername.isNotEmpty
+            ? _session.botUsername
+            : _session.launchData.botUsername;
+        final sent = await showSafariWebAlert<bool>(
               context: context,
+              tone: SafariAlertTone.permission,
+              iconOverride: Icons.phone_rounded,
+              originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
               title: 'Поделиться контактом?',
               message: 'Mini App запрашивает ваш номер телефона.',
               actions: const [
-                TheavDialogAction<bool>(label: 'Отмена', result: false),
-                TheavDialogAction<bool>(
+                SafariAlertAction<bool>(label: 'Отмена', result: false),
+                SafariAlertAction<bool>(
                   label: 'Отправить',
                   result: true,
                   isPrimary: true,
@@ -5980,7 +6598,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final title = data['title']?.toString();
     final msg = data['message']?.toString() ?? '';
     final rawButtons = data['buttons'] is List ? data['buttons'] as List : const [];
-    final actions = <TheavDialogAction<String>>[];
+    final actions = <SafariAlertAction<String>>[];
     for (final raw in rawButtons) {
       if (raw is Map) {
         final id = (raw['id'] ?? '').toString();
@@ -5992,7 +6610,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               : (type == 'close' ? 'Закрыть' : 'ОК');
         }
         actions.add(
-          TheavDialogAction<String>(
+          SafariAlertAction<String>(
             label: text,
             result: id.isNotEmpty ? id : type,
             isDestructive: type == 'destructive',
@@ -6003,15 +6621,20 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
     if (actions.isEmpty) {
       actions.add(
-        const TheavDialogAction<String>(
+        const SafariAlertAction<String>(
           label: 'ОК',
           result: 'ok',
           isPrimary: true,
         ),
       );
     }
-    return showTheavDialog<String>(
+    final botHandle = _session.botUsername.isNotEmpty
+        ? _session.botUsername
+        : _session.launchData.botUsername;
+    return showSafariWebAlert<String>(
       context: context,
+      tone: SafariAlertTone.info,
+      originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
       title: (title != null && title.isNotEmpty) ? title : null,
       message: msg,
       actions: actions,
@@ -6052,20 +6675,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   Future<void> _attemptClose({bool force = false}) async {
     if (!force && _session.closingConfirmation) {
-      final confirm = await showTheavDialog<bool>(
-            context: context,
-            title: 'Закрыть Mini App?',
-            message: 'Внесённые изменения могут не сохраниться.',
-            actions: const [
-              TheavDialogAction<bool>(label: 'Остаться', result: false),
-              TheavDialogAction<bool>(
-                label: 'Закрыть',
-                result: true,
-                isDestructive: true,
-              ),
-            ],
-          ) ??
-          false;
+      final botHandle = _session.botUsername.isNotEmpty
+          ? _session.botUsername
+          : _session.launchData.botUsername;
+      final confirm = await _confirmMiniAppCloseDialog(
+        context,
+        originLabel: botHandle.isNotEmpty ? '@$botHandle' : _session.displayTitle,
+      );
       if (!confirm || !mounted) return;
     }
     _isMinimizing = false;

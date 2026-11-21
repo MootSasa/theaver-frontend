@@ -9,7 +9,9 @@ import '../services/settings_service.dart';
 import '../services/theav_theme_service.dart';
 import '../widgets/bot/thv_invoice_sheet.dart';
 import '../widgets/browser/in_app_browser_sheet.dart';
+import '../widgets/browser/safari_browser_dialogs.dart';
 import 'entity_parser.dart';
+import 'safari_url_safety.dart';
 
 /// Unified URL router across messages, profiles, inline buttons, and Mini Apps.
 class LinkOpener {
@@ -40,6 +42,7 @@ class LinkOpener {
     String rawUrl, {
     bool forceExternal = false,
     bool forceInApp = false,
+    bool confirmExternalApp = false,
   }) async {
     final normalized = _normalizeRaw(rawUrl);
     if (normalized.isEmpty) return;
@@ -67,6 +70,11 @@ class LinkOpener {
     final uri = Uri.tryParse(normalized);
     if (uri == null) return;
 
+    final schemeInfo = SafariUrlSafetyAnalyzer.classifyExternalUri(uri);
+    if (schemeInfo.kind == ExternalSchemeKind.blocked) {
+      return;
+    }
+
     // 3. Internal Theaver Deep Links (/u/..., /join/..., /c/..., theaver://...)
     if (DeepLinkService.parseUri(uri) != null) {
       await DeepLinkService().handleLink(uri);
@@ -75,6 +83,27 @@ class LinkOpener {
 
     final scheme = uri.scheme.toLowerCase();
     final bool isWebHttp = scheme == 'http' || scheme == 'https';
+    if (isWebHttp) {
+      final safety = SafariUrlSafetyAnalyzer.analyzeUrl(uri.toString());
+      if (safety.isSuspiciousHomograph && context.mounted) {
+        final bool proceed = await showSafariSuspiciousLinkDialog(
+          context,
+          info: safety,
+        );
+        if (!proceed || !context.mounted) return;
+      }
+    } else if (confirmExternalApp ||
+        schemeInfo.kind == ExternalSchemeKind.appIntent ||
+        schemeInfo.kind == ExternalSchemeKind.customApp) {
+      if (context.mounted) {
+        final bool proceed = await showSafariExternalAppDialog(
+          context,
+          uri: uri,
+        );
+        if (!proceed || !context.mounted) return;
+      }
+    }
+
     final bool shouldOpenInApp = isWebHttp &&
         !forceExternal &&
         isInAppBrowserSupported &&
