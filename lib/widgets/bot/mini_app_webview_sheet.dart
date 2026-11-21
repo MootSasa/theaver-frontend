@@ -496,6 +496,83 @@ class MiniAppSession {
       <String, Map<String, bool>>{};
   final Set<String> mutedJsDialogHosts = <String>{};
   final List<DateTime> _recentJsDialogAt = <DateTime>[];
+  bool _webPageInteractionLocked = false;
+
+  bool get isWebPageInteractionLocked => _webPageInteractionLocked;
+
+  /// Freezes webpage scrolling, kinetic flings, touch events, and focus when
+  /// any browser/Mini App overlay (popover, menu, or modal alert) is open.
+  Future<void> setWebPageInteractionLocked(
+    bool locked, {
+    bool force = false,
+  }) async {
+    if (!force && _webPageInteractionLocked == locked) return;
+    _webPageInteractionLocked = locked;
+
+    final String targetUrl = isBrowser ? currentUrl : launchData.url;
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.android &&
+        WebViewPlatform.instance != null) {
+      try {
+        await _snapshotChannel.invokeMethod<bool>(
+          'setWebViewInteractionLocked',
+          <String, dynamic>{
+            'url': targetUrl,
+            'locked': locked,
+          },
+        );
+      } on MissingPluginException {
+        // Non-Android / unit test environment has no native WebView lock channel.
+      } on PlatformException {
+        // Ignore transient channel errors during route teardown.
+      } catch (_) {}
+    }
+
+    final ctrl = controller;
+    if (ctrl != null && WebViewPlatform.instance != null) {
+      final String lockJs = '''
+(function(lock) {
+  try {
+    window.__theaverInteractionLocked = !!lock;
+    if (lock) {
+      window.scrollTo(window.scrollX || 0, window.scrollY || 0);
+      if (!window.__theaverLockGuardInstalled) {
+        window.__theaverLockGuardInstalled = true;
+        var blockEvt = function(e) {
+          if (!window.__theaverInteractionLocked) return;
+          if (e.cancelable) e.preventDefault();
+          e.stopImmediatePropagation();
+        };
+        var blockKeys = function(e) {
+          if (!window.__theaverInteractionLocked) return;
+          var k = e.key || '';
+          if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'PageDown' || k === 'PageUp' || k === ' ' || k === 'Home' || k === 'End') {
+            if (e.cancelable) e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        };
+        var opts = { passive: false, capture: true };
+        window.addEventListener('touchstart', blockEvt, opts);
+        window.addEventListener('touchmove', blockEvt, opts);
+        window.addEventListener('wheel', blockEvt, opts);
+        window.addEventListener('pointerdown', blockEvt, opts);
+        window.addEventListener('click', blockEvt, opts);
+        window.addEventListener('keydown', blockKeys, opts);
+      }
+      if (document.documentElement) {
+        document.documentElement.style.setProperty('touch-action', 'none', 'important');
+      }
+    } else if (document.documentElement) {
+      document.documentElement.style.removeProperty('touch-action');
+    }
+  } catch (_) {}
+})(${locked ? 'true' : 'false'});
+''';
+      try {
+        await ctrl.runJavaScript(lockJs);
+      } catch (_) {}
+    }
+  }
 
   String _hostKeyForUrl(String? rawUrl) {
     final target = (rawUrl ?? '').trim().isNotEmpty
@@ -2197,6 +2274,9 @@ class MiniAppSession {
                   unawaited(capturePreviewSnapshot());
                 }
               });
+              if (_webPageInteractionLocked) {
+                unawaited(setWebPageInteractionLocked(true, force: true));
+              }
             },
             onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
             onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
@@ -2245,6 +2325,9 @@ class MiniAppSession {
                 unawaited(capturePreviewSnapshot());
               }
             });
+            if (_webPageInteractionLocked) {
+              unawaited(setWebPageInteractionLocked(true, force: true));
+            }
           },
           onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
           onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
@@ -5865,6 +5948,10 @@ class WebViewFloatingHeader extends StatelessWidget {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: onDismissMenu,
+                  onVerticalDragStart: (_) {},
+                  onVerticalDragUpdate: (_) {},
+                  onHorizontalDragStart: (_) {},
+                  onHorizontalDragUpdate: (_) {},
                 ),
               ),
             ),
@@ -6195,6 +6282,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
+  void _onActiveSafariAlertChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   void _onPendingLaunchResolved() {
     if (!mounted) return;
     if (_isTransitionReady) {
@@ -6328,6 +6421,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _session.onPendingLaunchResolved = _onPendingLaunchResolved;
     _session.onRequestBridgeInjection = _injectBridge;
     _session.onInboundBridgeMessage = _handleBridgeMessage;
+    activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
     _hasFullScreenRegistration = true;
     MiniAppSessionController.instance.registerFullScreenOpen();
   }
@@ -6378,6 +6472,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   @override
   void dispose() {
+    activeSafariWebAlertCount.removeListener(_onActiveSafariAlertChanged);
+    unawaited(_session.setWebPageInteractionLocked(false));
     _earlyWebViewWarmupTimer?.cancel();
     _earlyWebViewWarmupTimer = null;
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
@@ -6918,6 +7014,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     HapticUtils.selection();
     _closeMenu();
     if (!mounted) return;
+    unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     if (dragOffsetPx > 0.5) {
@@ -6954,6 +7051,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       unawaited(_session.capturePreviewSnapshot());
     }
     if (!mounted) return;
+    unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     if (_MinimizedMiniAppHostScope.maybeOf(context)) {
       _isMinimizing = true;
@@ -7094,6 +7192,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final media = MediaQuery.of(context);
     final double sheetHeight = media.size.height;
     final double topInset = media.padding.top;
+    final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
+    final bool isPageInteractionBlocked =
+        isRouteCovered || _isMenuOpen || activeSafariWebAlertCount.value > 0;
+    unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
 
     final Color bodyBg = _session.customBackgroundColor ?? resolved.bodyBg;
     final Color bodyFg = _session.customBackgroundColor != null
@@ -7451,38 +7553,41 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             left: 12,
             right: 12,
             bottom: media.padding.bottom + 10,
-            child: Row(
-              children: [
-                if (_session.secondaryButton.isVisible)
-                  Expanded(
-                    child: _buildActionButton(
-                      _session.secondaryButton,
-                      defaultBg: palette.primary.withValues(alpha: 0.14),
-                      defaultFg: palette.primary,
-                      onPressed: () => _dispatchEventToWebView(
-                        'secondary_button_pressed',
+            child: IgnorePointer(
+              ignoring: isPageInteractionBlocked,
+              child: Row(
+                children: [
+                  if (_session.secondaryButton.isVisible)
+                    Expanded(
+                      child: _buildActionButton(
+                        _session.secondaryButton,
+                        defaultBg: palette.primary.withValues(alpha: 0.14),
+                        defaultFg: palette.primary,
+                        onPressed: () => _dispatchEventToWebView(
+                          'secondary_button_pressed',
+                        ),
+                        style: style,
+                        isSecondaryGlassCandidate: true,
                       ),
-                      style: style,
-                      isSecondaryGlassCandidate: true,
                     ),
-                  ),
-                if (_session.secondaryButton.isVisible &&
-                    _session.mainButton.isVisible)
-                  const SizedBox(width: 10),
-                if (_session.mainButton.isVisible)
-                  Expanded(
-                    child: _buildActionButton(
-                      _session.mainButton,
-                      defaultBg: palette.primary,
-                      defaultFg: theme.colorScheme.onPrimary,
-                      onPressed: () => _dispatchEventToWebView(
-                        'main_button_pressed',
+                  if (_session.secondaryButton.isVisible &&
+                      _session.mainButton.isVisible)
+                    const SizedBox(width: 10),
+                  if (_session.mainButton.isVisible)
+                    Expanded(
+                      child: _buildActionButton(
+                        _session.mainButton,
+                        defaultBg: palette.primary,
+                        defaultFg: theme.colorScheme.onPrimary,
+                        onPressed: () => _dispatchEventToWebView(
+                          'main_button_pressed',
+                        ),
+                        style: style,
+                        isSecondaryGlassCandidate: false,
                       ),
-                      style: style,
-                      isSecondaryGlassCandidate: false,
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         Positioned(
@@ -7503,7 +7608,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: [
-            Positioned.fill(child: viewportBody),
+            Positioned.fill(
+              child: IgnorePointer(
+                key: const ValueKey('mini_app_web_interaction_guard'),
+                ignoring: isPageInteractionBlocked,
+                child: ExcludeFocus(
+                  excluding: isPageInteractionBlocked,
+                  child: viewportBody,
+                ),
+              ),
+            ),
             Positioned.fill(
               child: style.isGlass
                   ? LiquidGlassBatch(child: hudOverlayStack)

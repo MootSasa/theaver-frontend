@@ -107,6 +107,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (mounted) setState(() {});
   }
 
+  void _onActiveSafariAlertChanged() {
+    if (mounted) setState(() {});
+  }
+
   void _setRouteRestingOpaque(bool opaque) {
     if (!mounted || _lastRequestedRestingOpaque == opaque) return;
     _lastRequestedRestingOpaque = opaque;
@@ -237,6 +241,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
     _session.uiDialogDelegate = _dialogDelegate;
     _session.onSheetStateChanged = _onSessionStateChanged;
+    activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
     unawaited(BrowserDataService.instance.ensureLoaded());
     BrowserDataService.instance.addListener(_onBrowserDataChanged);
   }
@@ -308,6 +313,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   @override
   void dispose() {
+    activeSafariWebAlertCount.removeListener(_onActiveSafariAlertChanged);
+    unawaited(_session.setWebPageInteractionLocked(false));
     _earlyWebViewWarmupTimer?.cancel();
     _earlyWebViewWarmupTimer = null;
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
@@ -335,6 +342,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _closeMenu();
     _closeSiteInfoPopover();
     if (!mounted) return;
+    unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     HapticUtils.selection();
@@ -372,6 +380,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       unawaited(_session.capturePreviewSnapshot());
     }
     if (!mounted) return;
+    unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     if (MinimizedMiniAppHost.isMountedIn(context)) {
       _isMinimizing = true;
@@ -432,6 +441,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _closeTab() {
     _closeMenu();
     _closeSiteInfoPopover();
+    unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     HapticUtils.tap();
@@ -871,6 +881,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         !_isMenuOpen &&
         !_isFindOpen &&
         !_isSiteInfoOpen;
+    final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
+    final bool isPageInteractionBlocked = isRouteCovered ||
+        _isSiteInfoOpen ||
+        _isMenuOpen ||
+        activeSafariWebAlertCount.value > 0;
+    unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
     final Color topPocketBase = _session.browserTopPocketColor ??
         _session.browserCanvasColor ??
         resolved.bodyBg;
@@ -1291,7 +1307,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       bottom: bottomInset + 9.0,
       child: IgnorePointer(
         key: const ValueKey('in_app_browser_bottom_bar_ignore'),
-        ignoring: isCompact,
+        ignoring: isCompact || isPageInteractionBlocked,
         child: TweenAnimationBuilder<double>(
           tween: Tween<double>(
             begin: bottomExpandTarget,
@@ -1397,15 +1413,31 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             top: topInset + 60.0,
             left: 0,
             right: 0,
-            child: floatingFindBar,
+            child: IgnorePointer(
+              ignoring: isPageInteractionBlocked,
+              child: ExcludeFocus(
+                excluding: isPageInteractionBlocked,
+                child: floatingFindBar,
+              ),
+            ),
           ),
         floatingBottomBar,
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: floatingHeader,
+        ),
         if (_isSiteInfoOpen) ...[
           Positioned.fill(
             key: const ValueKey('in_app_browser_site_info_backdrop'),
             child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
+              behavior: HitTestBehavior.opaque,
               onTap: _closeSiteInfoPopover,
+              onVerticalDragStart: (_) {},
+              onVerticalDragUpdate: (_) {},
+              onHorizontalDragStart: (_) {},
+              onHorizontalDragUpdate: (_) {},
             ),
           ),
           Positioned(
@@ -1473,12 +1505,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
           ),
         ],
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: floatingHeader,
-        ),
       ],
     );
 
@@ -1488,7 +1514,16 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Positioned.fill(child: webBody),
+          Positioned.fill(
+            child: IgnorePointer(
+              key: const ValueKey('in_app_browser_web_interaction_guard'),
+              ignoring: isPageInteractionBlocked,
+              child: ExcludeFocus(
+                excluding: isPageInteractionBlocked,
+                child: webBody,
+              ),
+            ),
+          ),
           Positioned(
             key: const ValueKey('in_app_browser_top_scroll_pocket'),
             top: 0,

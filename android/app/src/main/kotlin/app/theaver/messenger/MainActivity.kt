@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Display
 import android.view.MotionEvent
@@ -46,6 +47,8 @@ class MainActivity : FlutterFragmentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val snapshotExecutor = Executors.newSingleThreadExecutor()
     private val hookedSurfaceHolders: MutableSet<SurfaceHolder> =
+        Collections.newSetFromMap(WeakHashMap())
+    private val lockedWebViews: MutableSet<WebView> =
         Collections.newSetFromMap(WeakHashMap())
     private var cachedFlutterSurfaceViewRef: WeakReference<SurfaceView>? = null
     private var targetRefreshRateHz: Float = 0f
@@ -196,6 +199,45 @@ class MainActivity : FlutterFragmentActivity() {
                                 }
                             }
                             result.success(null)
+                        }
+                    }
+                }
+                "setWebViewInteractionLocked" -> {
+                    val urlArg = call.argument<String>("url")
+                    val locked = call.argument<Boolean>("locked") ?: false
+                    runOnUiThread {
+                        try {
+                            if (locked) {
+                                val webView = findTargetWebView(window?.decorView, urlArg)
+                                if (webView != null) {
+                                    // Halts active kinetic fling scrolling and cancels in-flight touches.
+                                    webView.flingScroll(0, 0)
+                                    webView.scrollTo(webView.scrollX, webView.scrollY)
+                                    val now = SystemClock.uptimeMillis()
+                                    val cancelEvt = MotionEvent.obtain(
+                                        now,
+                                        now,
+                                        MotionEvent.ACTION_CANCEL,
+                                        0f,
+                                        0f,
+                                        0
+                                    )
+                                    webView.dispatchTouchEvent(cancelEvt)
+                                    cancelEvt.recycle()
+                                    lockedWebViews.add(webView)
+                                    webView.setOnTouchListener { _, _ -> true }
+                                }
+                            } else {
+                                findTargetWebView(window?.decorView, urlArg)
+                                    ?.setOnTouchListener(null)
+                                for (wv in lockedWebViews) {
+                                    wv.setOnTouchListener(null)
+                                }
+                                lockedWebViews.clear()
+                            }
+                            result.success(true)
+                        } catch (_: Throwable) {
+                            result.success(false)
                         }
                     }
                 }

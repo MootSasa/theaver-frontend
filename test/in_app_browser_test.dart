@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
@@ -1469,6 +1470,361 @@ void main() {
           find.byKey(const ValueKey('minimized_mini_app_dock_region')),
           findsOneWidget,
         );
+      },
+    );
+
+    testWidgets(
+      'Popup overlays (SiteInfo popover, Safari alert, 3-dots menu, modal sheets) freeze webpage scrolling and interaction until dismissed',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        Uri? launchedExternal;
+        const urlLauncherChannel = MethodChannel('plugins.flutter.io/url_launcher');
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(urlLauncherChannel, (call) async {
+          if (call.method == 'launch' || call.method == 'launchUrl') {
+            final args = call.arguments as Map?;
+            final rawUrl = args?['url']?.toString();
+            if (rawUrl != null) {
+              launchedExternal = Uri.tryParse(rawUrl);
+            }
+            return true;
+          }
+          if (call.method == 'canLaunch') {
+            return true;
+          }
+          return null;
+        });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(urlLauncherChannel, null);
+        });
+        LinkOpener.debugExternalLauncherForTest = (uri) async {
+          launchedExternal = uri;
+        };
+
+        final browserSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'Дзен';
+
+        late BuildContext hostCtx;
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 800),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: Builder(
+                  builder: (context) {
+                    hostCtx = context;
+                    return InAppBrowserSheet(session: browserSession);
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final guardFinder = find.byKey(
+          const ValueKey('in_app_browser_web_interaction_guard'),
+        );
+        final pageActionBtnFinder = find.descendant(
+          of: guardFinder,
+          matching: find.text('Открыть во внешнем браузере'),
+        );
+        expect(guardFinder, findsOneWidget);
+        expect(pageActionBtnFinder, findsOneWidget);
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isFalse,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        // 1. SiteInfo Popover locks page interaction, swallows drags, and blocks taps to page buttons.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_security_badge_button')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey('in_app_browser_site_info_popover')),
+          findsOneWidget,
+        );
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isTrue,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+        // Dragging over the page area beneath the popover is absorbed and does NOT close popover.
+        await tester.dragFrom(
+          const Offset(24, 520),
+          const Offset(0, -140),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('in_app_browser_site_info_popover')),
+          findsOneWidget,
+        );
+
+        // Tapping outside (below the popover) hits the opaque backdrop and closes only the popover.
+        await tester.tapAt(const Offset(200, 680));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('in_app_browser_site_info_popover')),
+          findsNothing,
+        );
+        expect(launchedExternal, isNull);
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isFalse,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        // 2. Overflow menu locks page interaction until dismissed.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_menu_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('in_app_browser_overflow_menu')),
+          findsOneWidget,
+        );
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isTrue,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+        await tester.tapAt(const Offset(24, 560));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('in_app_browser_overflow_menu')),
+          findsNothing,
+        );
+        expect(launchedExternal, isNull);
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isFalse,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        // 3. Safari warning alert dialog locks page & increments activeSafariWebAlertCount.
+        final alertFuture = showSafariSslWarningDialog(
+          hostCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+
+        expect(activeSafariWebAlertCount.value, 1);
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isTrue,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+        await tester.tap(find.byKey(const ValueKey('safari_ssl_go_back_btn')));
+        await tester.pumpAndSettle();
+        expect(await alertFuture, isFalse);
+        expect(activeSafariWebAlertCount.value, 0);
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isFalse,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        // 4. Pushing a secondary modal sheet (Bookmarks & History) locks via ModalRoute.isCurrentOf.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_menu_button')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Закладки и история'));
+        await tester.pumpAndSettle();
+
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isTrue,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<IgnorePointer>(guardFinder).ignoring,
+          isFalse,
+        );
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        // Once all overlays are dismissed, page interaction works normally again.
+        await tester.tap(pageActionBtnFinder);
+        await tester.pumpAndSettle();
+        expect(launchedExternal?.toString(), 'https://dzen.ru/');
+
+        // 5. Scrollable content test: verify actual Scrollable pixels stay 0 while alert/popover open,
+        // then scroll freely once dismissed.
+        tester.view.physicalSize = const Size(400, 340);
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 340),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: Builder(
+                  builder: (context) {
+                    hostCtx = context;
+                    return InAppBrowserSheet(session: browserSession);
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final compactGuardFinder = find.byKey(
+          const ValueKey('in_app_browser_web_interaction_guard'),
+        );
+        final scrollableFinder = find.descendant(
+          of: compactGuardFinder,
+          matching: find.byType(Scrollable),
+        );
+        double pageScrollOffset() =>
+            tester.state<ScrollableState>(scrollableFinder.first).position.pixels;
+        expect(
+          tester
+              .state<ScrollableState>(scrollableFinder.first)
+              .position
+              .maxScrollExtent,
+          greaterThan(10.0),
+        );
+
+        final compactAlertFuture = showSafariSslWarningDialog(
+          hostCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+        expect(tester.widget<IgnorePointer>(compactGuardFinder).ignoring, isTrue);
+
+        await tester.dragFrom(const Offset(24, 170), const Offset(0, -100));
+        await tester.pumpAndSettle();
+        expect(pageScrollOffset(), closeTo(0.0, 0.1));
+
+        final compactGoBackBtn = find.byKey(const ValueKey('safari_ssl_go_back_btn'));
+        await tester.ensureVisible(compactGoBackBtn);
+        await tester.pumpAndSettle();
+        await tester.tap(compactGoBackBtn);
+        await tester.pumpAndSettle();
+        expect(await compactAlertFuture, isFalse);
+        expect(tester.widget<IgnorePointer>(compactGuardFinder).ignoring, isFalse);
+
+        await tester.dragFrom(const Offset(200, 170), const Offset(0, -100));
+        await tester.pumpAndSettle();
+        expect(pageScrollOffset(), greaterThan(0.0));
+
+        // 6. MiniAppWebViewSheet also guards its page on overflow menu & Safari alerts.
+        tester.view.physicalSize = const Size(400, 800);
+        final miniSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://api.theaver.app/api/miniapps/wallet',
+            initData: 'hash=walt',
+            botId: '2',
+            botUsername: 'walt',
+            botDisplayName: 'Walt',
+          ),
+          botName: 'Walt',
+          botUsername: 'walt',
+        );
+        late BuildContext miniCtx;
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) {
+                  miniCtx = context;
+                  return MiniAppWebViewSheet(
+                    launchData: miniSession.launchData,
+                    botName: 'Walt',
+                    botUsername: 'walt',
+                    session: miniSession,
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final miniGuardFinder = find.byKey(
+          const ValueKey('mini_app_web_interaction_guard'),
+        );
+        expect(
+          tester.widget<IgnorePointer>(miniGuardFinder).ignoring,
+          isFalse,
+        );
+        expect(miniSession.isWebPageInteractionLocked, isFalse);
+
+        await tester.tap(
+          find.byKey(const ValueKey('mini_app_more_menu_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<IgnorePointer>(miniGuardFinder).ignoring,
+          isTrue,
+        );
+        expect(miniSession.isWebPageInteractionLocked, isTrue);
+
+        await tester.tapAt(const Offset(24, 560));
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<IgnorePointer>(miniGuardFinder).ignoring,
+          isFalse,
+        );
+        expect(miniSession.isWebPageInteractionLocked, isFalse);
+
+        final miniAlertFuture = showSafariWebAlert<bool>(
+          context: miniCtx,
+          title: 'Popup',
+          message: 'Locked?',
+          actions: const [
+            SafariAlertAction<bool>(
+              label: 'OK',
+              result: true,
+              isPrimary: true,
+              buttonKey: ValueKey('mini_lock_ok_btn'),
+            ),
+          ],
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<IgnorePointer>(miniGuardFinder).ignoring,
+          isTrue,
+        );
+        expect(miniSession.isWebPageInteractionLocked, isTrue);
+
+        await tester.tap(find.byKey(const ValueKey('mini_lock_ok_btn')));
+        await tester.pumpAndSettle();
+        expect(await miniAlertFuture, isTrue);
+        expect(
+          tester.widget<IgnorePointer>(miniGuardFinder).ignoring,
+          isFalse,
+        );
+        expect(miniSession.isWebPageInteractionLocked, isFalse);
       },
     );
   });

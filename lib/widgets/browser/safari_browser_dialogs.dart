@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -6,6 +7,24 @@ import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/safari_url_safety.dart';
 import '../design_system/theav_design_system.dart';
+
+/// Tracks the number of currently presented [showSafariWebAlert] dialogs so
+/// underlying WebView sheets can freeze page scrolling, focus, and input.
+final ValueNotifier<int> activeSafariWebAlertCount = ValueNotifier<int>(0);
+
+void _adjustSafariWebAlertCount(int delta) {
+  final int next = (activeSafariWebAlertCount.value + delta).clamp(0, 999);
+  if (activeSafariWebAlertCount.value == next) return;
+  final phase = SchedulerBinding.instance.schedulerPhase;
+  if (phase == SchedulerPhase.persistentCallbacks ||
+      phase == SchedulerPhase.midFrameMicrotasks) {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      activeSafariWebAlertCount.value = next;
+    });
+  } else {
+    activeSafariWebAlertCount.value = next;
+  }
+}
 
 /// Semantic tone driving badge icon and accent color inside Safari iOS 26
 /// browser and Mini App alerts.
@@ -54,62 +73,67 @@ Future<T?> showSafariWebAlert<T>({
   required List<SafariAlertAction<T>> actions,
   bool barrierDismissible = true,
   Key? dialogKey,
-}) {
+}) async {
   final bool isGlass = TheavSurfaceStyle.of(context, listen: false).isGlass;
-  return showGeneralDialog<T>(
-    context: context,
-    useRootNavigator: true,
-    barrierDismissible: barrierDismissible,
-    barrierLabel: Localizations.of<MaterialLocalizations>(
-          context,
-          MaterialLocalizations,
-        )?.modalBarrierDismissLabel ??
-        'Dismiss',
-    barrierColor: Colors.black.withValues(alpha: 0.36),
-    transitionDuration: const Duration(milliseconds: 230),
-    pageBuilder: (ctx, _, __) {
-      final Widget card = SafariWebAlertCard<T>(
-        key: dialogKey,
-        title: title,
-        message: message,
-        customBody: customBody,
-        tone: tone,
-        iconOverride: iconOverride,
-        originLabel: originLabel,
-        originIsSecure: originIsSecure,
-        actions: actions,
-      );
-      final Widget centered = Center(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            24,
-            24,
-            24,
-            24 + MediaQuery.viewInsetsOf(ctx).bottom,
+  _adjustSafariWebAlertCount(1);
+  try {
+    return await showGeneralDialog<T>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: barrierDismissible,
+      barrierLabel: Localizations.of<MaterialLocalizations>(
+            context,
+            MaterialLocalizations,
+          )?.modalBarrierDismissLabel ??
+          'Dismiss',
+      barrierColor: Colors.black.withValues(alpha: 0.36),
+      transitionDuration: const Duration(milliseconds: 230),
+      pageBuilder: (ctx, _, __) {
+        final Widget card = SafariWebAlertCard<T>(
+          key: dialogKey,
+          title: title,
+          message: message,
+          customBody: customBody,
+          tone: tone,
+          iconOverride: iconOverride,
+          originLabel: originLabel,
+          originIsSecure: originIsSecure,
+          actions: actions,
+        );
+        final Widget centered = Center(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              24,
+              24,
+              24 + MediaQuery.viewInsetsOf(ctx).bottom,
+            ),
+            child: SingleChildScrollView(
+              clipBehavior: Clip.none,
+              child: card,
+            ),
           ),
-          child: SingleChildScrollView(
-            clipBehavior: Clip.none,
-            child: card,
-          ),
-        ),
-      );
-      return isGlass ? centered : BackdropGroup(child: centered);
-    },
-    transitionBuilder: (ctx, animation, _, child) {
-      if (MediaQuery.maybeDisableAnimationsOf(ctx) ?? false) {
-        return child;
-      }
-      final bool isReversing = animation.status == AnimationStatus.reverse;
-      final Animation<double> curved = CurvedAnimation(
-        parent: animation,
-        curve: isReversing ? Curves.easeInCubic : Curves.easeOutBack,
-      );
-      return ScaleTransition(
-        scale: Tween<double>(begin: 0.88, end: 1.0).animate(curved),
-        child: child,
-      );
-    },
-  );
+        );
+        return isGlass ? centered : BackdropGroup(child: centered);
+      },
+      transitionBuilder: (ctx, animation, _, child) {
+        if (MediaQuery.maybeDisableAnimationsOf(ctx) ?? false) {
+          return child;
+        }
+        final bool isReversing = animation.status == AnimationStatus.reverse;
+        final Animation<double> curved = CurvedAnimation(
+          parent: animation,
+          curve: isReversing ? Curves.easeInCubic : Curves.easeOutBack,
+        );
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.88, end: 1.0).animate(curved),
+          child: child,
+        );
+      },
+    );
+  } finally {
+    _adjustSafariWebAlertCount(-1);
+  }
 }
 
 /// Dual-mode Safari iOS 26 card container shared by modal alerts and the
