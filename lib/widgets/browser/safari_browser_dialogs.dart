@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -54,6 +55,56 @@ class SafariAlertAction<T> {
     this.isDestructive = false,
     this.buttonKey,
   });
+}
+
+class _SafariAlertDismissScope extends StatefulWidget {
+  final bool barrierDismissible;
+  final Widget child;
+
+  const _SafariAlertDismissScope({
+    required this.barrierDismissible,
+    required this.child,
+  });
+
+  @override
+  State<_SafariAlertDismissScope> createState() =>
+      _SafariAlertDismissScopeState();
+}
+
+class _SafariAlertDismissScopeState extends State<_SafariAlertDismissScope> {
+  bool _didRequestDismiss = false;
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
+    super.dispose();
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (!mounted || !widget.barrierDismissible || _didRequestDismiss) {
+      return false;
+    }
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    final route = ModalRoute.of(context);
+    if (route != null && (!route.isCurrent || !route.isActive)) {
+      return false;
+    }
+    _didRequestDismiss = true;
+    Navigator.of(context).maybePop();
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Presents a centered Safari iOS 26 style alert (`LiquidGlassLens` when Glass
@@ -114,7 +165,11 @@ Future<T?> showSafariWebAlert<T>({
             ),
           ),
         );
-        return isGlass ? centered : BackdropGroup(child: centered);
+        final Widget scoped = _SafariAlertDismissScope(
+          barrierDismissible: barrierDismissible,
+          child: centered,
+        );
+        return isGlass ? scoped : BackdropGroup(child: scoped);
       },
       transitionBuilder: (ctx, animation, _, child) {
         if (MediaQuery.maybeDisableAnimationsOf(ctx) ?? false) {
@@ -499,7 +554,6 @@ Future<bool> showSafariSslWarningDialog(
     title: 'Соединение не защищено',
     message:
         'Сертификат безопасности этого сайта не прошёл проверку. Злоумышленники могут перехватить или подменить передаваемые данные.',
-    barrierDismissible: false,
     actions: const [
       SafariAlertAction<bool>(
         label: 'Вернуться назад',

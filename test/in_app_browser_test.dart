@@ -1827,5 +1827,295 @@ void main() {
         expect(miniSession.isWebPageInteractionLocked, isFalse);
       },
     );
+
+    testWidgets(
+      'Popups, SiteInfo popover, 3-dots menu, and modal sheets dismiss on outside tap, Escape key, and System Back without closing browser',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        final browserSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'Дзен';
+
+        late BuildContext homeCtx;
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 800),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: Builder(
+                  builder: (context) {
+                    homeCtx = context;
+                    return const Scaffold(body: SizedBox.shrink());
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        unawaited(
+          showTheavModalSheet<void>(
+            context: homeCtx,
+            enableDrag: false,
+            barrierDismissible: true,
+            useRootNavigator: true,
+            customSheetBuilder: (_) => InAppBrowserSheet(session: browserSession),
+            builder: (_) => const SizedBox.shrink(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final browserSheetFinder = find.byKey(
+          const ValueKey('in_app_browser_sheet'),
+        );
+        final BuildContext browserCtx = tester.element(browserSheetFinder);
+        final Offset browserCloseCenter = tester.getCenter(
+          find.byKey(const ValueKey('in_app_browser_close_button')),
+        );
+        expect(browserSheetFinder, findsOneWidget);
+
+        // 1. SSL warning alert: outside tap, Escape, and System Back.
+        final sslOutside = showSafariSslWarningDialog(
+          browserCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+        expect(activeSafariWebAlertCount.value, 1);
+        expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+        await tester.tapAt(const Offset(16, 80));
+        await tester.pumpAndSettle();
+        expect(await sslOutside, isFalse);
+        expect(activeSafariWebAlertCount.value, 0);
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+        expect(browserSheetFinder, findsOneWidget);
+
+        final sslEsc = showSafariSslWarningDialog(
+          browserCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+        expect(activeSafariWebAlertCount.value, 1);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(await sslEsc, isFalse);
+        expect(activeSafariWebAlertCount.value, 0);
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+        expect(browserSheetFinder, findsOneWidget);
+
+        final sslBack = showSafariSslWarningDialog(
+          browserCtx,
+          host: 'expired.badssl.com',
+        );
+        await tester.pumpAndSettle();
+        expect(activeSafariWebAlertCount.value, 1);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(await sslBack, isFalse);
+        expect(activeSafariWebAlertCount.value, 0);
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+        expect(browserSheetFinder, findsOneWidget);
+
+        // 2. JS Prompt (with autofocused TextField): Escape and outside tap.
+        final promptEsc = showSafariJsPromptDialog(
+          browserCtx,
+          originHost: 'dzen.ru',
+          isSecure: true,
+          message: 'Введите значение:',
+          defaultText: 'abc',
+        );
+        await tester.pumpAndSettle();
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect((await promptEsc).value, isNull);
+        expect(activeSafariWebAlertCount.value, 0);
+        expect(browserSheetFinder, findsOneWidget);
+
+        final promptOutside = showSafariJsPromptDialog(
+          browserCtx,
+          originHost: 'dzen.ru',
+          isSecure: true,
+          message: 'Введите значение:',
+          defaultText: 'abc',
+        );
+        await tester.pumpAndSettle();
+        await tester.tapAt(const Offset(16, 80));
+        await tester.pumpAndSettle();
+        expect((await promptOutside).value, isNull);
+        expect(activeSafariWebAlertCount.value, 0);
+        expect(browserSheetFinder, findsOneWidget);
+
+        // 3. SafariSiteInfoPopover: outside tap over [×], Escape, System Back.
+        final siteInfoBtn = find.byKey(
+          const ValueKey('in_app_browser_security_badge_button'),
+        );
+        final siteInfoPopover = find.byKey(
+          const ValueKey('in_app_browser_site_info_popover'),
+        );
+
+        await tester.tap(siteInfoBtn);
+        await tester.pumpAndSettle();
+        expect(siteInfoPopover, findsOneWidget);
+        await tester.tapAt(browserCloseCenter);
+        await tester.pumpAndSettle();
+        expect(siteInfoPopover, findsNothing);
+        expect(browserSheetFinder, findsOneWidget);
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        await tester.tap(siteInfoBtn);
+        await tester.pumpAndSettle();
+        expect(siteInfoPopover, findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(siteInfoPopover, findsNothing);
+        expect(browserSheetFinder, findsOneWidget);
+
+        await tester.tap(siteInfoBtn);
+        await tester.pumpAndSettle();
+        expect(siteInfoPopover, findsOneWidget);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(siteInfoPopover, findsNothing);
+        expect(browserSheetFinder, findsOneWidget);
+
+        // 4. Browser 3-dots menu: outside tap over [×], Escape, System Back.
+        final browserMenuBtn = find.byKey(
+          const ValueKey('in_app_browser_menu_button'),
+        );
+        final browserMenuFinder = find.byKey(
+          const ValueKey('in_app_browser_overflow_menu'),
+        );
+
+        await tester.tap(browserMenuBtn);
+        await tester.pumpAndSettle();
+        expect(browserMenuFinder, findsOneWidget);
+        await tester.tapAt(browserCloseCenter);
+        await tester.pumpAndSettle();
+        expect(browserMenuFinder, findsNothing);
+        expect(browserSheetFinder, findsOneWidget);
+        expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+        await tester.tap(browserMenuBtn);
+        await tester.pumpAndSettle();
+        expect(browserMenuFinder, findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(browserMenuFinder, findsNothing);
+        expect(browserSheetFinder, findsOneWidget);
+
+        await tester.tap(browserMenuBtn);
+        await tester.pumpAndSettle();
+        expect(browserMenuFinder, findsOneWidget);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(browserMenuFinder, findsNothing);
+        expect(browserSheetFinder, findsOneWidget);
+
+        // 5. Secondary TheavModalSheet (Bookmarks & History): outside tap, Escape, Back.
+        for (final dismissAction in [
+          () => tester.tapAt(const Offset(200, 40)),
+          () => tester.sendKeyEvent(LogicalKeyboardKey.escape),
+          () => tester.binding.handlePopRoute(),
+        ]) {
+          await tester.tap(browserMenuBtn);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Закладки и история'));
+          await tester.pumpAndSettle();
+          expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+          await dismissAction();
+          await tester.pumpAndSettle();
+          expect(find.text('Закладки'), findsNothing);
+          expect(browserSheetFinder, findsOneWidget);
+          expect(browserSession.isWebPageInteractionLocked, isFalse);
+        }
+
+        // Close browser sheet before Mini App checks.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_close_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(browserSheetFinder, findsNothing);
+
+        // 6. MiniAppWebViewSheet 3-dots menu & popup dismissal over it.
+        final miniSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://api.theaver.app/api/miniapps/wallet',
+            initData: 'hash=walt',
+            botId: '2',
+            botUsername: 'walt',
+            botDisplayName: 'Walt',
+          ),
+          botName: 'Walt',
+          botUsername: 'walt',
+        );
+        unawaited(
+          showTheavModalSheet<void>(
+            context: homeCtx,
+            enableDrag: false,
+            barrierDismissible: true,
+            useRootNavigator: true,
+            customSheetBuilder: (_) => MiniAppWebViewSheet(
+              launchData: miniSession.launchData,
+              botName: 'Walt',
+              botUsername: 'walt',
+              session: miniSession,
+            ),
+            builder: (_) => const SizedBox.shrink(),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final miniSheetFinder = find.byType(MiniAppWebViewSheet);
+        final Offset miniCloseCenter = tester.getCenter(
+          find.byKey(const ValueKey('mini_app_close_or_back_button')),
+        );
+        final miniMoreBtn = find.byKey(
+          const ValueKey('mini_app_more_menu_button'),
+        );
+        final miniMenuFinder = find.byKey(
+          const ValueKey('webview_right_pill_expanded'),
+        );
+
+        await tester.tap(miniMoreBtn);
+        await tester.pumpAndSettle();
+        expect(miniMenuFinder, findsOneWidget);
+        await tester.tapAt(miniCloseCenter);
+        await tester.pumpAndSettle();
+        expect(miniMenuFinder, findsNothing);
+        expect(miniSheetFinder, findsOneWidget);
+        expect(miniSession.isWebPageInteractionLocked, isFalse);
+
+        await tester.tap(miniMoreBtn);
+        await tester.pumpAndSettle();
+        expect(miniMenuFinder, findsOneWidget);
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(miniMenuFinder, findsNothing);
+        expect(miniSheetFinder, findsOneWidget);
+
+        await tester.tap(miniMoreBtn);
+        await tester.pumpAndSettle();
+        expect(miniMenuFinder, findsOneWidget);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(miniMenuFinder, findsNothing);
+        expect(miniSheetFinder, findsOneWidget);
+      },
+    );
   });
 }

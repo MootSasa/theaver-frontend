@@ -242,8 +242,36 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _session.uiDialogDelegate = _dialogDelegate;
     _session.onSheetStateChanged = _onSessionStateChanged;
     activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     unawaited(BrowserDataService.instance.ensureLoaded());
     BrowserDataService.instance.addListener(_onBrowserDataChanged);
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (!mounted || activeSafariWebAlertCount.value > 0) return false;
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (_isSiteInfoOpen) {
+      _closeSiteInfoPopover();
+      return true;
+    }
+    if (_isMenuOpen) {
+      _closeMenu();
+      return true;
+    }
+    if (_isFindOpen) {
+      setState(() {
+        _isFindOpen = false;
+        _findStatus = '';
+      });
+      _updateBrowserSafeClearances();
+      return true;
+    }
+    return false;
   }
 
   void _updateBrowserSafeClearances({EdgeInsets? paddingOverride}) {
@@ -313,6 +341,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     activeSafariWebAlertCount.removeListener(_onActiveSafariAlertChanged);
     unawaited(_session.setWebPageInteractionLocked(false));
     _earlyWebViewWarmupTimer?.cancel();

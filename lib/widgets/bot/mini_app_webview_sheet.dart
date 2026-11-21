@@ -2647,6 +2647,7 @@ class MiniAppSessionController extends ChangeNotifier {
 
   /// Handles native back / Escape when [MiniAppTabsSwitcher] is open.
   bool handleSystemBack() {
+    if (activeSafariWebAlertCount.value > 0) return false;
     if (!isSwitcherOpen) return false;
     HapticUtils.tap();
     closeSwitcher();
@@ -3775,6 +3776,9 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   }
 
   bool _handleHardwareKey(KeyEvent event) {
+    if (activeSafariWebAlertCount.value > 0) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
     if (event is KeyDownEvent &&
         (event.logicalKey == LogicalKeyboardKey.escape ||
             event.logicalKey == LogicalKeyboardKey.browserBack)) {
@@ -5941,6 +5945,8 @@ class WebViewFloatingHeader extends StatelessWidget {
         final Widget stackContent = Stack(
           clipBehavior: Clip.none,
           children: [
+            leftWidget,
+            centerWidget,
             Positioned.fill(
               key: const ValueKey('webview_header_menu_backdrop'),
               child: IgnorePointer(
@@ -5955,8 +5961,6 @@ class WebViewFloatingHeader extends StatelessWidget {
                 ),
               ),
             ),
-            leftWidget,
-            centerWidget,
             rightWidget,
           ],
         );
@@ -6422,8 +6426,24 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _session.onRequestBridgeInjection = _injectBridge;
     _session.onInboundBridgeMessage = _handleBridgeMessage;
     activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     _hasFullScreenRegistration = true;
     MiniAppSessionController.instance.registerFullScreenOpen();
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (!mounted || activeSafariWebAlertCount.value > 0) return false;
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    if (_isMenuOpen) {
+      _closeMenu();
+      return true;
+    }
+    return false;
   }
 
   void _releaseFullScreenRegistration() {
@@ -6472,6 +6492,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     activeSafariWebAlertCount.removeListener(_onActiveSafariAlertChanged);
     unawaited(_session.setWebPageInteractionLocked(false));
     _earlyWebViewWarmupTimer?.cancel();

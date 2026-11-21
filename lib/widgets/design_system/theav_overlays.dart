@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -589,6 +590,7 @@ class _TheavModalSheetState extends State<TheavModalSheet>
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     _reboundController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 210),
@@ -603,8 +605,27 @@ class _TheavModalSheetState extends State<TheavModalSheet>
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     _reboundController.dispose();
     super.dispose();
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (!mounted || _isDismissing) return false;
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    final route = ModalRoute.of(context);
+    if (route == null ||
+        !route.isCurrent ||
+        !route.isActive ||
+        !route.barrierDismissible) {
+      return false;
+    }
+    _isDismissing = true;
+    Navigator.of(context).maybePop();
+    return true;
   }
 
   void _onDragStart() {
