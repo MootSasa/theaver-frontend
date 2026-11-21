@@ -165,7 +165,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final size = MediaQuery.sizeOf(context);
     final padding = paddingOverride ?? MediaQuery.paddingOf(context);
     final double nextTop = padding.top + (_isFindOpen ? 110.0 : 58.0);
-    final double nextCompactTop = padding.top + (_isFindOpen ? 110.0 : 32.0);
+    final double nextCompactTop = padding.top + (_isFindOpen ? 110.0 : 38.0);
     final double nextBottom = padding.bottom + 64.0;
     final double nextCompactBottom = padding.bottom;
     final double nextVh = size.height;
@@ -1166,7 +1166,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             child: IgnorePointer(
               child: _BrowserScrollPocket(
                 edge: LiquidGlassEdge.top,
-                height: topInset + (isCompact ? 18.0 : 26.0),
+                height: topInset + (isCompact ? 22.0 : 26.0),
                 color: topPocketBase.withValues(alpha: 0.90),
                 blurSigma: allowEdgeBlur ? 3.5 : 0.0,
               ),

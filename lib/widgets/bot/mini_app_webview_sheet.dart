@@ -4648,7 +4648,7 @@ class WebViewFloatingHeader extends StatelessWidget {
     final bool menuExpanded = isMenuOpen && expandedMenuChild != null;
     final bool effectiveCompact = isCompact && !menuExpanded;
     final double normalHeight = topInset + 60.0;
-    final double compactHeight = topInset + 34.0;
+    final double compactHeight = topInset + 42.0;
 
     final Widget expandedPillBody = KeyedSubtree(
       key: const ValueKey('webview_center_expanded'),
@@ -4883,10 +4883,20 @@ class WebViewFloatingHeader extends StatelessWidget {
 
       glassCenterMorph = LiquidGlassMorph(
         key: const ValueKey('webview_center_morph'),
-        alignment:
-            effectiveCompact ? Alignment.topCenter : Alignment.bottomCenter,
-        motion: LiquidGlassMorphMotion.fluid,
-        smoothness: 24,
+        alignment: Alignment.topCenter,
+        motion: const LiquidGlassMorphMotion(
+          stiffness: 320,
+          damping: 35.8,
+          stretch: 0.12,
+          blended: false,
+          advanced: LiquidGlassMorphAdvanced(
+            leadBounce: 0.0,
+            followDelay: 0.0,
+            contentFollow: 1.0,
+            contentBlur: 6.0,
+          ),
+        ),
+        smoothness: 0,
         style: morphStyle,
         child:
             effectiveCompact ? compactCenterMorphBox : expandedCenterMorphBox,
@@ -4925,9 +4935,9 @@ class WebViewFloatingHeader extends StatelessWidget {
       );
       matteCenterMorphContent = AnimatedSize(
         key: const ValueKey('webview_center_matte_morph'),
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
-        alignment: Alignment.center,
+        alignment: Alignment.topCenter,
         clipBehavior: Clip.hardEdge,
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 170),
@@ -4966,7 +4976,7 @@ class WebViewFloatingHeader extends StatelessWidget {
 
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: expandTarget, end: expandTarget),
-      duration: const Duration(milliseconds: 220),
+      duration: const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
       child: glassCenterMorph,
       builder: (context, t, stableGlassCenter) {
@@ -4975,7 +4985,6 @@ class WebViewFloatingHeader extends StatelessWidget {
             : ui.lerpDouble(compactHeight, normalHeight, t)!;
         final double pillHeight = ui.lerpDouble(26.0, 44.0, t)!;
         final double pillRadius = pillHeight * 0.5;
-        final double topPad = 5.0 * t;
         final bool sideVisible = t > 0.02;
 
         final Widget leftWidget = Positioned(
@@ -5035,10 +5044,10 @@ class WebViewFloatingHeader extends StatelessWidget {
         } else if (stableGlassCenter != null) {
           centerWidget = Positioned(
             key: const ValueKey('webview_header_center_pos'),
-            top: topInset + 3.0,
+            top: topInset + 8.0,
             left: 24.0,
             right: 24.0,
-            height: 49.0,
+            height: 44.0,
             child: Transform.translate(
               offset: Offset(expandedShiftX * t, 0.0),
               child: stableGlassCenter,
@@ -5047,41 +5056,38 @@ class WebViewFloatingHeader extends StatelessWidget {
         } else {
           centerWidget = Positioned(
             key: const ValueKey('webview_header_center_pos'),
-            top: topInset + 3.0,
+            top: topInset + 8.0,
             left: 24.0,
             right: 24.0,
-            height: 49.0,
+            height: 44.0,
             child: Transform.translate(
               offset: Offset(expandedShiftX * t, 0.0),
-              child: Padding(
-                padding: EdgeInsets.only(top: topPad),
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: GestureDetector(
-                    key: const ValueKey('webview_header_center_pill'),
-                    behavior: HitTestBehavior.opaque,
-                    onTap: effectiveCompact
-                        ? (onExpandCompact ?? onCenterTap)
-                        : onCenterTap,
-                    onLongPress: onCenterLongPress,
-                    onVerticalDragStart: (menuExpanded || effectiveCompact)
-                        ? null
-                        : onVerticalDragStart,
-                    onVerticalDragUpdate: (menuExpanded || effectiveCompact)
-                        ? null
-                        : onVerticalDragUpdate,
-                    onVerticalDragEnd: (menuExpanded || effectiveCompact)
-                        ? null
-                        : onVerticalDragEnd,
-                    onVerticalDragCancel: (menuExpanded || effectiveCompact)
-                        ? null
-                        : onVerticalDragCancel,
-                    child: WebViewFloatingCapsule(
-                      height: null,
-                      borderRadius: pillRadius,
-                      colorOverride: capsuleColorOverride,
-                      child: matteCenterMorphContent!,
-                    ),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: GestureDetector(
+                  key: const ValueKey('webview_header_center_pill'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: effectiveCompact
+                      ? (onExpandCompact ?? onCenterTap)
+                      : onCenterTap,
+                  onLongPress: onCenterLongPress,
+                  onVerticalDragStart: (menuExpanded || effectiveCompact)
+                      ? null
+                      : onVerticalDragStart,
+                  onVerticalDragUpdate: (menuExpanded || effectiveCompact)
+                      ? null
+                      : onVerticalDragUpdate,
+                  onVerticalDragEnd: (menuExpanded || effectiveCompact)
+                      ? null
+                      : onVerticalDragEnd,
+                  onVerticalDragCancel: (menuExpanded || effectiveCompact)
+                      ? null
+                      : onVerticalDragCancel,
+                  child: WebViewFloatingCapsule(
+                    height: null,
+                    borderRadius: pillRadius,
+                    colorOverride: capsuleColorOverride,
+                    child: matteCenterMorphContent!,
                   ),
                 ),
               ),

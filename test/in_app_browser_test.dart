@@ -512,7 +512,7 @@ void main() {
         );
 
         expect(session.browserTopClearance, closeTo(82.0, 0.01));
-        expect(session.browserCompactTopClearance, closeTo(56.0, 0.01));
+        expect(session.browserCompactTopClearance, closeTo(62.0, 0.01));
         expect(session.browserBottomClearance, closeTo(80.0, 0.01));
         expect(session.browserCompactBottomClearance, closeTo(16.0, 0.01));
         expect(session.browserViewportHeight, closeTo(800.0, 0.01));
@@ -652,6 +652,12 @@ void main() {
         );
         expect(compactSize.height, closeTo(26.0, 0.5));
         expect(compactSize.width, lessThan(midSize.width));
+        expect(
+          tester
+              .getTopLeft(find.byKey(const ValueKey('webview_header_center_pill')))
+              .dy,
+          closeTo(32.0, 0.5),
+        );
 
         // Tapping compact center domain pill morphs back to all 3 top capsules & bottom bar.
         await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
@@ -723,26 +729,68 @@ void main() {
         final centerMorphFinder = find.byKey(const ValueKey('webview_center_morph'));
         expect(centerMorphFinder, findsOneWidget);
         expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+        final centerMorphWidget = tester.widget<LiquidGlassMorph>(centerMorphFinder);
+        expect(centerMorphWidget.motion.blended, isFalse);
+        expect(centerMorphWidget.smoothness, 0);
+        final centerLensFinder = find.descendant(
+          of: centerMorphFinder,
+          matching: find.byType(LiquidGlassLens),
+        );
+        expect(centerLensFinder, findsOneWidget);
+        expect(tester.getRect(centerLensFinder).top, closeTo(32.0, 0.5));
+        expect(tester.getRect(centerLensFinder).height, closeTo(44.0, 0.5));
         final State glassMorphState = tester.state(centerMorphFinder);
 
         session.applyBrowserPageMetaPayload(
           '{"collapsed":true,"topIsDark":false,"topColor":"rgb(255, 255, 255)","bottomColor":"rgb(255, 255, 255)","canvasColor":"rgb(255, 255, 255)"}',
         );
         await tester.pump();
-        await tester.pump(const Duration(milliseconds: 90));
+        await tester.pump(const Duration(milliseconds: 60));
         expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
+        expect(centerLensFinder, findsOneWidget);
+        final Rect collapseFrame60 = tester.getRect(centerLensFinder);
+        expect(collapseFrame60.top, closeTo(32.0, 0.5));
+        expect(collapseFrame60.height, inInclusiveRange(25.9, 44.1));
+
+        await tester.pump(const Duration(milliseconds: 90));
+        expect(centerLensFinder, findsOneWidget);
+        final Rect collapseFrame150 = tester.getRect(centerLensFinder);
+        expect(collapseFrame150.top, closeTo(32.0, 0.5));
+        expect(collapseFrame150.height, inInclusiveRange(25.9, 44.1));
 
         await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
+        expect(centerLensFinder, findsOneWidget);
+        final Rect compactLensRect = tester.getRect(centerLensFinder);
+        expect(compactLensRect.top, closeTo(32.0, 0.5));
+        expect(compactLensRect.height, closeTo(26.0, 0.5));
         expect(
           tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
           closeTo(26.0, 0.5),
         );
 
         await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
+        expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
+        expect(centerLensFinder, findsOneWidget);
+        final Rect expandFrame60 = tester.getRect(centerLensFinder);
+        expect(expandFrame60.top, closeTo(32.0, 0.5));
+        expect(expandFrame60.height, inInclusiveRange(25.9, 44.1));
+
+        await tester.pump(const Duration(milliseconds: 90));
+        expect(centerLensFinder, findsOneWidget);
+        final Rect expandFrame150 = tester.getRect(centerLensFinder);
+        expect(expandFrame150.top, closeTo(32.0, 0.5));
+        expect(expandFrame150.height, inInclusiveRange(25.9, 44.1));
+
         await tester.pumpAndSettle();
         expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
         expect(session.browserChromeCollapsed, isFalse);
+        expect(centerLensFinder, findsOneWidget);
+        final Rect expandedLensRect = tester.getRect(centerLensFinder);
+        expect(expandedLensRect.top, closeTo(32.0, 0.5));
+        expect(expandedLensRect.height, closeTo(44.0, 0.5));
         expect(
           tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
           closeTo(44.0, 0.5),
