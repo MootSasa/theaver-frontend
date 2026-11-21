@@ -379,7 +379,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
           ],
           selected: _activeTab,
           onChanged: _selectTab,
-          margin: const EdgeInsets.only(bottom: 6),
+          margin: const EdgeInsets.only(top: 2, bottom: 8),
         );
 
         final Widget searchBar = SizedBox(

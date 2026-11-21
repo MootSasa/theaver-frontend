@@ -1598,6 +1598,7 @@ class MiniAppSession {
         if (!document.body || vw <= 0 || vh <= 0) return null;
 
         var m = getScaledMetrics();
+        var hasTopInset = (m.tc > 0 || m.ctc > 0);
         var body = document.body;
         var htmlCs = window.getComputedStyle(document.documentElement);
         var bodyCs = window.getComputedStyle(body);
@@ -1632,7 +1633,13 @@ class MiniAppSession {
               var lpt = parseFloat(lel.dataset.theaverScrollContainerPt) || 0;
               var lpb = parseFloat(lel.dataset.theaverScrollContainerPb) || 0;
               setImp(lel, 'box-sizing', 'border-box');
-              setImp(lel, 'padding-top', Math.round(lpt <= 180 ? lpt + m.tc : Math.max(lpt, m.tc)) + 'px');
+              if (hasTopInset) {
+                lel.dataset.theaverAppliedTopPad = '1';
+                setImp(lel, 'padding-top', Math.round(lpt <= 180 ? lpt + m.tc : Math.max(lpt, m.tc)) + 'px');
+              } else if (lel.dataset.theaverAppliedTopPad === '1') {
+                setImp(lel, 'padding-top', Math.round(lpt) + 'px');
+                delete lel.dataset.theaverAppliedTopPad;
+              }
               setImp(lel, 'padding-bottom', Math.round(lpb <= 180 ? lpb + m.bc : Math.max(lpb, m.bc)) + 'px');
               break;
             }
@@ -1640,10 +1647,16 @@ class MiniAppSession {
         } else {
           var basePt = parseFloat(body.dataset.theaverBasePt) || 0;
           var basePb = parseFloat(body.dataset.theaverBasePb) || 0;
-          var nextPt = basePt <= 180 ? basePt + m.tc : Math.max(basePt, m.tc);
           var nextPb = basePb <= 180 ? basePb + m.bc : Math.max(basePb, m.bc);
           setImp(body, 'box-sizing', 'border-box');
-          setImp(body, 'padding-top', Math.round(nextPt) + 'px');
+          if (hasTopInset) {
+            var nextPt = basePt <= 180 ? basePt + m.tc : Math.max(basePt, m.tc);
+            body.dataset.theaverAppliedTopPad = '1';
+            setImp(body, 'padding-top', Math.round(nextPt) + 'px');
+          } else if (body.dataset.theaverAppliedTopPad === '1') {
+            setImp(body, 'padding-top', Math.round(basePt) + 'px');
+            delete body.dataset.theaverAppliedTopPad;
+          }
           setImp(body, 'padding-bottom', Math.round(nextPb) + 'px');
 
           var htmlColRaw = parseCssColor(htmlCs.backgroundColor);
@@ -1678,66 +1691,83 @@ class MiniAppSession {
           window.__theaverPrimaryTopNav = null;
         }
 
-        if (!primaryTop) {
-          for (var i = 0; i < all.length; i++) {
-            var el = all[i];
-            if (!el || !el.tagName) continue;
-            var cs = window.getComputedStyle(el);
-            if (cs.display === 'none') continue;
-            var pos = cs.position;
-            if (pos !== 'fixed' && pos !== 'sticky') continue;
-            if (cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
-            if (usesEnvTopVar(el)) continue;
-
-            var rect = el.getBoundingClientRect();
-            var eff = getEffectiveSize(el, rect);
-            if (eff.w < vw * 0.70 || rect.left > vw * 0.15) continue;
-            if (eff.h < 24 || eff.h > 88) continue;
-
-            if (el.dataset.theaverOrigRecorded !== '1') {
-              var inlineTopNum = parseNum(el.style.top || '');
-              if (inlineTopNum !== null && inlineTopNum < -12) continue;
-
-              var origTopStr = 'auto';
-              if (cs.top !== 'auto') {
-                var topVal = parseNum(cs.top);
-                if (topVal !== null) origTopStr = String(topVal);
-              } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= 4) {
-                origTopStr = 'auto-top';
-              }
-
-              var origBottomStr = 'auto';
-              if (cs.bottom !== 'auto') {
-                var botVal = parseNum(cs.bottom);
-                if (botVal !== null) origBottomStr = String(botVal);
-              }
-
-              var tNum = origTopStr === 'auto' || origTopStr === 'auto-top' ? null : parseNum(origTopStr);
-              var bNum = origBottomStr === 'auto' ? null : parseNum(origBottomStr);
-              if (bNum !== null) continue;
-              if (origTopStr !== 'auto-top' && (tNum === null || tNum < -2 || tNum > 4)) continue;
-
-              el.dataset.theaverOrigRecorded = '1';
-              el.dataset.theaverOrigTop = origTopStr;
-              el.dataset.theaverPos = pos;
+        if (!hasTopInset) {
+          if (primaryTop && primaryTop.dataset) {
+            if (primaryTop.dataset.theaverOrigTop && primaryTop.dataset.theaverOrigTop !== 'auto' && primaryTop.dataset.theaverOrigTop !== 'auto-top') {
+              setImp(primaryTop, 'top', primaryTop.dataset.theaverOrigTop + 'px');
+            } else if (primaryTop.dataset.theaverOrigTop === 'auto-top') {
+              primaryTop.style.removeProperty('top');
             }
-
-            el.dataset.theaverSafeRole = 'top-pinned';
-            primaryTop = el;
-            window.__theaverPrimaryTopNav = el;
-            break;
+            primaryTop.style.removeProperty('translate');
+            delete primaryTop.dataset.theaverSafeRole;
+            delete primaryTop.dataset.theaverHideInit;
+            delete primaryTop.dataset.theaverIsHiding;
+            delete primaryTop.dataset.theaverPrevTopOffset;
           }
-        }
+          primaryTop = null;
+          window.__theaverPrimaryTopNav = null;
+        } else {
+          if (!primaryTop) {
+            for (var i = 0; i < all.length; i++) {
+              var el = all[i];
+              if (!el || !el.tagName) continue;
+              var cs = window.getComputedStyle(el);
+              if (cs.display === 'none') continue;
+              var pos = cs.position;
+              if (pos !== 'fixed' && pos !== 'sticky') continue;
+              if (cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
+              if (usesEnvTopVar(el)) continue;
 
-        if (primaryTop) {
-          var pCs = window.getComputedStyle(primaryTop);
-          if (pCs.display !== 'none') {
-            var pPos = primaryTop.dataset.theaverPos || pCs.position;
-            var pOrigTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
-            var pOrigTopNum = pOrigTopRaw === 'auto' || pOrigTopRaw === 'auto-top' ? null : parseNum(pOrigTopRaw);
-            var pEff = getEffectiveSize(primaryTop, primaryTop.getBoundingClientRect());
-            if (pEff.h > 0) {
-              applyPinnedOffset(primaryTop, pCs, pPos, pOrigTopRaw, pOrigTopNum, pEff.h, m.activeTop);
+              var rect = el.getBoundingClientRect();
+              var eff = getEffectiveSize(el, rect);
+              if (eff.w < vw * 0.70 || rect.left > vw * 0.15) continue;
+              if (eff.h < 24 || eff.h > 88) continue;
+
+              if (el.dataset.theaverOrigRecorded !== '1') {
+                var inlineTopNum = parseNum(el.style.top || '');
+                if (inlineTopNum !== null && inlineTopNum < -12) continue;
+
+                var origTopStr = 'auto';
+                if (cs.top !== 'auto') {
+                  var topVal = parseNum(cs.top);
+                  if (topVal !== null) origTopStr = String(topVal);
+                } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= 4) {
+                  origTopStr = 'auto-top';
+                }
+
+                var origBottomStr = 'auto';
+                if (cs.bottom !== 'auto') {
+                  var botVal = parseNum(cs.bottom);
+                  if (botVal !== null) origBottomStr = String(botVal);
+                }
+
+                var tNum = origTopStr === 'auto' || origTopStr === 'auto-top' ? null : parseNum(origTopStr);
+                var bNum = origBottomStr === 'auto' ? null : parseNum(origBottomStr);
+                if (bNum !== null) continue;
+                if (origTopStr !== 'auto-top' && (tNum === null || tNum < -2 || tNum > 4)) continue;
+
+                el.dataset.theaverOrigRecorded = '1';
+                el.dataset.theaverOrigTop = origTopStr;
+                el.dataset.theaverPos = pos;
+              }
+
+              el.dataset.theaverSafeRole = 'top-pinned';
+              primaryTop = el;
+              window.__theaverPrimaryTopNav = el;
+              break;
+            }
+          }
+
+          if (primaryTop) {
+            var pCs = window.getComputedStyle(primaryTop);
+            if (pCs.display !== 'none') {
+              var pPos = primaryTop.dataset.theaverPos || pCs.position;
+              var pOrigTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
+              var pOrigTopNum = pOrigTopRaw === 'auto' || pOrigTopRaw === 'auto-top' ? null : parseNum(pOrigTopRaw);
+              var pEff = getEffectiveSize(primaryTop, primaryTop.getBoundingClientRect());
+              if (pEff.h > 0) {
+                applyPinnedOffset(primaryTop, pCs, pPos, pOrigTopRaw, pOrigTopNum, pEff.h, m.activeTop);
+              }
             }
           }
         }
@@ -1757,6 +1787,8 @@ class MiniAppSession {
       if (window.__theaverApplyingSafeZones) return;
       window.__theaverApplyingSafeZones = true;
       try {
+        var m = getScaledMetrics();
+        var hasTopInset = (m.tc > 0 || m.ctc > 0);
         var primaryTop = window.__theaverPrimaryTopNav || null;
         if (
           (!primaryTop || !primaryTop.isConnected) &&
@@ -1766,10 +1798,25 @@ class MiniAppSession {
           primaryTop = document.querySelector('[data-theaver-safe-role="top-pinned"]');
           window.__theaverPrimaryTopNav = primaryTop || null;
         }
+        if (!hasTopInset) {
+          if (primaryTop && primaryTop.dataset) {
+            if (primaryTop.dataset.theaverOrigTop && primaryTop.dataset.theaverOrigTop !== 'auto' && primaryTop.dataset.theaverOrigTop !== 'auto-top') {
+              setImp(primaryTop, 'top', primaryTop.dataset.theaverOrigTop + 'px');
+            } else if (primaryTop.dataset.theaverOrigTop === 'auto-top') {
+              primaryTop.style.removeProperty('top');
+            }
+            primaryTop.style.removeProperty('translate');
+            delete primaryTop.dataset.theaverSafeRole;
+            delete primaryTop.dataset.theaverHideInit;
+            delete primaryTop.dataset.theaverIsHiding;
+            delete primaryTop.dataset.theaverPrevTopOffset;
+          }
+          window.__theaverPrimaryTopNav = null;
+          return;
+        }
         if (primaryTop && primaryTop.isConnected) {
           var cs = window.getComputedStyle(primaryTop);
           if (cs.display !== 'none') {
-            var m = getScaledMetrics();
             var pos = primaryTop.dataset.theaverPos || cs.position;
             var origTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
             var origTopNum = origTopRaw === 'auto' || origTopRaw === 'auto-top' ? null : parseNum(origTopRaw);

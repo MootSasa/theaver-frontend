@@ -218,12 +218,23 @@ void main() {
         await tester.pump();
         expect(headerTapped, isTrue);
 
-        await tester.tap(find.text('Частный'));
+        await tester.tap(find.text('Частный'), warnIfMissed: false);
         await tester.pumpAndSettle();
         expect(selectedSegment, 'b');
 
         final expectGlassControls =
             mode == GlassMode.lite || mode == GlassMode.full;
+        expect(
+          find.byKey(const ValueKey('lg-animated-nav-gesture-overlay')),
+          expectGlassControls ? findsOneWidget : findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: find.byType(TheavSegmentedControl<String>),
+            matching: find.byType(ClipRRect),
+          ),
+          findsNothing,
+        );
         expect(
           find.byType(LiquidGlassSwitch),
           expectGlassControls ? findsOneWidget : findsNothing,

@@ -469,7 +469,7 @@ void main() {
     });
 
     testWidgets(
-      'InAppBrowserSheet keeps body edge-to-edge with scroll pockets and dynamically updates browserTopClearance',
+      'InAppBrowserSheet positions web viewport below Safari top bar without resizing on scroll collapse',
       (tester) async {
         tester.view.physicalSize = const Size(400, 800);
         tester.view.devicePixelRatio = 1.0;
@@ -499,41 +499,57 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_top_cap')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_bottom_cap')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_safe_viewport')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_web_viewport')), findsOneWidget);
         expect(find.byKey(const ValueKey('in_app_browser_top_scroll_pocket')), findsOneWidget);
         expect(find.byKey(const ValueKey('in_app_browser_bottom_scroll_pocket')), findsOneWidget);
 
         final sheetFinder = find.byKey(const ValueKey('in_app_browser_sheet'));
         expect(tester.getRect(sheetFinder), const Rect.fromLTWH(0, 0, 400, 800));
-        final sheetStack = tester.widget<Stack>(
-          find.descendant(of: sheetFinder, matching: find.byType(Stack)).first,
+
+        // Expanded state: web viewport y = 0 sits strictly below top capsules (24 + 56 = 80).
+        final webGuardFinder = find.byKey(
+          const ValueKey('in_app_browser_web_interaction_guard'),
         );
-        final firstLayer = sheetStack.children.first as Positioned;
-        expect(firstLayer.left, 0.0);
-        expect(firstLayer.right, 0.0);
-        expect(firstLayer.top, 0.0);
-        expect(firstLayer.bottom, 0.0);
+        final Rect expandedWebRect = tester.getRect(webGuardFinder);
+        expect(expandedWebRect.top, closeTo(80.0, 0.01));
+        expect(expandedWebRect.height, closeTo(738.0, 0.01));
         expect(
-          tester.getRect(find.byWidget(firstLayer)),
-          const Rect.fromLTWH(0, 0, 400, 800),
+          expandedWebRect.top,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('webview_header_center_pill')))
+                .bottom,
+          ),
+        );
+        expect(
+          expandedWebRect.top,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('in_app_browser_close_button')))
+                .bottom,
+          ),
         );
 
-        expect(session.browserTopClearance, closeTo(82.0, 0.01));
-        expect(session.browserCompactTopClearance, closeTo(62.0, 0.01));
-        expect(session.browserBottomClearance, closeTo(80.0, 0.01));
+        expect(session.browserTopClearance, closeTo(0.0, 0.01));
+        expect(session.browserCompactTopClearance, closeTo(0.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(98.0, 0.01));
         expect(session.browserCompactBottomClearance, closeTo(16.0, 0.01));
-        expect(session.browserViewportHeight, closeTo(800.0, 0.01));
+        expect(session.browserViewportHeight, closeTo(738.0, 0.01));
         expect(session.browserForceExpanded, isFalse);
 
-        // Opening Find-in-Page lowers top clearance below the find capsule and forces expanded chrome.
+        // Opening Find-in-Page lowers web viewport below the find bar without resizing PlatformView.
         await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Найти на странице'));
         await tester.pumpAndSettle();
 
-        expect(session.browserTopClearance, closeTo(134.0, 0.01));
+        final Rect findWebRect = tester.getRect(webGuardFinder);
+        expect(findWebRect.top, closeTo(132.0, 0.01));
+        expect(findWebRect.height, closeTo(738.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(150.0, 0.01));
         expect(session.browserForceExpanded, isTrue);
 
-        // Closing Find-in-Page restores normal top clearance.
+        // Closing Find-in-Page restores normal expanded top position.
         final findCapsuleFinder = find.ancestor(
           of: find.byType(TextField),
           matching: find.byType(WebViewFloatingCapsule),
@@ -544,8 +560,29 @@ void main() {
         );
         await tester.tap(findBarCloseFinder);
         await tester.pumpAndSettle();
-        expect(session.browserTopClearance, closeTo(82.0, 0.01));
+        expect(tester.getRect(webGuardFinder).top, closeTo(80.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(98.0, 0.01));
         expect(session.browserForceExpanded, isFalse);
+
+        // Downward scroll glides web viewport up beneath compact domain pill while preserving height.
+        session.applyBrowserPageMetaPayload(
+          '{"collapsed":true,"topIsDark":false,"topColor":"rgb(255, 255, 255)","bottomColor":"rgb(255, 255, 255)","canvasColor":"rgb(255, 255, 255)"}',
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 90));
+        expect(tester.getRect(webGuardFinder).height, closeTo(738.0, 0.01));
+        await tester.pumpAndSettle();
+        final Rect compactWebRect = tester.getRect(webGuardFinder);
+        expect(compactWebRect.top, closeTo(62.0, 0.01));
+        expect(compactWebRect.height, closeTo(738.0, 0.01));
+        expect(
+          compactWebRect.top,
+          greaterThan(
+            tester
+                .getRect(find.byKey(const ValueKey('webview_header_center_pill')))
+                .bottom,
+          ),
+        );
       },
     );
 
@@ -2251,16 +2288,30 @@ void main() {
         expect(searchTf.decoration?.fillColor, Colors.transparent);
         expect(searchTf.decoration?.border, InputBorder.none);
 
-        // Sliding LiquidGlassMotionPill + Liquid Glass invariants inside SafariLibrarySheet.
+        // LiquidGlassTabBar dual-pipeline switcher with zero ClipRRect or Opacity ancestors.
         final segmentedFinder = find.byKey(
           const ValueKey('safari_library_segmented_control'),
         );
         expect(
           find.descendant(
             of: segmentedFinder,
-            matching: find.byType(LiquidGlassMotionPill),
+            matching: find.byType(LiquidGlassView),
+          ),
+          findsNWidgets(2),
+        );
+        expect(
+          find.descendant(
+            of: segmentedFinder,
+            matching: find.byKey(const ValueKey('lg-animated-nav-gesture-overlay')),
           ),
           findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: segmentedFinder,
+            matching: find.byType(ClipRRect),
+          ),
+          findsNothing,
         );
         final segmentedLens = find.descendant(
           of: segmentedFinder,
@@ -2312,18 +2363,36 @@ void main() {
         expect(find.text('Сохранено'), findsOneWidget);
         expect(BrowserDataService.instance.isBookmarked('https://dzen.ru/'), isTrue);
 
-        // Horizontal drag across TheavSegmentedControl slides glass pill & PageView to History.
-        await tester.drag(segmentedFinder, const Offset(150, 0));
+        // Press-and-hold horizontal drag across LiquidGlassTabBar slides glass pill & PageView to History.
+        final Offset bookmarksCenter = tester.getCenter(find.text('Закладки'));
+        final TestGesture grabHistory =
+            await tester.startGesture(bookmarksCenter);
+        await tester.pump(const Duration(milliseconds: 120));
+        for (int step = 0; step < 6; step++) {
+          await grabHistory.moveBy(const Offset(24, 0));
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        await tester.pump(const Duration(milliseconds: 60));
+        await grabHistory.up();
         await tester.pumpAndSettle();
         expect(find.text('Сегодня'), findsOneWidget);
         expect(find.text('Вчера'), findsOneWidget);
 
-        // Drag back to Bookmarks, then switch via tap to History.
-        await tester.drag(segmentedFinder, const Offset(-150, 0));
+        // Press-and-drag back to Bookmarks, then switch via tap to History.
+        final Offset historyCenter = tester.getCenter(find.text('История'));
+        final TestGesture grabBookmarks =
+            await tester.startGesture(historyCenter);
+        await tester.pump(const Duration(milliseconds: 120));
+        for (int step = 0; step < 6; step++) {
+          await grabBookmarks.moveBy(const Offset(-24, 0));
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        await tester.pump(const Duration(milliseconds: 60));
+        await grabBookmarks.up();
         await tester.pumpAndSettle();
         expect(find.text('Сохранённые сайты'), findsOneWidget);
 
-        await tester.tap(find.text('История'));
+        await tester.tap(find.text('История'), warnIfMissed: false);
         await tester.pumpAndSettle();
         expect(find.text('Сегодня'), findsOneWidget);
         expect(find.text('Вчера'), findsOneWidget);
@@ -2387,7 +2456,7 @@ void main() {
         expect(find.text('История браузера пуста'), findsOneWidget);
 
         // Switch back to Bookmarks and tap saved Dart Guides bookmark -> navigates & closes sheet.
-        await tester.tap(find.text('Закладки'));
+        await tester.tap(find.text('Закладки'), warnIfMissed: false);
         await tester.pumpAndSettle();
         expect(find.text('Dart Guides'), findsOneWidget);
         await tester.tap(find.text('Dart Guides'));

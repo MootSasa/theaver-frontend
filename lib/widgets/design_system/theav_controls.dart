@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -21,15 +20,17 @@ class TheavSegmentOption<T> {
   });
 }
 
-/// Sliding pill segmented control supporting both Liquid Glass (with a living
-/// spring-driven [LiquidGlassMotionPill] supporting tap and horizontal drag)
-/// and borderless Material Matte modes.
-class TheavSegmentedControl<T> extends StatefulWidget {
+/// Sliding pill segmented control matching the main screen's
+/// [LiquidGlassTabBar] (dual-pipeline living morphing pill with under-pill
+/// magnification and dual-layer reveal, zero clipping) in Liquid Glass mode,
+/// and crisp Material Matte mode when glass is disabled.
+class TheavSegmentedControl<T> extends StatelessWidget {
   final List<TheavSegmentOption<T>> options;
   final T selected;
   final ValueChanged<T> onChanged;
   final double height;
   final EdgeInsetsGeometry margin;
+  final bool expand;
 
   const TheavSegmentedControl({
     super.key,
@@ -38,189 +39,46 @@ class TheavSegmentedControl<T> extends StatefulWidget {
     required this.onChanged,
     this.height = 38.0,
     this.margin = EdgeInsets.zero,
+    this.expand = false,
   });
 
-  @override
-  State<TheavSegmentedControl<T>> createState() =>
-      _TheavSegmentedControlState<T>();
-}
-
-class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
-    with SingleTickerProviderStateMixin {
-  static const double _pillStiffness = 260.0;
-  static const double _pillDamping = 28.0;
-
-  late double _fractionalIndex;
-  double _indexVel = 0.0;
-  double? _targetIndex;
-  bool _lifted = false;
-  bool _isDragging = false;
-  bool _glassVisible = false;
-  Ticker? _glideTicker;
-  Duration? _lastTickElapsed;
-  final LiquidGlassViewController _viewController = LiquidGlassViewController();
-
   int _selectedIndex() {
-    final int idx =
-        widget.options.indexWhere((o) => o.value == widget.selected);
+    final int idx = options.indexWhere((o) => o.value == selected);
     return idx < 0 ? 0 : idx;
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _fractionalIndex = _selectedIndex().toDouble();
-    _glideTicker = createTicker(_onGlideTick);
-  }
-
-  @override
-  void didUpdateWidget(covariant TheavSegmentedControl<T> oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.options.isEmpty) return;
-    final int newIdx = _selectedIndex();
-    final int maxIdx = widget.options.length - 1;
-    if (!_isDragging && oldWidget.selected != widget.selected) {
-      _animateToSegment(newIdx);
-    } else if (_fractionalIndex > maxIdx) {
-      _fractionalIndex = newIdx.toDouble();
-      _indexVel = 0.0;
-      _targetIndex = null;
-      _lifted = false;
+  double _measureCompactWidth(BuildContext context, double maxWidth) {
+    final double usableMax = math.max(96.0, maxWidth - 12.0);
+    if (expand || options.isEmpty) {
+      return usableMax;
     }
-  }
+    final TextDirection textDirection = Directionality.of(context);
+    final TextScaler textScaler = MediaQuery.textScalerOf(context);
+    final String? fontFamily = Theme.of(context).textTheme.titleMedium?.fontFamily;
+    final TextStyle measureStyle = TextStyle(
+      fontFamily: fontFamily,
+      fontSize: 14.0,
+      fontWeight: FontWeight.w700,
+    );
 
-  @override
-  void dispose() {
-    _glideTicker?.dispose();
-    _viewController.detach();
-    super.dispose();
-  }
-
-  void _ensureTicking() {
-    final ticker = _glideTicker;
-    if (ticker != null && !ticker.isActive) {
-      _lastTickElapsed = null;
-      ticker.start();
-    }
-  }
-
-  void _animateToSegment(int index, {bool lift = true}) {
-    final double nextTarget = index.toDouble();
-    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
-      _glideTicker?.stop();
-      setState(() {
-        _fractionalIndex = nextTarget;
-        _indexVel = 0.0;
-        _targetIndex = null;
-        _lifted = false;
-      });
-      return;
-    }
-    setState(() {
-      _targetIndex = nextTarget;
-      if (lift && (nextTarget - _fractionalIndex).abs() > 0.05) {
-        _lifted = true;
-      } else if (!lift) {
-        _lifted = false;
+    double maxCellWidth = 0.0;
+    for (final opt in options) {
+      final TextPainter painter = TextPainter(
+        text: TextSpan(text: opt.label, style: measureStyle),
+        maxLines: 1,
+        textDirection: textDirection,
+        textScaler: textScaler,
+      )..layout();
+      final double cellW =
+          painter.width.ceilToDouble() + (opt.icon != null ? 22.0 : 0.0) + 28.0;
+      if (cellW > maxCellWidth) {
+        maxCellWidth = cellW;
       }
-    });
-    _ensureTicking();
-  }
-
-  void _onGlideTick(Duration elapsed) {
-    final Duration last = _lastTickElapsed ?? elapsed;
-    final double rawDt = (elapsed - last).inMicroseconds / 1e6;
-    _lastTickElapsed = elapsed;
-    if (rawDt <= 0.0) return;
-    final double dt = math.min(0.04, rawDt);
-
-    final double? target = _targetIndex;
-    if (target == null) {
-      _glideTicker?.stop();
-      return;
     }
 
-    final (double nextX, double nextVel) = liquidGlassSpringStep(
-      x: _fractionalIndex,
-      vel: _indexVel,
-      target: target,
-      dt: dt,
-      stiffness: _pillStiffness,
-      damping: _pillDamping,
-    );
-    _fractionalIndex = nextX;
-    _indexVel = nextVel;
-
-    if ((nextX - target).abs() < 0.14) {
-      _lifted = false;
-    }
-    if ((nextX - target).abs() < 0.002 && nextVel.abs() < 0.01) {
-      _fractionalIndex = target;
-      _indexVel = 0.0;
-      _targetIndex = null;
-      _lifted = false;
-      _glideTicker?.stop();
-    }
-
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  void _handleSegmentTap(int index) {
-    final option = widget.options[index];
-    if (option.value != widget.selected) {
-      HapticUtils.selection();
-      widget.onChanged(option.value);
-      _animateToSegment(index);
-    } else if ((_fractionalIndex - index).abs() > 0.01 || _lifted) {
-      _animateToSegment(index, lift: false);
-    }
-  }
-
-  void _handleDragStart(DragStartDetails _) {
-    _glideTicker?.stop();
-    _targetIndex = null;
-    _indexVel = 0.0;
-    _isDragging = true;
-    setState(() => _lifted = true);
-  }
-
-  void _handleDragUpdate(DragUpdateDetails details, double cellW, int count) {
-    if (cellW <= 0.1 || count <= 1) return;
-    final double rawNext = _fractionalIndex + details.delta.dx / cellW;
-    final double maxIdx = (count - 1).toDouble();
-    if (rawNext < 0.0) {
-      _fractionalIndex = (rawNext * 0.35).clamp(-0.14, 0.0);
-    } else if (rawNext > maxIdx) {
-      _fractionalIndex =
-          (maxIdx + (rawNext - maxIdx) * 0.35).clamp(maxIdx, maxIdx + 0.14);
-    } else {
-      _fractionalIndex = rawNext;
-    }
-    final int nearest = _fractionalIndex.round().clamp(0, count - 1);
-    if (widget.options[nearest].value != widget.selected) {
-      HapticUtils.selection();
-      widget.onChanged(widget.options[nearest].value);
-    }
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  void _handleDragFinish(DragEndDetails? details) {
-    _isDragging = false;
-    if (widget.options.isEmpty) return;
-    final int maxIdx = widget.options.length - 1;
-    final int snapped = _fractionalIndex.round().clamp(0, maxIdx);
-    if (widget.options[snapped].value != widget.selected) {
-      HapticUtils.selection();
-      widget.onChanged(widget.options[snapped].value);
-    }
-    _animateToSegment(
-      snapped,
-      lift: (snapped - _fractionalIndex).abs() >= 0.08,
-    );
+    final double idealWidth = (maxCellWidth * options.length) + 6.0;
+    final double minCompact = math.min(140.0, maxWidth);
+    return idealWidth.clamp(minCompact, usableMax).toDouble();
   }
 
   Widget _buildSegmentRow(
@@ -233,11 +91,16 @@ class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
       padding: EdgeInsets.all(pad),
       child: Row(
         children: [
-          for (int i = 0; i < widget.options.length; i++)
+          for (int i = 0; i < options.length; i++)
             Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: () => _handleSegmentTap(i),
+                onTap: () {
+                  if (options[i].value != selected) {
+                    HapticUtils.selection();
+                    onChanged(options[i].value);
+                  }
+                },
                 child: SizedBox(
                   height: cellH,
                   child: Center(
@@ -247,7 +110,7 @@ class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
                         mainAxisSize: MainAxisSize.min,
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          if (widget.options[i].icon != null) ...[
+                          if (options[i].icon != null) ...[
                             IconTheme(
                               data: IconThemeData(
                                 size: 16,
@@ -255,7 +118,7 @@ class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
                                     ? palette.primary
                                     : palette.subtext,
                               ),
-                              child: widget.options[i].icon!,
+                              child: options[i].icon!,
                             ),
                             const SizedBox(width: 5),
                           ],
@@ -272,7 +135,7 @@ class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
                                     : FontWeight.w500,
                               ),
                               child: Text(
-                                widget.options[i].label,
+                                options[i].label,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -292,139 +155,150 @@ class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
 
   @override
   Widget build(BuildContext context) {
-    if (widget.options.isEmpty) return const SizedBox.shrink();
+    if (options.isEmpty) return const SizedBox.shrink();
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final int n = widget.options.length;
+    final int n = options.length;
     final int activeIdx = _selectedIndex();
 
     if (style.isGlass && style.glassProvider != null) {
-      const double pad = 3.5;
-      final double cellH = math.max(12.0, widget.height - pad * 2.0);
-      final Color trackBg = style.isDark
-          ? const Color(0x18FFFFFF)
-          : const Color(0x0D000000);
-      final Color restPillColor = style.isDark
-          ? const Color(0x36FFFFFF)
-          : const Color(0x88FFFFFF);
-      final double extraW = math.min(6.0, pad * 1.6);
-      final double extraH = math.min(5.0, pad * 1.5);
-
       return Padding(
-        padding: widget.margin,
+        padding: margin,
         child: SizedBox(
-          height: widget.height,
+          height: height,
+          width: double.infinity,
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final double w = constraints.maxWidth.isFinite &&
+              final double availW = constraints.maxWidth.isFinite &&
                       constraints.maxWidth > 0
                   ? constraints.maxWidth
                   : 280.0;
-              final double cellW = math.max(1.0, (w - pad * 2.0) / n);
-              final double clampedIdx = _fractionalIndex.clamp(
-                -0.14,
-                (n - 1).toDouble() + 0.14,
-              );
-              final double pillLeft = pad + clampedIdx * cellW;
-              final double pillCX = pillLeft + cellW * 0.5;
+              final double barW = _measureCompactWidth(context, availW);
+              final double cellH = math.max(12.0, height - 6.0);
+              final double pillW = math.max(12.0, (barW - 6.0) / n);
+              final double sideRoom = (availW - barW) * 0.5 + 20.0;
+              final double maxLiftedW = pillW + 2.0 * sideRoom;
+              final double maxGrowH = (maxLiftedW * (cellH / pillW)) - height;
+              final double effectiveGrowHeight = maxGrowH.clamp(2.5, 7.0);
 
-              final Widget backgroundLayer = Stack(
-                fit: StackFit.expand,
-                children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: trackBg,
-                      borderRadius: BorderRadius.circular(widget.height / 2),
-                    ),
-                  ),
-                  Positioned(
-                    left: pillLeft,
-                    top: pad,
-                    width: cellW,
-                    height: cellH,
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 120),
-                      opacity: _glassVisible ? 0.32 : 1.0,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: restPillColor,
-                          borderRadius: BorderRadius.circular(cellH / 2),
-                          boxShadow: style.isDark
-                              ? null
-                              : [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.06),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 1.5),
+              final barStyle = style.glassProvider!.createStyle(
+                context: context,
+                cornerRadius: height / 2,
+                refractionIndex: 1.1,
+                refractionWidth: 24.0,
+                color: style.isDark
+                    ? const Color(0x38202025)
+                    : const Color(0x66FFFFFF),
+              );
+
+              final Color selectedLabelColor =
+                  style.isDark ? Colors.white : const Color(0xFF1C1C1E);
+              final Color unselectedLabelColor = style.isDark
+                  ? Colors.white.withValues(alpha: 0.68)
+                  : const Color(0xFF1C1C1E).withValues(alpha: 0.58);
+
+              final tabBar = LiquidGlassTabBar(
+                items: [
+                  for (final opt in options)
+                    LiquidGlassTabBarItem(
+                      label: opt.label,
+                      iconBuilder: (_, __) => const SizedBox.shrink(),
+                      labelBuilder: (ctx, meta) => Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (opt.icon != null) ...[
+                                IconTheme(
+                                  data: IconThemeData(
+                                    size: meta.underGlass ? 16.5 : 15.5,
+                                    color: meta.selected
+                                        ? palette.primary
+                                        : meta.color,
                                   ),
-                                ],
+                                  child: opt.icon!,
+                                ),
+                                const SizedBox(width: 5),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  opt.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: meta.textStyle,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
+                ],
+                selectedIndex: activeIdx,
+                onChanged: (idx) {
+                  if (idx >= 0 &&
+                      idx < options.length &&
+                      options[idx].value != selected) {
+                    HapticUtils.selection();
+                    onChanged(options[idx].value);
+                  }
+                },
+                width: barW,
+                height: height,
+                alignment: Alignment.center,
+                margin: EdgeInsets.zero,
+                itemPadding: 3,
+                style: barStyle,
+                itemStyle: LiquidGlassTabItemStyle(
+                  selectedColor: selectedLabelColor,
+                  unselectedColor: unselectedLabelColor,
+                  iconSize: 0,
+                  underGlassIconSize: 0,
+                  iconLabelGap: 0,
+                  labelFontSize: 13.5,
+                  underGlassLabelFontSize: 14.0,
+                  selectedFontWeight: FontWeight.w700,
+                  unselectedFontWeight: FontWeight.w600,
+                ),
+                pillStyle: LiquidGlassTabPillStyle(
+                  mode: LiquidGlassPillMode.both,
+                  show: true,
+                  animated: true,
+                  growHeight: effectiveGrowHeight,
+                  rest: LiquidGlassStyle(
+                    shape: const LiquidGlassShape.continuousRoundedRectangle(
+                      cornerRadius: 28,
+                      clipQuality: LiquidGlassClipQuality.roundedRectangle,
+                    ),
+                    color: style.isDark
+                        ? const Color(0x38FFFFFF)
+                        : const Color(0x2EAEAEB2),
                   ),
-                  Positioned.fill(
-                    child: _buildSegmentRow(
-                      palette,
-                      pad: pad,
-                      cellH: cellH,
+                ),
+              );
+
+              const double hBleed = 32.0;
+              const double vBleed = 20.0;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: -hBleed,
+                    right: -hBleed,
+                    top: -vBleed,
+                    bottom: -vBleed,
+                    child: tabBar.buildGlassPillBar(
+                      body: const SizedBox.expand(),
+                      bottomInset: 0,
+                      pixelRatio: 1.0,
+                      useSync: true,
+                      batch: false,
+                      realTimeCapture: false,
                     ),
                   ),
                 ],
-              );
-
-              return GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragStart: _handleDragStart,
-                onHorizontalDragUpdate: (d) => _handleDragUpdate(d, cellW, n),
-                onHorizontalDragEnd: _handleDragFinish,
-                onHorizontalDragCancel: () => _handleDragFinish(null),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(widget.height / 2),
-                  child: LiquidGlassView(
-                    controller: _viewController,
-                    batch: false,
-                    realTimeCapture: false,
-                    useSync: true,
-                    backgroundWidget: backgroundLayer,
-                    child: IgnorePointer(
-                      child: LiquidGlassBatch.exclude(
-                        child: LiquidGlassMotionPill(
-                          center: Offset(pillCX, widget.height * 0.5),
-                          active: _lifted,
-                          restSize: Size(cellW, cellH),
-                          activeSize: Size(cellW + extraW, cellH + extraH),
-                          honorBackdropAlpha: true,
-                          style: LiquidGlassStyle(
-                            shape:
-                                const LiquidGlassShape.continuousRoundedRectangle(
-                              cornerRadius: 100,
-                            ),
-                            specular: const LiquidGlassLight.specular(),
-                            color: style.isDark
-                                ? const Color(0x22FFFFFF)
-                                : const Color(0x2CFFFFFF),
-                            blur: 0,
-                            shadow: const LiquidGlassShadow(inset: 3),
-                            refractionIndex: 1.045,
-                            refractionWidth: 12,
-                            magnification: 1.05,
-                            liteGlass: style.isLite,
-                          ),
-                          onGlassVisibilityChanged: (visible) {
-                            if (visible) {
-                              _viewController.startRealtimeCapture();
-                            } else {
-                              _viewController.stopRealtimeCapture();
-                            }
-                            if (mounted && _glassVisible != visible) {
-                              setState(() => _glassVisible = visible);
-                            }
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               );
             },
           ),
@@ -436,52 +310,69 @@ class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
         n <= 1 ? 0.0 : -1.0 + (2.0 * activeIdx / (n - 1));
     const double mattePad = 3.0;
     return Padding(
-      padding: widget.margin,
+      padding: margin,
       child: SizedBox(
-        height: widget.height,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: style.trackFill,
-            borderRadius: BorderRadius.circular(widget.height / 2),
-          ),
-          child: Stack(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(mattePad),
-                child: AnimatedAlign(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment(alignmentX, 0.0),
-                  child: FractionallySizedBox(
-                    widthFactor: 1.0 / n,
-                    heightFactor: 1.0,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: palette.surface,
-                        borderRadius: BorderRadius.circular(
-                          (widget.height - mattePad * 2) / 2,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(
-                              alpha: style.isDark ? 0.24 : 0.07,
+        height: height,
+        width: double.infinity,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final double availW = constraints.maxWidth.isFinite &&
+                    constraints.maxWidth > 0
+                ? constraints.maxWidth
+                : 280.0;
+            final double barW =
+                expand ? availW : _measureCompactWidth(context, availW);
+            return Center(
+              child: SizedBox(
+                width: barW,
+                height: height,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: style.trackFill,
+                    borderRadius: BorderRadius.circular(height / 2),
+                  ),
+                  child: Stack(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(mattePad),
+                        child: AnimatedAlign(
+                          duration: const Duration(milliseconds: 220),
+                          curve: Curves.easeOutCubic,
+                          alignment: Alignment(alignmentX, 0.0),
+                          child: FractionallySizedBox(
+                            widthFactor: 1.0 / n,
+                            heightFactor: 1.0,
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: palette.surface,
+                                borderRadius: BorderRadius.circular(
+                                  (height - mattePad * 2) / 2,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(
+                                      alpha: style.isDark ? 0.24 : 0.07,
+                                    ),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 1.5),
+                                  ),
+                                ],
+                              ),
                             ),
-                            blurRadius: 6,
-                            offset: const Offset(0, 1.5),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
+                      _buildSegmentRow(
+                        palette,
+                        pad: mattePad,
+                        cellH: math.max(12.0, height - mattePad * 2),
+                      ),
+                    ],
                   ),
                 ),
               ),
-              _buildSegmentRow(
-                palette,
-                pad: mattePad,
-                cellH: math.max(12.0, widget.height - mattePad * 2),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
