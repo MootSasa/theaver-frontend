@@ -87,6 +87,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   double _dragResetFrom = 0.0;
   double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
+  bool _allowRoutePop = false;
   bool _isTransitionReady = false;
   bool _didInjectInsetsOnMount = false;
   Animation<double>? _routeAnimation;
@@ -246,9 +247,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (!mounted) return;
     _setRouteRestingOpaque(false);
     HapticUtils.selection();
+    _allowRoutePop = true;
     final nav = Navigator.of(context, rootNavigator: true);
     MiniAppSessionController.instance.minimize(_session, navigator: nav);
-    nav.pop();
+    if (nav.canPop()) {
+      nav.pop();
+    }
   }
 
   Future<void> _openTabsSwitcherFromHeader() async {
@@ -263,12 +267,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (MinimizedMiniAppHost.isMountedIn(context)) {
       _isMinimizing = true;
       _setRouteRestingOpaque(false);
+      _allowRoutePop = true;
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimizeAndOpenSwitcher(
         _session,
         navigator: nav,
       );
-      nav.pop();
+      if (nav.canPop()) {
+        nav.pop();
+      }
       return;
     }
 
@@ -317,7 +324,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _setRouteRestingOpaque(false);
     HapticUtils.tap();
     MiniAppSessionController.instance.closeSession(_session);
-    Navigator.of(context, rootNavigator: true).maybePop();
+    _allowRoutePop = true;
+    final nav = Navigator.of(context, rootNavigator: true);
+    if (nav.canPop()) {
+      nav.pop();
+    }
   }
 
   void _expandBrowserChrome() {
@@ -340,12 +351,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   Future<void> _goBack() async {
-    final ctrl = _session.controller;
-    if (ctrl == null || !_hasPlatformWebView) return;
-    if (await ctrl.canGoBack()) {
+    final movedBack = await _session.performWebBack();
+    if (movedBack) {
       HapticUtils.tap();
-      await ctrl.goBack();
-      await _session.refreshBrowserNavState();
+      if (_session.browserChromeCollapsed) {
+        unawaited(_session.setBrowserChromeCollapsed(false));
+      }
       if (mounted) setState(() {});
     }
   }
@@ -1202,21 +1213,32 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       child: AnnotatedRegion<SystemUiOverlayStyle>(
         value: overlayStyle,
         child: PopScope(
-          canPop: false,
+          canPop: _allowRoutePop,
           onPopInvokedWithResult: (didPop, _) async {
             if (didPop) return;
             if (_isMenuOpen) {
               _closeMenu();
               return;
             }
-            if (_hasPlatformWebView && _session.canGoBack) {
-              await _goBack();
+            if (_isFindOpen) {
+              setState(() {
+                _isFindOpen = false;
+                _findStatus = '';
+              });
+              _updateBrowserSafeClearances();
               return;
             }
-            _setRouteRestingOpaque(false);
-            if (mounted) {
-              Navigator.of(context, rootNavigator: true).pop();
+            final movedBack = await _session.performWebBack();
+            if (movedBack) {
+              HapticUtils.tap();
+              if (_session.browserChromeCollapsed) {
+                unawaited(_session.setBrowserChromeCollapsed(false));
+              }
+              if (mounted) setState(() {});
+            } else if (_session.browserChromeCollapsed) {
+              _expandBrowserChrome();
             }
+            // System Back stays within browser history/controls; [×] closes the sheet.
           },
           child: ValueListenableBuilder<double>(
             valueListenable: _dragOffsetNotifier,

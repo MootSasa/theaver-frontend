@@ -2,16 +2,38 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/browser_data_service.dart';
+import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/utils/link_opener.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/bot/thv_invoice_sheet.dart';
 import 'package:theaver/widgets/browser/in_app_browser_sheet.dart';
+import 'package:theaver/widgets/design_system/theav_design_system.dart';
+
+class _TestLiquidGlassProvider extends LiquidGlassProvider {
+  _TestLiquidGlassProvider(this._mode);
+
+  final GlassMode _mode;
+
+  @override
+  GlassMode get mode => _mode;
+
+  @override
+  bool get enabled => _mode != GlassMode.disabled;
+
+  @override
+  bool get isLite => _mode == GlassMode.lite;
+
+  @override
+  bool get isFull => _mode == GlassMode.full;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -522,7 +544,7 @@ void main() {
     );
 
     testWidgets(
-      'InAppBrowserSheet collapses 3 top capsules into compact domain pill and hides bottom bar on downward scroll, expanding on domain tap',
+      'InAppBrowserSheet morphs 3 top capsules into compact domain pill and hides bottom bar on downward scroll, expanding on domain tap',
       (tester) async {
         tester.view.physicalSize = const Size(400, 800);
         tester.view.devicePixelRatio = 1.0;
@@ -535,7 +557,7 @@ void main() {
             initData: '',
           ),
           isBrowser: true,
-        );
+        )..pageTitle = 'Дзен — главная новость дня и очень длинный заголовок статьи';
         await tester.pumpWidget(
           MaterialApp(
             home: MediaQuery(
@@ -553,9 +575,13 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsOneWidget);
         expect(find.byKey(const ValueKey('in_app_browser_minimize_button')), findsOneWidget);
         expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsOneWidget);
-        expect(
-          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
-          closeTo(44.0, 0.5),
+        final Size expandedSize = tester.getSize(
+          find.byKey(const ValueKey('webview_header_center_pill')),
+        );
+        expect(expandedSize.height, closeTo(44.0, 0.5));
+        expect(expandedSize.width, greaterThan(180.0));
+        final State centerMatteState = tester.state(
+          find.byKey(const ValueKey('webview_center_matte_morph')),
         );
         expect(
           tester
@@ -567,10 +593,28 @@ void main() {
         );
         expect(find.byKey(const ValueKey('in_app_browser_bottom_bar')), findsOneWidget);
 
-        // Downward scroll collapses browser chrome Safari iOS 26 style.
+        // Downward scroll continuously morphs both width & height toward compact domain pill.
         session.applyBrowserPageMetaPayload(
           '{"collapsed":true,"topIsDark":false,"topColor":"rgb(239, 240, 242)","bottomColor":"rgb(239, 240, 242)","canvasColor":"rgb(239, 240, 242)"}',
         );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 90));
+
+        expect(
+          identical(
+            tester.state(find.byKey(const ValueKey('webview_center_matte_morph'))),
+            centerMatteState,
+          ),
+          isTrue,
+        );
+        final Size midSize = tester.getSize(
+          find.byKey(const ValueKey('webview_header_center_pill')),
+        );
+        expect(midSize.height, greaterThan(26.5));
+        expect(midSize.height, lessThan(43.5));
+        expect(midSize.width, lessThan(expandedSize.width - 10.0));
+        expect(midSize.width, greaterThan(110.0));
+
         await tester.pumpAndSettle();
 
         expect(session.browserChromeCollapsed, isTrue);
@@ -603,15 +647,23 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
-        expect(
-          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
-          closeTo(26.0, 0.5),
+        final Size compactSize = tester.getSize(
+          find.byKey(const ValueKey('webview_header_center_pill')),
         );
+        expect(compactSize.height, closeTo(26.0, 0.5));
+        expect(compactSize.width, lessThan(midSize.width));
 
-        // Tapping compact center domain pill expands all 3 top capsules & bottom bar.
+        // Tapping compact center domain pill morphs back to all 3 top capsules & bottom bar.
         await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
         await tester.pumpAndSettle();
 
+        expect(
+          identical(
+            tester.state(find.byKey(const ValueKey('webview_center_matte_morph'))),
+            centerMatteState,
+          ),
+          isTrue,
+        );
         expect(session.browserChromeCollapsed, isFalse);
         expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsOneWidget);
         expect(find.byKey(const ValueKey('in_app_browser_minimize_button')), findsOneWidget);
@@ -633,6 +685,191 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
         await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('in_app_browser_overflow_menu')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'InAppBrowserSheet uses continuous LiquidGlassMorph center pill in Glass mode',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'Дзен — главная лента новостей и статей';
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 800),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: InAppBrowserSheet(session: session),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final centerMorphFinder = find.byKey(const ValueKey('webview_center_morph'));
+        expect(centerMorphFinder, findsOneWidget);
+        expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+        final State glassMorphState = tester.state(centerMorphFinder);
+
+        session.applyBrowserPageMetaPayload(
+          '{"collapsed":true,"topIsDark":false,"topColor":"rgb(255, 255, 255)","bottomColor":"rgb(255, 255, 255)","canvasColor":"rgb(255, 255, 255)"}',
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 90));
+        expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
+
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
+        expect(
+          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
+          closeTo(26.0, 0.5),
+        );
+
+        await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+        await tester.pumpAndSettle();
+        expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
+        expect(session.browserChromeCollapsed, isFalse);
+        expect(
+          tester.getSize(find.byKey(const ValueKey('webview_header_center_pill'))).height,
+          closeTo(44.0, 0.5),
+        );
+      },
+    );
+
+    testWidgets(
+      'System Back performs web back without closing InAppBrowserSheet or MiniAppWebViewSheet; close button pops cleanly',
+      (tester) async {
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        late BuildContext homeCtx;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) {
+                homeCtx = context;
+                return const Scaffold(body: Center(child: Text('HomeHost')));
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 1. InAppBrowserSheet: system Back navigates back/closes overlays and never closes browser.
+        unawaited(LinkOpener.openUrl(homeCtx, 'https://dzen.ru/news'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+
+        // Open menu -> Back closes menu only.
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_overflow_menu')), findsOneWidget);
+
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_overflow_menu')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+
+        // Open Find-in-Page -> Back closes find bar only.
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Найти на странице'));
+        await tester.pumpAndSettle();
+        expect(find.byType(TextField), findsOneWidget);
+
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byType(TextField), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+
+        // Simulate web history stack (`canGoBack = true`) -> Back goes back without closing.
+        final browserWidget = tester.widget<InAppBrowserSheet>(
+          find.byType(InAppBrowserSheet),
+        );
+        browserWidget.session.canGoBack = true;
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(browserWidget.session.canGoBack, isFalse);
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+
+        // Even at root (`canGoBack == false`), system Back does NOT close the browser.
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+
+        // Tapping [x] closes the browser cleanly even if canGoBack == true.
+        browserWidget.session.canGoBack = true;
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_close_button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsNothing);
+        expect(find.text('HomeHost'), findsOneWidget);
+
+        // 2. MiniAppWebViewSheet: system Back triggers web back / back_button_pressed without closing Mini App.
+        final miniSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://api.theaver.app/api/miniapps/wallet',
+            initData: 'hash=walt',
+            botId: '2',
+            botUsername: 'walt',
+            botDisplayName: 'Walt',
+          ),
+          botName: 'Walt',
+          botUsername: 'walt',
+        );
+        miniSession.backButtonVisible = true;
+
+        unawaited(
+          showTheavModalSheet<void>(
+            context: homeCtx,
+            enableDrag: false,
+            useRootNavigator: true,
+            customSheetBuilder: (_) => MiniAppWebViewSheet(
+              launchData: miniSession.launchData,
+              botName: 'Walt',
+              botUsername: 'walt',
+              session: miniSession,
+            ),
+            builder: (_) => const SizedBox.shrink(),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+
+        // With Telegram BackButton visible -> system Back stays open.
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+
+        // With history canGoBack == true and backButtonVisible == false -> Back navigates back cleanly.
+        miniSession.backButtonVisible = false;
+        miniSession.canGoBack = true;
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(miniSession.canGoBack, isFalse);
+        expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+
+        // At root (backButtonVisible == false, canGoBack == false) -> system Back still keeps Mini App open.
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+
+        // Explicit close button [x] closes MiniAppWebViewSheet cleanly.
+        await tester.tap(find.byKey(const ValueKey('mini_app_close_or_back_button')));
+        await tester.pumpAndSettle();
+        expect(find.byType(MiniAppWebViewSheet), findsNothing);
       },
     );
   });

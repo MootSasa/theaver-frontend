@@ -1473,6 +1473,40 @@ class MiniAppSession {
     } catch (_) {}
   }
 
+  /// Navigates one step back inside the hosted web page or Mini App without
+  /// dismissing the container sheet. Returns `true` when back navigation or a
+  /// Mini App `back_button_pressed` event was dispatched.
+  Future<bool> performWebBack({VoidCallback? onDispatchedBackEvent}) async {
+    if (!isBrowser && backButtonVisible) {
+      if (onDispatchedBackEvent != null) {
+        onDispatchedBackEvent();
+      } else {
+        await dispatchEvent('back_button_pressed');
+      }
+      return true;
+    }
+    final ctrl = controller;
+    if (ctrl != null && WebViewPlatform.instance != null) {
+      try {
+        if (await ctrl.canGoBack()) {
+          await ctrl.goBack();
+          if (isBrowser) {
+            await refreshBrowserNavState();
+          }
+          return true;
+        }
+      } catch (_) {}
+      return false;
+    }
+    if (canGoBack) {
+      canGoBack = false;
+      onSheetStateChanged?.call();
+      MiniAppSessionController.instance.notifySessionUpdated();
+      return true;
+    }
+    return false;
+  }
+
   void ensureWebViewInitialized() {
     if (controller != null || isLaunchPending || WebViewPlatform.instance == null) {
       return;
@@ -1520,6 +1554,7 @@ class MiniAppSession {
               }
               loadProgress = 0.08;
               onSheetStateChanged?.call();
+              unawaited(refreshBrowserNavState());
             },
             onUrlChange: (change) {
               final next = change.url?.trim() ?? '';
@@ -1527,9 +1562,11 @@ class MiniAppSession {
                 currentUrl = next;
                 onSheetStateChanged?.call();
                 MiniAppSessionController.instance.notifySessionUpdated();
+                unawaited(refreshBrowserNavState());
                 Future<void>.delayed(const Duration(milliseconds: 150), () {
                   if (controller != null) {
                     unawaited(injectBrowserSafeInsets());
+                    unawaited(refreshBrowserNavState());
                   }
                 });
               }
@@ -4621,17 +4658,6 @@ class WebViewFloatingHeader extends StatelessWidget {
         barAccent: barAccent,
       ),
     );
-    final Widget compactPillBody = KeyedSubtree(
-      key: const ValueKey('webview_center_compact'),
-      child: _buildPillBody(
-        compactCenterChild ?? centerChild,
-        horizontalPad: 11.0,
-        barAccent: barAccent,
-      ),
-    );
-    final Widget activeCenterContent = (effectiveCompact && compactCenterChild != null)
-        ? compactPillBody
-        : expandedPillBody;
 
     final Widget collapsedBox = SizedBox(
       key: const ValueKey('webview_right_pill_collapsed'),
@@ -4789,33 +4815,167 @@ class WebViewFloatingHeader extends StatelessWidget {
       height: 44,
       child: Center(child: leadingChild),
     );
-    final Widget centerGesture = AnimatedSwitcher(
-      duration: const Duration(milliseconds: 160),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeOutCubic,
-      child: activeCenterContent,
-    );
 
+    final double expandTarget = effectiveCompact ? 0.0 : 1.0;
     const double expandedLeft = 12.0 + 44.0 + 8.0;
     final double expandedRight = 12.0 + collapsedRightWidth + 8.0;
     const double compactHoriz = 44.0;
-    const double baseLeft = compactHoriz;
-    final double baseRight = math.min(compactHoriz, expandedRight);
-    final double expandTarget = effectiveCompact ? 0.0 : 1.0;
+    final double maxExpandedWidth =
+        math.max(96.0, screenWidth - expandedLeft - expandedRight);
+    final double maxCompactWidth =
+        math.max(84.0, screenWidth - compactHoriz * 2.0);
+    final double expandedShiftX = (expandedLeft - expandedRight) * 0.5;
+    final bool hasCompactCenter = compactCenterChild != null;
+
+    Widget? glassCenterMorph;
+    if (useGlass && morphStyle != null && hasCompactCenter) {
+      final Widget expandedCenterMorphBox = ConstrainedBox(
+        key: const ValueKey('webview_center_morph_expanded'),
+        constraints: BoxConstraints(
+          minWidth: 88.0,
+          maxWidth: maxExpandedWidth,
+          minHeight: 44.0,
+          maxHeight: 44.0,
+        ),
+        child: GestureDetector(
+          key: const ValueKey('webview_header_center_pill'),
+          behavior: HitTestBehavior.opaque,
+          onTap: onCenterTap,
+          onLongPress: onCenterLongPress,
+          onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
+          onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
+          onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
+          onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
+          child: Material(
+            type: MaterialType.transparency,
+            child: _buildPillBody(
+              centerChild,
+              horizontalPad: 14.0,
+              barAccent: barAccent,
+            ),
+          ),
+        ),
+      );
+
+      final Widget compactCenterMorphBox = ConstrainedBox(
+        key: const ValueKey('webview_center_morph_compact'),
+        constraints: BoxConstraints(
+          minWidth: 72.0,
+          maxWidth: maxCompactWidth,
+          minHeight: 26.0,
+          maxHeight: 26.0,
+        ),
+        child: GestureDetector(
+          key: const ValueKey('webview_header_center_pill'),
+          behavior: HitTestBehavior.opaque,
+          onTap: onExpandCompact ?? onCenterTap,
+          onLongPress: onCenterLongPress,
+          child: Material(
+            type: MaterialType.transparency,
+            child: _buildPillBody(
+              compactCenterChild!,
+              horizontalPad: 11.0,
+              barAccent: barAccent,
+            ),
+          ),
+        ),
+      );
+
+      glassCenterMorph = LiquidGlassMorph(
+        key: const ValueKey('webview_center_morph'),
+        alignment:
+            effectiveCompact ? Alignment.topCenter : Alignment.bottomCenter,
+        motion: LiquidGlassMorphMotion.fluid,
+        smoothness: 24,
+        style: morphStyle,
+        child:
+            effectiveCompact ? compactCenterMorphBox : expandedCenterMorphBox,
+      );
+    }
+
+    Widget? matteCenterMorphContent;
+    if (!useGlass && hasCompactCenter) {
+      final Widget expandedMatteBody = ConstrainedBox(
+        key: const ValueKey('webview_center_expanded'),
+        constraints: BoxConstraints(
+          minWidth: 88.0,
+          maxWidth: maxExpandedWidth,
+          minHeight: 44.0,
+          maxHeight: 44.0,
+        ),
+        child: _buildPillBody(
+          centerChild,
+          horizontalPad: 14.0,
+          barAccent: barAccent,
+        ),
+      );
+      final Widget compactMatteBody = ConstrainedBox(
+        key: const ValueKey('webview_center_compact'),
+        constraints: BoxConstraints(
+          minWidth: 72.0,
+          maxWidth: maxCompactWidth,
+          minHeight: 26.0,
+          maxHeight: 26.0,
+        ),
+        child: _buildPillBody(
+          compactCenterChild!,
+          horizontalPad: 11.0,
+          barAccent: barAccent,
+        ),
+      );
+      matteCenterMorphContent = AnimatedSize(
+        key: const ValueKey('webview_center_matte_morph'),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.center,
+        clipBehavior: Clip.hardEdge,
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 170),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeOutCubic,
+          transitionBuilder: (child, anim) => FadeTransition(
+            opacity: anim,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.90, end: 1.0).animate(anim),
+              child: child,
+            ),
+          ),
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              for (final prev in previousChildren)
+                Positioned.fill(
+                  child: Center(
+                    child: OverflowBox(
+                      minWidth: 0.0,
+                      maxWidth: maxExpandedWidth,
+                      minHeight: 0.0,
+                      maxHeight: 44.0,
+                      child: prev,
+                    ),
+                  ),
+                ),
+              if (currentChild != null) currentChild,
+            ],
+          ),
+          child: effectiveCompact ? compactMatteBody : expandedMatteBody,
+        ),
+      );
+    }
 
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: expandTarget, end: expandTarget),
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
-      builder: (context, t, _) {
+      child: glassCenterMorph,
+      builder: (context, t, stableGlassCenter) {
         final double headerHeight = menuExpanded
             ? fullHeight
             : ui.lerpDouble(compactHeight, normalHeight, t)!;
         final double pillHeight = ui.lerpDouble(26.0, 44.0, t)!;
         final double pillRadius = pillHeight * 0.5;
         final double topPad = 5.0 * t;
-        final double leftPad = ui.lerpDouble(compactHoriz - baseLeft, expandedLeft - baseLeft, t)!;
-        final double rightPad = ui.lerpDouble(compactHoriz - baseRight, expandedRight - baseRight, t)!;
         final bool sideVisible = t > 0.02;
 
         final Widget leftWidget = Positioned(
@@ -4845,45 +5005,89 @@ class WebViewFloatingHeader extends StatelessWidget {
           ),
         );
 
-        final Widget centerWidget = Positioned(
-          key: const ValueKey('webview_header_center_pos'),
-          top: topInset + 3.0,
-          left: baseLeft,
-          right: baseRight,
-          height: 49.0,
-          child: Padding(
-            padding: EdgeInsets.only(
-              top: topPad,
-              left: leftPad,
-              right: rightPad,
-            ),
-            child: Align(
-              alignment: Alignment.topCenter,
+        final Widget centerWidget;
+        if (!hasCompactCenter) {
+          centerWidget = Positioned(
+            key: const ValueKey('webview_header_center_pos'),
+            top: topInset + 8,
+            left: expandedLeft,
+            right: expandedRight,
+            height: 44,
+            child: Center(
               child: GestureDetector(
                 key: const ValueKey('webview_header_center_pill'),
                 behavior: HitTestBehavior.opaque,
-                onTap: effectiveCompact
-                    ? (onExpandCompact ?? onCenterTap)
-                    : onCenterTap,
+                onTap: onCenterTap,
                 onLongPress: onCenterLongPress,
-                onVerticalDragStart:
-                    (menuExpanded || effectiveCompact) ? null : onVerticalDragStart,
-                onVerticalDragUpdate:
-                    (menuExpanded || effectiveCompact) ? null : onVerticalDragUpdate,
-                onVerticalDragEnd:
-                    (menuExpanded || effectiveCompact) ? null : onVerticalDragEnd,
-                onVerticalDragCancel:
-                    (menuExpanded || effectiveCompact) ? null : onVerticalDragCancel,
+                onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
+                onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
+                onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
+                onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
                 child: WebViewFloatingCapsule(
-                  height: pillHeight,
-                  borderRadius: pillRadius,
+                  height: 44,
+                  borderRadius: 22,
                   colorOverride: capsuleColorOverride,
-                  child: centerGesture,
+                  child: expandedPillBody,
                 ),
               ),
             ),
-          ),
-        );
+          );
+        } else if (stableGlassCenter != null) {
+          centerWidget = Positioned(
+            key: const ValueKey('webview_header_center_pos'),
+            top: topInset + 3.0,
+            left: 24.0,
+            right: 24.0,
+            height: 49.0,
+            child: Transform.translate(
+              offset: Offset(expandedShiftX * t, 0.0),
+              child: stableGlassCenter,
+            ),
+          );
+        } else {
+          centerWidget = Positioned(
+            key: const ValueKey('webview_header_center_pos'),
+            top: topInset + 3.0,
+            left: 24.0,
+            right: 24.0,
+            height: 49.0,
+            child: Transform.translate(
+              offset: Offset(expandedShiftX * t, 0.0),
+              child: Padding(
+                padding: EdgeInsets.only(top: topPad),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: GestureDetector(
+                    key: const ValueKey('webview_header_center_pill'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: effectiveCompact
+                        ? (onExpandCompact ?? onCenterTap)
+                        : onCenterTap,
+                    onLongPress: onCenterLongPress,
+                    onVerticalDragStart: (menuExpanded || effectiveCompact)
+                        ? null
+                        : onVerticalDragStart,
+                    onVerticalDragUpdate: (menuExpanded || effectiveCompact)
+                        ? null
+                        : onVerticalDragUpdate,
+                    onVerticalDragEnd: (menuExpanded || effectiveCompact)
+                        ? null
+                        : onVerticalDragEnd,
+                    onVerticalDragCancel: (menuExpanded || effectiveCompact)
+                        ? null
+                        : onVerticalDragCancel,
+                    child: WebViewFloatingCapsule(
+                      height: null,
+                      borderRadius: pillRadius,
+                      colorOverride: capsuleColorOverride,
+                      child: matteCenterMorphContent!,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
 
         final Widget rightWidget = Positioned(
           key: const ValueKey('webview_header_right_pos'),
@@ -5205,6 +5409,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   late final MiniAppSession _session;
   bool _isMenuOpen = false;
   bool _isMinimizing = false;
+  bool _allowRoutePop = false;
   bool _hasFullScreenRegistration = false;
   bool _isTransitionReady = false;
 
@@ -5472,7 +5677,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           );
           if (mounted) {
             if (res['success'] == true) {
-              Navigator.of(context).maybePop();
+              _popSheetRoute();
             } else {
               GlassToastService().show(
                 context,
@@ -5490,7 +5695,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             : _session.launchData.botUsername;
         final text = uname.isNotEmpty ? '@$uname $query' : query;
         if (mounted) {
-          Navigator.of(context).maybePop();
+          _popSheetRoute();
           _session.onSwitchInlineQuery?.call(text);
         }
         break;
@@ -5817,6 +6022,28 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     });
   }
 
+  void _popSheetRoute([NavigatorState? targetNavigator]) {
+    _allowRoutePop = true;
+    final nav = targetNavigator ?? Navigator.maybeOf(context);
+    if (nav != null && nav.canPop()) {
+      nav.pop();
+    }
+  }
+
+  Future<void> _handleSystemBack() async {
+    if (_isMenuOpen) {
+      _closeMenu();
+      return;
+    }
+    final bool didGoBack = await _session.performWebBack(
+      onDispatchedBackEvent: () => _dispatchEventToWebView('back_button_pressed'),
+    );
+    if (didGoBack) {
+      HapticUtils.tap();
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _attemptClose({bool force = false}) async {
     if (!force && _session.closingConfirmation) {
       final confirm = await showTheavDialog<bool>(
@@ -5839,7 +6066,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _setRouteRestingOpaque(false);
     MiniAppSessionController.instance.closeMinimized(_session);
     if (mounted) {
-      Navigator.of(context).maybePop();
+      _popSheetRoute();
     }
   }
 
@@ -5858,9 +6085,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       _releaseFullScreenRegistration();
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimize(_session, navigator: nav);
-      await nav.maybePop();
+      _popSheetRoute(nav);
     } else {
-      await Navigator.of(context).maybePop();
+      _popSheetRoute();
     }
   }
 
@@ -5881,7 +6108,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         _session,
         navigator: nav,
       );
-      await nav.maybePop();
+      _popSheetRoute(nav);
       return;
     }
 
@@ -6403,16 +6630,23 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             : SystemUiOverlayStyle.dark.copyWith(
                 statusBarColor: Colors.transparent,
               ),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          heightFactor: 1.0,
-          child: ValueListenableBuilder<double>(
-            valueListenable: _dragOffsetNotifier,
-            builder: (context, offsetY, child) => MiniAppDragOffset(
-              offsetY: offsetY,
-              child: child!,
+        child: PopScope(
+          canPop: _allowRoutePop,
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            unawaited(_handleSystemBack());
+          },
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            heightFactor: 1.0,
+            child: ValueListenableBuilder<double>(
+              valueListenable: _dragOffsetNotifier,
+              builder: (context, offsetY, child) => MiniAppDragOffset(
+                offsetY: offsetY,
+                child: child!,
+              ),
+              child: sheetStackChild,
             ),
-            child: sheetStackChild,
           ),
         ),
       ),
