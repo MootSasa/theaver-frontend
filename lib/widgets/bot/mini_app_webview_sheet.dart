@@ -1336,6 +1336,18 @@ class MiniAppSession {
       } catch (e) {}
     }
 
+    function markSelectorEnvBottom(selectorText) {
+      if (!selectorText) return;
+      try {
+        var matched = document.querySelectorAll(selectorText);
+        for (var i = 0; i < matched.length; i++) {
+          if (matched[i] && matched[i].dataset) {
+            matched[i].dataset.theaverUsesEnvBottom = '1';
+          }
+        }
+      } catch (e) {}
+    }
+
     function scanStyleRulesForEnv(ruleList) {
       if (!ruleList) return;
       for (var ri = 0; ri < ruleList.length; ri++) {
@@ -1352,6 +1364,9 @@ class MiniAppSession {
             if (csTxt.indexOf('safe-area-inset-top') !== -1 && rule.selectorText) {
               markSelectorEnvTop(rule.selectorText);
             }
+            if (csTxt.indexOf('safe-area-inset-bottom') !== -1 && rule.selectorText) {
+              markSelectorEnvBottom(rule.selectorText);
+            }
             for (var pi = 0; pi < rule.style.length; pi++) {
               var prop = rule.style.item(pi);
               if (!prop) continue;
@@ -1365,8 +1380,13 @@ class MiniAppSession {
                 rule.style.setProperty(prop, repl, prio);
               }
             }
-          } else if (csTxt.indexOf('--theaver-top-obscured') !== -1 && rule.selectorText) {
-            markSelectorEnvTop(rule.selectorText);
+          } else {
+            if (csTxt.indexOf('--theaver-top-obscured') !== -1 && rule.selectorText) {
+              markSelectorEnvTop(rule.selectorText);
+            }
+            if (csTxt.indexOf('--theaver-safe-bottom') !== -1 && rule.selectorText) {
+              markSelectorEnvBottom(rule.selectorText);
+            }
           }
         } else if (rule.cssRules) {
           try {
@@ -1514,22 +1534,33 @@ class MiniAppSession {
 
       var topProbe = sampleBandColor(vw, 6, canvasBg);
       var topColorObj = topProbe.color;
-      if (!topProbe.hitWide && scrollY <= 8 && document.querySelectorAll) {
-        try {
-          var metas = document.querySelectorAll('meta[name="theme-color"]');
-          for (var mi = 0; mi < metas.length; mi++) {
-            var metaEl = metas[mi];
-            var mediaAttr = metaEl.getAttribute('media');
-            if (mediaAttr && typeof window.matchMedia === 'function') {
-              if (!window.matchMedia(mediaAttr).matches) continue;
+      if (!topProbe.hitWide && scrollY <= 8) {
+        var matchedMeta = false;
+        if (document.querySelectorAll) {
+          try {
+            var metas = document.querySelectorAll('meta[name="theme-color"]');
+            for (var mi = 0; mi < metas.length; mi++) {
+              var metaEl = metas[mi];
+              var mediaAttr = metaEl.getAttribute('media');
+              if (mediaAttr && typeof window.matchMedia === 'function') {
+                if (!window.matchMedia(mediaAttr).matches) continue;
+              }
+              var mc = parseCssColor(metaEl.getAttribute('content'));
+              if (mc) {
+                topColorObj = blendOver(mc, canvasBg);
+                matchedMeta = true;
+                break;
+              }
             }
-            var mc = parseCssColor(metaEl.getAttribute('content'));
-            if (mc) {
-              topColorObj = blendOver(mc, canvasBg);
-              break;
-            }
+          } catch (e) {}
+        }
+        if (!matchedMeta && vh > 16) {
+          var navProbeY = Math.min(vh - 6, Math.max(8, (m.activeTop || 0) + 8));
+          var navProbe = sampleBandColor(vw, navProbeY, canvasBg);
+          if (navProbe.hitWide) {
+            topColorObj = navProbe.color;
           }
-        } catch (e) {}
+        }
       }
       var bottomProbe = vh > 12 ? sampleBandColor(vw, Math.max(0, vh - 6), canvasBg) : { color: canvasBg };
       var lum = (0.2126 * topColorObj.r + 0.7152 * topColorObj.g + 0.0722 * topColorObj.b) / 255;
@@ -1570,6 +1601,193 @@ class MiniAppSession {
       return false;
     }
 
+    function usesEnvBottomVar(el) {
+      if (!el || !el.dataset) return false;
+      if (el.dataset.theaverUsesEnvBottom === '1') return true;
+      var inlineStyle = (el.getAttribute && el.getAttribute('style')) || '';
+      if (inlineStyle.indexOf('--theaver-safe-bottom') !== -1 || inlineStyle.indexOf('safe-area-inset-bottom') !== -1) {
+        return true;
+      }
+      if (el.querySelector && el.querySelector('[data-theaver-uses-env-bottom="1"]')) {
+        return true;
+      }
+      return false;
+    }
+
+    function hasTrackedTopAncestor(el) {
+      var cur = el ? (el.parentElement || (el.getRootNode && el.getRootNode().host) || null) : null;
+      while (cur && cur.nodeType === 1 && cur !== document.body && cur !== document.documentElement) {
+        if (
+          cur.dataset &&
+          (cur.dataset.theaverSafeRole === 'top-pinned' ||
+            cur.dataset.theaverSafeRole === 'top-sheet' ||
+            cur.dataset.theaverPrimaryScroller === '1')
+        ) {
+          return true;
+        }
+        cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+      }
+      return false;
+    }
+
+    function clearTrackedPinnedElement(el) {
+      if (!el || !el.dataset) return;
+      if (el.dataset.theaverOrigTop && el.dataset.theaverOrigTop !== 'auto' && el.dataset.theaverOrigTop !== 'auto-top') {
+        setImp(el, 'top', el.dataset.theaverOrigTop + 'px');
+      } else if (el.dataset.theaverOrigTop === 'auto-top') {
+        el.style.removeProperty('top');
+      }
+      el.style.removeProperty('translate');
+      delete el.dataset.theaverSafeRole;
+      delete el.dataset.theaverHideInit;
+      delete el.dataset.theaverIsHiding;
+      delete el.dataset.theaverPrevTopOffset;
+    }
+
+    function clearTrackedSheetElement(sheetEl) {
+      if (!sheetEl || !sheetEl.dataset) return;
+      if (sheetEl.dataset.theaverAppliedSheetPt === '1') {
+        var origPt = parseFloat(sheetEl.dataset.theaverSheetOrigPt) || 0;
+        setImp(sheetEl, 'padding-top', Math.round(origPt) + 'px');
+        delete sheetEl.dataset.theaverAppliedSheetPt;
+      }
+      if (sheetEl.dataset.theaverAppliedSheetPb === '1') {
+        var origPb = parseFloat(sheetEl.dataset.theaverSheetOrigPb) || 0;
+        setImp(sheetEl, 'padding-bottom', Math.round(origPb) + 'px');
+        delete sheetEl.dataset.theaverAppliedSheetPb;
+      }
+      var kids = sheetEl.children || [];
+      for (var ci = 0; ci < kids.length; ci++) {
+        var kEl = kids[ci];
+        if (kEl && kEl.dataset && kEl.dataset.theaverSheetAbsChild === '1') {
+          var origCTop = parseFloat(kEl.dataset.theaverOrigAbsTop) || 0;
+          setImp(kEl, 'top', Math.round(origCTop) + 'px');
+          delete kEl.dataset.theaverSheetAbsChild;
+        }
+      }
+      delete sheetEl.dataset.theaverSafeRole;
+    }
+
+    function applyTopSheetInset(sheetEl, activeTop, activeBottom) {
+      if (!sheetEl || !sheetEl.dataset) return;
+      var sCs = window.getComputedStyle(sheetEl);
+      if (sCs.display === 'none') return;
+      if (sheetEl.dataset.theaverSheetOrigRecorded !== '1') {
+        sheetEl.dataset.theaverSheetOrigRecorded = '1';
+        sheetEl.dataset.theaverSheetOrigPt = String(parseFloat(sCs.paddingTop) || 0);
+        sheetEl.dataset.theaverSheetOrigPb = String(parseFloat(sCs.paddingBottom) || 0);
+      }
+      sheetEl.dataset.theaverSafeRole = 'top-sheet';
+      var origPt = parseFloat(sheetEl.dataset.theaverSheetOrigPt) || 0;
+      var origPb = parseFloat(sheetEl.dataset.theaverSheetOrigPb) || 0;
+      setImp(sheetEl, 'box-sizing', 'border-box');
+      if (origPt <= 160) {
+        sheetEl.dataset.theaverAppliedSheetPt = '1';
+        setImp(sheetEl, 'padding-top', Math.round(origPt + activeTop) + 'px');
+      } else {
+        setImp(sheetEl, 'padding-top', Math.round(Math.max(origPt, activeTop)) + 'px');
+      }
+      if (!usesEnvBottomVar(sheetEl) && origPb < activeBottom * 0.6) {
+        sheetEl.dataset.theaverAppliedSheetPb = '1';
+        setImp(sheetEl, 'padding-bottom', Math.round(origPb + activeBottom) + 'px');
+      }
+      var kids = sheetEl.children || [];
+      for (var ci = 0; ci < kids.length; ci++) {
+        var cEl = kids[ci];
+        if (!cEl || !cEl.tagName) continue;
+        var cCs = window.getComputedStyle(cEl);
+        if (cCs.display === 'none' || cCs.position !== 'absolute') continue;
+        if (usesEnvTopVar(cEl)) continue;
+        if (cEl.dataset.theaverOrigAbsRecorded !== '1') {
+          var cTop = parseNum(cCs.top);
+          if (cTop === null || cTop < -2 || cTop > 36) continue;
+          var cRect = cEl.getBoundingClientRect();
+          var cSz = getEffectiveSize(cEl, cRect);
+          if (cSz.w <= 0 || cSz.h <= 0 || cSz.w > 96 || cSz.h > 64) continue;
+          cEl.dataset.theaverOrigAbsRecorded = '1';
+          cEl.dataset.theaverOrigAbsTop = String(cTop);
+        }
+        cEl.dataset.theaverSheetAbsChild = '1';
+        var baseAbsTop = parseFloat(cEl.dataset.theaverOrigAbsTop) || 0;
+        setImp(cEl, 'top', Math.round(baseAbsTop + activeTop) + 'px');
+      }
+    }
+
+    function collectSheetPanels(rootEl, vw, vh) {
+      var panels = [];
+      if (!rootEl || !rootEl.children) return panels;
+      var queue = [];
+      var rootKids = rootEl.children || [];
+      for (var i = 0; i < rootKids.length; i++) {
+        queue.push({ node: rootKids[i], depth: 1 });
+      }
+      while (queue.length > 0) {
+        var cur = queue.shift();
+        var kEl = cur.node;
+        if (!kEl || !kEl.tagName) continue;
+        var tag = kEl.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'SVG' || tag === 'PATH') continue;
+        var kCs = window.getComputedStyle(kEl);
+        if (kCs.display === 'none') continue;
+        if (usesEnvTopVar(kEl) || hasTrackedTopAncestor(kEl)) continue;
+        var kRect = kEl.getBoundingClientRect();
+        var kEff = getEffectiveSize(kEl, kRect);
+        if (
+          kRect.top >= -4 &&
+          kRect.top <= 24 &&
+          kEff.h >= vh * 0.50 &&
+          kEff.w >= 140 &&
+          kEl.children &&
+          kEl.children.length > 0
+        ) {
+          var kBg = parseCssColor(kCs.backgroundColor);
+          if (kBg && kBg.a >= 0.72) {
+            panels.push(kEl);
+            continue;
+          }
+          var pushedSub = false;
+          if (cur.depth < 3 && kEl.children) {
+            for (var j = 0; j < kEl.children.length; j++) {
+              var subEl = kEl.children[j];
+              if (!subEl || !subEl.tagName) continue;
+              var subCs = window.getComputedStyle(subEl);
+              if (subCs.display === 'none') continue;
+              var subRect = subEl.getBoundingClientRect();
+              var subEff = getEffectiveSize(subEl, subRect);
+              if (
+                subRect.top >= -4 &&
+                subRect.top <= 24 &&
+                subEff.h >= vh * 0.50 &&
+                subEff.w >= 140 &&
+                subEl.children &&
+                subEl.children.length > 0
+              ) {
+                queue.push({ node: subEl, depth: cur.depth + 1 });
+                pushedSub = true;
+              }
+            }
+          }
+          if (!pushedSub) {
+            panels.push(kEl);
+          }
+        }
+      }
+      return panels;
+    }
+
+    function restoreRootTopInset(docEl) {
+      if (!docEl || !docEl.dataset) return;
+      if (docEl.dataset.theaverAppliedTopMargin === '1') {
+        var origMt = parseFloat(docEl.dataset.theaverBaseMt) || 0;
+        setImp(docEl, 'margin-top', Math.round(origMt) + 'px');
+        delete docEl.dataset.theaverAppliedTopMargin;
+      }
+      if (docEl.dataset.theaverSetRel === '1') {
+        docEl.style.removeProperty('position');
+        delete docEl.dataset.theaverSetRel;
+      }
+    }
+
     window.__theaverSyncSafeZones = function(
       rawTopClear,
       rawBottomClear,
@@ -1599,22 +1817,29 @@ class MiniAppSession {
 
         var m = getScaledMetrics();
         var hasTopInset = (m.tc > 0 || m.ctc > 0);
+        var docEl = document.documentElement;
         var body = document.body;
-        var htmlCs = window.getComputedStyle(document.documentElement);
+        var htmlCs = window.getComputedStyle(docEl);
         var bodyCs = window.getComputedStyle(body);
-        var isLockedViewport =
-          (htmlCs.overflowY === 'hidden' || bodyCs.overflowY === 'hidden') &&
-          document.documentElement.scrollHeight <= vh + 8;
 
-        if (!isLockedViewport && body.dataset.theaverBasePt === undefined) {
+        if (docEl.dataset.theaverBaseMt === undefined) {
+          docEl.dataset.theaverBaseMt = String(parseFloat(htmlCs.marginTop) || 0);
+          docEl.dataset.theaverOrigPos = htmlCs.position || 'static';
+        }
+        if (body.dataset.theaverBasePt === undefined) {
           body.dataset.theaverBasePt = String(parseFloat(bodyCs.paddingTop) || 0);
           body.dataset.theaverBasePb = String(parseFloat(bodyCs.paddingBottom) || 0);
         }
+
+        var isLockedViewport =
+          (htmlCs.overflowY === 'hidden' || bodyCs.overflowY === 'hidden') &&
+          docEl.scrollHeight <= vh + 8;
 
         var all = [];
         collectCandidates(body, all);
 
         if (isLockedViewport) {
+          restoreRootTopInset(docEl);
           for (var li = 0; li < all.length; li++) {
             var lel = all[li];
             if (!lel || !lel.tagName) continue;
@@ -1645,17 +1870,25 @@ class MiniAppSession {
             }
           }
         } else {
-          var basePt = parseFloat(body.dataset.theaverBasePt) || 0;
+          var baseMt = parseFloat(docEl.dataset.theaverBaseMt) || 0;
           var basePb = parseFloat(body.dataset.theaverBasePb) || 0;
           var nextPb = basePb <= 180 ? basePb + m.bc : Math.max(basePb, m.bc);
           setImp(body, 'box-sizing', 'border-box');
-          if (hasTopInset) {
-            var nextPt = basePt <= 180 ? basePt + m.tc : Math.max(basePt, m.tc);
-            body.dataset.theaverAppliedTopPad = '1';
-            setImp(body, 'padding-top', Math.round(nextPt) + 'px');
-          } else if (body.dataset.theaverAppliedTopPad === '1') {
+          if (body.dataset.theaverAppliedTopPad === '1') {
+            var basePt = parseFloat(body.dataset.theaverBasePt) || 0;
             setImp(body, 'padding-top', Math.round(basePt) + 'px');
             delete body.dataset.theaverAppliedTopPad;
+          }
+          if (hasTopInset) {
+            if (docEl.dataset.theaverOrigPos === 'static' || htmlCs.position === 'static') {
+              docEl.dataset.theaverSetRel = '1';
+              setImp(docEl, 'position', 'relative');
+            }
+            var nextMt = baseMt <= 180 ? baseMt + m.tc : Math.max(baseMt, m.tc);
+            docEl.dataset.theaverAppliedTopMargin = '1';
+            setImp(docEl, 'margin-top', Math.round(nextMt) + 'px');
+          } else {
+            restoreRootTopInset(docEl);
           }
           setImp(body, 'padding-bottom', Math.round(nextPb) + 'px');
 
@@ -1675,6 +1908,7 @@ class MiniAppSession {
                 if (kBg && kBg.a > 0.75) {
                   body.dataset.theaverMirroredBg = '1';
                   setImp(body, 'background-color', kCs.backgroundColor);
+                  setImp(docEl, 'background-color', kCs.backgroundColor);
                   break;
                 }
               }
@@ -1685,91 +1919,113 @@ class MiniAppSession {
         applyCssInsetVariables(m);
         polyfillSafeAreaEnv();
 
-        var primaryTop = window.__theaverPrimaryTopNav || null;
-        if (primaryTop && (!primaryTop.isConnected || window.getComputedStyle(primaryTop).display === 'none')) {
-          primaryTop = null;
-          window.__theaverPrimaryTopNav = null;
-        }
-
         if (!hasTopInset) {
-          if (primaryTop && primaryTop.dataset) {
-            if (primaryTop.dataset.theaverOrigTop && primaryTop.dataset.theaverOrigTop !== 'auto' && primaryTop.dataset.theaverOrigTop !== 'auto-top') {
-              setImp(primaryTop, 'top', primaryTop.dataset.theaverOrigTop + 'px');
-            } else if (primaryTop.dataset.theaverOrigTop === 'auto-top') {
-              primaryTop.style.removeProperty('top');
-            }
-            primaryTop.style.removeProperty('translate');
-            delete primaryTop.dataset.theaverSafeRole;
-            delete primaryTop.dataset.theaverHideInit;
-            delete primaryTop.dataset.theaverIsHiding;
-            delete primaryTop.dataset.theaverPrevTopOffset;
+          var prevPinnedList = window.__theaverTrackedTopPinned || [];
+          for (var rp = 0; rp < prevPinnedList.length; rp++) {
+            clearTrackedPinnedElement(prevPinnedList[rp]);
           }
-          primaryTop = null;
-          window.__theaverPrimaryTopNav = null;
+          if (document.querySelectorAll) {
+            var leftoverPinned = document.querySelectorAll('[data-theaver-safe-role="top-pinned"]');
+            for (var lp = 0; lp < leftoverPinned.length; lp++) {
+              clearTrackedPinnedElement(leftoverPinned[lp]);
+            }
+            var leftoverSheets = document.querySelectorAll('[data-theaver-safe-role="top-sheet"]');
+            for (var ls = 0; ls < leftoverSheets.length; ls++) {
+              clearTrackedSheetElement(leftoverSheets[ls]);
+            }
+          }
+          window.__theaverTrackedTopPinned = [];
+          window.__theaverTrackedTopSheets = [];
         } else {
-          if (!primaryTop) {
-            for (var i = 0; i < all.length; i++) {
-              var el = all[i];
-              if (!el || !el.tagName) continue;
-              var cs = window.getComputedStyle(el);
-              if (cs.display === 'none') continue;
-              var pos = cs.position;
-              if (pos !== 'fixed' && pos !== 'sticky') continue;
-              if (cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
-              if (usesEnvTopVar(el)) continue;
+          var trackedPinned = [];
+          var trackedSheets = [];
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (!el || !el.tagName) continue;
+            var tName = el.tagName;
+            if (tName === 'CANVAS' || tName === 'VIDEO' || tName === 'IMG' || tName === 'PICTURE') continue;
+            var cs = window.getComputedStyle(el);
+            if (cs.display === 'none') continue;
+            var pos = cs.position;
+            if (pos !== 'fixed' && pos !== 'sticky') continue;
+            var opVal = parseFloat(cs.opacity);
+            if (!isNaN(opVal) && opVal === 0 && cs.pointerEvents === 'none') continue;
+            if (cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
+            var zNum = parseInt(cs.zIndex, 10);
+            if (!isNaN(zNum) && zNum < 0) continue;
+            if (usesEnvTopVar(el) || hasTrackedTopAncestor(el)) continue;
 
-              var rect = el.getBoundingClientRect();
-              var eff = getEffectiveSize(el, rect);
-              if (eff.w < vw * 0.70 || rect.left > vw * 0.15) continue;
-              if (eff.h < 24 || eff.h > 88) continue;
+            var rect = el.getBoundingClientRect();
+            var eff = getEffectiveSize(el, rect);
+            if (eff.w < 24 || eff.h < 20) continue;
 
-              if (el.dataset.theaverOrigRecorded !== '1') {
-                var inlineTopNum = parseNum(el.style.top || '');
-                if (inlineTopNum !== null && inlineTopNum < -12) continue;
+            if (el.dataset.theaverOrigRecorded !== '1') {
+              var inlineTopNum = parseNum(el.style.top || '');
+              if (inlineTopNum !== null && inlineTopNum < -12) continue;
 
-                var origTopStr = 'auto';
-                if (cs.top !== 'auto') {
-                  var topVal = parseNum(cs.top);
-                  if (topVal !== null) origTopStr = String(topVal);
-                } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= 4) {
-                  origTopStr = 'auto-top';
-                }
-
-                var origBottomStr = 'auto';
-                if (cs.bottom !== 'auto') {
-                  var botVal = parseNum(cs.bottom);
-                  if (botVal !== null) origBottomStr = String(botVal);
-                }
-
-                var tNum = origTopStr === 'auto' || origTopStr === 'auto-top' ? null : parseNum(origTopStr);
-                var bNum = origBottomStr === 'auto' ? null : parseNum(origBottomStr);
-                if (bNum !== null) continue;
-                if (origTopStr !== 'auto-top' && (tNum === null || tNum < -2 || tNum > 4)) continue;
-
-                el.dataset.theaverOrigRecorded = '1';
-                el.dataset.theaverOrigTop = origTopStr;
-                el.dataset.theaverPos = pos;
+              var origTopStr = 'auto';
+              if (cs.top !== 'auto') {
+                var topVal = parseNum(cs.top);
+                if (topVal !== null) origTopStr = String(topVal);
+              } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= 20) {
+                origTopStr = 'auto-top';
               }
 
+              var origBottomStr = 'auto';
+              if (cs.bottom !== 'auto') {
+                var botVal = parseNum(cs.bottom);
+                if (botVal !== null) origBottomStr = String(botVal);
+              }
+
+              var tNum0 = origTopStr === 'auto' || origTopStr === 'auto-top' ? null : parseNum(origTopStr);
+              if (origTopStr !== 'auto-top' && (tNum0 === null || tNum0 < -2 || tNum0 > 20)) continue;
+
+              el.dataset.theaverOrigRecorded = '1';
+              el.dataset.theaverOrigTop = origTopStr;
+              el.dataset.theaverOrigBottom = origBottomStr;
+              el.dataset.theaverPos = pos;
+            }
+
+            var recPos = el.dataset.theaverPos || pos;
+            var recTopRaw = el.dataset.theaverOrigTop || 'auto';
+            var recBottomRaw = el.dataset.theaverOrigBottom || 'auto';
+            var recTopNum = recTopRaw === 'auto' || recTopRaw === 'auto-top' ? null : parseNum(recTopRaw);
+            var recBotNum = recBottomRaw === 'auto' ? null : parseNum(recBottomRaw);
+
+            if (recBotNum === null && eff.h < vh * 0.55 && trackedPinned.length < 10) {
               el.dataset.theaverSafeRole = 'top-pinned';
-              primaryTop = el;
-              window.__theaverPrimaryTopNav = el;
-              break;
-            }
-          }
-
-          if (primaryTop) {
-            var pCs = window.getComputedStyle(primaryTop);
-            if (pCs.display !== 'none') {
-              var pPos = primaryTop.dataset.theaverPos || pCs.position;
-              var pOrigTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
-              var pOrigTopNum = pOrigTopRaw === 'auto' || pOrigTopRaw === 'auto-top' ? null : parseNum(pOrigTopRaw);
-              var pEff = getEffectiveSize(primaryTop, primaryTop.getBoundingClientRect());
-              if (pEff.h > 0) {
-                applyPinnedOffset(primaryTop, pCs, pPos, pOrigTopRaw, pOrigTopNum, pEff.h, m.activeTop);
+              trackedPinned.push(el);
+              applyPinnedOffset(el, cs, recPos, recTopRaw, recTopNum, eff.h, m.activeTop);
+            } else if (
+              recPos === 'fixed' &&
+              (recBotNum !== null || eff.h >= vh * 0.55) &&
+              eff.w >= 140 &&
+              el.children &&
+              el.children.length > 0 &&
+              !(el.querySelector && el.querySelector('[data-theaver-primary-scroller="1"]'))
+            ) {
+              var elBg = parseCssColor(cs.backgroundColor);
+              var isWrapper = !elBg || elBg.a < 0.72;
+              if (isWrapper) {
+                var innerPanels = collectSheetPanels(el, vw, vh);
+                if (innerPanels.length > 0) {
+                  for (var ip = 0; ip < innerPanels.length; ip++) {
+                    if (trackedSheets.length >= 6) break;
+                    applyTopSheetInset(innerPanels[ip], m.activeTop, m.activeBottom);
+                    trackedSheets.push(innerPanels[ip]);
+                  }
+                } else if (trackedSheets.length < 6) {
+                  applyTopSheetInset(el, m.activeTop, m.activeBottom);
+                  trackedSheets.push(el);
+                }
+              } else if (trackedSheets.length < 6) {
+                applyTopSheetInset(el, m.activeTop, m.activeBottom);
+                trackedSheets.push(el);
               }
             }
           }
+          window.__theaverTrackedTopPinned = trackedPinned;
+          window.__theaverTrackedTopSheets = trackedSheets;
         }
 
         return emitPageMeta(m);
@@ -1789,42 +2045,43 @@ class MiniAppSession {
       try {
         var m = getScaledMetrics();
         var hasTopInset = (m.tc > 0 || m.ctc > 0);
-        var primaryTop = window.__theaverPrimaryTopNav || null;
-        if (
-          (!primaryTop || !primaryTop.isConnected) &&
-          document &&
-          document.querySelector
-        ) {
-          primaryTop = document.querySelector('[data-theaver-safe-role="top-pinned"]');
-          window.__theaverPrimaryTopNav = primaryTop || null;
-        }
+        var pinnedNodes = document && document.querySelectorAll
+          ? document.querySelectorAll('[data-theaver-safe-role="top-pinned"]')
+          : (window.__theaverTrackedTopPinned || []);
+        var sheetNodes = document && document.querySelectorAll
+          ? document.querySelectorAll('[data-theaver-safe-role="top-sheet"]')
+          : (window.__theaverTrackedTopSheets || []);
+
         if (!hasTopInset) {
-          if (primaryTop && primaryTop.dataset) {
-            if (primaryTop.dataset.theaverOrigTop && primaryTop.dataset.theaverOrigTop !== 'auto' && primaryTop.dataset.theaverOrigTop !== 'auto-top') {
-              setImp(primaryTop, 'top', primaryTop.dataset.theaverOrigTop + 'px');
-            } else if (primaryTop.dataset.theaverOrigTop === 'auto-top') {
-              primaryTop.style.removeProperty('top');
-            }
-            primaryTop.style.removeProperty('translate');
-            delete primaryTop.dataset.theaverSafeRole;
-            delete primaryTop.dataset.theaverHideInit;
-            delete primaryTop.dataset.theaverIsHiding;
-            delete primaryTop.dataset.theaverPrevTopOffset;
+          for (var cp = 0; cp < pinnedNodes.length; cp++) {
+            clearTrackedPinnedElement(pinnedNodes[cp]);
           }
-          window.__theaverPrimaryTopNav = null;
+          for (var csIdx = 0; csIdx < sheetNodes.length; csIdx++) {
+            clearTrackedSheetElement(sheetNodes[csIdx]);
+          }
+          window.__theaverTrackedTopPinned = [];
+          window.__theaverTrackedTopSheets = [];
           return;
         }
-        if (primaryTop && primaryTop.isConnected) {
-          var cs = window.getComputedStyle(primaryTop);
-          if (cs.display !== 'none') {
-            var pos = primaryTop.dataset.theaverPos || cs.position;
-            var origTopRaw = primaryTop.dataset.theaverOrigTop || 'auto';
-            var origTopNum = origTopRaw === 'auto' || origTopRaw === 'auto-top' ? null : parseNum(origTopRaw);
-            var eff = getEffectiveSize(primaryTop, primaryTop.getBoundingClientRect());
-            if (eff.h > 0) {
-              applyPinnedOffset(primaryTop, cs, pos, origTopRaw, origTopNum, eff.h, m.activeTop);
-            }
+
+        for (var pi = 0; pi < pinnedNodes.length; pi++) {
+          var pEl = pinnedNodes[pi];
+          if (!pEl || !pEl.isConnected) continue;
+          var cs = window.getComputedStyle(pEl);
+          if (cs.display === 'none') continue;
+          var pos = pEl.dataset.theaverPos || cs.position;
+          var origTopRaw = pEl.dataset.theaverOrigTop || 'auto';
+          var origTopNum = origTopRaw === 'auto' || origTopRaw === 'auto-top' ? null : parseNum(origTopRaw);
+          var eff = getEffectiveSize(pEl, pEl.getBoundingClientRect());
+          if (eff.h > 0) {
+            applyPinnedOffset(pEl, cs, pos, origTopRaw, origTopNum, eff.h, m.activeTop);
           }
+        }
+
+        for (var si = 0; si < sheetNodes.length; si++) {
+          var sEl = sheetNodes[si];
+          if (!sEl || !sEl.isConnected) continue;
+          applyTopSheetInset(sEl, m.activeTop, m.activeBottom);
         }
       } catch (e) {
       } finally {
@@ -1967,7 +2224,11 @@ class MiniAppSession {
         var cur = target;
         var steps = 0;
         while (cur && cur.nodeType === 1 && steps < 5) {
-          if (cur.dataset && cur.dataset.theaverSafeRole === 'top-pinned') {
+          if (
+            cur.dataset &&
+            (cur.dataset.theaverSafeRole === 'top-pinned' ||
+              cur.dataset.theaverSafeRole === 'top-sheet')
+          ) {
             return true;
           }
           cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;

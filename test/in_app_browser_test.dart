@@ -417,7 +417,13 @@ void main() {
       expect(js, contains('transitionrun'));
       expect(js, contains('__theaverRefreshTrackedPinned'));
       expect(js, contains('theaverScrollContainerPt'));
+      expect(js, contains('theaverAppliedTopMargin'));
+      expect(js, contains('hasTrackedTopAncestor'));
+      expect(js, contains('usesEnvBottomVar'));
+      expect(js, contains('applyTopSheetInset'));
+      expect(js, contains('collectSheetPanels'));
       expect(js, contains("'top-pinned'"));
+      expect(js, contains("'top-sheet'"));
       expect(js, contains('takeRecords'));
       expect(js, contains('TheaverBrowserTheme'));
       expect(js, isNot(contains("visibility === 'hidden'")));
@@ -469,7 +475,7 @@ void main() {
     });
 
     testWidgets(
-      'InAppBrowserSheet positions web viewport below Safari top bar without resizing on scroll collapse',
+      'InAppBrowserSheet keeps body edge-to-edge with soft LiquidGlassScrollEdge scroll pockets and dynamically updates browserTopClearance',
       (tester) async {
         tester.view.physicalSize = const Size(400, 800);
         tester.view.devicePixelRatio = 1.0;
@@ -499,57 +505,67 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_top_cap')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_bottom_cap')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_safe_viewport')), findsNothing);
-        expect(find.byKey(const ValueKey('in_app_browser_web_viewport')), findsOneWidget);
+        expect(find.byKey(const ValueKey('in_app_browser_web_viewport')), findsNothing);
         expect(find.byKey(const ValueKey('in_app_browser_top_scroll_pocket')), findsOneWidget);
         expect(find.byKey(const ValueKey('in_app_browser_bottom_scroll_pocket')), findsOneWidget);
 
+        // Edge-to-edge full-screen web layer with soft gradient LiquidGlassScrollEdge pocket (no opaque stripe).
         final sheetFinder = find.byKey(const ValueKey('in_app_browser_sheet'));
         expect(tester.getRect(sheetFinder), const Rect.fromLTWH(0, 0, 400, 800));
-
-        // Expanded state: web viewport y = 0 sits strictly below top capsules (24 + 56 = 80).
-        final webGuardFinder = find.byKey(
-          const ValueKey('in_app_browser_web_interaction_guard'),
+        final sheetStack = tester.widget<Stack>(
+          find.descendant(of: sheetFinder, matching: find.byType(Stack)).first,
         );
-        final Rect expandedWebRect = tester.getRect(webGuardFinder);
-        expect(expandedWebRect.top, closeTo(80.0, 0.01));
-        expect(expandedWebRect.height, closeTo(738.0, 0.01));
+        final firstLayer = sheetStack.children.first as Positioned;
+        expect(firstLayer.left, 0.0);
+        expect(firstLayer.right, 0.0);
+        expect(firstLayer.top, 0.0);
+        expect(firstLayer.bottom, 0.0);
         expect(
-          expandedWebRect.top,
-          greaterThan(
-            tester
-                .getRect(find.byKey(const ValueKey('webview_header_center_pill')))
-                .bottom,
-          ),
-        );
-        expect(
-          expandedWebRect.top,
-          greaterThan(
-            tester
-                .getRect(find.byKey(const ValueKey('in_app_browser_close_button')))
-                .bottom,
-          ),
+          tester.getRect(find.byWidget(firstLayer)),
+          const Rect.fromLTWH(0, 0, 400, 800),
         );
 
-        expect(session.browserTopClearance, closeTo(0.0, 0.01));
-        expect(session.browserCompactTopClearance, closeTo(0.0, 0.01));
-        expect(session.browserBottomClearance, closeTo(98.0, 0.01));
+        final topPocketFinder = find.byKey(
+          const ValueKey('in_app_browser_top_scroll_pocket'),
+        );
+        final LiquidGlassScrollEdge topEdge =
+            tester.widget<LiquidGlassScrollEdge>(
+          find.descendant(
+            of: topPocketFinder,
+            matching: find.byType(LiquidGlassScrollEdge),
+          ),
+        );
+        expect(topEdge.style, LiquidGlassScrollEdgeStyle.soft);
+        final topPocketBoxes = tester.widgetList<DecoratedBox>(
+          find.descendant(
+            of: topPocketFinder,
+            matching: find.byType(DecoratedBox),
+          ),
+        );
+        expect(topPocketBoxes, isNotEmpty);
+        for (final box in topPocketBoxes) {
+          final dec = box.decoration as BoxDecoration;
+          expect(dec.border, isNull);
+          expect(dec.gradient, isNotNull);
+        }
+
+        expect(session.browserTopClearance, closeTo(82.0, 0.01));
+        expect(session.browserCompactTopClearance, closeTo(62.0, 0.01));
+        expect(session.browserBottomClearance, closeTo(80.0, 0.01));
         expect(session.browserCompactBottomClearance, closeTo(16.0, 0.01));
-        expect(session.browserViewportHeight, closeTo(738.0, 0.01));
+        expect(session.browserViewportHeight, closeTo(800.0, 0.01));
         expect(session.browserForceExpanded, isFalse);
 
-        // Opening Find-in-Page lowers web viewport below the find bar without resizing PlatformView.
+        // Opening Find-in-Page lowers top clearance below the find capsule and forces expanded chrome.
         await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Найти на странице'));
         await tester.pumpAndSettle();
 
-        final Rect findWebRect = tester.getRect(webGuardFinder);
-        expect(findWebRect.top, closeTo(132.0, 0.01));
-        expect(findWebRect.height, closeTo(738.0, 0.01));
-        expect(session.browserBottomClearance, closeTo(150.0, 0.01));
+        expect(session.browserTopClearance, closeTo(134.0, 0.01));
         expect(session.browserForceExpanded, isTrue);
 
-        // Closing Find-in-Page restores normal expanded top position.
+        // Closing Find-in-Page restores normal top clearance.
         final findCapsuleFinder = find.ancestor(
           of: find.byType(TextField),
           matching: find.byType(WebViewFloatingCapsule),
@@ -560,29 +576,8 @@ void main() {
         );
         await tester.tap(findBarCloseFinder);
         await tester.pumpAndSettle();
-        expect(tester.getRect(webGuardFinder).top, closeTo(80.0, 0.01));
-        expect(session.browserBottomClearance, closeTo(98.0, 0.01));
+        expect(session.browserTopClearance, closeTo(82.0, 0.01));
         expect(session.browserForceExpanded, isFalse);
-
-        // Downward scroll glides web viewport up beneath compact domain pill while preserving height.
-        session.applyBrowserPageMetaPayload(
-          '{"collapsed":true,"topIsDark":false,"topColor":"rgb(255, 255, 255)","bottomColor":"rgb(255, 255, 255)","canvasColor":"rgb(255, 255, 255)"}',
-        );
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 90));
-        expect(tester.getRect(webGuardFinder).height, closeTo(738.0, 0.01));
-        await tester.pumpAndSettle();
-        final Rect compactWebRect = tester.getRect(webGuardFinder);
-        expect(compactWebRect.top, closeTo(62.0, 0.01));
-        expect(compactWebRect.height, closeTo(738.0, 0.01));
-        expect(
-          compactWebRect.top,
-          greaterThan(
-            tester
-                .getRect(find.byKey(const ValueKey('webview_header_center_pill')))
-                .bottom,
-          ),
-        );
       },
     );
 

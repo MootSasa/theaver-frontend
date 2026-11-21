@@ -78,9 +78,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   static const String _desktopUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-  static const double _kCompactHeaderClearance = 38.0;
-  static const double _kExpandedHeaderClearance = 56.0;
-  static const double _kFindHeaderClearance = 108.0;
 
   late final MiniAppSession _session;
   late final BrowserUiDialogDelegate _dialogDelegate;
@@ -281,19 +278,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _updateBrowserSafeClearances({EdgeInsets? paddingOverride}) {
     final size = MediaQuery.sizeOf(context);
     final padding = paddingOverride ?? MediaQuery.paddingOf(context);
-    final double extraExpandedTop =
-        (_isFindOpen ? _kFindHeaderClearance : _kExpandedHeaderClearance) -
-            _kCompactHeaderClearance;
-    // WebView viewport y = 0 starts directly below the Safari top header shelf,
-    // so pages never need top DOM shifting; bottom clearance includes the
-    // expanded header's downward GPU translation so fixed bottom bars stay
-    // above the floating bottom toolbar.
-    const double nextTop = 0.0;
-    const double nextCompactTop = 0.0;
-    final double nextBottom = padding.bottom + 64.0 + extraExpandedTop;
+    final double nextTop = padding.top + (_isFindOpen ? 110.0 : 58.0);
+    final double nextCompactTop = padding.top + (_isFindOpen ? 110.0 : 38.0);
+    final double nextBottom = padding.bottom + 64.0;
     final double nextCompactBottom = padding.bottom;
-    final double nextVh =
-        math.max(1.0, size.height - (padding.top + _kCompactHeaderClearance));
+    final double nextVh = size.height;
     final bool nextForceExpanded = _isFindOpen;
     final bool clearanceChanged =
         (nextTop - _session.browserTopClearance).abs() > 0.5 ||
@@ -1185,9 +1174,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             child: SingleChildScrollView(
               padding: EdgeInsets.fromLTRB(
                 24,
+                topInset + (_isFindOpen ? 124 : 72),
                 24,
-                24,
-                bottomInset + 96,
+                bottomInset + 80,
               ),
               child: Container(
                 padding: const EdgeInsets.all(20),
@@ -1445,102 +1434,63 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       ],
     );
 
-    final double baseWebTop = topInset + _kCompactHeaderClearance;
-    final double webViewportHeight = math.max(1.0, mq.size.height - baseWebTop);
-    final double targetExtraTop = _isFindOpen
-        ? (_kFindHeaderClearance - _kCompactHeaderClearance)
-        : (isCompact
-            ? 0.0
-            : (_kExpandedHeaderClearance - _kCompactHeaderClearance));
-
     final Widget sheetBody = Material(
       key: const ValueKey('in_app_browser_sheet'),
       color: resolved.bodyBg,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: targetExtraTop, end: targetExtraTop),
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-        child: IgnorePointer(
-          key: const ValueKey('in_app_browser_web_interaction_guard'),
-          ignoring: isPageInteractionBlocked,
-          child: ExcludeFocus(
-            excluding: isPageInteractionBlocked,
-            child: webBody,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              key: const ValueKey('in_app_browser_web_interaction_guard'),
+              ignoring: isPageInteractionBlocked,
+              child: ExcludeFocus(
+                excluding: isPageInteractionBlocked,
+                child: webBody,
+              ),
+            ),
           ),
-        ),
-        builder: (context, extraTop, stableWebChild) {
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              Positioned(
-                key: const ValueKey('in_app_browser_web_viewport'),
-                left: 0,
-                right: 0,
-                top: baseWebTop,
-                height: webViewportHeight,
-                child: Transform.translate(
-                  offset: Offset(0.0, extraTop),
-                  child: stableWebChild,
+          Positioned(
+            key: const ValueKey('in_app_browser_top_scroll_pocket'),
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: _BrowserScrollPocket(
+                edge: LiquidGlassEdge.top,
+                height: topInset + (isCompact ? 20.0 : 24.0),
+                color: topPocketBase.withValues(alpha: 0.88),
+                blurSigma: allowEdgeBlur ? 3.5 : 0.0,
+              ),
+            ),
+          ),
+          Positioned(
+            key: const ValueKey('in_app_browser_bottom_scroll_pocket'),
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: _BrowserScrollPocket(
+                edge: LiquidGlassEdge.bottom,
+                height: math.max(
+                  isCompact
+                      ? (bottomInset > 0 ? bottomInset + 8.0 : 0.0)
+                      : (bottomInset + 24.0),
+                  0.0,
                 ),
-              ),
-              Positioned(
-                key: const ValueKey('in_app_browser_top_scroll_pocket'),
-                top: 0,
-                left: 0,
-                right: 0,
-                height: baseWebTop + extraTop,
-                child: IgnorePointer(
-                  child: TweenAnimationBuilder<Color?>(
-                    tween: ColorTween(begin: topPocketBase, end: topPocketBase),
-                    duration: const Duration(milliseconds: 180),
-                    curve: Curves.easeOutCubic,
-                    builder: (context, animatedColor, _) {
-                      final Color shelfColor = animatedColor ?? topPocketBase;
-                      final Color hairlineColor =
-                          (isTopDark ? Colors.white : Colors.black)
-                              .withValues(alpha: isCompact ? 0.10 : 0.05);
-                      return DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: shelfColor,
-                          border: Border(
-                            bottom:
-                                BorderSide(color: hairlineColor, width: 0.5),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                color: bottomPocketBase.withValues(
+                  alpha: isCompact ? 0.65 : 0.84,
                 ),
+                blurSigma: allowEdgeBlur ? 3.0 : 0.0,
               ),
-              Positioned(
-                key: const ValueKey('in_app_browser_bottom_scroll_pocket'),
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: IgnorePointer(
-                  child: _BrowserScrollPocket(
-                    edge: LiquidGlassEdge.bottom,
-                    height: math.max(
-                      isCompact
-                          ? (bottomInset > 0 ? bottomInset + 8.0 : 0.0)
-                          : (bottomInset + 24.0),
-                      0.0,
-                    ),
-                    color: bottomPocketBase.withValues(
-                      alpha: isCompact ? 0.65 : 0.84,
-                    ),
-                    blurSigma: allowEdgeBlur ? 3.0 : 0.0,
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: style.isGlass
-                    ? LiquidGlassBatch(child: hudOverlayStack)
-                    : hudOverlayStack,
-              ),
-            ],
-          );
-        },
+            ),
+          ),
+          Positioned.fill(
+            child: style.isGlass
+                ? LiquidGlassBatch(child: hudOverlayStack)
+                : hudOverlayStack,
+          ),
+        ],
       ),
     );
 
