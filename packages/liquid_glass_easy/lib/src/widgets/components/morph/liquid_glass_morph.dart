@@ -397,6 +397,9 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
   /// that has since been swapped out cannot aim the glass at its size.
   Key? _measuredKey;
 
+  /// True after [widget.child] swaps until the new child's measurement lands.
+  bool _pendingSwap = false;
+
   /// False until the springs have been given a real target. Until then the
   /// glass is not painted — there is nothing meaningful to paint yet, and
   /// springing up from zero would be an opening animation nobody asked for.
@@ -560,7 +563,14 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
       return;
     }
 
-    if (to == _target && _sameShape(shape, _dst.shape) && !swap) return;
+    final Offset toAnchor = _dst.anchor.withinRect(to);
+    final bool aimMatches = (_dst.ax.target - toAnchor.dx).abs() < 0.05 &&
+        (_dst.ay.target - toAnchor.dy).abs() < 0.05 &&
+        (_dst.w.target - to.width).abs() < 0.05 &&
+        (_dst.h.target - to.height).abs() < 0.05;
+    if (to == _target && aimMatches && _sameShape(shape, _dst.shape) && !swap) {
+      return;
+    }
 
     // Where the glass IS right now becomes the source of this morph — so a
     // retarget mid-flight starts from the moving outline, not from wherever
@@ -671,10 +681,15 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
   /// Reported by the render object, one frame after the child's natural size
   /// changes — so a child that grows a row simply grows the glass.
   void _onMeasured(Key key, Size natural) {
-    if (!mounted) return;
-    final bool swap = key != _measuredKey && _measuredKey != null;
-    if (natural == _natural && !swap) return;
+    if (!mounted || key != _keyOf(widget.child)) return;
+    final bool swap =
+        _pendingSwap || (key != _measuredKey && _measuredKey != null);
+    final bool dstAimedAtNatural = !_seeded ||
+        ((_dst.w.target - (widget.width ?? natural.width)).abs() < 0.05 &&
+            (_dst.h.target - (widget.height ?? natural.height)).abs() < 0.05);
+    if (natural == _natural && !swap && dstAimedAtNatural) return;
     setState(() {
+      _pendingSwap = false;
       _measuredKey = key;
       _natural = natural;
       _retarget(swap: swap);
@@ -713,8 +728,12 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
       // A new child needs measuring before there is anything to aim at; the
       // report lands next frame and retargets then.
       if (widget.width != null && widget.height != null) {
+        _pendingSwap = false;
         _measuredKey = _keyOf(widget.child);
         _retarget(swap: true);
+      } else {
+        _pendingSwap = true;
+        _wake();
       }
       return;
     }
@@ -748,7 +767,7 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
 
     // The content swap can outlast the springs on a calm motion, so the
     // ticker runs until both are done.
-    if (_src.moving || _dst.moving || _elapsed < _m.duration) {
+    if (_pendingSwap || _src.moving || _dst.moving || _elapsed < _m.duration) {
       setState(() {});
       return;
     }
@@ -757,6 +776,7 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
     // frames rather than waking the engine every vsync to find nothing to do.
     _dst.snapTo(_target);
     _src.copyFrom(_dst);
+    _srcChild = null;
     _ticker.stop();
     setState(() {});
     widget.onEnd?.call();
@@ -983,9 +1003,9 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
     );
     final Offset slide = _travel * (-a.contentSlide * (1 - k));
     return _MorphMeasure(
-      // Keyed on the child, so a new child gets a fresh measurer and reports
-      // even when it happens to be the same size as the last one.
-      key: _keyOf(child),
+      // Keyed by incoming/outgoing role + child key so rapid reversals in a
+      // single-lens Stack cannot match outgoing siblings onto incoming ones.
+      key: ValueKey<(bool, Key)>((true, _keyOf(child))),
       measure: _measureConstraints(c),
       offset: Offset.lerp(pinned, riding, a.contentFollow)! + slide,
       onMeasured: (Size s) => _onMeasured(_keyOf(child), s),
@@ -1015,7 +1035,7 @@ class _LiquidGlassMorphState extends State<LiquidGlassMorph>
       (blob.height - _srcPin.height) / 2,
     );
     return _MorphMeasure(
-      key: _keyOf(child),
+      key: ValueKey<(bool, Key)>((false, _keyOf(child))),
       // The same constraints it was measured under as the live child, so it
       // does not reflow on its way out.
       measure: _measureConstraints(c),
@@ -1100,9 +1120,10 @@ class _RenderMorphMeasure extends RenderShiftedBox {
   _RenderMorphMeasure({
     required BoxConstraints measure,
     required Offset? offset,
-    required this.onMeasured,
+    required ValueChanged<Size>? onMeasured,
   })  : _measure = measure,
         _offset = offset,
+        _onMeasured = onMeasured,
         super(null);
 
   BoxConstraints _measure;
@@ -1119,7 +1140,16 @@ class _RenderMorphMeasure extends RenderShiftedBox {
     markNeedsLayout();
   }
 
-  ValueChanged<Size>? onMeasured;
+  ValueChanged<Size>? _onMeasured;
+  ValueChanged<Size>? get onMeasured => _onMeasured;
+  set onMeasured(ValueChanged<Size>? v) {
+    final bool becameActive = _onMeasured == null && v != null;
+    _onMeasured = v;
+    if (becameActive) {
+      _reported = null;
+      markNeedsLayout();
+    }
+  }
 
   /// The last size handed to [onMeasured], so a morph — which relayouts this
   /// box every frame — reports only when the CHILD actually changed size.
@@ -1142,11 +1172,12 @@ class _RenderMorphMeasure extends RenderShiftedBox {
     (c.parentData! as BoxParentData).offset = _offset ??
         Alignment.center.inscribe(natural, Offset.zero & size).topLeft;
 
-    final ValueChanged<Size>? report = onMeasured;
-    if (report != null && natural != _reported) {
+    if (_onMeasured != null && natural != _reported) {
       _reported = natural;
       // Reporting from inside layout would mean a setState during layout.
-      SchedulerBinding.instance.addPostFrameCallback((_) => report(natural));
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (attached) _onMeasured?.call(natural);
+      });
     }
   }
 }

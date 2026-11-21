@@ -799,6 +799,104 @@ void main() {
     );
 
     testWidgets(
+      'InAppBrowserSheet center LiquidGlassMorph never freezes under rapid up-down scroll reversals',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'Дзен — длинный заголовок новости для морфинга капсулы';
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 800),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: InAppBrowserSheet(session: session),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final centerMorphFinder = find.byKey(const ValueKey('webview_center_morph'));
+        final centerLensFinder = find.descendant(
+          of: centerMorphFinder,
+          matching: find.byType(LiquidGlassLens),
+        );
+        final State glassMorphState = tester.state(centerMorphFinder);
+
+        void pushCollapsed(bool collapsed) {
+          session.applyBrowserPageMetaPayload(
+            '{"collapsed":$collapsed,"topIsDark":false,"topColor":"rgb(255, 255, 255)","bottomColor":"rgb(255, 255, 255)","canvasColor":"rgb(255, 255, 255)"}',
+          );
+        }
+
+        // 1. Mid-flight reversal while outgoing expanded child is still alive (~50ms):
+        // collapse -> reverse back up before contentOutEnd -> settle -> collapse again.
+        pushCollapsed(true);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 50));
+        pushCollapsed(false);
+        await tester.pumpAndSettle();
+        expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
+        expect(tester.getRect(centerLensFinder).height, closeTo(44.0, 0.5));
+
+        pushCollapsed(true);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
+        expect(tester.getRect(centerLensFinder).height, closeTo(26.0, 0.5));
+        expect(tester.getRect(centerLensFinder).top, closeTo(32.0, 0.5));
+
+        // Tap compact capsule to expand back cleanly.
+        await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+        await tester.pumpAndSettle();
+        expect(tester.getRect(centerLensFinder).height, closeTo(44.0, 0.5));
+
+        // 2. Single-frame / pre-measurement bounce (collapse -> 1 frame -> expand -> collapse).
+        pushCollapsed(true);
+        await tester.pump();
+        pushCollapsed(false);
+        await tester.pumpAndSettle();
+        expect(tester.getRect(centerLensFinder).height, closeTo(44.0, 0.5));
+
+        pushCollapsed(true);
+        await tester.pumpAndSettle();
+        expect(tester.getRect(centerLensFinder).height, closeTo(26.0, 0.5));
+
+        // 3. Rapid 8-step up-down scroll oscillation burst ending collapsed, then expanded.
+        const delaysMs = <int>[25, 45, 30, 55, 20, 40, 35, 30];
+        for (int i = 0; i < delaysMs.length; i++) {
+          pushCollapsed(i.isEven ? false : true);
+          await tester.pump();
+          await tester.pump(Duration(milliseconds: delaysMs[i]));
+        }
+        pushCollapsed(true);
+        await tester.pumpAndSettle();
+        expect(identical(tester.state(centerMorphFinder), glassMorphState), isTrue);
+        expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
+        expect(tester.getRect(centerLensFinder).height, closeTo(26.0, 0.5));
+        expect(tester.getRect(centerLensFinder).top, closeTo(32.0, 0.5));
+
+        pushCollapsed(false);
+        await tester.pumpAndSettle();
+        expect(tester.getRect(centerLensFinder).height, closeTo(44.0, 0.5));
+        expect(tester.getRect(centerLensFinder).top, closeTo(32.0, 0.5));
+      },
+    );
+
+    testWidgets(
       'System Back performs web back without closing InAppBrowserSheet or MiniAppWebViewSheet; close button pops cleanly',
       (tester) async {
         LinkOpener.debugForceInAppSupportedForTest = true;
