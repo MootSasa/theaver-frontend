@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../services/browser_data_service.dart';
 import '../../services/glass_toast_service.dart';
@@ -43,8 +44,8 @@ Future<void> showSafariLibrarySheet(
 
 /// Dual-mode Safari iOS 26 library panel for bookmarks and chronologically
 /// grouped browser history, featuring a sliding [TheavSegmentedControl],
-/// real-time search capsule, current-page quick bookmark card, and
-/// [TheavInsetGroup] lists.
+/// transparent search bar, smooth horizontal [PageView] tab transition,
+/// feathered scroll edges, and borderless [TheavInsetGroup] cards.
 class SafariLibrarySheet extends StatefulWidget {
   final String currentUrl;
   final String currentTitle;
@@ -80,20 +81,68 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
   ];
 
   late SafariLibraryTab _activeTab;
+  late final PageController _pageController;
   late final TextEditingController _searchCtrl;
+  final ScrollController _bookmarksScrollCtrl = ScrollController();
+  final ScrollController _historyScrollCtrl = ScrollController();
   String _searchQuery = '';
+  int? _programmaticTargetPage;
 
   @override
   void initState() {
     super.initState();
     _activeTab = widget.initialTab;
+    _pageController = PageController(initialPage: widget.initialTab.index);
     _searchCtrl = TextEditingController();
   }
 
   @override
   void dispose() {
+    _pageController.dispose();
     _searchCtrl.dispose();
+    _bookmarksScrollCtrl.dispose();
+    _historyScrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _selectTab(SafariLibraryTab next) {
+    if (_activeTab == next) return;
+    setState(() {
+      _activeTab = next;
+      _programmaticTargetPage = next.index;
+    });
+    if (!_pageController.hasClients) return;
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _pageController.jumpToPage(next.index);
+      _programmaticTargetPage = null;
+    } else {
+      _pageController
+          .animateToPage(
+            next.index,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+        if (mounted) {
+          _programmaticTargetPage = null;
+        }
+      });
+    }
+  }
+
+  void _handlePageChanged(int idx) {
+    if (idx < 0 || idx >= SafariLibraryTab.values.length) return;
+    if (_programmaticTargetPage != null) {
+      if (idx == _programmaticTargetPage) {
+        _programmaticTargetPage = null;
+      }
+      return;
+    }
+    final nextTab = SafariLibraryTab.values[idx];
+    if (_activeTab != nextTab) {
+      HapticUtils.selection();
+      setState(() => _activeTab = nextTab);
+    }
   }
 
   void _clearSearch() {
@@ -232,18 +281,30 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
           padding: const EdgeInsets.only(bottom: 12),
           child: Row(
             children: [
-              TheavHeaderIconButton(
-                key: const ValueKey('safari_library_close_btn'),
-                size: 36,
-                foregroundColor: palette.onSurface,
-                icon: Icon(
-                  Icons.close_rounded,
-                  size: 20,
-                  color: palette.onSurface,
+              Tooltip(
+                message: 'Закрыть',
+                child: GestureDetector(
+                  key: const ValueKey('safari_library_close_btn'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).maybePop();
+                  },
+                  child: SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 22,
+                        color: palette.subtext,
+                      ),
+                    ),
+                  ),
                 ),
-                onTap: () => Navigator.of(context).maybePop(),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 4),
               Expanded(
                 child: Text(
                   'Закладки и история',
@@ -263,16 +324,16 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                 Material(
                   key: const ValueKey('safari_library_clear_history_btn'),
                   color: palette.error.withValues(
-                    alpha: style.isDark ? 0.16 : 0.10,
+                    alpha: style.isDark ? 0.14 : 0.08,
                   ),
                   borderRadius: BorderRadius.circular(16),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(16),
                     onTap: _confirmClearHistory,
                     child: SizedBox(
-                      height: 32,
+                      height: 30,
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 11),
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -293,28 +354,6 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                           ],
                         ),
                       ),
-                    ),
-                  ),
-                ),
-              ] else if (_activeTab == SafariLibraryTab.bookmarks &&
-                  bookmarks.isNotEmpty) ...[
-                const SizedBox(width: 8),
-                Container(
-                  height: 26,
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: BoxDecoration(
-                    color: palette.onSurface.withValues(
-                      alpha: style.isDark ? 0.10 : 0.06,
-                    ),
-                    borderRadius: BorderRadius.circular(13),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '${bookmarks.length}',
-                    style: TextStyle(
-                      color: palette.subtext,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
@@ -339,31 +378,16 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
             ),
           ],
           selected: _activeTab,
-          onChanged: (next) => setState(() => _activeTab = next),
-          margin: const EdgeInsets.only(bottom: 10),
+          onChanged: _selectTab,
+          margin: const EdgeInsets.only(bottom: 6),
         );
 
-        final Widget searchBar = Container(
+        final Widget searchBar = SizedBox(
           key: const ValueKey('safari_library_search_bar'),
-          height: 40.0,
-          margin: const EdgeInsets.only(bottom: 12),
-          decoration: BoxDecoration(
-            color: palette.onSurface.withValues(
-              alpha: style.isDark ? 0.09 : 0.055,
-            ),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: style.isGlass
-                  ? (style.isDark
-                      ? Colors.white.withValues(alpha: 0.12)
-                      : Colors.black.withValues(alpha: 0.07))
-                  : palette.divider,
-              width: 0.5,
-            ),
-          ),
+          height: 38.0,
           child: Row(
             children: [
-              const SizedBox(width: 13),
+              const SizedBox(width: 6),
               Icon(
                 Icons.search_rounded,
                 size: 18,
@@ -384,10 +408,18 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                         ? 'Поиск по закладкам...'
                         : 'Поиск в истории...',
                     hintStyle: TextStyle(
-                      color: palette.subtext.withValues(alpha: 0.8),
-                      fontSize: 14,
+                      color: palette.subtext.withValues(alpha: 0.78),
+                      fontSize: 14.5,
                     ),
+                    filled: false,
+                    fillColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
                     border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    disabledBorder: InputBorder.none,
+                    errorBorder: InputBorder.none,
+                    focusedErrorBorder: InputBorder.none,
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(vertical: 8),
                   ),
@@ -395,52 +427,25 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                 ),
               ),
               if (_searchQuery.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: Material(
-                    color: palette.onSurface.withValues(
-                      alpha: style.isDark ? 0.14 : 0.08,
-                    ),
-                    shape: const CircleBorder(),
-                    child: InkWell(
-                      key: const ValueKey('safari_library_search_clear_btn'),
-                      customBorder: const CircleBorder(),
-                      onTap: _clearSearch,
-                      child: SizedBox(
-                        width: 26,
-                        height: 26,
-                        child: Icon(
-                          Icons.close_rounded,
-                          size: 15,
-                          color: palette.onSurface,
-                        ),
+                GestureDetector(
+                  key: const ValueKey('safari_library_search_clear_btn'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _clearSearch,
+                  child: SizedBox(
+                    width: 30,
+                    height: 30,
+                    child: Center(
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 18,
+                        color: palette.subtext,
                       ),
                     ),
                   ),
-                )
-              else
-                const SizedBox(width: 12),
+                ),
             ],
           ),
         );
-
-        final Widget tabBody = _activeTab == SafariLibraryTab.bookmarks
-            ? _buildBookmarksTab(
-                context,
-                style: style,
-                bookmarks: filteredBookmarks,
-                hasAnyBookmarks: bookmarks.isNotEmpty,
-                query: query,
-                canBookmarkCurrent: canBookmarkCurrent,
-                cleanCurrentUrl: cleanCurrentUrl,
-              )
-            : _buildHistoryTab(
-                context,
-                style: style,
-                entries: filteredHistory,
-                hasAnyHistory: history.isNotEmpty,
-                query: query,
-              );
 
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -449,6 +454,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
             headerRow,
             segmentedBar,
             searchBar,
+            const SizedBox(height: 6),
             Flexible(
               fit: FlexFit.loose,
               child: ConstrainedBox(
@@ -458,7 +464,30 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                 ),
                 child: SizedBox(
                   height: contentHeight,
-                  child: tabBody,
+                  child: PageView(
+                    key: const ValueKey('safari_library_page_view'),
+                    controller: _pageController,
+                    physics: const BouncingScrollPhysics(),
+                    onPageChanged: _handlePageChanged,
+                    children: [
+                      _buildBookmarksTab(
+                        context,
+                        style: style,
+                        bookmarks: filteredBookmarks,
+                        hasAnyBookmarks: bookmarks.isNotEmpty,
+                        query: query,
+                        canBookmarkCurrent: canBookmarkCurrent,
+                        cleanCurrentUrl: cleanCurrentUrl,
+                      ),
+                      _buildHistoryTab(
+                        context,
+                        style: style,
+                        entries: filteredHistory,
+                        hasAnyHistory: history.isNotEmpty,
+                        query: query,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -502,199 +531,210 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 4),
-      children: [
-        if (showQuickCard) ...[
-          Container(
-            key: const ValueKey('safari_library_current_page_card'),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: palette.primary.withValues(alpha: style.isDark ? 0.11 : 0.06),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: palette.primary.withValues(
-                  alpha: style.isDark ? 0.24 : 0.16,
-                ),
-                width: 0.6,
+    final Color cardFill = palette.onSurface.withValues(
+      alpha: style.isDark ? 0.06 : 0.04,
+    );
+    final Color dividerTint = palette.onSurface.withValues(
+      alpha: style.isDark ? 0.06 : 0.045,
+    );
+
+    return _SafariFeatherScrollView(
+      controller: _bookmarksScrollCtrl,
+      edgeKeyPrefix: 'safari_bookmarks',
+      child: ListView(
+        controller: _bookmarksScrollCtrl,
+        padding: const EdgeInsets.only(top: 6, bottom: 16),
+        children: [
+          if (showQuickCard) ...[
+            Container(
+              key: const ValueKey('safari_library_current_page_card'),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: cardFill,
+                borderRadius: BorderRadius.circular(20),
               ),
-            ),
-            child: Row(
-              children: [
-                _DomainMonogramBadge(
-                  host: currentSafety.displayHost.isNotEmpty
-                      ? currentSafety.displayHost
-                      : cleanCurrentUrl,
-                  isSecure: currentSafety.securityLevel ==
-                      SafariConnectionSecurityLevel.secureHttps,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Текущая страница',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: palette.primary,
-                        ),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        resolvedCurrentTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w600,
-                          color: palette.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        currentSafety.displayHost.isNotEmpty
-                            ? currentSafety.displayHost
-                            : cleanCurrentUrl,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: palette.subtext,
-                        ),
-                      ),
-                    ],
+              child: Row(
+                children: [
+                  _DomainMonogramBadge(
+                    host: currentSafety.displayHost.isNotEmpty
+                        ? currentSafety.displayHost
+                        : cleanCurrentUrl,
+                    isSecure: currentSafety.securityLevel ==
+                        SafariConnectionSecurityLevel.secureHttps,
                   ),
-                ),
-                const SizedBox(width: 10),
-                Material(
-                  key: const ValueKey('safari_library_toggle_current_bookmark_btn'),
-                  color: isCurrentSaved
-                      ? palette.primary.withValues(
-                          alpha: style.isDark ? 0.22 : 0.13,
-                        )
-                      : palette.primary,
-                  borderRadius: BorderRadius.circular(17),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(17),
-                    onTap: () {
-                      HapticUtils.selection();
-                      unawaited(
-                        BrowserDataService.instance.toggleBookmark(
-                          cleanCurrentUrl,
-                          resolvedCurrentTitle,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Текущая страница',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: palette.primary,
+                          ),
                         ),
-                      );
-                    },
-                    child: SizedBox(
-                      height: 34,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isCurrentSaved
-                                  ? Icons.bookmark_added_rounded
-                                  : Icons.bookmark_add_rounded,
-                              size: 16,
-                              color: isCurrentSaved
-                                  ? palette.primary
-                                  : palette.onPrimary,
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              isCurrentSaved ? 'Сохранено' : 'Сохранить',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
+                        const SizedBox(height: 1),
+                        Text(
+                          resolvedCurrentTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w600,
+                            color: palette.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          currentSafety.displayHost.isNotEmpty
+                              ? currentSafety.displayHost
+                              : cleanCurrentUrl,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: palette.subtext,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Material(
+                    key: const ValueKey('safari_library_toggle_current_bookmark_btn'),
+                    color: isCurrentSaved
+                        ? palette.primary.withValues(
+                            alpha: style.isDark ? 0.22 : 0.13,
+                          )
+                        : palette.primary,
+                    borderRadius: BorderRadius.circular(17),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(17),
+                      onTap: () {
+                        HapticUtils.selection();
+                        unawaited(
+                          BrowserDataService.instance.toggleBookmark(
+                            cleanCurrentUrl,
+                            resolvedCurrentTitle,
+                          ),
+                        );
+                      },
+                      child: SizedBox(
+                        height: 34,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                isCurrentSaved
+                                    ? Icons.bookmark_added_rounded
+                                    : Icons.bookmark_add_rounded,
+                                size: 16,
                                 color: isCurrentSaved
                                     ? palette.primary
                                     : palette.onPrimary,
                               ),
-                            ),
-                          ],
+                              const SizedBox(width: 5),
+                              Text(
+                                isCurrentSaved ? 'Сохранено' : 'Сохранить',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: isCurrentSaved
+                                      ? palette.primary
+                                      : palette.onPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-        ],
-        if (bookmarks.isEmpty)
-          _SafariLibraryEmptyState(
-            icon: query.isNotEmpty
-                ? Icons.search_off_rounded
-                : Icons.bookmarks_outlined,
-            title: hasAnyBookmarks && query.isNotEmpty
-                ? 'Ничего не найдено'
-                : 'Нет сохранённых закладок',
-            subtitle: hasAnyBookmarks && query.isNotEmpty
-                ? 'Попробуйте изменить запрос поиска.'
-                : 'Нажмите «Сохранить» выше или звёздочку в меню, чтобы добавить сайт.',
-            actionLabel: query.isNotEmpty ? 'Сбросить поиск' : null,
-            onAction: query.isNotEmpty ? _clearSearch : null,
-          )
-        else
-          TheavInsetGroup(
-            margin: EdgeInsets.zero,
-            borderRadius: 20.0,
-            dividerIndent: 64.0,
-            header: 'Сохранённые сайты',
-            children: [
-              for (final item in bookmarks)
-                Dismissible(
-                  key: ValueKey('safari_bookmark_dismiss_${item.url}'),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    color: palette.error.withValues(alpha: 0.14),
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 18),
-                    child: Icon(
-                      Icons.delete_outline_rounded,
-                      color: palette.error,
-                      size: 20,
+            const SizedBox(height: 10),
+          ],
+          if (bookmarks.isEmpty)
+            _SafariLibraryEmptyState(
+              icon: query.isNotEmpty
+                  ? Icons.search_off_rounded
+                  : Icons.bookmarks_outlined,
+              title: hasAnyBookmarks && query.isNotEmpty
+                  ? 'Ничего не найдено'
+                  : 'Нет сохранённых закладок',
+              subtitle: hasAnyBookmarks && query.isNotEmpty
+                  ? 'Попробуйте изменить запрос поиска.'
+                  : 'Нажмите «Сохранить» выше или звёздочку в меню, чтобы добавить сайт.',
+              actionLabel: query.isNotEmpty ? 'Сбросить поиск' : null,
+              onAction: query.isNotEmpty ? _clearSearch : null,
+            )
+          else
+            TheavInsetGroup(
+              margin: EdgeInsets.zero,
+              borderRadius: 20.0,
+              dividerIndent: 64.0,
+              showBorder: false,
+              showShadow: false,
+              backgroundColor: cardFill,
+              dividerColor: dividerTint,
+              header: 'Сохранённые сайты',
+              children: [
+                for (final item in bookmarks)
+                  Dismissible(
+                    key: ValueKey('safari_bookmark_dismiss_${item.url}'),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      color: palette.error.withValues(alpha: 0.14),
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 18),
+                      child: Icon(
+                        Icons.delete_outline_rounded,
+                        color: palette.error,
+                        size: 20,
+                      ),
                     ),
-                  ),
-                  onDismissed: (_) {
-                    HapticUtils.selection();
-                    unawaited(
-                      BrowserDataService.instance.removeBookmark(item.url),
-                    );
-                  },
-                  child: _SafariLibraryEntryRow(
-                    title: item.title,
-                    subtitle: _formatCompactUrl(
-                      item.url,
-                      SafariUrlSafetyAnalyzer.analyzeUrl(item.url),
-                    ),
-                    host: SafariUrlSafetyAnalyzer.analyzeUrl(item.url)
-                        .displayHost,
-                    isSecure: SafariUrlSafetyAnalyzer.analyzeUrl(item.url)
-                            .securityLevel ==
-                        SafariConnectionSecurityLevel.secureHttps,
-                    isBookmarkedBadge: false,
-                    removeButtonKey: ValueKey('safari_bookmark_remove_${item.url}'),
-                    removeIcon: Icons.bookmark_remove_outlined,
-                    removeTooltip: 'Удалить из закладок',
-                    onTap: () => _selectAndOpen(item.url),
-                    onLongPress: () => unawaited(_copyEntryUrl(item.url)),
-                    onRemove: () {
+                    onDismissed: (_) {
                       HapticUtils.selection();
                       unawaited(
                         BrowserDataService.instance.removeBookmark(item.url),
                       );
                     },
+                    child: _SafariLibraryEntryRow(
+                      title: item.title,
+                      subtitle: _formatCompactUrl(
+                        item.url,
+                        SafariUrlSafetyAnalyzer.analyzeUrl(item.url),
+                      ),
+                      host: SafariUrlSafetyAnalyzer.analyzeUrl(item.url)
+                          .displayHost,
+                      isSecure: SafariUrlSafetyAnalyzer.analyzeUrl(item.url)
+                              .securityLevel ==
+                          SafariConnectionSecurityLevel.secureHttps,
+                      isBookmarkedBadge: false,
+                      removeButtonKey:
+                          ValueKey('safari_bookmark_remove_${item.url}'),
+                      removeIcon: Icons.close_rounded,
+                      removeTooltip: 'Удалить из закладок',
+                      onTap: () => _selectAndOpen(item.url),
+                      onLongPress: () => unawaited(_copyEntryUrl(item.url)),
+                      onRemove: () {
+                        HapticUtils.selection();
+                        unawaited(
+                          BrowserDataService.instance.removeBookmark(item.url),
+                        );
+                      },
+                    ),
                   ),
-                ),
-            ],
-          ),
-      ],
+              ],
+            ),
+        ],
+      ),
     );
   }
 
@@ -724,6 +764,12 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
     }
 
     final palette = style.palette;
+    final Color cardFill = palette.onSurface.withValues(
+      alpha: style.isDark ? 0.06 : 0.04,
+    );
+    final Color dividerTint = palette.onSurface.withValues(
+      alpha: style.isDark ? 0.06 : 0.045,
+    );
     final DateTime nowLocal = DateTime.now();
     final List<({String label, List<BrowserHistoryEntry> items})> sections = [];
     String? currentLabel;
@@ -739,81 +785,253 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
       currentBucket.add(entry);
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 4),
-      itemCount: sections.length,
-      itemBuilder: (context, sectionIdx) {
-        final section = sections[sectionIdx];
-        return TheavInsetGroup(
-          margin: EdgeInsets.only(
-            bottom: sectionIdx < sections.length - 1 ? 10 : 0,
-          ),
-          borderRadius: 20.0,
-          dividerIndent: 64.0,
-          header: section.label,
-          headerTrailing: Text(
-            '${section.items.length}',
-            style: TextStyle(
-              color: palette.subtext,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+    return _SafariFeatherScrollView(
+      controller: _historyScrollCtrl,
+      edgeKeyPrefix: 'safari_history',
+      child: ListView.builder(
+        controller: _historyScrollCtrl,
+        padding: const EdgeInsets.only(top: 6, bottom: 16),
+        itemCount: sections.length,
+        itemBuilder: (context, sectionIdx) {
+          final section = sections[sectionIdx];
+          return TheavInsetGroup(
+            margin: EdgeInsets.only(
+              bottom: sectionIdx < sections.length - 1 ? 10 : 0,
+            ),
+            borderRadius: 20.0,
+            dividerIndent: 64.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: section.label,
+            headerTrailing: Text(
+              '${section.items.length}',
+              style: TextStyle(
+                color: palette.subtext,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            children: [
+              for (final entry in section.items)
+                Dismissible(
+                  key: ValueKey(
+                    'safari_history_dismiss_${entry.url}_${entry.visitedAt.microsecondsSinceEpoch}',
+                  ),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    color: palette.error.withValues(alpha: 0.14),
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 18),
+                    child: Icon(
+                      Icons.delete_outline_rounded,
+                      color: palette.error,
+                      size: 20,
+                    ),
+                  ),
+                  onDismissed: (_) {
+                    HapticUtils.selection();
+                    unawaited(
+                      BrowserDataService.instance.removeHistoryEntry(entry),
+                    );
+                  },
+                  child: () {
+                    final safety = SafariUrlSafetyAnalyzer.analyzeUrl(entry.url);
+                    final String hostLabel =
+                        _formatCompactUrl(entry.url, safety);
+                    final bool isBookmarked =
+                        BrowserDataService.instance.isBookmarked(entry.url);
+                    return _SafariLibraryEntryRow(
+                      title: entry.title,
+                      subtitle: '$hostLabel • ${_formatTime(entry.visitedAt)}',
+                      host: safety.displayHost,
+                      isSecure: safety.securityLevel ==
+                          SafariConnectionSecurityLevel.secureHttps,
+                      isBookmarkedBadge: isBookmarked,
+                      removeButtonKey: ValueKey(
+                        'safari_history_remove_${entry.url}_${entry.visitedAt.microsecondsSinceEpoch}',
+                      ),
+                      removeIcon: Icons.close_rounded,
+                      removeTooltip: 'Удалить из истории',
+                      onTap: () => _selectAndOpen(entry.url),
+                      onLongPress: () => unawaited(_copyEntryUrl(entry.url)),
+                      onRemove: () {
+                        HapticUtils.selection();
+                        unawaited(
+                          BrowserDataService.instance.removeHistoryEntry(entry),
+                        );
+                      },
+                    );
+                  }(),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Applies subtle top and bottom alpha feathering via [ShaderMask] together with
+/// sibling [LiquidGlassScrollEdge] soft-blur overlays outside [ListView].
+class _SafariFeatherScrollView extends StatefulWidget {
+  final ScrollController controller;
+  final String edgeKeyPrefix;
+  final Widget child;
+
+  const _SafariFeatherScrollView({
+    required this.controller,
+    required this.edgeKeyPrefix,
+    required this.child,
+  });
+
+  @override
+  State<_SafariFeatherScrollView> createState() =>
+      _SafariFeatherScrollViewState();
+}
+
+class _SafariFeatherScrollViewState extends State<_SafariFeatherScrollView> {
+  double _topStrength = 0.0;
+  double _bottomStrength = 0.0;
+  bool _postFrameScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_updateEdgeStrengths);
+    _scheduleEdgeSync();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SafariFeatherScrollView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_updateEdgeStrengths);
+      widget.controller.addListener(_updateEdgeStrengths);
+    }
+    _scheduleEdgeSync();
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_updateEdgeStrengths);
+    super.dispose();
+  }
+
+  void _scheduleEdgeSync() {
+    if (_postFrameScheduled) return;
+    _postFrameScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _postFrameScheduled = false;
+      if (mounted) _updateEdgeStrengths();
+    });
+  }
+
+  void _updateEdgeStrengths() {
+    if (!widget.controller.hasClients) return;
+    final pos = widget.controller.position;
+    final double pixels = pos.pixels;
+    final double maxExtent = pos.maxScrollExtent;
+    final double nextTop =
+        maxExtent > 1.0 ? (pixels / 22.0).clamp(0.0, 1.0) : 0.0;
+    final double nextBottom = maxExtent > 1.0
+        ? ((maxExtent - pixels) / 22.0).clamp(0.0, 1.0)
+        : 0.0;
+    if ((nextTop - _topStrength).abs() > 0.03 ||
+        (nextBottom - _bottomStrength).abs() > 0.03) {
+      setState(() {
+        _topStrength = nextTop;
+        _bottomStrength = nextBottom;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
+    final Color sheetTint = style.overlayFill;
+    final bool needsMask = _topStrength > 0.01 || _bottomStrength > 0.01;
+
+    final Widget scrollChild = NotificationListener<ScrollMetricsNotification>(
+      onNotification: (_) {
+        _scheduleEdgeSync();
+        return false;
+      },
+      child: widget.child,
+    );
+
+    final Widget maskedContent = needsMask
+        ? LayoutBuilder(
+            builder: (context, constraints) {
+              final double h = constraints.maxHeight.isFinite &&
+                      constraints.maxHeight > 1.0
+                  ? constraints.maxHeight
+                  : 320.0;
+              final double topFrac = (24.0 / h).clamp(0.02, 0.22);
+              final double bottomFrac = (26.0 / h).clamp(0.02, 0.22);
+              return ShaderMask(
+                blendMode: BlendMode.dstIn,
+                shaderCallback: (bounds) => LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  stops: <double>[
+                    0.0,
+                    topFrac,
+                    1.0 - bottomFrac,
+                    1.0,
+                  ],
+                  colors: <Color>[
+                    Colors.white.withValues(alpha: 1.0 - _topStrength * 0.85),
+                    Colors.white,
+                    Colors.white,
+                    Colors.white.withValues(alpha: 1.0 - _bottomStrength * 0.85),
+                  ],
+                ).createShader(bounds),
+                child: scrollChild,
+              );
+            },
+          )
+        : scrollChild;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        maskedContent,
+        if (_topStrength > 0.02)
+          Positioned(
+            key: ValueKey('${widget.edgeKeyPrefix}_top_scroll_edge'),
+            top: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: LiquidGlassScrollEdge(
+                edge: LiquidGlassEdge.top,
+                height: 24.0,
+                style: LiquidGlassScrollEdgeStyle.soft,
+                color: sheetTint.withValues(alpha: 0.22 * _topStrength),
+                blur: allowEdgeBlur ? 4.2 * _topStrength : 0.0,
+              ),
             ),
           ),
-          children: [
-            for (final entry in section.items)
-              Dismissible(
-                key: ValueKey(
-                  'safari_history_dismiss_${entry.url}_${entry.visitedAt.microsecondsSinceEpoch}',
-                ),
-                direction: DismissDirection.endToStart,
-                background: Container(
-                  color: palette.error.withValues(alpha: 0.14),
-                  alignment: Alignment.centerRight,
-                  padding: const EdgeInsets.only(right: 18),
-                  child: Icon(
-                    Icons.delete_outline_rounded,
-                    color: palette.error,
-                    size: 20,
-                  ),
-                ),
-                onDismissed: (_) {
-                  HapticUtils.selection();
-                  unawaited(
-                    BrowserDataService.instance.removeHistoryEntry(entry),
-                  );
-                },
-                child: () {
-                  final safety = SafariUrlSafetyAnalyzer.analyzeUrl(entry.url);
-                  final String hostLabel =
-                      _formatCompactUrl(entry.url, safety);
-                  final bool isBookmarked =
-                      BrowserDataService.instance.isBookmarked(entry.url);
-                  return _SafariLibraryEntryRow(
-                    title: entry.title,
-                    subtitle: '$hostLabel • ${_formatTime(entry.visitedAt)}',
-                    host: safety.displayHost,
-                    isSecure: safety.securityLevel ==
-                        SafariConnectionSecurityLevel.secureHttps,
-                    isBookmarkedBadge: isBookmarked,
-                    removeButtonKey: ValueKey(
-                      'safari_history_remove_${entry.url}_${entry.visitedAt.microsecondsSinceEpoch}',
-                    ),
-                    removeIcon: Icons.close_rounded,
-                    removeTooltip: 'Удалить из истории',
-                    onTap: () => _selectAndOpen(entry.url),
-                    onLongPress: () => unawaited(_copyEntryUrl(entry.url)),
-                    onRemove: () {
-                      HapticUtils.selection();
-                      unawaited(
-                        BrowserDataService.instance.removeHistoryEntry(entry),
-                      );
-                    },
-                  );
-                }(),
+        if (_bottomStrength > 0.02)
+          Positioned(
+            key: ValueKey('${widget.edgeKeyPrefix}_bottom_scroll_edge'),
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: LiquidGlassScrollEdge(
+                edge: LiquidGlassEdge.bottom,
+                height: 26.0,
+                style: LiquidGlassScrollEdgeStyle.soft,
+                color: sheetTint.withValues(alpha: 0.24 * _bottomStrength),
+                blur: allowEdgeBlur ? 4.4 * _bottomStrength : 0.0,
               ),
-          ],
-        );
-      },
+            ),
+          ),
+      ],
     );
   }
 }
@@ -859,12 +1077,8 @@ class _DomainMonogramBadge extends StatelessWidget {
       width: 38,
       height: 38,
       decoration: BoxDecoration(
-        color: tint.withValues(alpha: style.isDark ? 0.22 : 0.13),
+        color: tint.withValues(alpha: style.isDark ? 0.20 : 0.12),
         borderRadius: BorderRadius.circular(11),
-        border: Border.all(
-          color: tint.withValues(alpha: style.isDark ? 0.26 : 0.16),
-          width: 0.6,
-        ),
       ),
       alignment: Alignment.center,
       child: Text(
@@ -893,7 +1107,6 @@ class _DomainMonogramBadge extends StatelessWidget {
             decoration: BoxDecoration(
               color: palette.primary,
               shape: BoxShape.circle,
-              border: Border.all(color: palette.surface, width: 1.5),
             ),
             child: Icon(
               Icons.bookmark_rounded,
@@ -982,31 +1195,18 @@ class _SafariLibraryEntryRow extends StatelessWidget {
       ),
       trailing: Tooltip(
         message: removeTooltip,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            key: removeButtonKey,
-            customBorder: const CircleBorder(),
-            onTap: onRemove,
-            child: SizedBox(
-              width: 38,
-              height: 38,
-              child: Center(
-                child: Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: palette.onSurface.withValues(
-                      alpha: style.isDark ? 0.09 : 0.055,
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    removeIcon,
-                    size: 16,
-                    color: palette.subtext,
-                  ),
-                ),
+        child: GestureDetector(
+          key: removeButtonKey,
+          behavior: HitTestBehavior.opaque,
+          onTap: onRemove,
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Center(
+              child: Icon(
+                removeIcon,
+                size: 18,
+                color: palette.subtext.withValues(alpha: 0.78),
               ),
             ),
           ),

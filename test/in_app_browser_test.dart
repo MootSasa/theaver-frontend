@@ -2141,6 +2141,14 @@ void main() {
               'title': 'Dart Guides',
               'createdAt': earlierToday.toIso8601String(),
             },
+            for (int i = 1; i <= 8; i++)
+              {
+                'url': 'https://example.org/bookmark-$i',
+                'title': 'Bookmark $i',
+                'createdAt': earlierToday
+                    .subtract(Duration(minutes: i))
+                    .toIso8601String(),
+              },
           ]),
           'in_app_browser_history': jsonEncode([
             {
@@ -2174,6 +2182,13 @@ void main() {
           ChangeNotifierProvider<LiquidGlassProvider>.value(
             value: _TestLiquidGlassProvider(GlassMode.full),
             child: MaterialApp(
+              theme: ThemeData(
+                useMaterial3: true,
+                inputDecorationTheme: const InputDecorationTheme(
+                  filled: true,
+                  fillColor: Color(0xFF1C1C1E),
+                ),
+              ),
               home: MediaQuery(
                 data: const MediaQueryData(
                   size: Size(400, 800),
@@ -2197,6 +2212,10 @@ void main() {
           findsOneWidget,
         );
         expect(
+          find.byKey(const ValueKey('safari_library_page_view')),
+          findsOneWidget,
+        );
+        expect(
           find.byKey(const ValueKey('safari_library_search_input')),
           findsOneWidget,
         );
@@ -2207,9 +2226,41 @@ void main() {
         expect(find.text('Сохранённые сайты'), findsOneWidget);
         expect(find.text('Dart Guides'), findsOneWidget);
 
-        // Liquid Glass invariants inside SafariLibrarySheet.
+        // Plain close icon without button wrapper & borderless card groups.
+        expect(
+          find.byKey(const ValueKey('safari_library_close_btn')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: libraryFinder,
+            matching: find.byType(TheavHeaderIconButton),
+          ),
+          findsNothing,
+        );
+        final groupWidget = tester.widget<TheavInsetGroup>(
+          find.byType(TheavInsetGroup).first,
+        );
+        expect(groupWidget.showBorder, isFalse);
+
+        // Transparent search field even when InputDecorationTheme(filled: true) is set.
+        final searchTf = tester.widget<TextField>(
+          find.byKey(const ValueKey('safari_library_search_input')),
+        );
+        expect(searchTf.decoration?.filled, isFalse);
+        expect(searchTf.decoration?.fillColor, Colors.transparent);
+        expect(searchTf.decoration?.border, InputBorder.none);
+
+        // Sliding LiquidGlassMotionPill + Liquid Glass invariants inside SafariLibrarySheet.
         final segmentedFinder = find.byKey(
           const ValueKey('safari_library_segmented_control'),
+        );
+        expect(
+          find.descendant(
+            of: segmentedFinder,
+            matching: find.byType(LiquidGlassMotionPill),
+          ),
+          findsOneWidget,
         );
         final segmentedLens = find.descendant(
           of: segmentedFinder,
@@ -2231,6 +2282,26 @@ void main() {
           findsNothing,
         );
 
+        // Bottom feathered scroll edge is active on overflowed list; scrolling activates top edge too.
+        expect(
+          find.byKey(const ValueKey('safari_bookmarks_bottom_scroll_edge')),
+          findsOneWidget,
+        );
+        await tester.drag(
+          find.descendant(of: libraryFinder, matching: find.byType(ListView)).first,
+          const Offset(0, -140),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('safari_bookmarks_top_scroll_edge')),
+          findsOneWidget,
+        );
+        await tester.drag(
+          find.descendant(of: libraryFinder, matching: find.byType(ListView)).first,
+          const Offset(0, 180),
+        );
+        await tester.pumpAndSettle();
+
         // Quick-bookmark current page via Safari capsule pill button.
         final toggleCurrentBtn = find.byKey(
           const ValueKey('safari_library_toggle_current_bookmark_btn'),
@@ -2241,7 +2312,17 @@ void main() {
         expect(find.text('Сохранено'), findsOneWidget);
         expect(BrowserDataService.instance.isBookmarked('https://dzen.ru/'), isTrue);
 
-        // Switch to History tab via TheavSegmentedControl.
+        // Horizontal drag across TheavSegmentedControl slides glass pill & PageView to History.
+        await tester.drag(segmentedFinder, const Offset(150, 0));
+        await tester.pumpAndSettle();
+        expect(find.text('Сегодня'), findsOneWidget);
+        expect(find.text('Вчера'), findsOneWidget);
+
+        // Drag back to Bookmarks, then switch via tap to History.
+        await tester.drag(segmentedFinder, const Offset(-150, 0));
+        await tester.pumpAndSettle();
+        expect(find.text('Сохранённые сайты'), findsOneWidget);
+
         await tester.tap(find.text('История'));
         await tester.pumpAndSettle();
         expect(find.text('Сегодня'), findsOneWidget);

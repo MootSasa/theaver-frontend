@@ -1,4 +1,7 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -18,9 +21,10 @@ class TheavSegmentOption<T> {
   });
 }
 
-/// Sliding pill segmented control supporting both Liquid Glass and Material Matte
-/// modes without Material tab bar scaffolding.
-class TheavSegmentedControl<T> extends StatelessWidget {
+/// Sliding pill segmented control supporting both Liquid Glass (with a living
+/// spring-driven [LiquidGlassMotionPill] supporting tap and horizontal drag)
+/// and borderless Material Matte modes.
+class TheavSegmentedControl<T> extends StatefulWidget {
   final List<TheavSegmentOption<T>> options;
   final T selected;
   final ValueChanged<T> onChanged;
@@ -37,131 +41,447 @@ class TheavSegmentedControl<T> extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    if (options.isEmpty) return const SizedBox.shrink();
-    final style = TheavSurfaceStyle.of(context);
-    final palette = style.palette;
-    final int selectedIndex = options.indexWhere((o) => o.value == selected);
-    final int activeIdx = selectedIndex < 0 ? 0 : selectedIndex;
-    final double alignmentX = options.length <= 1
-        ? 0.0
-        : -1.0 + (2.0 * activeIdx / (options.length - 1));
+  State<TheavSegmentedControl<T>> createState() =>
+      _TheavSegmentedControlState<T>();
+}
 
+class _TheavSegmentedControlState<T> extends State<TheavSegmentedControl<T>>
+    with SingleTickerProviderStateMixin {
+  static const double _pillStiffness = 260.0;
+  static const double _pillDamping = 28.0;
+
+  late double _fractionalIndex;
+  double _indexVel = 0.0;
+  double? _targetIndex;
+  bool _lifted = false;
+  bool _isDragging = false;
+  bool _glassVisible = false;
+  Ticker? _glideTicker;
+  Duration? _lastTickElapsed;
+  final LiquidGlassViewController _viewController = LiquidGlassViewController();
+
+  int _selectedIndex() {
+    final int idx =
+        widget.options.indexWhere((o) => o.value == widget.selected);
+    return idx < 0 ? 0 : idx;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _fractionalIndex = _selectedIndex().toDouble();
+    _glideTicker = createTicker(_onGlideTick);
+  }
+
+  @override
+  void didUpdateWidget(covariant TheavSegmentedControl<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.options.isEmpty) return;
+    final int newIdx = _selectedIndex();
+    final int maxIdx = widget.options.length - 1;
+    if (!_isDragging && oldWidget.selected != widget.selected) {
+      _animateToSegment(newIdx);
+    } else if (_fractionalIndex > maxIdx) {
+      _fractionalIndex = newIdx.toDouble();
+      _indexVel = 0.0;
+      _targetIndex = null;
+      _lifted = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _glideTicker?.dispose();
+    _viewController.detach();
+    super.dispose();
+  }
+
+  void _ensureTicking() {
+    final ticker = _glideTicker;
+    if (ticker != null && !ticker.isActive) {
+      _lastTickElapsed = null;
+      ticker.start();
+    }
+  }
+
+  void _animateToSegment(int index, {bool lift = true}) {
+    final double nextTarget = index.toDouble();
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _glideTicker?.stop();
+      setState(() {
+        _fractionalIndex = nextTarget;
+        _indexVel = 0.0;
+        _targetIndex = null;
+        _lifted = false;
+      });
+      return;
+    }
+    setState(() {
+      _targetIndex = nextTarget;
+      if (lift && (nextTarget - _fractionalIndex).abs() > 0.05) {
+        _lifted = true;
+      } else if (!lift) {
+        _lifted = false;
+      }
+    });
+    _ensureTicking();
+  }
+
+  void _onGlideTick(Duration elapsed) {
+    final Duration last = _lastTickElapsed ?? elapsed;
+    final double rawDt = (elapsed - last).inMicroseconds / 1e6;
+    _lastTickElapsed = elapsed;
+    if (rawDt <= 0.0) return;
+    final double dt = math.min(0.04, rawDt);
+
+    final double? target = _targetIndex;
+    if (target == null) {
+      _glideTicker?.stop();
+      return;
+    }
+
+    final (double nextX, double nextVel) = liquidGlassSpringStep(
+      x: _fractionalIndex,
+      vel: _indexVel,
+      target: target,
+      dt: dt,
+      stiffness: _pillStiffness,
+      damping: _pillDamping,
+    );
+    _fractionalIndex = nextX;
+    _indexVel = nextVel;
+
+    if ((nextX - target).abs() < 0.14) {
+      _lifted = false;
+    }
+    if ((nextX - target).abs() < 0.002 && nextVel.abs() < 0.01) {
+      _fractionalIndex = target;
+      _indexVel = 0.0;
+      _targetIndex = null;
+      _lifted = false;
+      _glideTicker?.stop();
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _handleSegmentTap(int index) {
+    final option = widget.options[index];
+    if (option.value != widget.selected) {
+      HapticUtils.selection();
+      widget.onChanged(option.value);
+      _animateToSegment(index);
+    } else if ((_fractionalIndex - index).abs() > 0.01 || _lifted) {
+      _animateToSegment(index, lift: false);
+    }
+  }
+
+  void _handleDragStart(DragStartDetails _) {
+    _glideTicker?.stop();
+    _targetIndex = null;
+    _indexVel = 0.0;
+    _isDragging = true;
+    setState(() => _lifted = true);
+  }
+
+  void _handleDragUpdate(DragUpdateDetails details, double cellW, int count) {
+    if (cellW <= 0.1 || count <= 1) return;
+    final double rawNext = _fractionalIndex + details.delta.dx / cellW;
+    final double maxIdx = (count - 1).toDouble();
+    if (rawNext < 0.0) {
+      _fractionalIndex = (rawNext * 0.35).clamp(-0.14, 0.0);
+    } else if (rawNext > maxIdx) {
+      _fractionalIndex =
+          (maxIdx + (rawNext - maxIdx) * 0.35).clamp(maxIdx, maxIdx + 0.14);
+    } else {
+      _fractionalIndex = rawNext;
+    }
+    final int nearest = _fractionalIndex.round().clamp(0, count - 1);
+    if (widget.options[nearest].value != widget.selected) {
+      HapticUtils.selection();
+      widget.onChanged(widget.options[nearest].value);
+    }
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _handleDragFinish(DragEndDetails? details) {
+    _isDragging = false;
+    if (widget.options.isEmpty) return;
+    final int maxIdx = widget.options.length - 1;
+    final int snapped = _fractionalIndex.round().clamp(0, maxIdx);
+    if (widget.options[snapped].value != widget.selected) {
+      HapticUtils.selection();
+      widget.onChanged(widget.options[snapped].value);
+    }
+    _animateToSegment(
+      snapped,
+      lift: (snapped - _fractionalIndex).abs() >= 0.08,
+    );
+  }
+
+  Widget _buildSegmentRow(
+    TheavPalette palette, {
+    required double pad,
+    required double cellH,
+  }) {
+    final int selectedIdx = _selectedIndex();
     return Padding(
-      padding: margin,
-      child: Container(
-        height: height,
-        padding: const EdgeInsets.all(3.0),
-        decoration: BoxDecoration(
-          color: style.trackFill,
-          borderRadius: BorderRadius.circular(height / 2),
-          border: Border.all(
-            color: palette.divider,
-            width: 0.5,
-          ),
-        ),
-        child: Stack(
-          children: [
-            AnimatedAlign(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment(alignmentX, 0.0),
-              child: FractionallySizedBox(
-                widthFactor: 1.0 / options.length,
-                heightFactor: 1.0,
-                child: style.isGlass && style.glassProvider != null
-                    ? LiquidGlassLens(
-                        style: style.glassProvider!.createStyle(
-                          context: context,
-                          cornerRadius: (height - 6) / 2,
-                          refractionIndex: 1.12,
-                          refractionWidth: 18.0,
-                          color: style.isDark
-                              ? const Color(0x38FFFFFF)
-                              : const Color(0x52FFFFFF),
-                        ),
-                        child: const SizedBox.expand(),
-                      )
-                    : DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: palette.surface,
-                          borderRadius: BorderRadius.circular((height - 6) / 2),
-                          border: Border.all(
-                            color: palette.divider,
-                            width: 0.5,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black
-                                  .withValues(alpha: style.isDark ? 0.24 : 0.07),
-                              blurRadius: 6,
-                              offset: const Offset(0, 1.5),
+      padding: EdgeInsets.all(pad),
+      child: Row(
+        children: [
+          for (int i = 0; i < widget.options.length; i++)
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _handleSegmentTap(i),
+                child: SizedBox(
+                  height: cellH,
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (widget.options[i].icon != null) ...[
+                            IconTheme(
+                              data: IconThemeData(
+                                size: 16,
+                                color: i == selectedIdx
+                                    ? palette.primary
+                                    : palette.subtext,
+                              ),
+                              child: widget.options[i].icon!,
                             ),
+                            const SizedBox(width: 5),
                           ],
-                        ),
+                          Flexible(
+                            child: AnimatedDefaultTextStyle(
+                              duration: const Duration(milliseconds: 160),
+                              style: TextStyle(
+                                color: i == selectedIdx
+                                    ? palette.onSurface
+                                    : palette.subtext,
+                                fontSize: 13.5,
+                                fontWeight: i == selectedIdx
+                                    ? FontWeight.w600
+                                    : FontWeight.w500,
+                              ),
+                              child: Text(
+                                widget.options[i].label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                  ),
+                ),
               ),
             ),
-            Row(
-              children: options.map((opt) {
-                final isSelected = opt.value == selected;
-                final textColor = isSelected
-                    ? palette.onSurface
-                    : palette.subtext;
-                return Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      if (!isSelected) {
-                        HapticUtils.selection();
-                        onChanged(opt.value);
-                      }
-                    },
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            if (opt.icon != null) ...[
-                              IconTheme(
-                                data: IconThemeData(
-                                  size: 16,
-                                  color: isSelected
-                                      ? palette.primary
-                                      : palette.subtext,
-                                ),
-                                child: opt.icon!,
-                              ),
-                              const SizedBox(width: 5),
-                            ],
-                            Flexible(
-                              child: AnimatedDefaultTextStyle(
-                                duration: const Duration(milliseconds: 160),
-                                style: TextStyle(
-                                  color: textColor,
-                                  fontSize: 13.5,
-                                  fontWeight: isSelected
-                                      ? FontWeight.w600
-                                      : FontWeight.w500,
-                                ),
-                                child: Text(
-                                  opt.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
-                          ],
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.options.isEmpty) return const SizedBox.shrink();
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+    final int n = widget.options.length;
+    final int activeIdx = _selectedIndex();
+
+    if (style.isGlass && style.glassProvider != null) {
+      const double pad = 3.5;
+      final double cellH = math.max(12.0, widget.height - pad * 2.0);
+      final Color trackBg = style.isDark
+          ? const Color(0x18FFFFFF)
+          : const Color(0x0D000000);
+      final Color restPillColor = style.isDark
+          ? const Color(0x36FFFFFF)
+          : const Color(0x88FFFFFF);
+      final double extraW = math.min(6.0, pad * 1.6);
+      final double extraH = math.min(5.0, pad * 1.5);
+
+      return Padding(
+        padding: widget.margin,
+        child: SizedBox(
+          height: widget.height,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final double w = constraints.maxWidth.isFinite &&
+                      constraints.maxWidth > 0
+                  ? constraints.maxWidth
+                  : 280.0;
+              final double cellW = math.max(1.0, (w - pad * 2.0) / n);
+              final double clampedIdx = _fractionalIndex.clamp(
+                -0.14,
+                (n - 1).toDouble() + 0.14,
+              );
+              final double pillLeft = pad + clampedIdx * cellW;
+              final double pillCX = pillLeft + cellW * 0.5;
+
+              final Widget backgroundLayer = Stack(
+                fit: StackFit.expand,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: trackBg,
+                      borderRadius: BorderRadius.circular(widget.height / 2),
+                    ),
+                  ),
+                  Positioned(
+                    left: pillLeft,
+                    top: pad,
+                    width: cellW,
+                    height: cellH,
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 120),
+                      opacity: _glassVisible ? 0.32 : 1.0,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: restPillColor,
+                          borderRadius: BorderRadius.circular(cellH / 2),
+                          boxShadow: style.isDark
+                              ? null
+                              : [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.06),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 1.5),
+                                  ),
+                                ],
                         ),
                       ),
                     ),
                   ),
-                );
-              }).toList(),
-            ),
-          ],
+                  Positioned.fill(
+                    child: _buildSegmentRow(
+                      palette,
+                      pad: pad,
+                      cellH: cellH,
+                    ),
+                  ),
+                ],
+              );
+
+              return GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragStart: _handleDragStart,
+                onHorizontalDragUpdate: (d) => _handleDragUpdate(d, cellW, n),
+                onHorizontalDragEnd: _handleDragFinish,
+                onHorizontalDragCancel: () => _handleDragFinish(null),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(widget.height / 2),
+                  child: LiquidGlassView(
+                    controller: _viewController,
+                    batch: false,
+                    realTimeCapture: false,
+                    useSync: true,
+                    backgroundWidget: backgroundLayer,
+                    child: IgnorePointer(
+                      child: LiquidGlassBatch.exclude(
+                        child: LiquidGlassMotionPill(
+                          center: Offset(pillCX, widget.height * 0.5),
+                          active: _lifted,
+                          restSize: Size(cellW, cellH),
+                          activeSize: Size(cellW + extraW, cellH + extraH),
+                          honorBackdropAlpha: true,
+                          style: LiquidGlassStyle(
+                            shape:
+                                const LiquidGlassShape.continuousRoundedRectangle(
+                              cornerRadius: 100,
+                            ),
+                            specular: const LiquidGlassLight.specular(),
+                            color: style.isDark
+                                ? const Color(0x22FFFFFF)
+                                : const Color(0x2CFFFFFF),
+                            blur: 0,
+                            shadow: const LiquidGlassShadow(inset: 3),
+                            refractionIndex: 1.045,
+                            refractionWidth: 12,
+                            magnification: 1.05,
+                            liteGlass: style.isLite,
+                          ),
+                          onGlassVisibilityChanged: (visible) {
+                            if (visible) {
+                              _viewController.startRealtimeCapture();
+                            } else {
+                              _viewController.stopRealtimeCapture();
+                            }
+                            if (mounted && _glassVisible != visible) {
+                              setState(() => _glassVisible = visible);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+    }
+
+    final double alignmentX =
+        n <= 1 ? 0.0 : -1.0 + (2.0 * activeIdx / (n - 1));
+    const double mattePad = 3.0;
+    return Padding(
+      padding: widget.margin,
+      child: SizedBox(
+        height: widget.height,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: style.trackFill,
+            borderRadius: BorderRadius.circular(widget.height / 2),
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(mattePad),
+                child: AnimatedAlign(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment(alignmentX, 0.0),
+                  child: FractionallySizedBox(
+                    widthFactor: 1.0 / n,
+                    heightFactor: 1.0,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: palette.surface,
+                        borderRadius: BorderRadius.circular(
+                          (widget.height - mattePad * 2) / 2,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(
+                              alpha: style.isDark ? 0.24 : 0.07,
+                            ),
+                            blurRadius: 6,
+                            offset: const Offset(0, 1.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              _buildSegmentRow(
+                palette,
+                pad: mattePad,
+                cellH: math.max(12.0, widget.height - mattePad * 2),
+              ),
+            ],
+          ),
         ),
       ),
     );

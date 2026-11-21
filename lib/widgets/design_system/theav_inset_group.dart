@@ -20,6 +20,9 @@ class TheavInsetGroup extends StatelessWidget {
   final double dividerIndent;
   final Color? backgroundColor;
   final bool showDividers;
+  final bool showBorder;
+  final bool showShadow;
+  final Color? dividerColor;
 
   const TheavInsetGroup({
     super.key,
@@ -32,6 +35,9 @@ class TheavInsetGroup extends StatelessWidget {
     this.dividerIndent = 54.0,
     this.backgroundColor,
     this.showDividers = true,
+    this.showBorder = true,
+    this.showShadow = true,
+    this.dividerColor,
   });
 
   @override
@@ -84,11 +90,13 @@ class TheavInsetGroup extends StatelessWidget {
             decoration: BoxDecoration(
               color: effectiveBg,
               borderRadius: BorderRadius.circular(borderRadius),
-              border: Border.all(
-                color: effectiveBorderColor,
-                width: effectiveBorderWidth,
-              ),
-              boxShadow: style.isDark
+              border: showBorder
+                  ? Border.all(
+                      color: effectiveBorderColor,
+                      width: effectiveBorderWidth,
+                    )
+                  : null,
+              boxShadow: (!showShadow || style.isDark)
                   ? null
                   : [
                       BoxShadow(
@@ -139,7 +147,7 @@ class TheavInsetGroup extends StatelessWidget {
             thickness: 0.5,
             indent: dividerIndent,
             endIndent: 16,
-            color: palette.divider,
+            color: dividerColor ?? palette.divider,
           ),
         );
       }
