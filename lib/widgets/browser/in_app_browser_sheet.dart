@@ -87,6 +87,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   bool _isMenuOpen = false;
   bool _isSiteInfoOpen = false;
+  bool _isSiteInfoAnimatingOut = false;
   bool _isFindOpen = false;
   String _findStatus = '';
   double _dragResetFrom = 0.0;
@@ -470,7 +471,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   void _closeTab() {
     _closeMenu();
-    _closeSiteInfoPopover();
+    _isSiteInfoOpen = false;
+    _isSiteInfoAnimatingOut = false;
     unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
@@ -491,7 +493,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _toggleMenu() {
     HapticUtils.tap();
     if (!_isMenuOpen) {
-      if (_isSiteInfoOpen) _isSiteInfoOpen = false;
+      if (_isSiteInfoOpen) {
+        _isSiteInfoOpen = false;
+        _isSiteInfoAnimatingOut = true;
+      }
       if (_session.browserChromeCollapsed) {
         unawaited(_session.setBrowserChromeCollapsed(false));
       }
@@ -512,15 +517,24 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       if (_session.browserChromeCollapsed) {
         unawaited(_session.setBrowserChromeCollapsed(false));
       }
-      setState(() => _isSiteInfoOpen = true);
+      setState(() {
+        _isSiteInfoOpen = true;
+        _isSiteInfoAnimatingOut = false;
+      });
     } else {
-      setState(() => _isSiteInfoOpen = false);
+      setState(() {
+        _isSiteInfoOpen = false;
+        _isSiteInfoAnimatingOut = true;
+      });
     }
   }
 
   void _closeSiteInfoPopover() {
     if (_isSiteInfoOpen) {
-      setState(() => _isSiteInfoOpen = false);
+      setState(() {
+        _isSiteInfoOpen = false;
+        _isSiteInfoAnimatingOut = true;
+      });
     }
   }
 
@@ -695,7 +709,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _navigateToUrl(String rawUrl) {
     final uri = Uri.tryParse(rawUrl);
     if (uri == null) return;
-    _isSiteInfoOpen = false;
+    if (_isSiteInfoOpen) {
+      _isSiteInfoOpen = false;
+      _isSiteInfoAnimatingOut = true;
+    }
     setState(() {
       _session.currentUrl = rawUrl;
       _session.pageTitle = '';
@@ -1354,7 +1371,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           right: 0,
           child: floatingHeader,
         ),
-        if (_isSiteInfoOpen) ...[
+        if (_isSiteInfoOpen)
           Positioned.fill(
             key: const ValueKey('in_app_browser_site_info_backdrop'),
             child: GestureDetector(
@@ -1366,71 +1383,58 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               onHorizontalDragUpdate: (_) {},
             ),
           ),
+        if (_isSiteInfoOpen || _isSiteInfoAnimatingOut)
           Positioned(
             top: topInset + 58.0,
             left: 16.0,
             right: 16.0,
             child: Align(
               alignment: Alignment.topCenter,
-              child: LiquidGlassBatch.exclude(
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween<double>(begin: 0.0, end: 1.0),
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutBack,
-                  builder: (context, v, child) {
-                    final double scale = 0.88 + 0.12 * v;
-                    final double dy = -10.0 * (1.0 - v.clamp(0.0, 1.0));
-                    return Transform.translate(
-                      offset: Offset(0.0, dy),
-                      child: Transform.scale(
-                        scale: scale,
-                        alignment: Alignment.topCenter,
-                        child: child,
-                      ),
+              child: SafariSiteInfoAnimatedPopover(
+                isOpen: _isSiteInfoOpen,
+                onDismissed: () {
+                  if (mounted && !_isSiteInfoOpen) {
+                    setState(() => _isSiteInfoAnimatingOut = false);
+                  }
+                },
+                safetyInfo: safetyInfo,
+                isDesktopMode: _session.isDesktopMode,
+                grantedPermissionLabels:
+                    _session.grantedPermissionLabelsForUrl(currentUrl),
+                hasMutedJsDialogs:
+                    _session.hasMutedJsDialogsForUrl(currentUrl),
+                hasAcceptedSslWarning:
+                    _session.hasAcceptedSslWarningForUrl(currentUrl),
+                onCopyUrl: () {
+                  _closeSiteInfoPopover();
+                  unawaited(_copyCurrentUrl());
+                },
+                onUpgradeToHttps: SafariUrlSafetyAnalyzer
+                            .tryBuildHttpsUpgrade(currentUrl) !=
+                        null
+                    ? _upgradeCurrentUrlToHttps
+                    : null,
+                onResetPermissions: () {
+                  _session.resetSessionPermissionsForUrl(currentUrl);
+                  _closeSiteInfoPopover();
+                  if (mounted) {
+                    GlassToastService().show(
+                      context,
+                      'Разрешения сайта сброшены',
+                      icon: Icons.restart_alt_rounded,
                     );
-                  },
-                  child: SafariSiteInfoPopover(
-                    safetyInfo: safetyInfo,
-                    isDesktopMode: _session.isDesktopMode,
-                    grantedPermissionLabels:
-                        _session.grantedPermissionLabelsForUrl(currentUrl),
-                    hasMutedJsDialogs:
-                        _session.hasMutedJsDialogsForUrl(currentUrl),
-                    hasAcceptedSslWarning:
-                        _session.hasAcceptedSslWarningForUrl(currentUrl),
-                    onCopyUrl: () {
-                      _closeSiteInfoPopover();
-                      unawaited(_copyCurrentUrl());
-                    },
-                    onUpgradeToHttps: SafariUrlSafetyAnalyzer
-                                .tryBuildHttpsUpgrade(currentUrl) !=
-                            null
-                        ? _upgradeCurrentUrlToHttps
-                        : null,
-                    onResetPermissions: () {
-                      _session.resetSessionPermissionsForUrl(currentUrl);
-                      _closeSiteInfoPopover();
-                      if (mounted) {
-                        GlassToastService().show(
-                          context,
-                          'Разрешения сайта сброшены',
-                          icon: Icons.restart_alt_rounded,
-                        );
-                      }
-                    },
-                    onToggleDesktopMode: () {
-                      _closeSiteInfoPopover();
-                      unawaited(_toggleDesktopMode());
-                    },
-                    onClearSiteDataAndReload: () {
-                      unawaited(_clearCurrentSiteDataAndReload());
-                    },
-                  ),
-                ),
+                  }
+                },
+                onToggleDesktopMode: () {
+                  _closeSiteInfoPopover();
+                  unawaited(_toggleDesktopMode());
+                },
+                onClearSiteDataAndReload: () {
+                  unawaited(_clearCurrentSiteDataAndReload());
+                },
               ),
             ),
           ),
-        ],
       ],
     );
 

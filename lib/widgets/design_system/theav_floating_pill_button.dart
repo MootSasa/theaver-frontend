@@ -46,19 +46,27 @@ class TheavFloatingSurface extends StatelessWidget {
         refractionWidth: refractionWidth,
         color: colorOverride,
       );
-      return LiquidGlassLens(
-        style: style,
-        touch: enableFlex
-            ? const LiquidGlassTouch.flexing(
-                LiquidGlassFlex(
-                  stretch: 5,
-                  squeeze: 0.72,
-                  lean: 0.25,
-                  grip: 0.5,
-                ),
-              )
-            : null,
-        child: content,
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // `LiquidGlassTouch.flexing` expands `LiquidGlassLens` to
+          // `constraints.biggest`, so only enable it when both axes are tight
+          // and keep loose containers (e.g. floating pills/toasts) shrink-wrapped.
+          final bool allowTightFlex = enableFlex && constraints.isTight;
+          return LiquidGlassLens(
+            style: style,
+            touch: allowTightFlex
+                ? const LiquidGlassTouch.flexing(
+                    LiquidGlassFlex(
+                      stretch: 5,
+                      squeeze: 0.72,
+                      lean: 0.25,
+                      grip: 0.5,
+                    ),
+                  )
+                : null,
+            child: content,
+          );
+        },
       );
     }
 

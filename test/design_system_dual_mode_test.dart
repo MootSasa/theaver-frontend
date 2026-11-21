@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:theaver/models/theav_theme.dart';
 import 'package:theaver/services/bot_service.dart';
+import 'package:theaver/services/glass_toast_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
 import 'package:theaver/services/theav_theme_service.dart';
@@ -1788,4 +1789,188 @@ void main() {
     expect(tester.getSize(dockFinder).height, closeTo(initialDockHeight, 0.5));
     expect(lastInnerViewInsetsBottom, closeTo(0.0, 0.01));
   });
+
+  for (final mode in const <GlassMode>[GlassMode.full, GlassMode.lite]) {
+    testWidgets(
+      'TheavFloatingSurface shrink-wraps under loose constraints in $mode',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        await tester.pumpWidget(
+          _buildHost(
+            glassMode: mode,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: const TheavFloatingSurface(
+                  key: ValueKey('loose_floating_surface'),
+                  borderRadius: 24,
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Ссылка скопирована'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final surfaceFinder = find.byKey(const ValueKey('loose_floating_surface'));
+        final lensFinder = find.descendant(
+          of: surfaceFinder,
+          matching: find.byType(LiquidGlassLens),
+        );
+        expect(lensFinder, findsOneWidget);
+
+        final Size lensSize = tester.getSize(lensFinder);
+        expect(lensSize.height, lessThan(80.0));
+        expect(lensSize.height, greaterThan(20.0));
+        expect(lensSize.width, lessThan(320.0));
+        expect(lensSize.width, greaterThan(80.0));
+      },
+    );
+  }
+
+  for (final mode in const <GlassMode>[
+    GlassMode.full,
+    GlassMode.lite,
+    GlassMode.disabled,
+  ]) {
+    testWidgets(
+      'GlassToastService displays compact pill, passes outside taps, and animates close on timer & swipe in $mode',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(GlassToastService().hide);
+
+        late BuildContext hostContext;
+        int backgroundTaps = 0;
+
+        await tester.pumpWidget(
+          _buildHost(
+            glassMode: mode,
+            child: Builder(
+              builder: (ctx) {
+                hostContext = ctx;
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 48),
+                    child: ElevatedButton(
+                      key: const ValueKey('toast_bg_action_btn'),
+                      onPressed: () => backgroundTaps++,
+                      child: const Text('Background Action'),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 1. Auto-timer dismissal check + compact bounds + zero Fade/Opacity above glass.
+        GlassToastService().show(
+          hostContext,
+          'Ссылка скопирована',
+          duration: const Duration(seconds: 3),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pumpAndSettle(const Duration(milliseconds: 16));
+
+        final overlayFinder = find.byKey(const ValueKey('glass_toast_overlay'));
+        final pillFinder = find.byKey(const ValueKey('glass_toast_pill'));
+        expect(overlayFinder, findsOneWidget);
+        expect(pillFinder, findsOneWidget);
+        expect(find.text('Ссылка скопирована'), findsOneWidget);
+
+        final Size pillSize = tester.getSize(pillFinder);
+        expect(pillSize.height, lessThan(80.0));
+        expect(pillSize.width, lessThan(320.0));
+
+        if (mode != GlassMode.disabled) {
+          final morphFinder = find.descendant(
+            of: overlayFinder,
+            matching: find.byType(LiquidGlassMorph),
+          );
+          expect(morphFinder, findsOneWidget);
+          expect(
+            find.ancestor(
+              of: morphFinder,
+              matching: find.descendant(
+                of: overlayFinder,
+                matching: find.byWidgetPredicate(
+                  (w) =>
+                      w is FadeTransition ||
+                      (w is Opacity && w.opacity > 0.0 && w.opacity < 1.0),
+                ),
+              ),
+            ),
+            findsNothing,
+          );
+          final lensFinder = find.descendant(
+            of: morphFinder,
+            matching: find.byType(LiquidGlassLens),
+          );
+          expect(lensFinder, findsWidgets);
+          expect(
+            find.ancestor(
+              of: lensFinder.first,
+              matching: find.descendant(
+                of: overlayFinder,
+                matching: find.byWidgetPredicate(
+                  (w) =>
+                      w is FadeTransition ||
+                      (w is Opacity && w.opacity > 0.0 && w.opacity < 1.0),
+                ),
+              ),
+            ),
+            findsNothing,
+          );
+        }
+
+        // Outside taps must still pass straight through to the page below.
+        await tester.tap(find.byKey(const ValueKey('toast_bg_action_btn')));
+        await tester.pump();
+        expect(backgroundTaps, equals(1));
+
+        // Let the 3s timer trigger dismissal; mid-exit must remain animating,
+        // then vanish cleanly after pumpAndSettle().
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pump(const Duration(milliseconds: 60));
+        expect(overlayFinder, findsOneWidget);
+        await tester.pumpAndSettle(const Duration(milliseconds: 16));
+        expect(overlayFinder, findsNothing);
+        expect(pillFinder, findsNothing);
+
+        // 2. Swipe-down gesture dismisses smoothly.
+        GlassToastService().show(
+          hostContext,
+          'Свайп вниз',
+          duration: const Duration(seconds: 5),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 20));
+        await tester.pumpAndSettle(const Duration(milliseconds: 16));
+        expect(find.text('Свайп вниз'), findsOneWidget);
+
+        await tester.drag(pillFinder, const Offset(0, 68));
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.pumpAndSettle(const Duration(milliseconds: 16));
+        expect(pillFinder, findsNothing);
+        expect(find.text('Свайп вниз'), findsNothing);
+      },
+    );
+  }
 }

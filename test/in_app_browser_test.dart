@@ -2460,5 +2460,106 @@ void main() {
         expect(browserSession.currentUrl, 'https://dart.dev/guides');
       },
     );
+
+    for (final mode in const <GlassMode>[GlassMode.full, GlassMode.disabled]) {
+      testWidgets(
+        'SafariSiteInfoPopover animates open and reverse-close cleanly without Opacity around glass in $mode',
+        (tester) async {
+          tester.view.physicalSize = const Size(400, 800);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          LinkOpener.debugForceInAppSupportedForTest = true;
+
+          final browserSession = MiniAppSession(
+            launchData: const MiniAppLaunchData(
+              url: 'https://dzen.ru/',
+              initData: '',
+            ),
+            isBrowser: true,
+          )..pageTitle = 'Дзен';
+
+          await tester.pumpWidget(
+            ChangeNotifierProvider<LiquidGlassProvider>.value(
+              value: _TestLiquidGlassProvider(mode),
+              child: MaterialApp(
+                home: MediaQuery(
+                  data: const MediaQueryData(
+                    size: Size(400, 800),
+                    padding: EdgeInsets.only(top: 24, bottom: 16),
+                  ),
+                  child: InAppBrowserSheet(session: browserSession),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final animatedPopoverFinder =
+              find.byType(SafariSiteInfoAnimatedPopover);
+          final popoverFinder = find.byKey(
+            const ValueKey('in_app_browser_site_info_popover'),
+          );
+          final guardFinder = find.byKey(
+            const ValueKey('in_app_browser_web_interaction_guard'),
+          );
+
+          expect(animatedPopoverFinder, findsNothing);
+
+          // Open Site Info popover.
+          await tester.tap(
+            find.byKey(const ValueKey('in_app_browser_security_badge_button')),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(animatedPopoverFinder, findsOneWidget);
+
+          await tester.pumpAndSettle();
+          expect(popoverFinder, findsOneWidget);
+          expect(browserSession.isWebPageInteractionLocked, isTrue);
+
+          if (mode == GlassMode.full) {
+            final morphFinder = find.descendant(
+              of: animatedPopoverFinder,
+              matching: find.byType(LiquidGlassMorph),
+            );
+            expect(morphFinder, findsOneWidget);
+            expect(
+              find.ancestor(
+                of: morphFinder,
+                matching: find.descendant(
+                  of: animatedPopoverFinder,
+                  matching: find.byWidgetPredicate(
+                    (w) =>
+                        w is FadeTransition ||
+                        (w is Opacity && w.opacity > 0.0 && w.opacity < 1.0),
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          }
+
+          // Tap outside below the popover (also inside morph field below card) to dismiss.
+          await tester.tapAt(const Offset(200, 480));
+          await tester.pump();
+
+          // Page lock releases immediately while reverse close animation is still running.
+          expect(
+            tester.widget<IgnorePointer>(guardFinder).ignoring,
+            isFalse,
+          );
+          expect(browserSession.isWebPageInteractionLocked, isFalse);
+
+          await tester.pump(const Duration(milliseconds: 60));
+          expect(animatedPopoverFinder, findsOneWidget);
+          expect(popoverFinder, findsOneWidget);
+
+          await tester.pumpAndSettle();
+          expect(animatedPopoverFinder, findsNothing);
+          expect(popoverFinder, findsNothing);
+        },
+      );
+    }
   });
 }
