@@ -237,6 +237,20 @@ class BrowserDataService extends ChangeNotifier {
     await _saveHistory();
   }
 
+  /// Removes a specific [entry] regardless of filtered list indices.
+  Future<void> removeHistoryEntry(BrowserHistoryEntry entry) async {
+    await ensureLoaded();
+    final int idx = _history.indexWhere(
+      (h) =>
+          identical(h, entry) ||
+          (h.url == entry.url && h.visitedAt == entry.visitedAt),
+    );
+    if (idx < 0) return;
+    _history.removeAt(idx);
+    notifyListeners();
+    await _saveHistory();
+  }
+
   Future<void> clearHistoryAndCookies() async {
     await ensureLoaded();
     _history = [];

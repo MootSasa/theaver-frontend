@@ -20,6 +20,7 @@ import '../../utils/safari_url_safety.dart';
 import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
 import 'safari_browser_dialogs.dart';
+import 'safari_library_sheet.dart';
 
 /// Opens [url] inside Theaver's Telegram-style full-screen WebView browser,
 /// or restores an already minimized browser tab with the same URL.
@@ -680,118 +681,14 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   Future<void> _openBookmarksAndHistorySheet() async {
     _closeMenu();
+    _closeSiteInfoPopover();
     HapticUtils.tap();
-    await BrowserDataService.instance.ensureLoaded();
     if (!mounted) return;
-
-    await showTheavModalSheet<void>(
-      context: context,
-      useRootNavigator: true,
-      title: 'Закладки и история',
-      showCloseButton: true,
-      builder: (sheetCtx) => DefaultTabController(
-        length: 2,
-        child: SizedBox(
-          height: math.min(MediaQuery.of(sheetCtx).size.height * 0.56, 420),
-          child: Column(
-            children: [
-              TabBar(
-                labelColor: sheetCtx.theav.primary,
-                unselectedLabelColor: sheetCtx.theav.subtext,
-                indicatorColor: sheetCtx.theav.primary,
-                tabs: const [
-                  Tab(text: 'Закладки'),
-                  Tab(text: 'История'),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: AnimatedBuilder(
-                  animation: BrowserDataService.instance,
-                  builder: (_, __) {
-                    final bm = BrowserDataService.instance.bookmarks;
-                    final hist = BrowserDataService.instance.history;
-                    return TabBarView(
-                      children: [
-                        bm.isEmpty
-                            ? Center(
-                                child: Text(
-                                  'Нет сохранённых закладок',
-                                  style: TextStyle(color: sheetCtx.theav.subtext),
-                                ),
-                              )
-                            : ListView.builder(
-                                itemCount: bm.length,
-                                itemBuilder: (_, i) {
-                                  final item = bm[i];
-                                  return ListTile(
-                                    leading: const Icon(Icons.bookmark_rounded),
-                                    title: Text(
-                                      item.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    subtitle: Text(
-                                      item.url,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.close, size: 18),
-                                      onPressed: () => BrowserDataService.instance
-                                          .removeBookmark(item.url),
-                                    ),
-                                    onTap: () {
-                                      Navigator.of(sheetCtx).pop();
-                                      _navigateToUrl(item.url);
-                                    },
-                                  );
-                                },
-                              ),
-                        hist.isEmpty
-                            ? Center(
-                                child: Text(
-                                  'История браузера пуста',
-                                  style: TextStyle(color: sheetCtx.theav.subtext),
-                                ),
-                              )
-                            : ListView.builder(
-                                itemCount: hist.length,
-                                itemBuilder: (_, i) {
-                                  final item = hist[i];
-                                  return ListTile(
-                                    leading: const Icon(Icons.history_rounded),
-                                    title: Text(
-                                      item.title,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    subtitle: Text(
-                                      item.url,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    trailing: IconButton(
-                                      icon: const Icon(Icons.close, size: 18),
-                                      onPressed: () => BrowserDataService.instance
-                                          .deleteHistoryAt(i),
-                                    ),
-                                    onTap: () {
-                                      Navigator.of(sheetCtx).pop();
-                                      _navigateToUrl(item.url);
-                                    },
-                                  );
-                                },
-                              ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    await showSafariLibrarySheet(
+      context,
+      currentUrl: _session.currentUrl,
+      currentTitle: _session.displayTitle,
+      onSelectUrl: _navigateToUrl,
     );
   }
 

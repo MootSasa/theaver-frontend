@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +20,7 @@ import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/bot/thv_invoice_sheet.dart';
 import 'package:theaver/widgets/browser/in_app_browser_sheet.dart';
 import 'package:theaver/widgets/browser/safari_browser_dialogs.dart';
+import 'package:theaver/widgets/browser/safari_library_sheet.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
 
 class _TestLiquidGlassProvider extends LiquidGlassProvider {
@@ -2115,6 +2117,202 @@ void main() {
         await tester.pumpAndSettle();
         expect(miniMenuFinder, findsNothing);
         expect(miniSheetFinder, findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'SafariLibrarySheet renders segmented control, current-page quick bookmark card, date-grouped history, search, and Safari clear confirmation',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        final now = DateTime.now();
+        final todayNoon = DateTime(now.year, now.month, now.day, 12, 0);
+        final earlierToday = todayNoon.subtract(const Duration(minutes: 15));
+        final yesterdayNoon = todayNoon.subtract(const Duration(days: 1));
+
+        SharedPreferences.setMockInitialValues({
+          'in_app_browser_bookmarks': jsonEncode([
+            {
+              'url': 'https://dart.dev/guides',
+              'title': 'Dart Guides',
+              'createdAt': earlierToday.toIso8601String(),
+            },
+          ]),
+          'in_app_browser_history': jsonEncode([
+            {
+              'url': 'https://dart.dev/guides',
+              'title': 'Dart Guides',
+              'visitedAt': todayNoon.toIso8601String(),
+            },
+            {
+              'url': 'https://flutter.dev/docs',
+              'title': 'Flutter Docs',
+              'visitedAt': earlierToday.toIso8601String(),
+            },
+            {
+              'url': 'https://pub.dev/packages',
+              'title': 'Pub Packages',
+              'visitedAt': yesterdayNoon.toIso8601String(),
+            },
+          ]),
+        });
+        await BrowserDataService.instance.ensureLoaded(forceReload: true);
+
+        final browserSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'Дзен';
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: MediaQuery(
+                data: const MediaQueryData(
+                  size: Size(400, 800),
+                  padding: EdgeInsets.only(top: 24, bottom: 16),
+                ),
+                child: InAppBrowserSheet(session: browserSession),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Open library from bottom Safari toolbar button.
+        await tester.tap(find.byTooltip('Закладки и история'));
+        await tester.pumpAndSettle();
+
+        final libraryFinder = find.byType(SafariLibrarySheet);
+        expect(libraryFinder, findsOneWidget);
+        expect(
+          find.byType(TheavSegmentedControl<SafariLibraryTab>),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('safari_library_search_input')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('safari_library_current_page_card')),
+          findsOneWidget,
+        );
+        expect(find.text('Сохранённые сайты'), findsOneWidget);
+        expect(find.text('Dart Guides'), findsOneWidget);
+
+        // Liquid Glass invariants inside SafariLibrarySheet.
+        final segmentedFinder = find.byKey(
+          const ValueKey('safari_library_segmented_control'),
+        );
+        final segmentedLens = find.descendant(
+          of: segmentedFinder,
+          matching: find.byType(LiquidGlassLens),
+        );
+        expect(segmentedLens, findsOneWidget);
+        expect(
+          find.ancestor(of: segmentedLens, matching: find.byType(Opacity)),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: find.descendant(
+              of: libraryFinder,
+              matching: find.byType(ListView),
+            ),
+            matching: find.byType(BackdropFilter),
+          ),
+          findsNothing,
+        );
+
+        // Quick-bookmark current page via Safari capsule pill button.
+        final toggleCurrentBtn = find.byKey(
+          const ValueKey('safari_library_toggle_current_bookmark_btn'),
+        );
+        expect(find.text('Сохранить'), findsOneWidget);
+        await tester.tap(toggleCurrentBtn);
+        await tester.pumpAndSettle();
+        expect(find.text('Сохранено'), findsOneWidget);
+        expect(BrowserDataService.instance.isBookmarked('https://dzen.ru/'), isTrue);
+
+        // Switch to History tab via TheavSegmentedControl.
+        await tester.tap(find.text('История'));
+        await tester.pumpAndSettle();
+        expect(find.text('Сегодня'), findsOneWidget);
+        expect(find.text('Вчера'), findsOneWidget);
+        expect(find.text('Flutter Docs'), findsOneWidget);
+        expect(find.text('Pub Packages'), findsOneWidget);
+
+        // Search filter + exact single entry deletion by entry rather than index 0.
+        await tester.enterText(
+          find.byKey(const ValueKey('safari_library_search_input')),
+          'flutter',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Flutter Docs'), findsOneWidget);
+        expect(find.text('Pub Packages'), findsNothing);
+
+        final flutterEntry = BrowserDataService.instance.history.firstWhere(
+          (e) => e.url == 'https://flutter.dev/docs',
+        );
+        await tester.tap(
+          find.byKey(
+            ValueKey(
+              'safari_history_remove_${flutterEntry.url}_${flutterEntry.visitedAt.microsecondsSinceEpoch}',
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Ничего не найдено'), findsOneWidget);
+        expect(
+          BrowserDataService.instance.history
+              .any((e) => e.url == 'https://dart.dev/guides'),
+          isTrue,
+        );
+        expect(
+          BrowserDataService.instance.history
+              .any((e) => e.url == 'https://pub.dev/packages'),
+          isTrue,
+        );
+
+        // Clear search restores remaining Today & Yesterday sections.
+        await tester.tap(
+          find.byKey(const ValueKey('safari_library_search_clear_btn')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Dart Guides'), findsOneWidget);
+        expect(find.text('Pub Packages'), findsOneWidget);
+
+        // Safari confirmation dialog clears history while preserving bookmarks.
+        await tester.tap(
+          find.byKey(const ValueKey('safari_library_clear_history_btn')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('safari_clear_history_confirm_dialog')),
+          findsOneWidget,
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('safari_clear_history_confirm_btn')),
+        );
+        await tester.pumpAndSettle();
+        expect(BrowserDataService.instance.history, isEmpty);
+        expect(find.text('История браузера пуста'), findsOneWidget);
+
+        // Switch back to Bookmarks and tap saved Dart Guides bookmark -> navigates & closes sheet.
+        await tester.tap(find.text('Закладки'));
+        await tester.pumpAndSettle();
+        expect(find.text('Dart Guides'), findsOneWidget);
+        await tester.tap(find.text('Dart Guides'));
+        await tester.pumpAndSettle();
+        expect(libraryFinder, findsNothing);
+        expect(browserSession.currentUrl, 'https://dart.dev/guides');
       },
     );
   });
