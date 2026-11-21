@@ -5677,6 +5677,9 @@ class WebViewFloatingHeader extends StatelessWidget {
   final double expandedMenuWidth;
   final double expandedMenuHeight;
   final double collapsedRightWidth;
+  final bool isCenterPopoverOpen;
+  final VoidCallback? onDismissCenterPopover;
+  final Widget? expandedCenterPopoverChild;
   final GestureDragStartCallback? onVerticalDragStart;
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
@@ -5702,6 +5705,9 @@ class WebViewFloatingHeader extends StatelessWidget {
     this.expandedMenuWidth = 248.0,
     this.expandedMenuHeight = 240.0,
     this.collapsedRightWidth = 84.0,
+    this.isCenterPopoverOpen = false,
+    this.onDismissCenterPopover,
+    this.expandedCenterPopoverChild,
     this.onVerticalDragStart,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
@@ -5776,9 +5782,14 @@ class WebViewFloatingHeader extends StatelessWidget {
       math.max(collapsedRightWidth + 40.0, screenWidth - 24.0),
     );
     final bool menuExpanded = isMenuOpen && expandedMenuChild != null;
-    final bool effectiveCompact = isCompact && !menuExpanded;
+    final bool centerPopoverExpanded =
+        isCenterPopoverOpen && expandedCenterPopoverChild != null;
+    final bool anyHeaderOverlayOpen = menuExpanded || centerPopoverExpanded;
+    final bool effectiveCompact = isCompact && !anyHeaderOverlayOpen;
     final double normalHeight = topInset + 60.0;
     final double compactHeight = topInset + 42.0;
+    final double centerFieldHeight =
+        math.max(44.0, fullHeight - topInset - 16.0);
 
     final Widget expandedPillBody = KeyedSubtree(
       key: const ValueKey('webview_center_expanded'),
@@ -5958,9 +5969,11 @@ class WebViewFloatingHeader extends StatelessWidget {
         math.max(84.0, screenWidth - compactHoriz * 2.0);
     final double expandedShiftX = (expandedLeft - expandedRight) * 0.5;
     final bool hasCompactCenter = compactCenterChild != null;
+    final bool hasCenterMorph =
+        hasCompactCenter || expandedCenterPopoverChild != null;
 
     Widget? glassCenterMorph;
-    if (useGlass && morphStyle != null && hasCompactCenter) {
+    if (useGlass && morphStyle != null && hasCenterMorph) {
       final Widget expandedCenterMorphBox = ConstrainedBox(
         key: const ValueKey('webview_center_morph_expanded'),
         constraints: BoxConstraints(
@@ -5974,10 +5987,12 @@ class WebViewFloatingHeader extends StatelessWidget {
           behavior: HitTestBehavior.opaque,
           onTap: onCenterTap,
           onLongPress: onCenterLongPress,
-          onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
-          onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
-          onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
-          onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
+          onVerticalDragStart: anyHeaderOverlayOpen ? null : onVerticalDragStart,
+          onVerticalDragUpdate:
+              anyHeaderOverlayOpen ? null : onVerticalDragUpdate,
+          onVerticalDragEnd: anyHeaderOverlayOpen ? null : onVerticalDragEnd,
+          onVerticalDragCancel:
+              anyHeaderOverlayOpen ? null : onVerticalDragCancel,
           child: Material(
             type: MaterialType.transparency,
             child: _buildPillBody(
@@ -5989,54 +6004,103 @@ class WebViewFloatingHeader extends StatelessWidget {
         ),
       );
 
-      final Widget compactCenterMorphBox = ConstrainedBox(
-        key: const ValueKey('webview_center_morph_compact'),
-        constraints: BoxConstraints(
-          minWidth: 72.0,
-          maxWidth: maxCompactWidth,
-          minHeight: 26.0,
-          maxHeight: 26.0,
-        ),
-        child: GestureDetector(
-          key: const ValueKey('webview_header_center_pill'),
-          behavior: HitTestBehavior.opaque,
-          onTap: onExpandCompact ?? onCenterTap,
-          onLongPress: onCenterLongPress,
-          child: Material(
-            type: MaterialType.transparency,
-            child: _buildPillBody(
-              compactCenterChild!,
-              horizontalPad: 11.0,
-              barAccent: barAccent,
-            ),
-          ),
-        ),
+      final Widget? compactCenterMorphBox = compactCenterChild != null
+          ? ConstrainedBox(
+              key: const ValueKey('webview_center_morph_compact'),
+              constraints: BoxConstraints(
+                minWidth: 72.0,
+                maxWidth: maxCompactWidth,
+                minHeight: 26.0,
+                maxHeight: 26.0,
+              ),
+              child: GestureDetector(
+                key: const ValueKey('webview_header_center_pill'),
+                behavior: HitTestBehavior.opaque,
+                onTap: onExpandCompact ?? onCenterTap,
+                onLongPress: onCenterLongPress,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: _buildPillBody(
+                    compactCenterChild!,
+                    horizontalPad: 11.0,
+                    barAccent: barAccent,
+                  ),
+                ),
+              ),
+            )
+          : null;
+
+      final Widget? popoverCenterMorphBox = expandedCenterPopoverChild != null
+          ? KeyedSubtree(
+              key: const ValueKey('webview_center_morph_popover'),
+              child: Material(
+                type: MaterialType.transparency,
+                child: expandedCenterPopoverChild!,
+              ),
+            )
+          : null;
+
+      final Widget activeGlassCenterChild = centerPopoverExpanded
+          ? popoverCenterMorphBox!
+          : (effectiveCompact && compactCenterMorphBox != null
+              ? compactCenterMorphBox
+              : expandedCenterMorphBox);
+
+      final LiquidGlassStyle centerPopoverGlassStyle =
+          style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: 26.0,
+        refractionIndex: 1.1,
+        refractionWidth: 22.0,
+        borderWidth: 1.1,
+        color: style.hudFill.withValues(alpha: style.isDark ? 0.82 : 0.88),
       );
 
-      glassCenterMorph = LiquidGlassMorph(
-        key: const ValueKey('webview_center_morph'),
-        alignment: Alignment.topCenter,
-        motion: const LiquidGlassMorphMotion(
-          stiffness: 320,
-          damping: 35.8,
-          stretch: 0.12,
-          blended: false,
-          advanced: LiquidGlassMorphAdvanced(
-            leadBounce: 0.0,
-            followDelay: 0.0,
-            contentFollow: 1.0,
-            contentBlur: 6.0,
-          ),
+      glassCenterMorph = LiquidGlassBatch.exclude(
+        child: LiquidGlassMorph(
+          key: const ValueKey('webview_center_morph'),
+          alignment: Alignment.topCenter,
+          motion: centerPopoverExpanded
+              ? const LiquidGlassMorphMotion(
+                  stiffness: 245,
+                  damping: 24.5,
+                  stretch: 0.26,
+                  anchor: Alignment.topCenter,
+                  blended: false,
+                  advanced: LiquidGlassMorphAdvanced(
+                    leadBounce: 0.04,
+                    followDelay: 0.0,
+                    newScaleFrom: 0.88,
+                    oldScaleTo: 0.90,
+                    contentBlur: 7.0,
+                    contentInStart: 0.20,
+                    contentInEnd: 0.78,
+                    contentOutEnd: 0.30,
+                    thickenBlur: 0.30,
+                    thickenRefraction: 0.25,
+                  ),
+                )
+              : const LiquidGlassMorphMotion(
+                  stiffness: 320,
+                  damping: 35.8,
+                  stretch: 0.12,
+                  blended: false,
+                  advanced: LiquidGlassMorphAdvanced(
+                    leadBounce: 0.0,
+                    followDelay: 0.0,
+                    contentFollow: 1.0,
+                    contentBlur: 6.0,
+                  ),
+                ),
+          smoothness: 0,
+          style: centerPopoverExpanded ? centerPopoverGlassStyle : morphStyle,
+          child: activeGlassCenterChild,
         ),
-        smoothness: 0,
-        style: morphStyle,
-        child:
-            effectiveCompact ? compactCenterMorphBox : expandedCenterMorphBox,
       );
     }
 
     Widget? matteCenterMorphContent;
-    if (!useGlass && hasCompactCenter) {
+    if (!useGlass && hasCenterMorph) {
       final Widget expandedMatteBody = ConstrainedBox(
         key: const ValueKey('webview_center_expanded'),
         constraints: BoxConstraints(
@@ -6051,20 +6115,33 @@ class WebViewFloatingHeader extends StatelessWidget {
           barAccent: barAccent,
         ),
       );
-      final Widget compactMatteBody = ConstrainedBox(
-        key: const ValueKey('webview_center_compact'),
-        constraints: BoxConstraints(
-          minWidth: 72.0,
-          maxWidth: maxCompactWidth,
-          minHeight: 26.0,
-          maxHeight: 26.0,
-        ),
-        child: _buildPillBody(
-          compactCenterChild!,
-          horizontalPad: 11.0,
-          barAccent: barAccent,
-        ),
-      );
+      final Widget? compactMatteBody = compactCenterChild != null
+          ? ConstrainedBox(
+              key: const ValueKey('webview_center_compact'),
+              constraints: BoxConstraints(
+                minWidth: 72.0,
+                maxWidth: maxCompactWidth,
+                minHeight: 26.0,
+                maxHeight: 26.0,
+              ),
+              child: _buildPillBody(
+                compactCenterChild!,
+                horizontalPad: 11.0,
+                barAccent: barAccent,
+              ),
+            )
+          : null;
+      final Widget? popoverMatteBody = expandedCenterPopoverChild != null
+          ? KeyedSubtree(
+              key: const ValueKey('webview_center_popover'),
+              child: expandedCenterPopoverChild!,
+            )
+          : null;
+      final Widget activeMatteCenterChild = centerPopoverExpanded
+          ? popoverMatteBody!
+          : (effectiveCompact && compactMatteBody != null
+              ? compactMatteBody
+              : expandedMatteBody);
       matteCenterMorphContent = AnimatedSize(
         key: const ValueKey('webview_center_matte_morph'),
         duration: const Duration(milliseconds: 240),
@@ -6078,22 +6155,25 @@ class WebViewFloatingHeader extends StatelessWidget {
           transitionBuilder: (child, anim) => FadeTransition(
             opacity: anim,
             child: ScaleTransition(
+              alignment: Alignment.topCenter,
               scale: Tween<double>(begin: 0.90, end: 1.0).animate(anim),
               child: child,
             ),
           ),
           layoutBuilder: (currentChild, previousChildren) => Stack(
-            alignment: Alignment.center,
+            alignment: Alignment.topCenter,
             clipBehavior: Clip.none,
             children: [
               for (final prev in previousChildren)
                 Positioned.fill(
-                  child: Center(
+                  child: Align(
+                    alignment: Alignment.topCenter,
                     child: OverflowBox(
+                      alignment: Alignment.topCenter,
                       minWidth: 0.0,
-                      maxWidth: maxExpandedWidth,
+                      maxWidth: math.max(maxExpandedWidth, 328.0),
                       minHeight: 0.0,
-                      maxHeight: 44.0,
+                      maxHeight: centerFieldHeight,
                       child: prev,
                     ),
                   ),
@@ -6101,7 +6181,7 @@ class WebViewFloatingHeader extends StatelessWidget {
               if (currentChild != null) currentChild,
             ],
           ),
-          child: effectiveCompact ? compactMatteBody : expandedMatteBody,
+          child: activeMatteCenterChild,
         ),
       );
     }
@@ -6112,7 +6192,7 @@ class WebViewFloatingHeader extends StatelessWidget {
       curve: Curves.easeOutCubic,
       child: glassCenterMorph,
       builder: (context, t, stableGlassCenter) {
-        final double headerHeight = menuExpanded
+        final double headerHeight = anyHeaderOverlayOpen
             ? fullHeight
             : ui.lerpDouble(compactHeight, normalHeight, t)!;
         final double pillHeight = ui.lerpDouble(26.0, 44.0, t)!;
@@ -6147,7 +6227,7 @@ class WebViewFloatingHeader extends StatelessWidget {
         );
 
         final Widget centerWidget;
-        if (!hasCompactCenter) {
+        if (!hasCenterMorph) {
           centerWidget = Positioned(
             key: const ValueKey('webview_header_center_pos'),
             top: topInset + 8,
@@ -6160,10 +6240,14 @@ class WebViewFloatingHeader extends StatelessWidget {
                 behavior: HitTestBehavior.opaque,
                 onTap: onCenterTap,
                 onLongPress: onCenterLongPress,
-                onVerticalDragStart: menuExpanded ? null : onVerticalDragStart,
-                onVerticalDragUpdate: menuExpanded ? null : onVerticalDragUpdate,
-                onVerticalDragEnd: menuExpanded ? null : onVerticalDragEnd,
-                onVerticalDragCancel: menuExpanded ? null : onVerticalDragCancel,
+                onVerticalDragStart:
+                    anyHeaderOverlayOpen ? null : onVerticalDragStart,
+                onVerticalDragUpdate:
+                    anyHeaderOverlayOpen ? null : onVerticalDragUpdate,
+                onVerticalDragEnd:
+                    anyHeaderOverlayOpen ? null : onVerticalDragEnd,
+                onVerticalDragCancel:
+                    anyHeaderOverlayOpen ? null : onVerticalDragCancel,
                 child: WebViewFloatingCapsule(
                   height: 44,
                   borderRadius: 22,
@@ -6177,49 +6261,73 @@ class WebViewFloatingHeader extends StatelessWidget {
           centerWidget = Positioned(
             key: const ValueKey('webview_header_center_pos'),
             top: topInset + 8.0,
-            left: 24.0,
-            right: 24.0,
-            height: 44.0,
-            child: Transform.translate(
-              offset: Offset(expandedShiftX * t, 0.0),
+            left: 16.0,
+            right: 16.0,
+            height: centerFieldHeight,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(
+                begin: centerPopoverExpanded ? 0.0 : 1.0,
+                end: centerPopoverExpanded ? 0.0 : 1.0,
+              ),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
               child: stableGlassCenter,
+              builder: (context, shiftFactor, morphChild) => Transform.translate(
+                offset: Offset(expandedShiftX * t * shiftFactor, 0.0),
+                child: morphChild,
+              ),
             ),
           );
         } else {
           centerWidget = Positioned(
             key: const ValueKey('webview_header_center_pos'),
             top: topInset + 8.0,
-            left: 24.0,
-            right: 24.0,
-            height: 44.0,
-            child: Transform.translate(
-              offset: Offset(expandedShiftX * t, 0.0),
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: GestureDetector(
-                  key: const ValueKey('webview_header_center_pill'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: effectiveCompact
-                      ? (onExpandCompact ?? onCenterTap)
-                      : onCenterTap,
-                  onLongPress: onCenterLongPress,
-                  onVerticalDragStart: (menuExpanded || effectiveCompact)
-                      ? null
-                      : onVerticalDragStart,
-                  onVerticalDragUpdate: (menuExpanded || effectiveCompact)
-                      ? null
-                      : onVerticalDragUpdate,
-                  onVerticalDragEnd: (menuExpanded || effectiveCompact)
-                      ? null
-                      : onVerticalDragEnd,
-                  onVerticalDragCancel: (menuExpanded || effectiveCompact)
-                      ? null
-                      : onVerticalDragCancel,
-                  child: WebViewFloatingCapsule(
-                    height: null,
-                    borderRadius: pillRadius,
-                    colorOverride: capsuleColorOverride,
-                    child: matteCenterMorphContent!,
+            left: 16.0,
+            right: 16.0,
+            height: centerFieldHeight,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(
+                begin: centerPopoverExpanded ? 0.0 : 1.0,
+                end: centerPopoverExpanded ? 0.0 : 1.0,
+              ),
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              builder: (context, shiftFactor, _) => Transform.translate(
+                offset: Offset(expandedShiftX * t * shiftFactor, 0.0),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: GestureDetector(
+                    key: const ValueKey('webview_header_center_pill'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: centerPopoverExpanded
+                        ? null
+                        : (effectiveCompact
+                            ? (onExpandCompact ?? onCenterTap)
+                            : onCenterTap),
+                    onLongPress:
+                        centerPopoverExpanded ? null : onCenterLongPress,
+                    onVerticalDragStart:
+                        (anyHeaderOverlayOpen || effectiveCompact)
+                            ? null
+                            : onVerticalDragStart,
+                    onVerticalDragUpdate:
+                        (anyHeaderOverlayOpen || effectiveCompact)
+                            ? null
+                            : onVerticalDragUpdate,
+                    onVerticalDragEnd:
+                        (anyHeaderOverlayOpen || effectiveCompact)
+                            ? null
+                            : onVerticalDragEnd,
+                    onVerticalDragCancel:
+                        (anyHeaderOverlayOpen || effectiveCompact)
+                            ? null
+                            : onVerticalDragCancel,
+                    child: WebViewFloatingCapsule(
+                      height: null,
+                      borderRadius: centerPopoverExpanded ? 26.0 : pillRadius,
+                      colorOverride: capsuleColorOverride,
+                      child: matteCenterMorphContent!,
+                    ),
                   ),
                 ),
               ),
@@ -6250,51 +6358,77 @@ class WebViewFloatingHeader extends StatelessWidget {
           ),
         );
 
+        final Widget siteInfoBackdrop = Positioned.fill(
+          key: const ValueKey('in_app_browser_site_info_backdrop'),
+          child: IgnorePointer(
+            ignoring: !centerPopoverExpanded,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onDismissCenterPopover,
+              onVerticalDragStart: (_) {},
+              onVerticalDragUpdate: (_) {},
+              onHorizontalDragStart: (_) {},
+              onHorizontalDragUpdate: (_) {},
+            ),
+          ),
+        );
+
+        final Widget menuBackdrop = Positioned.fill(
+          key: const ValueKey('webview_header_menu_backdrop'),
+          child: IgnorePointer(
+            ignoring: !menuExpanded,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onDismissMenu,
+              onVerticalDragStart: (_) {},
+              onVerticalDragUpdate: (_) {},
+              onHorizontalDragStart: (_) {},
+              onHorizontalDragUpdate: (_) {},
+            ),
+          ),
+        );
+
         final Widget stackContent = Stack(
           clipBehavior: Clip.none,
-          children: [
-            leftWidget,
-            centerWidget,
-            Positioned.fill(
-              key: const ValueKey('webview_header_menu_backdrop'),
-              child: IgnorePointer(
-                ignoring: !menuExpanded,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onDismissMenu,
-                  onVerticalDragStart: (_) {},
-                  onVerticalDragUpdate: (_) {},
-                  onHorizontalDragStart: (_) {},
-                  onHorizontalDragUpdate: (_) {},
-                ),
-              ),
-            ),
-            rightWidget,
-          ],
+          children: menuExpanded
+              ? [
+                  leftWidget,
+                  centerWidget,
+                  siteInfoBackdrop,
+                  menuBackdrop,
+                  rightWidget,
+                ]
+              : [
+                  leftWidget,
+                  rightWidget,
+                  menuBackdrop,
+                  siteInfoBackdrop,
+                  centerWidget,
+                ],
         );
 
         final Widget framedHeader = SizedBox(
           width: double.infinity,
           height: headerHeight,
           child: morphStyle != null
-              ? LiquidGlassBlender(
-                  smoothness: 0,
-                  style: morphStyle,
-                  child: stackContent,
-                )
+              ? LiquidGlassBatch(child: stackContent)
               : stackContent,
         );
 
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onVerticalDragStart:
-              (menuExpanded || effectiveCompact) ? null : onVerticalDragStart,
-          onVerticalDragUpdate:
-              (menuExpanded || effectiveCompact) ? null : onVerticalDragUpdate,
-          onVerticalDragEnd:
-              (menuExpanded || effectiveCompact) ? null : onVerticalDragEnd,
-          onVerticalDragCancel:
-              (menuExpanded || effectiveCompact) ? null : onVerticalDragCancel,
+          onVerticalDragStart: (anyHeaderOverlayOpen || effectiveCompact)
+              ? null
+              : onVerticalDragStart,
+          onVerticalDragUpdate: (anyHeaderOverlayOpen || effectiveCompact)
+              ? null
+              : onVerticalDragUpdate,
+          onVerticalDragEnd: (anyHeaderOverlayOpen || effectiveCompact)
+              ? null
+              : onVerticalDragEnd,
+          onVerticalDragCancel: (anyHeaderOverlayOpen || effectiveCompact)
+              ? null
+              : onVerticalDragCancel,
           child: framedHeader,
         );
       },

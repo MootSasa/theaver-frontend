@@ -87,7 +87,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   bool _isMenuOpen = false;
   bool _isSiteInfoOpen = false;
-  bool _isSiteInfoAnimatingOut = false;
   bool _isFindOpen = false;
   String _findStatus = '';
   double _dragResetFrom = 0.0;
@@ -472,7 +471,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _closeTab() {
     _closeMenu();
     _isSiteInfoOpen = false;
-    _isSiteInfoAnimatingOut = false;
     unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
@@ -495,7 +493,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (!_isMenuOpen) {
       if (_isSiteInfoOpen) {
         _isSiteInfoOpen = false;
-        _isSiteInfoAnimatingOut = true;
       }
       if (_session.browserChromeCollapsed) {
         unawaited(_session.setBrowserChromeCollapsed(false));
@@ -517,24 +514,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       if (_session.browserChromeCollapsed) {
         unawaited(_session.setBrowserChromeCollapsed(false));
       }
-      setState(() {
-        _isSiteInfoOpen = true;
-        _isSiteInfoAnimatingOut = false;
-      });
+      setState(() => _isSiteInfoOpen = true);
     } else {
-      setState(() {
-        _isSiteInfoOpen = false;
-        _isSiteInfoAnimatingOut = true;
-      });
+      setState(() => _isSiteInfoOpen = false);
     }
   }
 
   void _closeSiteInfoPopover() {
     if (_isSiteInfoOpen) {
-      setState(() {
-        _isSiteInfoOpen = false;
-        _isSiteInfoAnimatingOut = true;
-      });
+      setState(() => _isSiteInfoOpen = false);
     }
   }
 
@@ -709,10 +697,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _navigateToUrl(String rawUrl) {
     final uri = Uri.tryParse(rawUrl);
     if (uri == null) return;
-    if (_isSiteInfoOpen) {
-      _isSiteInfoOpen = false;
-      _isSiteInfoAnimatingOut = true;
-    }
+    _isSiteInfoOpen = false;
     setState(() {
       _session.currentUrl = rawUrl;
       _session.pageTitle = '';
@@ -921,6 +906,42 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       ),
     );
 
+    final Widget expandedSiteInfoContent = SafariSiteInfoPopover(
+      bareContent: true,
+      safetyInfo: safetyInfo,
+      isDesktopMode: _session.isDesktopMode,
+      grantedPermissionLabels:
+          _session.grantedPermissionLabelsForUrl(currentUrl),
+      hasMutedJsDialogs: _session.hasMutedJsDialogsForUrl(currentUrl),
+      hasAcceptedSslWarning: _session.hasAcceptedSslWarningForUrl(currentUrl),
+      onCopyUrl: () {
+        _closeSiteInfoPopover();
+        unawaited(_copyCurrentUrl());
+      },
+      onUpgradeToHttps:
+          SafariUrlSafetyAnalyzer.tryBuildHttpsUpgrade(currentUrl) != null
+              ? _upgradeCurrentUrlToHttps
+              : null,
+      onResetPermissions: () {
+        _session.resetSessionPermissionsForUrl(currentUrl);
+        _closeSiteInfoPopover();
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            'Разрешения сайта сброшены',
+            icon: Icons.restart_alt_rounded,
+          );
+        }
+      },
+      onToggleDesktopMode: () {
+        _closeSiteInfoPopover();
+        unawaited(_toggleDesktopMode());
+      },
+      onClearSiteDataAndReload: () {
+        unawaited(_clearCurrentSiteDataAndReload());
+      },
+    );
+
     final Widget floatingHeader = WebViewFloatingHeader(
       topInset: topInset,
       progressListenable: _session.loadProgressNotifier,
@@ -929,6 +950,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       onCenterLongPress: _copyCurrentUrl,
       isCompact: isCompact,
       onExpandCompact: _expandBrowserChrome,
+      isCenterPopoverOpen: _isSiteInfoOpen,
+      onDismissCenterPopover: _closeSiteInfoPopover,
+      expandedCenterPopoverChild: expandedSiteInfoContent,
       compactCenterChild: Row(
         key: const ValueKey('in_app_browser_compact_domain_row'),
         mainAxisSize: MainAxisSize.min,
@@ -1371,70 +1395,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           right: 0,
           child: floatingHeader,
         ),
-        if (_isSiteInfoOpen)
-          Positioned.fill(
-            key: const ValueKey('in_app_browser_site_info_backdrop'),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _closeSiteInfoPopover,
-              onVerticalDragStart: (_) {},
-              onVerticalDragUpdate: (_) {},
-              onHorizontalDragStart: (_) {},
-              onHorizontalDragUpdate: (_) {},
-            ),
-          ),
-        if (_isSiteInfoOpen || _isSiteInfoAnimatingOut)
-          Positioned(
-            top: topInset + 58.0,
-            left: 16.0,
-            right: 16.0,
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: SafariSiteInfoAnimatedPopover(
-                isOpen: _isSiteInfoOpen,
-                onDismissed: () {
-                  if (mounted && !_isSiteInfoOpen) {
-                    setState(() => _isSiteInfoAnimatingOut = false);
-                  }
-                },
-                safetyInfo: safetyInfo,
-                isDesktopMode: _session.isDesktopMode,
-                grantedPermissionLabels:
-                    _session.grantedPermissionLabelsForUrl(currentUrl),
-                hasMutedJsDialogs:
-                    _session.hasMutedJsDialogsForUrl(currentUrl),
-                hasAcceptedSslWarning:
-                    _session.hasAcceptedSslWarningForUrl(currentUrl),
-                onCopyUrl: () {
-                  _closeSiteInfoPopover();
-                  unawaited(_copyCurrentUrl());
-                },
-                onUpgradeToHttps: SafariUrlSafetyAnalyzer
-                            .tryBuildHttpsUpgrade(currentUrl) !=
-                        null
-                    ? _upgradeCurrentUrlToHttps
-                    : null,
-                onResetPermissions: () {
-                  _session.resetSessionPermissionsForUrl(currentUrl);
-                  _closeSiteInfoPopover();
-                  if (mounted) {
-                    GlassToastService().show(
-                      context,
-                      'Разрешения сайта сброшены',
-                      icon: Icons.restart_alt_rounded,
-                    );
-                  }
-                },
-                onToggleDesktopMode: () {
-                  _closeSiteInfoPopover();
-                  unawaited(_toggleDesktopMode());
-                },
-                onClearSiteDataAndReload: () {
-                  unawaited(_clearCurrentSiteDataAndReload());
-                },
-              ),
-            ),
-          ),
       ],
     );
 

@@ -2463,7 +2463,7 @@ void main() {
 
     for (final mode in const <GlassMode>[GlassMode.full, GlassMode.disabled]) {
       testWidgets(
-        'SafariSiteInfoPopover animates open and reverse-close cleanly without Opacity around glass in $mode',
+        'SafariSiteInfoPopover morphs directly from address capsule and back without second oval or Opacity around glass in $mode',
         (tester) async {
           tester.view.physicalSize = const Size(400, 800);
           tester.view.devicePixelRatio = 1.0;
@@ -2495,8 +2495,10 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          final animatedPopoverFinder =
-              find.byType(SafariSiteInfoAnimatedPopover);
+          final headerFinder = find.byType(WebViewFloatingHeader);
+          final securityBtn = find.byKey(
+            const ValueKey('in_app_browser_security_badge_button'),
+          );
           final popoverFinder = find.byKey(
             const ValueKey('in_app_browser_site_info_popover'),
           );
@@ -2504,31 +2506,60 @@ void main() {
             const ValueKey('in_app_browser_web_interaction_guard'),
           );
 
-          expect(animatedPopoverFinder, findsNothing);
+          expect(popoverFinder, findsNothing);
 
-          // Open Site Info popover.
-          await tester.tap(
-            find.byKey(const ValueKey('in_app_browser_security_badge_button')),
-          );
+          Finder? centerMorphFinder;
+          Finder? centerLensFinder;
+          State? centerMorphState;
+
+          if (mode == GlassMode.full) {
+            expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+            centerMorphFinder =
+                find.byKey(const ValueKey('webview_center_morph'));
+            centerLensFinder = find.descendant(
+              of: centerMorphFinder,
+              matching: find.byType(LiquidGlassLens),
+            );
+            expect(centerLensFinder, findsOneWidget);
+            centerMorphState = tester.state(centerMorphFinder);
+            expect(tester.getRect(centerLensFinder).height, closeTo(44.0, 0.5));
+          }
+
+          // Open Site Info popover by morphing the center address pill itself.
+          await tester.tap(securityBtn);
           await tester.pump();
-          await tester.pump(const Duration(milliseconds: 50));
-          expect(animatedPopoverFinder, findsOneWidget);
+          for (int i = 0; i < 4; i++) {
+            await tester.pump(const Duration(milliseconds: 16));
+          }
+
+          if (mode == GlassMode.full) {
+            expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+            expect(
+              identical(tester.state(centerMorphFinder!), centerMorphState),
+              isTrue,
+            );
+            expect(
+              tester.getRect(centerLensFinder!).height,
+              greaterThan(44.5),
+            );
+          }
 
           await tester.pumpAndSettle();
           expect(popoverFinder, findsOneWidget);
           expect(browserSession.isWebPageInteractionLocked, isTrue);
 
+          double openHeight = 0.0;
           if (mode == GlassMode.full) {
-            final morphFinder = find.descendant(
-              of: animatedPopoverFinder,
-              matching: find.byType(LiquidGlassMorph),
-            );
-            expect(morphFinder, findsOneWidget);
+            final Rect openRect = tester.getRect(centerLensFinder!);
+            openHeight = openRect.height;
+            expect(openRect.width, closeTo(328.0, 1.0));
+            expect(openHeight, greaterThan(200.0));
+            expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
             expect(
               find.ancestor(
-                of: morphFinder,
+                of: centerMorphFinder!,
                 matching: find.descendant(
-                  of: animatedPopoverFinder,
+                  of: headerFinder,
                   matching: find.byWidgetPredicate(
                     (w) =>
                         w is FadeTransition ||
@@ -2540,24 +2571,41 @@ void main() {
             );
           }
 
-          // Tap outside below the popover (also inside morph field below card) to dismiss.
+          // Tap outside below the card to collapse back into the address pill.
           await tester.tapAt(const Offset(200, 480));
           await tester.pump();
 
-          // Page lock releases immediately while reverse close animation is still running.
           expect(
             tester.widget<IgnorePointer>(guardFinder).ignoring,
             isFalse,
           );
           expect(browserSession.isWebPageInteractionLocked, isFalse);
 
-          await tester.pump(const Duration(milliseconds: 60));
-          expect(animatedPopoverFinder, findsOneWidget);
-          expect(popoverFinder, findsOneWidget);
+          for (int i = 0; i < 5; i++) {
+            await tester.pump(const Duration(milliseconds: 16));
+          }
+          if (mode == GlassMode.full) {
+            expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+            expect(
+              identical(tester.state(centerMorphFinder!), centerMorphState),
+              isTrue,
+            );
+            final double midCloseHeight =
+                tester.getRect(centerLensFinder!).height;
+            expect(midCloseHeight, greaterThan(44.5));
+            expect(midCloseHeight, lessThan(openHeight - 10.0));
+          }
 
           await tester.pumpAndSettle();
-          expect(animatedPopoverFinder, findsNothing);
           expect(popoverFinder, findsNothing);
+          expect(securityBtn, findsOneWidget);
+          if (mode == GlassMode.full) {
+            expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+            expect(
+              tester.getRect(centerLensFinder!).height,
+              closeTo(44.0, 0.5),
+            );
+          }
         },
       );
     }
