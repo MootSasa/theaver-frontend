@@ -14,6 +14,7 @@ import 'package:theaver/services/browser_data_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
 import 'package:theaver/services/settings_service.dart';
+import 'package:theaver/utils/browser_find_in_page_script.dart';
 import 'package:theaver/utils/link_opener.dart';
 import 'package:theaver/utils/safari_url_safety.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
@@ -3158,5 +3159,169 @@ void main() {
         },
       );
     }
+
+    test('BrowserFindInPageResult.tryParseJsResult decodes raw JSON, double-encoded JSON, Map, and empty payloads', () {
+      expect(
+        BrowserFindInPageResult.tryParseJsResult({'current': 2, 'total': 7}),
+        const BrowserFindInPageResult(current: 2, total: 7),
+      );
+      expect(
+        BrowserFindInPageResult.tryParseJsResult('{"current":1,"total":4}'),
+        const BrowserFindInPageResult(current: 1, total: 4),
+      );
+      expect(
+        BrowserFindInPageResult.tryParseJsResult(
+          jsonEncode('{"current":3,"total":5}'),
+        ),
+        const BrowserFindInPageResult(current: 3, total: 5),
+      );
+      expect(
+        BrowserFindInPageResult.tryParseJsResult('{"current":9,"total":3}'),
+        const BrowserFindInPageResult(current: 3, total: 3),
+      );
+      expect(
+        BrowserFindInPageResult.tryParseJsResult('{"current":0,"total":0}'),
+        BrowserFindInPageResult.empty,
+      );
+      expect(BrowserFindInPageResult.tryParseJsResult('null'), isNull);
+      expect(BrowserFindInPageResult.tryParseJsResult(null), isNull);
+      expect(BrowserFindInPageResult.tryParseJsResult(''), isNull);
+    });
+
+    testWidgets(
+      'Find-in-Page triggers debounced live search automatically on typing, shows match counter, steps next/prev with wrap-around, disables buttons on 0 из 0, and clears on empty or close',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final calls = <({String query, bool isStep, bool backwards})>[];
+        int activeIdx = 0;
+        int clearCount = 0;
+
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://example.org/article',
+            initData: '',
+            botId: '',
+            botUsername: '',
+            botDisplayName: 'example.org',
+          ),
+          isBrowser: true,
+          initialUrl: 'https://example.org/article',
+        );
+        session.debugFindInPageOverride = (
+          query, {
+          required bool isStep,
+          required bool backwards,
+          required bool preserveViewportMatch,
+        }) async {
+          calls.add((query: query, isStep: isStep, backwards: backwards));
+          final clean = query.trim();
+          if (clean == 'qwerty') {
+            activeIdx = 0;
+            return BrowserFindInPageResult.empty;
+          }
+          const int total = 3;
+          if (!isStep) {
+            activeIdx = 1;
+          } else {
+            final int delta = backwards ? -1 : 1;
+            activeIdx = ((activeIdx - 1 + delta + total) % total) + 1;
+          }
+          return BrowserFindInPageResult(current: activeIdx, total: total);
+        };
+        session.debugClearFindInPageOverride = () {
+          clearCount++;
+        };
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(400, 800),
+                padding: EdgeInsets.only(top: 24, bottom: 16),
+              ),
+              child: InAppBrowserSheet(session: session),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Найти на странице'));
+        await tester.pumpAndSettle();
+
+        final inputFinder = find.byKey(const ValueKey('in_app_browser_find_input'));
+        final counterFinder =
+            find.byKey(const ValueKey('in_app_browser_find_counter'));
+        final prevFinder = find.byKey(const ValueKey('in_app_browser_find_prev_btn'));
+        final nextFinder = find.byKey(const ValueKey('in_app_browser_find_next_btn'));
+
+        // Rapid typing coalesces via 120ms debounce without pressing Search or ↓.
+        await tester.enterText(inputFinder, 'fl');
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.enterText(inputFinder, 'flutter');
+        await tester.pump(const Duration(milliseconds: 60));
+        expect(calls, isEmpty);
+
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(calls.length, 1);
+        expect(calls.last.query, 'flutter');
+        expect(calls.last.isStep, isFalse);
+        expect(find.text('1 из 3'), findsOneWidget);
+        expect(counterFinder, findsOneWidget);
+        expect(tester.widget<IconButton>(prevFinder).onPressed, isNotNull);
+        expect(tester.widget<IconButton>(nextFinder).onPressed, isNotNull);
+
+        // Stepping forward wraps 1 -> 2 -> 3 -> 1 and backward wraps 1 -> 3.
+        await tester.tap(nextFinder);
+        await tester.pump();
+        expect(find.text('2 из 3'), findsOneWidget);
+        await tester.tap(nextFinder);
+        await tester.pump();
+        expect(find.text('3 из 3'), findsOneWidget);
+        await tester.tap(nextFinder);
+        await tester.pump();
+        expect(find.text('1 из 3'), findsOneWidget);
+
+        await tester.tap(prevFinder);
+        await tester.pump();
+        expect(find.text('3 из 3'), findsOneWidget);
+
+        // 0 matches shows '0 из 0' and disables step buttons.
+        await tester.enterText(inputFinder, 'qwerty');
+        await tester.pump(const Duration(milliseconds: 140));
+        expect(find.text('0 из 0'), findsOneWidget);
+        expect(tester.widget<IconButton>(prevFinder).onPressed, isNull);
+        expect(tester.widget<IconButton>(nextFinder).onPressed, isNull);
+
+        // Clearing text hides counter and clears page highlights immediately.
+        final int clearsBeforeEmpty = clearCount;
+        await tester.enterText(inputFinder, '');
+        await tester.pump();
+        expect(counterFinder, findsNothing);
+        expect(clearCount, greaterThan(clearsBeforeEmpty));
+
+        // Typing then closing Find-in-Page also clears page highlights.
+        await tester.enterText(inputFinder, 'flutter');
+        await tester.pump(const Duration(milliseconds: 140));
+        expect(find.text('1 из 3'), findsOneWidget);
+        final int clearsBeforeClose = clearCount;
+        final findBarFinder =
+            find.byKey(const ValueKey('in_app_browser_find_bar'));
+        await tester.tap(
+          find.descendant(
+            of: findBarFinder,
+            matching: find.byIcon(Icons.close_rounded),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(clearCount, greaterThan(clearsBeforeClose));
+        expect(findBarFinder, findsNothing);
+      },
+    );
   });
 }

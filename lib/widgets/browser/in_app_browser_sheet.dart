@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -19,6 +18,7 @@ import '../../services/browser_vault_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
 import '../../utils/browser_autofill_script.dart';
+import '../../utils/browser_find_in_page_script.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/safari_url_safety.dart';
 import '../bot/mini_app_webview_sheet.dart';
@@ -95,7 +95,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   bool _isMenuOpen = false;
   bool _isSiteInfoOpen = false;
   bool _isFindOpen = false;
-  String _findStatus = '';
+  Timer? _findDebounceTimer;
+  int _findRequestSeq = 0;
+  int _findCurrentMatch = 0;
+  int _findTotalMatches = 0;
+  bool _hasCompletedFindForQuery = false;
+  String _lastSearchedFindQuery = '';
   double _dragResetFrom = 0.0;
   double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
@@ -264,6 +269,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
     _session.uiDialogDelegate = _dialogDelegate;
     _session.onSheetStateChanged = _onSessionStateChanged;
+    _session.onBrowserPageFinished = _handleBrowserPageFinished;
     activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     unawaited(BrowserDataService.instance.ensureLoaded());
@@ -397,6 +403,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     unawaited(_session.setWebPageInteractionLocked(false));
     _earlyWebViewWarmupTimer?.cancel();
     _earlyWebViewWarmupTimer = null;
+    _findDebounceTimer?.cancel();
+    _findDebounceTimer = null;
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
     _routeAnimation = null;
     BrowserDataService.instance.removeListener(_onBrowserDataChanged);
@@ -408,6 +416,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     }
     if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
       _session.onSheetStateChanged = null;
+    }
+    if (identical(_session.onBrowserPageFinished, _handleBrowserPageFinished)) {
+      _session.onBrowserPageFinished = null;
     }
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
@@ -526,6 +537,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _closeTab() {
+    _findDebounceTimer?.cancel();
+    _findDebounceTimer = null;
     _findFocusNode.unfocus();
     _closeMenu();
     _isSiteInfoOpen = false;
@@ -602,17 +615,27 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         _findFocusNode.requestFocus();
       }
     });
+    if (_findCtrl.text.trim().isNotEmpty) {
+      unawaited(_runFindSearch(_findCtrl.text, preserveViewportMatch: true));
+    }
   }
 
   void _closeFindBar() {
     if (!_isFindOpen) return;
     final bool disableAnims =
         MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    _findDebounceTimer?.cancel();
+    _findDebounceTimer = null;
+    _findRequestSeq++;
     _findFocusNode.unfocus();
     setState(() {
       _isFindOpen = false;
-      _findStatus = '';
+      _findCurrentMatch = 0;
+      _findTotalMatches = 0;
+      _hasCompletedFindForQuery = false;
+      _lastSearchedFindQuery = '';
     });
+    unawaited(_clearFindInPage());
     _updateBrowserSafeClearances();
     if (disableAnims) {
       _findBarController.value = 0.0;
@@ -850,22 +873,128 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     }
   }
 
-  Future<void> _findInPage(String query, {bool backwards = false}) async {
-    final ctrl = _session.controller;
-    final clean = query.trim();
-    if (clean.isEmpty) {
-      if (mounted) setState(() => _findStatus = '');
+  void _handleBrowserPageFinished() {
+    if (!mounted || !_isFindOpen || _findCtrl.text.trim().isEmpty) return;
+    _findDebounceTimer?.cancel();
+    _findDebounceTimer = null;
+    unawaited(_runFindSearch(_findCtrl.text, preserveViewportMatch: false));
+  }
+
+  void _onFindQueryChanged(String value) {
+    _findDebounceTimer?.cancel();
+    _findDebounceTimer = null;
+    if (value.trim().isEmpty) {
+      _findRequestSeq++;
+      _lastSearchedFindQuery = '';
+      setState(() {
+        _findCurrentMatch = 0;
+        _findTotalMatches = 0;
+        _hasCompletedFindForQuery = false;
+      });
+      unawaited(_clearFindInPage());
       return;
     }
+    setState(() {
+      _hasCompletedFindForQuery = false;
+    });
+    _findDebounceTimer = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted || !_isFindOpen) return;
+      unawaited(_runFindSearch(_findCtrl.text, preserveViewportMatch: true));
+    });
+  }
+
+  Future<BrowserFindInPageResult> _executeFindScript(
+    String query, {
+    required bool isStep,
+    required bool backwards,
+    required bool preserveViewportMatch,
+  }) async {
+    final debugOverride = _session.debugFindInPageOverride;
+    if (debugOverride != null) {
+      return debugOverride(
+        query,
+        isStep: isStep,
+        backwards: backwards,
+        preserveViewportMatch: preserveViewportMatch,
+      );
+    }
+    final ctrl = _session.controller;
+    if (ctrl == null || !_hasPlatformWebView) {
+      return BrowserFindInPageResult.empty;
+    }
+    try {
+      final String js = isStep
+          ? BrowserFindInPageScript.buildStepScript(
+              query: query,
+              backwards: backwards,
+            )
+          : BrowserFindInPageScript.buildSearchScript(
+              query: query,
+              preserveViewportMatch: preserveViewportMatch,
+            );
+      final Object raw = await ctrl.runJavaScriptReturningResult(js);
+      return BrowserFindInPageResult.tryParseJsResult(raw) ??
+          BrowserFindInPageResult.empty;
+    } catch (_) {
+      return BrowserFindInPageResult.empty;
+    }
+  }
+
+  Future<void> _runFindSearch(
+    String rawQuery, {
+    required bool preserveViewportMatch,
+  }) async {
+    if (rawQuery.trim().isEmpty) {
+      await _clearFindInPage();
+      return;
+    }
+    final int seq = ++_findRequestSeq;
+    final BrowserFindInPageResult result = await _executeFindScript(
+      rawQuery,
+      isStep: false,
+      backwards: false,
+      preserveViewportMatch: preserveViewportMatch,
+    );
+    if (!mounted || !_isFindOpen || seq != _findRequestSeq) return;
+    setState(() {
+      _lastSearchedFindQuery = rawQuery;
+      _findCurrentMatch = result.current;
+      _findTotalMatches = result.total;
+      _hasCompletedFindForQuery = true;
+    });
+  }
+
+  Future<void> _stepFindMatch({required bool backwards}) async {
+    final String rawQuery = _findCtrl.text;
+    if (rawQuery.trim().isEmpty) return;
+    _findDebounceTimer?.cancel();
+    _findDebounceTimer = null;
+    if (_lastSearchedFindQuery != rawQuery || !_hasCompletedFindForQuery) {
+      await _runFindSearch(rawQuery, preserveViewportMatch: true);
+      return;
+    }
+    if (_findTotalMatches <= 0) return;
+    final int seq = ++_findRequestSeq;
+    final BrowserFindInPageResult result = await _executeFindScript(
+      rawQuery,
+      isStep: true,
+      backwards: backwards,
+      preserveViewportMatch: false,
+    );
+    if (!mounted || !_isFindOpen || seq != _findRequestSeq) return;
+    setState(() {
+      _findCurrentMatch = result.current;
+      _findTotalMatches = result.total;
+      _hasCompletedFindForQuery = true;
+    });
+  }
+
+  Future<void> _clearFindInPage() async {
+    _session.debugClearFindInPageOverride?.call();
+    final ctrl = _session.controller;
     if (ctrl == null || !_hasPlatformWebView) return;
     try {
-      final js =
-          '(function(){ return !!window.find(${jsonEncode(clean)}, false, ${backwards ? 'true' : 'false'}, true, false, false, false); })();';
-      final res = await ctrl.runJavaScriptReturningResult(js);
-      if (mounted) {
-        final found = res == true || res.toString() == 'true';
-        setState(() => _findStatus = found ? 'Найдено' : 'Не найдено');
-      }
+      await ctrl.runJavaScript(BrowserFindInPageScript.buildClearScript());
     } catch (_) {}
   }
 
@@ -1301,6 +1430,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
 
     final bool mountFindBar = _isFindOpen || !_findBarController.isDismissed;
+    final bool hasFindQuery = _findCtrl.text.trim().isNotEmpty;
+    final bool canStepFind =
+        hasFindQuery && (!_hasCompletedFindForQuery || _findTotalMatches > 0);
     final Widget? floatingFindBar = mountFindBar
         ? AnimatedBuilder(
             animation: _findBarAnimation,
@@ -1318,6 +1450,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                     controller: _findCtrl,
                     focusNode: _findFocusNode,
                     autofocus: true,
+                    textInputAction: TextInputAction.search,
                     cursorColor: resolved.palette.primary,
                     style: TextStyle(
                       fontSize: 14,
@@ -1342,21 +1475,33 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                         vertical: 8,
                       ),
                     ),
-                    onSubmitted: (v) => _findInPage(v),
+                    onChanged: _onFindQueryChanged,
+                    onSubmitted: (_) =>
+                        unawaited(_stepFindMatch(backwards: false)),
                   ),
                 ),
-                if (_findStatus.isNotEmpty)
+                if (hasFindQuery && _hasCompletedFindForQuery)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: Text(
-                      _findStatus,
+                      _findTotalMatches > 0
+                          ? '$_findCurrentMatch из $_findTotalMatches'
+                          : '0 из 0',
+                      key: const ValueKey('in_app_browser_find_counter'),
+                      maxLines: 1,
+                      softWrap: false,
                       style: TextStyle(
-                        fontSize: 11.5,
-                        color: resolved.headerFg.withValues(alpha: 0.7),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: resolved.headerFg.withValues(
+                          alpha: _findTotalMatches > 0 ? 0.78 : 0.48,
+                        ),
                       ),
                     ),
                   ),
                 IconButton(
+                  key: const ValueKey('in_app_browser_find_prev_btn'),
                   constraints: const BoxConstraints(
                     minWidth: 36,
                     minHeight: 36,
@@ -1365,12 +1510,16 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                   icon: Icon(
                     Icons.keyboard_arrow_up_rounded,
                     size: 21,
-                    color: resolved.headerFg,
+                    color: resolved.headerFg.withValues(
+                      alpha: canStepFind ? 1.0 : 0.32,
+                    ),
                   ),
-                  onPressed: () =>
-                      _findInPage(_findCtrl.text, backwards: true),
+                  onPressed: canStepFind
+                      ? () => unawaited(_stepFindMatch(backwards: true))
+                      : null,
                 ),
                 IconButton(
+                  key: const ValueKey('in_app_browser_find_next_btn'),
                   constraints: const BoxConstraints(
                     minWidth: 36,
                     minHeight: 36,
@@ -1379,9 +1528,13 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                   icon: Icon(
                     Icons.keyboard_arrow_down_rounded,
                     size: 21,
-                    color: resolved.headerFg,
+                    color: resolved.headerFg.withValues(
+                      alpha: canStepFind ? 1.0 : 0.32,
+                    ),
                   ),
-                  onPressed: () => _findInPage(_findCtrl.text),
+                  onPressed: canStepFind
+                      ? () => unawaited(_stepFindMatch(backwards: false))
+                      : null,
                 ),
                 IconButton(
                   constraints: const BoxConstraints(

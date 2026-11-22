@@ -26,6 +26,7 @@ import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/browser_autofill_script.dart';
+import '../../utils/browser_find_in_page_script.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
 import '../../utils/safari_url_safety.dart';
@@ -567,10 +568,13 @@ class MiniAppSession {
   }
 
   VoidCallback? onSheetStateChanged;
+  VoidCallback? onBrowserPageFinished;
   VoidCallback? onPendingLaunchResolved;
   VoidCallback? onRequestBridgeInjection;
   ValueChanged<String>? onInboundBridgeMessage;
   BrowserUiDialogDelegate? uiDialogDelegate;
+  BrowserFindInPageExecutor? debugFindInPageOverride;
+  VoidCallback? debugClearFindInPageOverride;
 
   final Set<String> acceptedSslWarningHosts = <String>{};
   final Set<String> acceptedSuspiciousHosts = <String>{};
@@ -3094,6 +3098,7 @@ class MiniAppSession {
                 );
               } catch (_) {}
               await refreshBrowserNavState();
+              onBrowserPageFinished?.call();
               await BrowserDataService.instance
                   .recordVisit(currentUrl, displayTitle);
               unawaited(BrowserStorageBridge.instance.flushCookies());
