@@ -5,6 +5,11 @@ import '../screens/auth/login_screen.dart';
 import '../utils/swipe_back_route.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
+import 'browser_cookie_jar_vault.dart';
+import 'browser_data_service.dart';
+import 'browser_site_settings_service.dart';
+import 'browser_vault_auth_gate.dart';
+import 'browser_vault_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
 import 'liquid_glass_provider.dart';
@@ -109,14 +114,26 @@ class AccountSwitchOrchestrator {
         );
       }
 
+      final prevUserId = _accountManager.currentAccount?.userId;
+
       TilingLayoutController.instance.closeAllChats();
       MiniAppSessionController.instance.closeAllMinimized();
+      BrowserVaultAuthGate.instance.invalidateGrant();
+      await BrowserCookieJarVault.instance
+          .snapshotAndClearForOutgoingAccount(prevUserId);
 
       await _accountManager.setCurrentAccount(account.userId);
       AppDatabase.setActiveUser(account.userId);
       await SettingsService().reloadForUser(account.userId);
       await PowerSavingProvider.instance.reloadForUser();
       await _accountManager.registerDeviceSession(account.userId);
+      await BrowserCookieJarVault.instance
+          .restoreForIncomingAccount(account.userId);
+      unawaited(BrowserDataService.instance.ensureLoaded(forceReload: true));
+      unawaited(BrowserVaultService.instance.ensureLoaded(forceReload: true));
+      unawaited(
+        BrowserSiteSettingsService.instance.ensureLoaded(forceReload: true),
+      );
 
       liquidGlass?.init();
       unread?.clearForAccountSwitch();
@@ -154,6 +171,13 @@ class AccountSwitchOrchestrator {
     final isCurrent = account.userId == _accountManager.currentAccount?.userId;
     if (!isCurrent) {
       await _accountManager.removeAccount(account.userId);
+      await BrowserVaultService.instance.wipeAccountVault(account.userId);
+      await BrowserSiteSettingsService.instance.wipeAccount(account.userId);
+      await BrowserDataService.instance.wipeAccountData(account.userId);
+      await BrowserCookieJarVault.instance.wipeAccountCookies(
+        account.userId,
+        isCurrentAccount: false,
+      );
       try {
         await AppDatabase.removeUserDatabase(account.userId);
       } catch (_) {}

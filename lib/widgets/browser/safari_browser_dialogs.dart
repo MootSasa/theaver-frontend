@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../services/browser_site_settings_service.dart';
+import '../../services/browser_vault_service.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/safari_url_safety.dart';
@@ -643,59 +645,117 @@ Future<bool> showSafariExternalAppDialog(
   return res ?? false;
 }
 
+/// Decision returned by [showSafariSitePermissionDialog].
+enum SafariSitePermissionChoice {
+  allowAlways,
+  allowSession,
+  deny,
+}
+
+({IconData icon, String resourcePhrase}) _resolvePermissionUiInfo(
+  Set<WebViewPermissionResourceType> types,
+) {
+  final bool wantsCam = types.contains(WebViewPermissionResourceType.camera);
+  final bool wantsMic =
+      types.contains(WebViewPermissionResourceType.microphone);
+  if (wantsCam && wantsMic) {
+    return (
+      icon: Icons.videocam_rounded,
+      resourcePhrase: 'камере и микрофону',
+    );
+  }
+  if (wantsMic) {
+    return (
+      icon: Icons.mic_rounded,
+      resourcePhrase: 'микрофону',
+    );
+  }
+  if (wantsCam) {
+    return (
+      icon: Icons.camera_alt_rounded,
+      resourcePhrase: 'камере',
+    );
+  }
+  return (
+    icon: Icons.sensors_rounded,
+    resourcePhrase: 'защищённым функциям устройства',
+  );
+}
+
 /// Shows a Safari-style permission request when a website requests access to
-/// the device camera or microphone.
+/// the device camera or microphone, offering persistent site approval when
+/// [offerPersistentAlways] is enabled.
+Future<SafariSitePermissionChoice> showSafariSitePermissionDialog(
+  BuildContext context, {
+  required String host,
+  required Set<WebViewPermissionResourceType> types,
+  bool offerPersistentAlways = true,
+}) async {
+  final info = _resolvePermissionUiInfo(types);
+  final cleanHost = host.trim().isNotEmpty
+      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
+      : 'этот сайт';
+  final res = await showSafariWebAlert<SafariSitePermissionChoice>(
+    context: context,
+    dialogKey: const ValueKey('safari_permission_dialog'),
+    tone: SafariAlertTone.permission,
+    iconOverride: info.icon,
+    originLabel: cleanHost,
+    originIsSecure: true,
+    title: 'Доступ к ${info.resourcePhrase}',
+    message:
+        'Разрешить сайту «$cleanHost» использовать доступ к ${info.resourcePhrase}?',
+    actions: [
+      if (offerPersistentAlways) ...const [
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: 'Разрешить для этого сайта',
+          result: SafariSitePermissionChoice.allowAlways,
+          isPrimary: true,
+          buttonKey: ValueKey('safari_permission_allow_always_btn'),
+        ),
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: 'Только в этой сессии',
+          result: SafariSitePermissionChoice.allowSession,
+          buttonKey: ValueKey('safari_permission_allow_btn'),
+        ),
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: 'Не разрешать',
+          result: SafariSitePermissionChoice.deny,
+          isDestructive: true,
+          buttonKey: ValueKey('safari_permission_deny_btn'),
+        ),
+      ] else ...const [
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: 'Не разрешать',
+          result: SafariSitePermissionChoice.deny,
+          buttonKey: ValueKey('safari_permission_deny_btn'),
+        ),
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: 'Разрешить',
+          result: SafariSitePermissionChoice.allowSession,
+          isPrimary: true,
+          buttonKey: ValueKey('safari_permission_allow_btn'),
+        ),
+      ],
+    ],
+  );
+  return res ?? SafariSitePermissionChoice.deny;
+}
+
+/// Shows a Safari-style permission request when a website requests access to
+/// the device camera or microphone (boolean wrapper around two-button mode).
 Future<bool> showSafariPermissionDialog(
   BuildContext context, {
   required String host,
   required Set<WebViewPermissionResourceType> types,
 }) async {
-  final bool wantsCam = types.contains(WebViewPermissionResourceType.camera);
-  final bool wantsMic =
-      types.contains(WebViewPermissionResourceType.microphone);
-  final IconData icon;
-  final String resourcePhrase;
-  if (wantsCam && wantsMic) {
-    icon = Icons.videocam_rounded;
-    resourcePhrase = 'камере и микрофону';
-  } else if (wantsMic) {
-    icon = Icons.mic_rounded;
-    resourcePhrase = 'микрофону';
-  } else if (wantsCam) {
-    icon = Icons.camera_alt_rounded;
-    resourcePhrase = 'камере';
-  } else {
-    icon = Icons.sensors_rounded;
-    resourcePhrase = 'защищённым функциям устройства';
-  }
-
-  final cleanHost = host.trim().isNotEmpty
-      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
-      : 'этот сайт';
-  final res = await showSafariWebAlert<bool>(
-    context: context,
-    dialogKey: const ValueKey('safari_permission_dialog'),
-    tone: SafariAlertTone.permission,
-    iconOverride: icon,
-    originLabel: cleanHost,
-    originIsSecure: true,
-    title: 'Доступ к $resourcePhrase',
-    message: 'Разрешить сайту «$cleanHost» использовать доступ к $resourcePhrase?',
-    actions: const [
-      SafariAlertAction<bool>(
-        label: 'Не разрешать',
-        result: false,
-        buttonKey: ValueKey('safari_permission_deny_btn'),
-      ),
-      SafariAlertAction<bool>(
-        label: 'Разрешить',
-        result: true,
-        isPrimary: true,
-        buttonKey: ValueKey('safari_permission_allow_btn'),
-      ),
-    ],
+  final choice = await showSafariSitePermissionDialog(
+    context,
+    host: host,
+    types: types,
+    offerPersistentAlways: false,
   );
-  return res ?? false;
+  return choice != SafariSitePermissionChoice.deny;
 }
 
 /// Shows an informational Safari alert when OS-level camera/microphone
@@ -942,13 +1002,36 @@ class _SafariJsPromptBodyState extends State<_SafariJsPromptBody> {
   }
 }
 
+class SafariHttpAuthResult {
+  final String user;
+  final String password;
+  final bool saveCredential;
+
+  const SafariHttpAuthResult({
+    required this.user,
+    required this.password,
+    this.saveCredential = false,
+  });
+}
+
 class _SafariHttpAuthBody extends StatefulWidget {
+  final List<BrowserCredentialHint> savedHints;
+  final Future<BrowserSavedCredential?> Function(BrowserCredentialHint hint)?
+      onUnlockSavedHint;
+  final bool offerSaveOption;
+  final bool initialSaveOption;
   final ValueChanged<String> onUserChanged;
   final ValueChanged<String> onPasswordChanged;
+  final ValueChanged<bool> onSaveChanged;
 
   const _SafariHttpAuthBody({
+    this.savedHints = const [],
+    this.onUnlockSavedHint,
+    this.offerSaveOption = false,
+    this.initialSaveOption = true,
     required this.onUserChanged,
     required this.onPasswordChanged,
+    required this.onSaveChanged,
   });
 
   @override
@@ -959,10 +1042,13 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
   late final TextEditingController _userCtrl;
   late final TextEditingController _passCtrl;
   bool _obscure = true;
+  late bool _saveChecked;
+  bool _unlocking = false;
 
   @override
   void initState() {
     super.initState();
+    _saveChecked = widget.initialSaveOption;
     _userCtrl = TextEditingController()
       ..addListener(() => widget.onUserChanged(_userCtrl.text));
     _passCtrl = TextEditingController()
@@ -976,13 +1062,66 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
     super.dispose();
   }
 
+  Future<void> _autofillHint(BrowserCredentialHint hint) async {
+    if (_unlocking || widget.onUnlockSavedHint == null) return;
+    HapticUtils.tap();
+    setState(() => _unlocking = true);
+    try {
+      final unlocked = await widget.onUnlockSavedHint!(hint);
+      if (!mounted || unlocked == null) return;
+      _userCtrl.text = unlocked.username;
+      _passCtrl.text = unlocked.password;
+      _saveChecked = false;
+      widget.onSaveChanged(false);
+    } finally {
+      if (mounted) {
+        setState(() => _unlocking = false);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (widget.savedHints.isNotEmpty && widget.onUnlockSavedHint != null) ...[
+          Material(
+            color: palette.primary.withValues(alpha: style.isDark ? 0.18 : 0.10),
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              key: const ValueKey('safari_http_auth_autofill_btn'),
+              borderRadius: BorderRadius.circular(14),
+              onTap: _unlocking ? null : () => _autofillHint(widget.savedHints.first),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.key_rounded, size: 17, color: palette.primary),
+                    const SizedBox(width: 7),
+                    Flexible(
+                      child: Text(
+                        'Подставить: ${widget.savedHints.first.username.isNotEmpty ? widget.savedHints.first.username : widget.savedHints.first.displayHost}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: palette.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
         TextField(
           key: const ValueKey('safari_http_auth_user'),
           controller: _userCtrl,
@@ -1017,6 +1156,51 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
           ),
           onSubmitted: (_) => Navigator.of(context).pop(true),
         ),
+        if (widget.offerSaveOption) ...[
+          const SizedBox(height: 8),
+          InkWell(
+            key: const ValueKey('safari_http_auth_save_toggle'),
+            borderRadius: BorderRadius.circular(10),
+            onTap: () {
+              setState(() => _saveChecked = !_saveChecked);
+              widget.onSaveChanged(_saveChecked);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: Checkbox(
+                      value: _saveChecked,
+                      onChanged: (v) {
+                        final next = v ?? false;
+                        setState(() => _saveChecked = next);
+                        widget.onSaveChanged(next);
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Сохранить пароль в Theaver',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: palette.onSurface.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1070,15 +1254,20 @@ Future<({String? value, bool muteHost})> showSafariJsPromptDialog(
   );
 }
 
-/// Shows a Safari-style HTTP Basic/Digest Authentication prompt returning a
-/// username/password tuple or `null` when cancelled.
-Future<({String user, String password})?> showSafariHttpAuthDialog(
+/// Shows a Safari-style HTTP Basic/Digest Authentication prompt returning
+/// [SafariHttpAuthResult] or `null` when cancelled.
+Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
   BuildContext context, {
   required String host,
   String? realm,
+  List<BrowserCredentialHint> savedHints = const [],
+  Future<BrowserSavedCredential?> Function(BrowserCredentialHint hint)?
+      onUnlockSavedHint,
+  bool offerSaveOption = false,
 }) async {
   String userValue = '';
   String passValue = '';
+  bool saveCredential = offerSaveOption;
   final cleanHost = SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim());
   final String realmSuffix = (realm != null && realm.trim().isNotEmpty)
       ? '\nОбласть: ${realm.trim()}'
@@ -1093,8 +1282,13 @@ Future<({String user, String password})?> showSafariHttpAuthDialog(
         title: 'Требуется вход',
         message: 'Введите имя пользователя и пароль для входа.$realmSuffix',
         customBody: _SafariHttpAuthBody(
+          savedHints: savedHints,
+          onUnlockSavedHint: onUnlockSavedHint,
+          offerSaveOption: offerSaveOption,
+          initialSaveOption: saveCredential,
           onUserChanged: (v) => userValue = v,
           onPasswordChanged: (v) => passValue = v,
+          onSaveChanged: (v) => saveCredential = v,
         ),
         actions: const [
           SafariAlertAction<bool>(
@@ -1112,7 +1306,11 @@ Future<({String user, String password})?> showSafariHttpAuthDialog(
       ) ??
       false;
   if (!confirmed) return null;
-  return (user: userValue, password: passValue);
+  return SafariHttpAuthResult(
+    user: userValue,
+    password: passValue,
+    saveCredential: saveCredential,
+  );
 }
 
 /// Anchored Safari iOS 26 "Site Info" popover shown below the floating domain
@@ -1123,9 +1321,13 @@ class SafariSiteInfoPopover extends StatelessWidget {
   final List<String> grantedPermissionLabels;
   final bool hasMutedJsDialogs;
   final bool hasAcceptedSslWarning;
+  final int savedPasswordCount;
+  final BrowserCookiePolicy? cookiePolicy;
+  final bool isIncognito;
   final VoidCallback onCopyUrl;
   final VoidCallback? onUpgradeToHttps;
   final VoidCallback? onResetPermissions;
+  final VoidCallback? onOpenSitePasswords;
   final VoidCallback onToggleDesktopMode;
   final VoidCallback onClearSiteDataAndReload;
   final bool bareContent;
@@ -1137,9 +1339,13 @@ class SafariSiteInfoPopover extends StatelessWidget {
     this.grantedPermissionLabels = const [],
     this.hasMutedJsDialogs = false,
     this.hasAcceptedSslWarning = false,
+    this.savedPasswordCount = 0,
+    this.cookiePolicy,
+    this.isIncognito = false,
     required this.onCopyUrl,
     this.onUpgradeToHttps,
     this.onResetPermissions,
+    this.onOpenSitePasswords,
     required this.onToggleDesktopMode,
     required this.onClearSiteDataAndReload,
     this.bareContent = false,
@@ -1314,6 +1520,44 @@ class SafariSiteInfoPopover extends StatelessWidget {
               ],
             ),
           ),
+          if (isIncognito) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: palette.primary.withValues(alpha: style.isDark ? 0.18 : 0.10),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.visibility_off_rounded, size: 17, color: palette.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Частный доступ: история, cookie и пароли не сохраняются',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: palette.onSurface.withValues(alpha: 0.88),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (cookiePolicy != null &&
+              cookiePolicy != BrowserCookiePolicy.allowAll) ...[
+            const SizedBox(height: 8),
+            Text(
+              cookiePolicy == BrowserCookiePolicy.blockAll
+                  ? 'Политика cookie: все cookie заблокированы'
+                  : 'Политика cookie: без сторонних cookie',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: palette.subtext,
+              ),
+            ),
+          ],
           if (showCustomStateReset && onResetPermissions != null) ...[
             const SizedBox(height: 10),
             Container(
@@ -1330,7 +1574,7 @@ class SafariSiteInfoPopover extends StatelessWidget {
                     [
                       if (grantedPermissionLabels.isNotEmpty)
                         'Разрешения: ${grantedPermissionLabels.join(', ')}',
-                      if (hasMutedJsDialogs) 'JS-окна заблокированы в сессии',
+                      if (hasMutedJsDialogs) 'JS-окна заблокированы',
                       if (hasAcceptedSslWarning) 'Исключение SSL активно',
                     ].join(' • '),
                     style: TextStyle(
@@ -1347,6 +1591,15 @@ class SafariSiteInfoPopover extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ],
+          if (savedPasswordCount > 0 && onOpenSitePasswords != null) ...[
+            const SizedBox(height: 10),
+            _SafariPopoverPillButton(
+              key: const ValueKey('safari_site_info_passwords_btn'),
+              icon: Icons.key_rounded,
+              label: 'Сохранённые пароли ($savedPasswordCount)',
+              onTap: onOpenSitePasswords!,
             ),
           ],
           const SizedBox(height: 10),

@@ -89,6 +89,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onPause() {
+        try {
+            android.webkit.CookieManager.getInstance().flush()
+        } catch (_: Throwable) {}
         val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
         dm?.unregisterDisplayListener(displayListener)
         super.onPause()
@@ -125,6 +128,9 @@ class MainActivity : FlutterFragmentActivity() {
         PushDetectorHandler.register(flutterEngine, applicationContext)
         NativeNotificationsChannel.register(flutterEngine, applicationContext)
         ApkInstallerHandler.register(flutterEngine, applicationContext)
+        BrowserStorageChannel.register(flutterEngine, applicationContext) { targetUrl ->
+            findTargetWebView(window?.decorView, targetUrl)
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "app.theaver.messenger/screen_security"

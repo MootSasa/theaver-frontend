@@ -26,6 +26,7 @@ import '../../widgets/theme/four_corner_gradient.dart';
 import '../../widgets/theme/theme_preview_sheet.dart';
 import '../../l10n/app_localizations.dart';
 import 'advanced_theme_colors_screen.dart';
+import 'browser_vault_and_data_screen.dart';
 import 'theme_editor_screen.dart';
 import 'wallpaper_screen.dart';
 import '../../widgets/settings/chat_swipe_setting_card.dart';
@@ -792,6 +793,54 @@ class ChatSettingsScreen extends StatelessWidget {
                 },
               ),
               const SizedBox(height: 6),
+              ListTile(
+                key: const ValueKey('settings_browser_vault_tile'),
+                leading: const Icon(
+                  Icons.key_rounded,
+                  color: Colors.grey,
+                  size: 22,
+                ),
+                title: Text(l10n.translate('settings_browser_vault_title')),
+                subtitle: Text(
+                  l10n.translate('settings_browser_vault_subtitle'),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  HapticUtils.tap();
+                  Navigator.of(context).push(
+                    SwipeBackPageRoute<void>(
+                      builder: (_) =>
+                          const BrowserVaultAndDataScreen(initialSection: 0),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                key: const ValueKey('settings_browser_cookies_tile'),
+                leading: const Icon(
+                  Icons.cookie_outlined,
+                  color: Colors.grey,
+                  size: 22,
+                ),
+                title: Text(
+                  l10n.translate('settings_browser_cookies_sites_title'),
+                ),
+                subtitle: Text(
+                  l10n.translate('settings_browser_cookies_sites_subtitle'),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  HapticUtils.tap();
+                  Navigator.of(context).push(
+                    SwipeBackPageRoute<void>(
+                      builder: (_) =>
+                          const BrowserVaultAndDataScreen(initialSection: 2),
+                    ),
+                  );
+                },
+              ),
               ListTile(
                 key: const ValueKey('settings_clear_browser_data_tile'),
                 leading: const iconoir.Trash(

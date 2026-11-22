@@ -3,6 +3,7 @@ import UIKit
 import AVFoundation
 import MediaPlayer
 import UserNotifications
+import WebKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, FlutterStreamHandler {
@@ -25,6 +26,7 @@ import UserNotifications
       setupMediaMuxer(messenger: messenger)
       setupProximityAndMediaSession(messenger: messenger)
       setupNativeNotifications(messenger: messenger)
+      setupBrowserStorageChannel(messenger: messenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -35,6 +37,7 @@ import UserNotifications
     setupMediaMuxer(messenger: messenger)
     setupProximityAndMediaSession(messenger: messenger)
     setupNativeNotifications(messenger: messenger)
+    setupBrowserStorageChannel(messenger: messenger)
   }
 
   private func setupProximityAndMediaSession(messenger: FlutterBinaryMessenger) {
@@ -536,6 +539,172 @@ import UserNotifications
       }
     } catch {
       completion(false, error)
+    }
+  }
+
+  private func setupBrowserStorageChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "app.theaver.messenger/browser_storage",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { (call, result) in
+      let dataStore = WKWebsiteDataStore.default()
+      let cookieStore = dataStore.httpCookieStore
+
+      switch call.method {
+      case "flushCookies":
+        result(true)
+
+      case "configureWebViewPolicies":
+        result(true)
+
+      case "exportAllCookies":
+        cookieStore.getAllCookies { cookies in
+          let mapped: [[String: Any]] = cookies.map { cookie in
+            let expiresMs = cookie.expiresDate != nil
+              ? Int64((cookie.expiresDate!.timeIntervalSince1970 * 1000.0).rounded())
+              : 0
+            let sameSiteVal: Int
+            if #available(iOS 13.0, *), let policy = cookie.sameSitePolicy {
+              switch policy {
+              case .lax:
+                sameSiteVal = 1
+              case .strict:
+                sameSiteVal = 2
+              default:
+                sameSiteVal = -1
+              }
+            } else {
+              sameSiteVal = -1
+            }
+            return [
+              "hostKey": cookie.domain,
+              "name": cookie.name,
+              "value": cookie.value,
+              "path": cookie.path.isEmpty ? "/" : cookie.path,
+              "expiresEpochMs": expiresMs,
+              "isSecure": cookie.isSecure,
+              "isHttpOnly": cookie.isHTTPOnly,
+              "sameSite": sameSiteVal,
+            ]
+          }
+          result(mapped)
+        }
+
+      case "importCookies":
+        let args = call.arguments as? [String: Any]
+        let rawList = args?["cookies"] as? [[String: Any]] ?? []
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000.0)
+        let group = DispatchGroup()
+        for item in rawList {
+          guard let domain = item["hostKey"] as? String,
+                !domain.isEmpty,
+                let name = item["name"] as? String,
+                !name.isEmpty,
+                let value = item["value"] as? String else {
+            continue
+          }
+          let expiresMs = (item["expiresEpochMs"] as? NSNumber)?.int64Value ?? 0
+          if expiresMs > 0 && expiresMs < nowMs {
+            continue
+          }
+          let path = (item["path"] as? String)?.isEmpty == false ? (item["path"] as! String) : "/"
+          let isSecure = (item["isSecure"] as? Bool) ?? false
+          var props: [HTTPCookiePropertyKey: Any] = [
+            .domain: domain,
+            .name: name,
+            .value: value,
+            .path: path,
+            .secure: isSecure ? "TRUE" : "FALSE",
+          ]
+          if expiresMs > 0 {
+            props[.expires] = Date(timeIntervalSince1970: Double(expiresMs) / 1000.0)
+          }
+          if #available(iOS 13.0, *), let sameSite = (item["sameSite"] as? NSNumber)?.intValue {
+            if sameSite == 1 {
+              props[.sameSitePolicy] = HTTPCookieStringPolicy.sameSiteLax
+            } else if sameSite == 2 {
+              props[.sameSitePolicy] = HTTPCookieStringPolicy.sameSiteStrict
+            }
+          }
+          if let cookie = HTTPCookie(properties: props) {
+            group.enter()
+            cookieStore.setCookie(cookie) {
+              group.leave()
+            }
+          }
+        }
+        group.notify(queue: .main) {
+          result(true)
+        }
+
+      case "clearSiteData":
+        let args = call.arguments as? [String: Any]
+        let originUrl = (args?["originUrl"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: originUrl),
+              let cleanHost = url.host?.lowercased() else {
+          result(false)
+          return
+        }
+        let hostNoDot = cleanHost.hasPrefix(".") ? String(cleanHost.dropFirst()) : cleanHost
+        let group = DispatchGroup()
+
+        group.enter()
+        cookieStore.getAllCookies { cookies in
+          let innerGroup = DispatchGroup()
+          for cookie in cookies {
+            let domain = cookie.domain.lowercased()
+            let domNoDot = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+            let matches = domNoDot == hostNoDot ||
+              domNoDot.hasSuffix("." + hostNoDot) ||
+              (domain.hasPrefix(".") && hostNoDot.hasSuffix(domain))
+            if matches {
+              innerGroup.enter()
+              cookieStore.delete(cookie) {
+                innerGroup.leave()
+              }
+            }
+          }
+          innerGroup.notify(queue: .main) {
+            group.leave()
+          }
+        }
+
+        group.enter()
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        dataStore.fetchDataRecords(ofTypes: types) { records in
+          let matching = records.filter { rec in
+            let name = rec.displayName.lowercased()
+            return name == hostNoDot || hostNoDot.hasSuffix("." + name) || name.hasSuffix("." + hostNoDot)
+          }
+          if matching.isEmpty {
+            group.leave()
+          } else {
+            dataStore.removeData(ofTypes: types, for: matching) {
+              group.leave()
+            }
+          }
+        }
+
+        group.notify(queue: .main) {
+          result(true)
+        }
+
+      case "clearAllWebData":
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        dataStore.removeData(ofTypes: types, modifiedSince: .distantPast) {
+          let storage = URLCredentialStorage.shared
+          for (space, creds) in storage.allCredentials {
+            for (_, cred) in creds {
+              storage.remove(cred, for: space)
+            }
+          }
+          result(true)
+        }
+
+      default:
+        result(FlutterMethodNotImplemented)
+      }
     }
   }
 }

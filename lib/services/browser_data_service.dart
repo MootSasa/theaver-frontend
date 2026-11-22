@@ -1,10 +1,13 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show ChangeNotifier, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, kIsWeb, visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../utils/safari_url_safety.dart';
 import 'account_manager.dart';
+import 'browser_storage_bridge.dart';
 
 class BrowserBookmark {
   final String url;
@@ -68,14 +71,29 @@ class BrowserDataService extends ChangeNotifier {
 
   static const String _bookmarksBaseKey = 'in_app_browser_bookmarks';
   static const String _historyBaseKey = 'in_app_browser_history';
+  static const String _knownOriginsBaseKey = 'in_app_browser_known_origins';
   static const int _maxHistoryItems = 200;
+  static const int _maxKnownOrigins = 500;
+
+  @visibleForTesting
+  String? debugUserIdOverride;
 
   List<BrowserBookmark> _bookmarks = [];
   List<BrowserHistoryEntry> _history = [];
+  List<String> _knownOrigins = [];
   String? _loadedScope;
 
   List<BrowserBookmark> get bookmarks => List.unmodifiable(_bookmarks);
   List<BrowserHistoryEntry> get history => List.unmodifiable(_history);
+  List<String> get knownOrigins => List.unmodifiable(_knownOrigins);
+
+  List<String> knownOriginsForAccount(String userId) {
+    final targetScope = _scopeForUserId(userId);
+    if (_loadedScope == targetScope) {
+      return List.unmodifiable(_knownOrigins);
+    }
+    return const [];
+  }
 
   static String extractHost(String rawUrl) {
     final uri = Uri.tryParse(rawUrl.trim());
@@ -85,10 +103,36 @@ class BrowserDataService extends ChangeNotifier {
     return rawUrl.trim();
   }
 
+  static String? _normalizeOrigin(String rawUrl) {
+    final uri = Uri.tryParse(rawUrl.trim());
+    if (uri == null) return null;
+    final scheme = uri.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https') return null;
+    final safety = SafariUrlSafetyAnalyzer.analyzeUrl(rawUrl);
+    final host = safety.asciiHost.isNotEmpty
+        ? safety.asciiHost.toLowerCase()
+        : uri.host.trim().toLowerCase();
+    if (host.isEmpty) return null;
+    final portSuffix = (uri.hasPort &&
+            !((scheme == 'https' && uri.port == 443) ||
+                (scheme == 'http' && uri.port == 80)))
+        ? ':${uri.port}'
+        : '';
+    return '$scheme://$host$portSuffix';
+  }
+
+  String _scopeForUserId(String? uid) {
+    final clean = uid?.trim() ?? '';
+    return clean.isNotEmpty ? 'u_${clean}_' : '';
+  }
+
   String _currentScope() {
+    if (debugUserIdOverride != null && debugUserIdOverride!.trim().isNotEmpty) {
+      return _scopeForUserId(debugUserIdOverride);
+    }
     try {
       final uid = AccountManager().currentAccount?.userId;
-      if (uid != null && uid.isNotEmpty) return 'u_${uid}_';
+      if (uid != null && uid.isNotEmpty) return _scopeForUserId(uid);
     } catch (_) {}
     return '';
   }
@@ -131,6 +175,12 @@ class BrowserDataService extends ChangeNotifier {
       } else {
         _history = [];
       }
+
+      final rawOrigins = prefs.getStringList('$scope$_knownOriginsBaseKey');
+      _knownOrigins = rawOrigins != null
+          ? rawOrigins.where((e) => e.trim().isNotEmpty).toList()
+          : <String>[];
+
       notifyListeners();
     } catch (_) {}
   }
@@ -154,6 +204,14 @@ class BrowserDataService extends ChangeNotifier {
         '$scope$_historyBaseKey',
         jsonEncode(_history.map((h) => h.toJson()).toList()),
       );
+    } catch (_) {}
+  }
+
+  Future<void> _saveKnownOrigins() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final scope = _currentScope();
+      await prefs.setStringList('$scope$_knownOriginsBaseKey', _knownOrigins);
     } catch (_) {}
   }
 
@@ -225,8 +283,23 @@ class BrowserDataService extends ChangeNotifier {
         _history = _history.sublist(0, _maxHistoryItems);
       }
     }
+
+    final origin = _normalizeOrigin(cleanUrl);
+    bool originsChanged = false;
+    if (origin != null) {
+      _knownOrigins.remove(origin);
+      _knownOrigins.insert(0, origin);
+      if (_knownOrigins.length > _maxKnownOrigins) {
+        _knownOrigins = _knownOrigins.sublist(0, _maxKnownOrigins);
+      }
+      originsChanged = true;
+    }
+
     notifyListeners();
     await _saveHistory();
+    if (originsChanged) {
+      await _saveKnownOrigins();
+    }
   }
 
   Future<void> deleteHistoryAt(int index) async {
@@ -251,21 +324,85 @@ class BrowserDataService extends ChangeNotifier {
     await _saveHistory();
   }
 
-  Future<void> clearHistoryAndCookies() async {
+  /// Clears cookies (including `HttpOnly`), `WebStorage`, and origin records
+  /// for the site matching [urlOrOrigin].
+  Future<void> clearSiteData(String urlOrOrigin) async {
     await ensureLoaded();
-    _history = [];
+    final raw = urlOrOrigin.trim();
+    if (raw.isEmpty) return;
+    final String normalizedTarget = _normalizeOrigin(raw) ??
+        (raw.contains('://') ? raw : 'https://$raw');
+    await BrowserStorageBridge.instance.clearSiteData(normalizedTarget);
+
+    final targetHost = (Uri.tryParse(normalizedTarget)?.host ?? raw)
+        .toLowerCase()
+        .replaceFirst(RegExp(r'^www\.'), '');
+    final prevLen = _knownOrigins.length;
+    if (targetHost.isNotEmpty) {
+      _knownOrigins.removeWhere((origin) {
+        final h = (Uri.tryParse(origin)?.host ?? '')
+            .toLowerCase()
+            .replaceFirst(RegExp(r'^www\.'), '');
+        return h == targetHost || h.endsWith('.$targetHost');
+      });
+    }
+    if (_knownOrigins.length != prevLen) {
+      await _saveKnownOrigins();
+    }
     notifyListeners();
-    await _saveHistory();
-    if (!kIsWeb && WebViewPlatform.instance != null) {
-      try {
-        await WebViewCookieManager().clearCookies();
-      } catch (_) {}
+  }
+
+  Future<void> clearHistoryAndCookies({
+    bool clearHistory = true,
+    bool clearCookiesAndSiteData = true,
+  }) async {
+    await ensureLoaded();
+    if (clearHistory) {
+      _history = [];
+    }
+    if (clearCookiesAndSiteData) {
+      _knownOrigins = [];
+    }
+    notifyListeners();
+    if (clearHistory) {
+      await _saveHistory();
+    }
+    if (clearCookiesAndSiteData) {
+      await _saveKnownOrigins();
+      await BrowserStorageBridge.instance.clearAllWebData();
+      if (!kIsWeb && WebViewPlatform.instance != null) {
+        try {
+          await WebViewCookieManager().clearCookies();
+        } catch (_) {}
+      }
     }
   }
 
+  /// Permanently removes all bookmarks, history, and known origins stored for [userId].
+  Future<void> wipeAccountData(String userId) async {
+    final scope = _scopeForUserId(userId);
+    if (scope.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('$scope$_bookmarksBaseKey');
+      await prefs.remove('$scope$_historyBaseKey');
+      await prefs.remove('$scope$_knownOriginsBaseKey');
+    } catch (_) {}
+    if (_loadedScope == scope || _currentScope() == scope) {
+      _bookmarks = [];
+      _history = [];
+      _knownOrigins = [];
+      _loadedScope = null;
+      notifyListeners();
+    }
+  }
+
+  @visibleForTesting
   void resetForTesting() {
     _bookmarks = [];
     _history = [];
+    _knownOrigins = [];
     _loadedScope = null;
+    debugUserIdOverride = null;
   }
 }

@@ -6,6 +6,11 @@ import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import 'account_manager.dart';
+import 'browser_cookie_jar_vault.dart';
+import 'browser_data_service.dart';
+import 'browser_site_settings_service.dart';
+import 'browser_vault_auth_gate.dart';
+import 'browser_vault_service.dart';
 import 'cache_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
@@ -212,6 +217,17 @@ class AuthService {
       final token = await getToken();
       final accountManager = AccountManager();
       final currentUserId = accountManager.currentAccount?.userId;
+
+      BrowserVaultAuthGate.instance.invalidateGrant();
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        await BrowserVaultService.instance.wipeAccountVault(currentUserId);
+        await BrowserSiteSettingsService.instance.wipeAccount(currentUserId);
+        await BrowserDataService.instance.wipeAccountData(currentUserId);
+      }
+      await BrowserCookieJarVault.instance.wipeAccountCookies(
+        currentUserId ?? '',
+        isCurrentAccount: true,
+      );
 
       // 2. Clear current account from AccountManager immediately
       if (currentUserId != null) {

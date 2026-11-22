@@ -16,11 +16,17 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../services/bot_service.dart';
+import '../../services/browser_cookie_jar_vault.dart';
 import '../../services/browser_data_service.dart';
+import '../../services/browser_site_settings_service.dart';
+import '../../services/browser_storage_bridge.dart';
+import '../../services/browser_vault_auth_gate.dart';
+import '../../services/browser_vault_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
 import '../../utils/blur_utils.dart';
+import '../../utils/browser_autofill_script.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
 import '../../utils/safari_url_safety.dart';
@@ -196,6 +202,12 @@ abstract interface class BrowserUiDialogDelegate {
     required Set<WebViewPermissionResourceType> types,
   });
 
+  Future<SafariSitePermissionChoice> onSitePermissionChoiceRequest({
+    required String host,
+    required Set<WebViewPermissionResourceType> types,
+    required bool offerPersistentAlways,
+  });
+
   Future<void> onSystemPermissionBlocked({required String resourceLabel});
 
   Future<void> onJsAlert({
@@ -226,6 +238,8 @@ abstract interface class BrowserUiDialogDelegate {
   Future<WebViewCredential?> onHttpAuthRequest({
     required String host,
     String? realm,
+    String? url,
+    bool isIncognito = false,
   });
 }
 
@@ -278,6 +292,25 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
       contextResolver(),
       host: host,
       types: types,
+    );
+  }
+
+  @override
+  Future<SafariSitePermissionChoice> onSitePermissionChoiceRequest({
+    required String host,
+    required Set<WebViewPermissionResourceType> types,
+    required bool offerPersistentAlways,
+  }) {
+    if (!isDialogHostMounted) {
+      return Future<SafariSitePermissionChoice>.value(
+        SafariSitePermissionChoice.deny,
+      );
+    }
+    return showSafariSitePermissionDialog(
+      contextResolver(),
+      host: host,
+      types: types,
+      offerPersistentAlways: offerPersistentAlways,
     );
   }
 
@@ -356,14 +389,59 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
   Future<WebViewCredential?> onHttpAuthRequest({
     required String host,
     String? realm,
+    String? url,
+    bool isIncognito = false,
   }) async {
     if (!isDialogHostMounted) return null;
+    final cleanHost = host.trim();
+    final effectiveUrl = (url != null && url.trim().isNotEmpty)
+        ? url.trim()
+        : (cleanHost.isNotEmpty ? 'https://$cleanHost/' : '');
+    final vault = BrowserVaultService.instance;
+    await vault.ensureLoaded();
+    await BrowserSiteSettingsService.instance.ensureLoaded();
+    if (!isDialogHostMounted) return null;
+
+    final hints = effectiveUrl.isNotEmpty
+        ? vault.getHintsForUrl(effectiveUrl, isHttpAuth: true, realm: realm)
+        : const <BrowserCredentialHint>[];
+
     final res = await showSafariHttpAuthDialog(
       contextResolver(),
-      host: host,
+      host: cleanHost,
       realm: realm,
+      savedHints: hints,
+      onUnlockSavedHint: hints.isEmpty
+          ? null
+          : (hint) {
+              if (!isDialogHostMounted) {
+                return Future<BrowserSavedCredential?>.value(null);
+              }
+              return vault.unlockAndReadCredential(
+                contextResolver(),
+                hint.id,
+                reason: 'Подтвердите личность для входа на $cleanHost',
+                originScope: effectiveUrl,
+              );
+            },
+      offerSaveOption:
+          !isIncognito && BrowserSiteSettingsService.instance.savePasswordsEnabled,
     );
     if (res == null) return null;
+    if (res.saveCredential &&
+        !isIncognito &&
+        res.password.isNotEmpty &&
+        effectiveUrl.isNotEmpty) {
+      unawaited(
+        vault.saveOrUpdateCredential(
+          url: effectiveUrl,
+          username: res.user,
+          password: res.password,
+          isHttpAuth: true,
+          realm: realm,
+        ),
+      );
+    }
     return WebViewCredential(user: res.user, password: res.password);
   }
 }
@@ -447,7 +525,12 @@ class MiniAppSession {
   bool isMinimized = false;
   NavigatorState? lastNavigator;
 
+  static const String desktopUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
   final bool isBrowser;
+  final bool isIncognito;
   String currentUrl;
   String pageTitle = '';
   bool canGoBack = false;
@@ -465,6 +548,10 @@ class MiniAppSession {
   Color? browserTopPocketColor;
   Color? browserBottomPocketColor;
   int _earlyBrowserInsetsStage = 0;
+
+  BrowserFocusedFieldState? focusedAutofillField;
+  BrowserPendingCredentialSubmission? pendingCredentialPrompt;
+  String? _lastAutofillOrigin;
 
   Future<void> setBrowserChromeCollapsed(bool collapsed) async {
     if (browserForceExpanded && collapsed) return;
@@ -620,22 +707,107 @@ class MiniAppSession {
     return _recentJsDialogAt.length >= 3;
   }
 
+  void clearAutofillOverlays({bool notify = true}) {
+    final bool changed =
+        focusedAutofillField != null || pendingCredentialPrompt != null;
+    focusedAutofillField = null;
+    pendingCredentialPrompt = null;
+    if (changed && notify) {
+      onSheetStateChanged?.call();
+    }
+  }
+
+  /// Processes JSON messages sent by [BrowserAutofillScript] on the top-level
+  /// web document for autofill bar presentation and login save prompts.
+  Future<void> handleAutofillChannelMessage(String rawMessage) async {
+    if (!isBrowser) return;
+    try {
+      final decoded = jsonDecode(rawMessage);
+      if (decoded is! Map) return;
+      final type = decoded['type']?.toString() ?? '';
+      final msgOrigin = decoded['origin']?.toString() ?? '';
+      final pageOrigin = BrowserVaultService.normalizeOrigin(currentUrl);
+      if (pageOrigin == null || msgOrigin != pageOrigin) return;
+
+      if (type == 'fieldFocused') {
+        if (isIncognito) {
+          focusedAutofillField = null;
+          onSheetStateChanged?.call();
+          return;
+        }
+        final kind = decoded['kind']?.toString() ?? '';
+        final subtype = decoded['subtype']?.toString() ?? '';
+        if (kind != 'login' && kind != 'contact') return;
+        focusedAutofillField = BrowserFocusedFieldState(
+          kind: kind,
+          subtype: subtype,
+          origin: pageOrigin,
+        );
+        onSheetStateChanged?.call();
+      } else if (type == 'fieldBlurred') {
+        if (focusedAutofillField != null) {
+          focusedAutofillField = null;
+          onSheetStateChanged?.call();
+        }
+      } else if (type == 'credentialsSubmitted') {
+        if (isIncognito) return;
+        await BrowserSiteSettingsService.instance.ensureLoaded();
+        if (!BrowserSiteSettingsService.instance.savePasswordsEnabled) return;
+        final username = decoded['username']?.toString() ?? '';
+        final password = decoded['password']?.toString() ?? '';
+        final evaluation = await BrowserVaultService.instance.inspectCandidate(
+          url: currentUrl,
+          username: username,
+          password: password,
+        );
+        if (evaluation.status == BrowserVaultSaveStatus.newCredential ||
+            evaluation.status == BrowserVaultSaveStatus.updatePassword) {
+          focusedAutofillField = null;
+          pendingCredentialPrompt = BrowserPendingCredentialSubmission(
+            url: currentUrl,
+            origin: evaluation.normalizedOrigin ?? pageOrigin,
+            displayHost: evaluation.displayHost ?? displayTitle,
+            username: username.trim(),
+            password: password,
+            isUpdate:
+                evaluation.status == BrowserVaultSaveStatus.updatePassword,
+            existingId: evaluation.existingId,
+          );
+          onSheetStateChanged?.call();
+        }
+      }
+    } catch (_) {}
+  }
+
   List<String> grantedPermissionLabelsForUrl(String rawUrl) {
     final hostKey = _hostKeyForUrl(rawUrl);
     final perms = sessionSitePermissions[hostKey];
-    if (perms == null || perms.isEmpty) return const [];
+    final persistent = !isIncognito
+        ? BrowserSiteSettingsService.instance.preferenceForHost(hostKey)
+        : null;
+    final bool hasCam =
+        perms?[WebViewPermissionResourceType.camera.name] == true ||
+            persistent?.cameraPolicy == SitePermissionDecision.allow;
+    final bool hasMic =
+        perms?[WebViewPermissionResourceType.microphone.name] == true ||
+            persistent?.microphonePolicy == SitePermissionDecision.allow;
     final labels = <String>[];
-    if (perms[WebViewPermissionResourceType.camera.name] == true) {
-      labels.add('Камера');
-    }
-    if (perms[WebViewPermissionResourceType.microphone.name] == true) {
-      labels.add('Микрофон');
-    }
+    if (hasCam) labels.add('Камера');
+    if (hasMic) labels.add('Микрофон');
     return labels;
   }
 
-  bool hasMutedJsDialogsForUrl(String rawUrl) =>
-      mutedJsDialogHosts.contains(_hostKeyForUrl(rawUrl));
+  bool hasMutedJsDialogsForUrl(String rawUrl) {
+    final hostKey = _hostKeyForUrl(rawUrl);
+    if (mutedJsDialogHosts.contains(hostKey)) return true;
+    if (!isIncognito) {
+      return BrowserSiteSettingsService.instance
+              .preferenceForHost(hostKey)
+              ?.muteJsDialogs ??
+          false;
+    }
+    return false;
+  }
 
   bool hasAcceptedSslWarningForUrl(String rawUrl) =>
       acceptedSslWarningHosts.contains(_hostKeyForUrl(rawUrl));
@@ -646,6 +818,9 @@ class MiniAppSession {
     mutedJsDialogHosts.remove(hostKey);
     acceptedSslWarningHosts.remove(hostKey);
     acceptedSuspiciousHosts.remove(hostKey);
+    if (isBrowser && !isIncognito && hostKey.isNotEmpty) {
+      unawaited(BrowserSiteSettingsService.instance.resetHost(hostKey));
+    }
     if (_hostKeyForUrl(currentUrl) == hostKey) {
       currentPageHasSslWarning = false;
     }
@@ -704,6 +879,12 @@ class MiniAppSession {
       return;
     }
     final origin = _resolveDialogOrigin(null);
+    if (isBrowser && !isIncognito) {
+      await BrowserSiteSettingsService.instance.ensureLoaded();
+    }
+    final persistentPref = (isBrowser && !isIncognito)
+        ? BrowserSiteSettingsService.instance.preferenceForHost(origin.hostKey)
+        : null;
     final hostPerms = sessionSitePermissions.putIfAbsent(
       origin.hostKey,
       () => <String, bool>{},
@@ -712,7 +893,24 @@ class MiniAppSession {
     bool hasAllCachedGrants = request.types.isNotEmpty;
     bool hasAnyCachedDeny = false;
     for (final t in request.types) {
-      final cached = hostPerms[t.name];
+      bool? cached = hostPerms[t.name];
+      if (cached == null && persistentPref != null) {
+        if (t == WebViewPermissionResourceType.camera) {
+          if (persistentPref.cameraPolicy == SitePermissionDecision.allow) {
+            cached = true;
+          } else if (persistentPref.cameraPolicy ==
+              SitePermissionDecision.deny) {
+            cached = false;
+          }
+        } else if (t == WebViewPermissionResourceType.microphone) {
+          if (persistentPref.microphonePolicy == SitePermissionDecision.allow) {
+            cached = true;
+          } else if (persistentPref.microphonePolicy ==
+              SitePermissionDecision.deny) {
+            cached = false;
+          }
+        }
+      }
       if (cached == false) {
         hasAnyCachedDeny = true;
       }
@@ -728,12 +926,30 @@ class MiniAppSession {
     }
 
     if (!hasAllCachedGrants) {
-      final bool siteAllowed = await uiDialogDelegate!.onSitePermissionRequest(
+      final SafariSitePermissionChoice choice =
+          await uiDialogDelegate!.onSitePermissionChoiceRequest(
         host: origin.label,
         types: request.types,
+        offerPersistentAlways: isBrowser && !isIncognito,
       );
+      final bool siteAllowed = choice != SafariSitePermissionChoice.deny;
       for (final t in request.types) {
         hostPerms[t.name] = siteAllowed;
+      }
+      if (choice == SafariSitePermissionChoice.allowAlways &&
+          isBrowser &&
+          !isIncognito &&
+          origin.hostKey.isNotEmpty) {
+        await BrowserSiteSettingsService.instance.setPermissionForHost(
+          origin.hostKey,
+          camera: request.types.contains(WebViewPermissionResourceType.camera)
+              ? SitePermissionDecision.allow
+              : null,
+          microphone:
+              request.types.contains(WebViewPermissionResourceType.microphone)
+                  ? SitePermissionDecision.allow
+                  : null,
+        );
       }
       onSheetStateChanged?.call();
       if (!siteAllowed) {
@@ -803,9 +1019,14 @@ class MiniAppSession {
     JavaScriptAlertDialogRequest request,
   ) async {
     final origin = _resolveDialogOrigin(request.url);
-    if (!_hasActiveDialogHost ||
-        (origin.hostKey.isNotEmpty &&
-            mutedJsDialogHosts.contains(origin.hostKey))) {
+    final bool isMuted = origin.hostKey.isNotEmpty &&
+        (mutedJsDialogHosts.contains(origin.hostKey) ||
+            (!isIncognito &&
+                (BrowserSiteSettingsService.instance
+                        .preferenceForHost(origin.hostKey)
+                        ?.muteJsDialogs ??
+                    false)));
+    if (!_hasActiveDialogHost || isMuted) {
       return;
     }
     final bool offerMute = recordJsDialogAndShouldOfferMute();
@@ -817,6 +1038,12 @@ class MiniAppSession {
       onMuteHost: () {
         if (origin.hostKey.isNotEmpty) {
           mutedJsDialogHosts.add(origin.hostKey);
+          if (isBrowser && !isIncognito) {
+            unawaited(
+              BrowserSiteSettingsService.instance
+                  .setMuteJsDialogsForHost(origin.hostKey, true),
+            );
+          }
           onSheetStateChanged?.call();
         }
       },
@@ -827,9 +1054,14 @@ class MiniAppSession {
     JavaScriptConfirmDialogRequest request,
   ) async {
     final origin = _resolveDialogOrigin(request.url);
-    if (!_hasActiveDialogHost ||
-        (origin.hostKey.isNotEmpty &&
-            mutedJsDialogHosts.contains(origin.hostKey))) {
+    final bool isMuted = origin.hostKey.isNotEmpty &&
+        (mutedJsDialogHosts.contains(origin.hostKey) ||
+            (!isIncognito &&
+                (BrowserSiteSettingsService.instance
+                        .preferenceForHost(origin.hostKey)
+                        ?.muteJsDialogs ??
+                    false)));
+    if (!_hasActiveDialogHost || isMuted) {
       return false;
     }
     final bool offerMute = recordJsDialogAndShouldOfferMute();
@@ -841,6 +1073,12 @@ class MiniAppSession {
       onMuteHost: () {
         if (origin.hostKey.isNotEmpty) {
           mutedJsDialogHosts.add(origin.hostKey);
+          if (isBrowser && !isIncognito) {
+            unawaited(
+              BrowserSiteSettingsService.instance
+                  .setMuteJsDialogsForHost(origin.hostKey, true),
+            );
+          }
           onSheetStateChanged?.call();
         }
       },
@@ -851,9 +1089,14 @@ class MiniAppSession {
     JavaScriptTextInputDialogRequest request,
   ) async {
     final origin = _resolveDialogOrigin(request.url);
-    if (!_hasActiveDialogHost ||
-        (origin.hostKey.isNotEmpty &&
-            mutedJsDialogHosts.contains(origin.hostKey))) {
+    final bool isMuted = origin.hostKey.isNotEmpty &&
+        (mutedJsDialogHosts.contains(origin.hostKey) ||
+            (!isIncognito &&
+                (BrowserSiteSettingsService.instance
+                        .preferenceForHost(origin.hostKey)
+                        ?.muteJsDialogs ??
+                    false)));
+    if (!_hasActiveDialogHost || isMuted) {
       return '';
     }
     final bool offerMute = recordJsDialogAndShouldOfferMute();
@@ -866,6 +1109,12 @@ class MiniAppSession {
       onMuteHost: () {
         if (origin.hostKey.isNotEmpty) {
           mutedJsDialogHosts.add(origin.hostKey);
+          if (isBrowser && !isIncognito) {
+            unawaited(
+              BrowserSiteSettingsService.instance
+                  .setMuteJsDialogsForHost(origin.hostKey, true),
+            );
+          }
           onSheetStateChanged?.call();
         }
       },
@@ -883,6 +1132,8 @@ class MiniAppSession {
     final WebViewCredential? cred = await uiDialogDelegate!.onHttpAuthRequest(
       host: cleanHost,
       realm: request.realm,
+      url: isBrowser ? currentUrl : launchData.url,
+      isIncognito: isIncognito,
     );
     if (cred != null) {
       request.onProceed(cred);
@@ -929,6 +1180,7 @@ class MiniAppSession {
     this.buttonText = '',
     this.onSwitchInlineQuery,
     this.isBrowser = false,
+    this.isIncognito = false,
     String? initialUrl,
     Future<MiniAppLaunchData?>? pendingLaunchFuture,
   })  : id = id ?? '${isBrowser ? 'browser_tab' : 'mini_app'}_${++_nextSessionSeq}',
@@ -2492,6 +2744,30 @@ class MiniAppSession {
       ..setOnJavaScriptTextInputDialog(handleJavaScriptPrompt);
   }
 
+  Future<void> _syncNativeBrowserPolicies(String rawUrl) async {
+    await BrowserSiteSettingsService.instance.ensureLoaded();
+    final settings = BrowserSiteSettingsService.instance;
+    await BrowserStorageBridge.instance.configureWebViewPolicies(
+      url: rawUrl,
+      acceptThirdPartyCookies:
+          settings.cookiePolicy == BrowserCookiePolicy.allowAll,
+      blockAllCookies: settings.cookiePolicy == BrowserCookiePolicy.blockAll,
+      enableOsAutofill: settings.osAutofillEnabled,
+      isIncognito: isIncognito,
+    );
+  }
+
+  void _handleBrowserOriginTransition(String nextUrl) {
+    final nextOrigin = BrowserVaultService.normalizeOrigin(nextUrl);
+    if (nextOrigin != _lastAutofillOrigin) {
+      _lastAutofillOrigin = nextOrigin;
+      if (focusedAutofillField != null) {
+        focusedAutofillField = null;
+      }
+      BrowserVaultAuthGate.instance.onOriginChanged(nextUrl);
+    }
+  }
+
   void ensureWebViewInitialized() {
     if (controller != null || isLaunchPending || WebViewPlatform.instance == null) {
       return;
@@ -2502,6 +2778,19 @@ class MiniAppSession {
     if (uri == null) return;
 
     if (isBrowser) {
+      if (isIncognito) {
+        unawaited(BrowserCookieJarVault.instance.onIncognitoSessionOpened(id));
+      } else {
+        unawaited(BrowserVaultService.instance.ensureLoaded());
+        final savedDesktop = BrowserSiteSettingsService.instance
+            .preferenceForUrl(targetUrl)
+            ?.desktopMode;
+        if (savedDesktop != null) {
+          isDesktopMode = savedDesktop;
+        }
+      }
+      _lastAutofillOrigin = BrowserVaultService.normalizeOrigin(targetUrl);
+
       final ctrl = WebViewController(
         onPermissionRequest: (req) => unawaited(handleWebPermissionRequest(req)),
       )
@@ -2510,6 +2799,12 @@ class MiniAppSession {
           'TheaverBrowserTheme',
           onMessageReceived: (JavaScriptMessage msg) {
             applyBrowserPageMetaPayload(msg.message);
+          },
+        )
+        ..addJavaScriptChannel(
+          'TheaverBrowserAutofill',
+          onMessageReceived: (JavaScriptMessage msg) {
+            unawaited(handleAutofillChannelMessage(msg.message));
           },
         )
         ..setNavigationDelegate(
@@ -2536,19 +2831,36 @@ class MiniAppSession {
                   browserCanvasColor = null;
                   browserTopPocketColor = null;
                   browserBottomPocketColor = null;
+                  if (!isIncognito) {
+                    final siteDesktop = BrowserSiteSettingsService.instance
+                        .preferenceForUrl(nextUrl)
+                        ?.desktopMode;
+                    if (siteDesktop != null && siteDesktop != isDesktopMode) {
+                      isDesktopMode = siteDesktop;
+                      unawaited(
+                        controller?.setUserAgent(
+                          siteDesktop ? desktopUserAgent : null,
+                        ) ??
+                            Future<void>.value(),
+                      );
+                    }
+                  }
                 }
                 currentUrl = nextUrl;
+                _handleBrowserOriginTransition(nextUrl);
               }
               currentPageHasSslWarning =
                   acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
               loadProgress = 0.08;
               onSheetStateChanged?.call();
+              unawaited(_syncNativeBrowserPolicies(currentUrl));
               unawaited(refreshBrowserNavState());
             },
             onUrlChange: (change) {
               final next = change.url?.trim() ?? '';
               if (next.isNotEmpty && next != currentUrl) {
                 currentUrl = next;
+                _handleBrowserOriginTransition(next);
                 currentPageHasSslWarning =
                     acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
                 onSheetStateChanged?.call();
@@ -2565,13 +2877,25 @@ class MiniAppSession {
             onPageFinished: (urlStr) async {
               if (urlStr.trim().isNotEmpty) {
                 currentUrl = urlStr.trim();
+                _handleBrowserOriginTransition(currentUrl);
               }
               loadProgress = 1.0;
               isWebContentReady = true;
+              await _syncNativeBrowserPolicies(currentUrl);
               await injectBrowserSafeInsets();
+              try {
+                await controller?.runJavaScript(
+                  BrowserAutofillScript.buildObserverScript(),
+                );
+              } catch (_) {}
               await refreshBrowserNavState();
-              await BrowserDataService.instance
-                  .recordVisit(currentUrl, displayTitle);
+              if (isIncognito) {
+                BrowserCookieJarVault.instance.onIncognitoUrlVisited(currentUrl);
+              } else {
+                await BrowserDataService.instance
+                    .recordVisit(currentUrl, displayTitle);
+                unawaited(BrowserStorageBridge.instance.flushCookies());
+              }
               Future<void>.delayed(const Duration(milliseconds: 300), () {
                 if (controller != null && !isMinimized) {
                   unawaited(injectBrowserSafeInsets());
@@ -2595,6 +2919,10 @@ class MiniAppSession {
           ),
         );
       _attachSharedDialogCallbacks(ctrl);
+      if (isDesktopMode) {
+        unawaited(ctrl.setUserAgent(desktopUserAgent));
+      }
+      unawaited(_syncNativeBrowserPolicies(targetUrl));
       ctrl.loadRequest(uri);
       controller = ctrl;
       return;
@@ -3059,6 +3387,7 @@ class MiniAppSessionController extends ChangeNotifier {
               s.launchData.url == session.launchData.url) ||
           (session.isBrowser &&
               s.isBrowser &&
+              s.isIncognito == session.isIncognito &&
               s.currentUrl.isNotEmpty &&
               s.currentUrl == session.currentUrl),
     );
@@ -3110,6 +3439,7 @@ class MiniAppSessionController extends ChangeNotifier {
               s.launchData.url == session.launchData.url) ||
           (session.isBrowser &&
               s.isBrowser &&
+              s.isIncognito == session.isIncognito &&
               s.currentUrl.isNotEmpty &&
               s.currentUrl == session.currentUrl),
     );
@@ -3209,6 +3539,10 @@ class MiniAppSessionController extends ChangeNotifier {
   }
 
   void closeSession(MiniAppSession session) {
+    session.clearAutofillOverlays(notify: false);
+    if (session.isBrowser && session.isIncognito) {
+      unawaited(BrowserCookieJarVault.instance.onIncognitoSessionClosed(session.id));
+    }
     final idx = _minimizedSessions.indexWhere((s) => identical(s, session));
     if (idx == -1) return;
     _minimizedSessions.removeAt(idx);
@@ -3230,6 +3564,10 @@ class MiniAppSessionController extends ChangeNotifier {
   void closeAllMinimized() {
     if (_minimizedSessions.isEmpty && !_isSwitcherOpen) return;
     for (final s in _minimizedSessions) {
+      s.clearAutofillOverlays(notify: false);
+      if (s.isBrowser && s.isIncognito) {
+        unawaited(BrowserCookieJarVault.instance.onIncognitoSessionClosed(s.id));
+      }
       s.isMinimized = false;
     }
     _minimizedSessions.clear();
@@ -3714,6 +4052,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                   key: const ValueKey('mini_app_tabs_switcher'),
                   sessions: ctrl.minimizedSessions,
                   frozenBackdropImage: _frozenBackdropImage,
+                  initialPrivateMode: ctrl.minimizedSessions.isNotEmpty &&
+                      ctrl.minimizedSessions.last.isBrowser &&
+                      ctrl.minimizedSessions.last.isIncognito,
                   onDismiss: ctrl.closeSwitcher,
                   onSelectSession: (s) => ctrl.restoreSession(
                     s,
@@ -3721,6 +4062,25 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                   ),
                   onCloseSession: _handleCloseSession,
                   onCloseAll: _handleCloseAllSessions,
+                  onOpenNewBrowserTab: (isPrivate) {
+                    final BuildContext targetCtx = (ctrl
+                                .minimizedSessions.isNotEmpty
+                            ? _resolveNavigatorFor(ctrl.minimizedSessions.last)
+                                ?.overlay
+                                ?.context
+                            : null) ??
+                        widget.navigatorKey?.currentState?.overlay?.context ??
+                        context;
+                    ctrl.closeSwitcher();
+                    if (targetCtx.mounted) {
+                      unawaited(
+                        openNewBrowserTabPrompt(
+                          targetCtx,
+                          isIncognito: isPrivate,
+                        ),
+                      );
+                    }
+                  },
                 ),
               ],
             );
@@ -4018,14 +4378,17 @@ class MinimizedMiniAppBar extends StatelessWidget {
 }
 
 /// Telegram-style full-screen 3D perspective card switcher for multiple open
-/// minimized Mini Apps with a top `Закрыть все вкладки` pill.
+/// minimized Mini Apps and browser tabs, including a Safari-style Regular /
+/// Private («Частный доступ») switcher toggle when browser tabs are open.
 class MiniAppTabsSwitcher extends StatefulWidget {
   final List<MiniAppSession> sessions;
   final ui.Image? frozenBackdropImage;
+  final bool initialPrivateMode;
   final VoidCallback onDismiss;
   final ValueChanged<MiniAppSession> onSelectSession;
   final ValueChanged<MiniAppSession> onCloseSession;
   final VoidCallback onCloseAll;
+  final ValueChanged<bool>? onOpenNewBrowserTab;
 
   /// Test-only override for supplying synthetic gyroscope events without native sensors.
   @visibleForTesting
@@ -4035,10 +4398,12 @@ class MiniAppTabsSwitcher extends StatefulWidget {
     super.key,
     required this.sessions,
     this.frozenBackdropImage,
+    this.initialPrivateMode = false,
     required this.onDismiss,
     required this.onSelectSession,
     required this.onCloseSession,
     required this.onCloseAll,
+    this.onOpenNewBrowserTab,
   });
 
   @override
@@ -4057,6 +4422,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   late final AnimationController _gyroTicker;
   final ValueNotifier<Offset> _gyroTiltNotifier =
       ValueNotifier<Offset>(Offset.zero);
+  late bool _privateMode;
   double _targetPitch = 0.0;
   double _targetYaw = 0.0;
   double _currentPitch = 0.0;
@@ -4072,6 +4438,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   @override
   void initState() {
     super.initState();
+    _privateMode = widget.initialPrivateMode;
     WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     _gyroTicker = AnimationController(
@@ -4330,6 +4697,86 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             child: closeAllChild,
           );
 
+    final bool showBrowserControls = widget.sessions.any((s) => s.isBrowser);
+    final List<MiniAppSession> visibleSessions = showBrowserControls
+        ? (_privateMode
+            ? widget.sessions
+                .where((s) => s.isBrowser && s.isIncognito)
+                .toList()
+            : widget.sessions
+                .where((s) => !s.isBrowser || !s.isIncognito)
+                .toList())
+        : widget.sessions;
+
+    final Widget? browserModeDock = showBrowserControls
+        ? Positioned(
+            bottom: math.max(14.0, mq.padding.bottom + 10.0),
+            left: 16,
+            right: 16,
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: TheavSegmentedControl<bool>(
+                      key: const ValueKey('browser_switcher_mode_segment'),
+                      height: 38.0,
+                      options: const [
+                        TheavSegmentOption<bool>(
+                          value: false,
+                          label: 'Вкладки',
+                        ),
+                        TheavSegmentOption<bool>(
+                          value: true,
+                          label: 'Частный доступ',
+                        ),
+                      ],
+                      selected: _privateMode,
+                      onChanged: (nextPrivate) {
+                        if (_privateMode == nextPrivate) return;
+                        HapticUtils.selection();
+                        setState(() => _privateMode = nextPrivate);
+                      },
+                    ),
+                  ),
+                  if (widget.onOpenNewBrowserTab != null) ...[
+                    const SizedBox(width: 8),
+                    TheavFloatingSurface(
+                      borderRadius: 19,
+                      enableFlex: false,
+                      refractionIndex: 1.06,
+                      refractionWidth: 14.0,
+                      padding: EdgeInsets.zero,
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          key: const ValueKey(
+                            'browser_switcher_new_tab_button',
+                          ),
+                          borderRadius: BorderRadius.circular(19),
+                          onTap: () {
+                            HapticUtils.tap();
+                            widget.onOpenNewBrowserTab!(_privateMode);
+                          },
+                          child: SizedBox(
+                            width: 38,
+                            height: 38,
+                            child: Icon(
+                              Icons.add_rounded,
+                              size: 22,
+                              color: resolved.headerFg,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          )
+        : null;
+
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -4339,10 +4786,11 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             builder: (context, constraints) {
               final double availH = constraints.maxHeight;
               final double cardHeight = (availH * 0.56).clamp(240.0, 380.0);
-              final int n = widget.sessions.length;
+              final int n = visibleSessions.length;
               final double stepY = n <= 1
                   ? 0.0
-                  : ((availH - cardHeight - 24.0) / (n - 1))
+                  : ((availH - cardHeight - (showBrowserControls ? 78.0 : 24.0)) /
+                          (n - 1))
                       .clamp(200.0, 268.0);
               final double stackHeight =
                   n == 0 ? 0.0 : cardHeight + (n - 1) * stepY;
@@ -4371,6 +4819,71 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                     ((viewBottom / stepY).ceil() + 1).clamp(firstIdx, n - 1);
               }
 
+              if (n == 0 && showBrowserControls) {
+                return Center(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _handleDismissTap,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _privateMode
+                                ? Icons.visibility_off_rounded
+                                : Icons.tab_rounded,
+                            size: 40,
+                            color: resolved.palette.subtext,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _privateMode
+                                ? 'Частный доступ'
+                                : 'Нет открытых вкладок',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: resolved.headerFg,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _privateMode
+                                ? 'История посещений, cookie и пароли не сохраняются, а данные удаляются при закрытии.'
+                                : 'Откройте новую вкладку или перейдите в частный доступ.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              height: 1.38,
+                              color: resolved.palette.subtext,
+                              decoration: TextDecoration.none,
+                            ),
+                          ),
+                          if (widget.onOpenNewBrowserTab != null) ...[
+                            const SizedBox(height: 18),
+                            TheavFloatingPillButton(
+                              key: const ValueKey(
+                                'browser_switcher_empty_new_tab_btn',
+                              ),
+                              icon: const Icon(Icons.add_rounded, size: 18),
+                              label: _privateMode
+                                  ? 'Открыть частную вкладку'
+                                  : 'Новая вкладка',
+                              isPrimary: true,
+                              onTap: () =>
+                                  widget.onOpenNewBrowserTab!(_privateMode),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }
+
               return RepaintBoundary(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (ScrollNotification notification) {
@@ -4397,7 +4910,10 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                         16,
                         contentTopOffset,
                         16,
-                        math.max(24.0, mq.padding.bottom + 16),
+                        math.max(
+                          showBrowserControls ? 76.0 : 24.0,
+                          mq.padding.bottom + (showBrowserControls ? 68 : 16),
+                        ),
                       ),
                       child: SizedBox(
                         height: stackHeight,
@@ -4408,7 +4924,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                             for (int i = firstIdx; i <= lastIdx; i++)
                               _buildStackedCard(
                                 context,
-                                session: widget.sessions[i],
+                                session: visibleSessions[i],
                                 index: i,
                                 totalCount: n,
                                 top: i * stepY,
@@ -4426,16 +4942,18 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             },
           ),
         ),
-        Positioned(
-          top: mq.padding.top + 14,
-          left: 0,
-          right: 0,
-          child: Center(
-            child: RepaintBoundary(
-              child: SizedBox(height: 36, child: closeAllPill),
+        if (visibleSessions.isNotEmpty)
+          Positioned(
+            top: mq.padding.top + 14,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: RepaintBoundary(
+                child: SizedBox(height: 36, child: closeAllPill),
+              ),
             ),
           ),
-        ),
+        if (browserModeDock != null) browserModeDock,
       ],
     );
   }
@@ -4570,14 +5088,18 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                                       children: [
                                         if (session.isBrowser) ...[
                                           Icon(
-                                            session.currentUrl
-                                                    .toLowerCase()
-                                                    .startsWith('https://')
-                                                ? Icons.lock_outline_rounded
-                                                : Icons.public_rounded,
+                                            session.isIncognito
+                                                ? Icons.visibility_off_rounded
+                                                : (session.currentUrl
+                                                        .toLowerCase()
+                                                        .startsWith('https://')
+                                                    ? Icons.lock_outline_rounded
+                                                    : Icons.public_rounded),
                                             size: 16,
-                                            color: cardHeaderFg
-                                                .withValues(alpha: 0.78),
+                                            color: session.isIncognito
+                                                ? resolved.palette.primary
+                                                : cardHeaderFg
+                                                    .withValues(alpha: 0.78),
                                           ),
                                           const SizedBox(width: 6),
                                         ],
@@ -4595,6 +5117,34 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                                             ),
                                           ),
                                         ),
+                                        if (session.isBrowser &&
+                                            session.isIncognito) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            key: ValueKey(
+                                              'mini_app_tab_incognito_badge_${session.id}',
+                                            ),
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 7,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: resolved.palette.primary
+                                                  .withValues(alpha: 0.16),
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                            ),
+                                            child: Text(
+                                              'Частный',
+                                              style: TextStyle(
+                                                fontSize: 10.5,
+                                                fontWeight: FontWeight.w700,
+                                                color: resolved.palette.primary,
+                                                decoration: TextDecoration.none,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
                                         if (isVerified) ...[
                                           const SizedBox(width: 6),
                                           MiniAppVerifiedSeal(
