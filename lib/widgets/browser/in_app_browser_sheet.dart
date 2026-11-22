@@ -111,6 +111,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   bool _isWebViewSurfacePainted = false;
   bool _didInjectInsetsOnMount = false;
   Timer? _earlyWebViewWarmupTimer;
+  ModalRoute<dynamic>? _enclosingRoute;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
 
@@ -125,7 +126,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _setRouteRestingOpaque(bool opaque) {
-    if (!mounted || _lastRequestedRestingOpaque == opaque) return;
+    if (!mounted || !context.mounted || _lastRequestedRestingOpaque == opaque) {
+      return;
+    }
     _lastRequestedRestingOpaque = opaque;
     TheavSheetRoutePerfControl.setRestingOpaque(context, opaque);
   }
@@ -265,7 +268,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
     _dialogDelegate = SheetBrowserUiDialogDelegate(
       contextResolver: () => context,
-      mountedResolver: () => mounted,
+      mountedResolver: () => mounted && context.mounted,
     );
     _session.uiDialogDelegate = _dialogDelegate;
     _session.onSheetStateChanged = _onSessionStateChanged;
@@ -305,12 +308,16 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   bool _handleHardwareKey(KeyEvent event) {
-    if (!mounted || activeSafariWebAlertCount.value > 0) return false;
+    if (!mounted ||
+        !context.mounted ||
+        activeSafariWebAlertCount.value > 0) {
+      return false;
+    }
     if (event is! KeyDownEvent ||
         event.logicalKey != LogicalKeyboardKey.escape) {
       return false;
     }
-    final route = ModalRoute.of(context);
+    final route = _enclosingRoute;
     if (route != null && !route.isCurrent) return false;
     if (_session.pendingCredentialPrompt != null) {
       setState(() => _session.pendingCredentialPrompt = null);
@@ -367,7 +374,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     super.didChangeDependencies();
     _updateBrowserSafeClearances();
 
-    final nextRouteAnim = ModalRoute.of(context)?.animation;
+    final route = ModalRoute.of(context);
+    _enclosingRoute = route;
+    final nextRouteAnim = route?.animation;
     if (!identical(nextRouteAnim, _routeAnimation)) {
       _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
       _routeAnimation = nextRouteAnim;
@@ -390,6 +399,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         nextRouteAnim.addStatusListener(_onRouteAnimationStatusChanged);
       }
     }
+  }
+
+  @override
+  void deactivate() {
+    _enclosingRoute = null;
+    super.deactivate();
   }
 
   void _onBrowserDataChanged() {

@@ -715,7 +715,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       // Dynamic threshold: height of the newest message
       if (!_isDetachedHistoryWindow && offset < 50 && _messages.isNotEmpty) {
         final firstMsgId = _messages.first.id;
-        final key = _messageKeys[firstMsgId];
+        final key = _feedItems.isNotEmpty
+            ? _messageKeys[_feedItemKeyId(_feedItems.first)]
+            : _messageKeys[firstMsgId];
         final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
         if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
           _newestMessageHeight = renderBox.size.height;
@@ -4804,19 +4806,13 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     final GlobalKey key;
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
-    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
-      key = _messageKeys[message.localId!]!;
+    if (hasLocalId &&
+        message.localId != message.id &&
+        _messageKeys.containsKey(message.localId!)) {
+      key = _messageKeys.remove(message.localId!)!;
       _messageKeys[message.id] = key;
     } else {
       key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (hasLocalId) {
-        _messageKeys[message.localId!] = key;
-      }
-    }
-    if (album != null) {
-      for (final sub in album.items) {
-        _messageKeys[sub.id] = key;
-      }
     }
 
     final prevItem =

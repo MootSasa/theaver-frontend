@@ -895,7 +895,6 @@ class SafariFeatherScrollView extends StatefulWidget {
 }
 
 class _SafariFeatherScrollViewState extends State<SafariFeatherScrollView> {
-  final GlobalKey _scrollChildKey = GlobalKey();
   double _topStrength = 0.0;
   double _bottomStrength = 0.0;
   bool _postFrameScheduled = false;
@@ -958,15 +957,13 @@ class _SafariFeatherScrollViewState extends State<SafariFeatherScrollView> {
     final Color sheetTint = style.overlayFill;
     final bool hasFade = _topStrength > 0.01 || _bottomStrength > 0.01;
 
-    final Widget scrollChild = KeyedSubtree(
-      key: _scrollChildKey,
-      child: NotificationListener<ScrollMetricsNotification>(
-        onNotification: (_) {
-          _scheduleEdgeSync();
-          return false;
-        },
-        child: widget.child,
-      ),
+    final Widget scrollChild = NotificationListener<ScrollMetricsNotification>(
+      key: ValueKey<String>('${widget.edgeKeyPrefix}_scroll_listener'),
+      onNotification: (_) {
+        _scheduleEdgeSync();
+        return false;
+      },
+      child: widget.child,
     );
 
     final Widget maskedContent = widget.enableShaderMask

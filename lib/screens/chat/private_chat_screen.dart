@@ -313,6 +313,27 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  GlobalKey _obtainPrimaryMessageKey(Message message) {
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId &&
+        message.localId != message.id &&
+        _messageKeys.containsKey(message.localId!)) {
+      final promoted = _messageKeys.remove(message.localId!)!;
+      _messageKeys[message.id] = promoted;
+      return promoted;
+    }
+    return _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+  }
+
+  GlobalKey? _resolveFeedMessageKey(String? messageId) {
+    if (messageId == null || messageId.isEmpty) return null;
+    final idx = _findFeedIndexForMessage(messageId);
+    if (idx >= 0 && idx < _feedItems.length) {
+      return _messageKeys[_feedItems[idx].id];
+    }
+    return _messageKeys[messageId];
+  }
+
   bool _isVideoFile(String filePath) {
     final clean = filePath.split('?').first.toLowerCase();
     return clean.endsWith('.mp4') ||
@@ -2785,7 +2806,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         scrollController: _scrollController,
         targetIndex: index,
         itemCount: _feedItems.length,
-        resolveTargetKey: () => _messageKeys[messageId],
+        resolveTargetKey: () => _resolveFeedMessageKey(messageId),
         keyForIndex: (idx) => idx >= 0 && idx < _feedItems.length
             ? _messageKeys[_feedItems[idx].id]
             : null,
@@ -2930,7 +2951,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     // Dynamic threshold: cached height of newest message
     if (!_isDetachedHistoryWindow && offset < 50 && _messages.isNotEmpty) {
       final firstMsgId = _messages.first.id;
-      final key = _messageKeys[firstMsgId];
+      final key = _feedItems.isNotEmpty
+          ? _messageKeys[_feedItems.first.id]
+          : _resolveFeedMessageKey(firstMsgId);
       final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
       if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
         _newestMessageHeight = renderBox.size.height;
@@ -3768,7 +3791,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           itemCount: _feedItems.length,
           resolveTargetKey: () => _unreadSeparatorKey.currentContext != null
               ? _unreadSeparatorKey
-              : _messageKeys[_firstUnreadMessageId],
+              : _resolveFeedMessageKey(_firstUnreadMessageId),
           keyForIndex: (idx) => idx >= 0 && idx < _feedItems.length
               ? _messageKeys[_feedItems[idx].id]
               : null,
@@ -5201,13 +5224,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   Widget _buildAlbumFeedItem(MediaAlbum album, int index) {
     final message = album.primaryMessage;
-    final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+    final key = _obtainPrimaryMessageKey(message);
     final bool isMe = message.senderId == _currentUserId;
-
-    // Ensure all album item IDs map to this key so reply jumps locate the album
-    for (final ai in album.items) {
-      _messageKeys[ai.id] = key;
-    }
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
@@ -5358,17 +5376,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Widget _buildMessageItem(Message message, int index) {
-    final GlobalKey key;
+    final GlobalKey key = _obtainPrimaryMessageKey(message);
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
-    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
-      key = _messageKeys[message.localId!]!;
-      _messageKeys[message.id] = key;
-    } else {
-      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (hasLocalId) {
-        _messageKeys[message.localId!] = key;
-      }
-    }
     final bool isMe = message.senderId == _currentUserId;
     final isHighlighted = _highlightMessageId == message.id;
     final bool isSelected = _selectedMessageIds.contains(message.id);

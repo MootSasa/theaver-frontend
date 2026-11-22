@@ -75,11 +75,24 @@ class _SafariAlertDismissScope extends StatefulWidget {
 
 class _SafariAlertDismissScopeState extends State<_SafariAlertDismissScope> {
   bool _didRequestDismiss = false;
+  ModalRoute<dynamic>? _enclosingRoute;
 
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _enclosingRoute = ModalRoute.of(context);
+  }
+
+  @override
+  void deactivate() {
+    _enclosingRoute = null;
+    super.deactivate();
   }
 
   @override
@@ -89,14 +102,17 @@ class _SafariAlertDismissScopeState extends State<_SafariAlertDismissScope> {
   }
 
   bool _handleHardwareKey(KeyEvent event) {
-    if (!mounted || !widget.barrierDismissible || _didRequestDismiss) {
+    if (!mounted ||
+        !context.mounted ||
+        !widget.barrierDismissible ||
+        _didRequestDismiss) {
       return false;
     }
     if (event is! KeyDownEvent ||
         event.logicalKey != LogicalKeyboardKey.escape) {
       return false;
     }
-    final route = ModalRoute.of(context);
+    final route = _enclosingRoute;
     if (route != null && (!route.isCurrent || !route.isActive)) {
       return false;
     }

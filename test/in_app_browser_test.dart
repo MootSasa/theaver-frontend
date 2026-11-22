@@ -9,8 +9,10 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import 'package:theaver/screens/settings/browser_vault_and_data_screen.dart';
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/browser_data_service.dart';
+import 'package:theaver/services/browser_vault_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
 import 'package:theaver/services/settings_service.dart';
@@ -3321,6 +3323,142 @@ void main() {
         await tester.pumpAndSettle();
         expect(clearCount, greaterThan(clearsBeforeClose));
         expect(findBarFinder, findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Popup sheets, alerts, SiteInfo popover, and InAppBrowserSheet emit no InheritedElement or GlobalKey exceptions when dismissed mid-reverse via Escape',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        BrowserVaultService.instance.resetForTesting();
+        BrowserVaultService.instance.debugSecureStoreOverride =
+            <String, String>{};
+        BrowserVaultService.instance.debugUserIdOverride = 'alice';
+        LinkOpener.debugForceInAppSupportedForTest = true;
+
+        final glass = _TestLiquidGlassProvider(GlassMode.full);
+        late BuildContext hostCtx;
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: glass,
+            child: MaterialApp(
+              home: Builder(
+                builder: (context) {
+                  hostCtx = context;
+                  return const Scaffold(body: Center(child: Text('Host')));
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 1. Open InAppBrowserSheet inside _TheavModalSheetRoute.
+        unawaited(LinkOpener.openUrl(hostCtx, 'https://example.org/docs'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+
+        // 2. Open SiteInfo popover inside InAppBrowserSheet and dismiss via Escape.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_security_badge_button')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('in_app_browser_site_info_popover')),
+          findsOneWidget,
+        );
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const ValueKey('in_app_browser_site_info_popover')),
+          findsNothing,
+        );
+
+        // 3. Open SafariLibrarySheet and send Escape both to dismiss & mid-reverse.
+        final BuildContext browserCtx = tester.element(
+          find.byKey(const ValueKey('in_app_browser_sheet')),
+        );
+        unawaited(
+          showSafariLibrarySheet(
+            browserCtx,
+            currentUrl: 'https://example.org/docs',
+            currentTitle: 'Docs',
+            onSelectUrl: (_) {},
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(SafariFeatherScrollView), findsWidgets);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // 4. Open BrowserVaultAndDataSheet and send Escape to dismiss & mid-reverse.
+        unawaited(
+          showBrowserVaultAndDataSheet(
+            browserCtx,
+            initialSection: 0,
+            autoUnlockPasswords: false,
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('browser_vault_close_btn')),
+          findsOneWidget,
+        );
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // 5. Open SafariSslWarningDialog and dismiss with mid-reverse Escape.
+        unawaited(
+          showSafariSslWarningDialog(browserCtx, host: 'example.org'),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('safari_ssl_warning_dialog')),
+          findsOneWidget,
+        );
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+
+        // 6. Close InAppBrowserSheet and fire Escape mid-route-reverse.
+        await tester.tap(
+          find.byKey(const ValueKey('in_app_browser_close_button')),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.escape);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.escape);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsNothing);
       },
     );
   });

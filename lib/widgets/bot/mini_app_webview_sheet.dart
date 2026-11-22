@@ -4648,6 +4648,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   double _currentPitch = 0.0;
   double _currentYaw = 0.0;
   double _lastCullingOffset = 0.0;
+  ModalRoute<dynamic>? _enclosingRoute;
 
   bool get _shouldUseGyro =>
       MiniAppTabsSwitcher.debugGyroscopeStreamOverride != null ||
@@ -4669,9 +4670,25 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     _syncGyroSubscription();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _enclosingRoute = ModalRoute.of(context);
+  }
+
+  @override
+  void deactivate() {
+    _enclosingRoute = null;
+    super.deactivate();
+  }
+
   bool _handleHardwareKey(KeyEvent event) {
-    if (activeSafariWebAlertCount.value > 0) return false;
-    final route = ModalRoute.of(context);
+    if (!mounted ||
+        !context.mounted ||
+        activeSafariWebAlertCount.value > 0) {
+      return false;
+    }
+    final route = _enclosingRoute;
     if (route != null && !route.isCurrent) return false;
     if (event is KeyDownEvent &&
         (event.logicalKey == LogicalKeyboardKey.escape ||
@@ -7313,6 +7330,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   double _dragResetFrom = 0.0;
   double _dragAccumulated = 0.0;
   late final AnimationController _dragResetController;
+  ModalRoute<dynamic>? _enclosingRoute;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
   double _computedTopClearance = 64.0;
@@ -7360,7 +7378,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   void _setRouteRestingOpaque(bool opaque) {
-    if (!mounted || _lastRequestedRestingOpaque == opaque) return;
+    if (!mounted || !context.mounted || _lastRequestedRestingOpaque == opaque) {
+      return;
+    }
     _lastRequestedRestingOpaque = opaque;
     TheavSheetRoutePerfControl.setRestingOpaque(context, opaque);
   }
@@ -7476,7 +7496,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
     _dialogDelegate = SheetBrowserUiDialogDelegate(
       contextResolver: () => context,
-      mountedResolver: () => mounted,
+      mountedResolver: () => mounted && context.mounted,
     );
     _session.uiDialogDelegate = _dialogDelegate;
     _session.onSheetStateChanged = _onSessionStateChanged;
@@ -7490,12 +7510,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   bool _handleHardwareKey(KeyEvent event) {
-    if (!mounted || activeSafariWebAlertCount.value > 0) return false;
+    if (!mounted ||
+        !context.mounted ||
+        activeSafariWebAlertCount.value > 0) {
+      return false;
+    }
     if (event is! KeyDownEvent ||
         event.logicalKey != LogicalKeyboardKey.escape) {
       return false;
     }
-    final route = ModalRoute.of(context);
+    final route = _enclosingRoute;
     if (route != null && !route.isCurrent) return false;
     if (_isMenuOpen) {
       _closeMenu();
@@ -7560,7 +7584,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     super.didChangeDependencies();
     _updateMiniAppSafeClearances(MediaQuery.of(context));
 
-    final nextRouteAnim = ModalRoute.of(context)?.animation;
+    final route = ModalRoute.of(context);
+    _enclosingRoute = route;
+    final nextRouteAnim = route?.animation;
     if (!identical(nextRouteAnim, _routeAnimation)) {
       _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
       _routeAnimation = nextRouteAnim;
@@ -7584,6 +7610,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       }
     }
     _syncThemeWithWebView();
+  }
+
+  @override
+  void deactivate() {
+    _enclosingRoute = null;
+    super.deactivate();
   }
 
   @override

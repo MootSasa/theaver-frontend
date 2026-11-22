@@ -151,16 +151,33 @@ class _RenderSheetVerticalOffset extends RenderProxyBox {
   }
 }
 
+class _TheavModalSheetRouteScope extends InheritedWidget {
+  final _TheavModalSheetRoute<dynamic> route;
+
+  const _TheavModalSheetRouteScope({
+    required this.route,
+    required super.child,
+  });
+
+  static _TheavModalSheetRoute<dynamic>? maybeRouteOf(BuildContext context) {
+    if (!context.mounted) return null;
+    return context
+        .getInheritedWidgetOfExactType<_TheavModalSheetRouteScope>()
+        ?.route;
+  }
+
+  @override
+  bool updateShouldNotify(_TheavModalSheetRouteScope oldWidget) =>
+      !identical(route, oldWidget.route);
+}
+
 /// Performance helper allowing edge-to-edge custom routes (e.g. WebView sheets)
 /// to toggle overlay opaque culling while resting so Flutter skips painting
 /// underlying routes behind the full-screen surface, and to hand off active
 /// downward drag offsets/velocities cleanly into route dismissal.
 abstract final class TheavSheetRoutePerfControl {
   static void setRestingOpaque(BuildContext context, bool opaque) {
-    final route = ModalRoute.of(context);
-    if (route is _TheavModalSheetRoute) {
-      route.setRestingOpaque(opaque);
-    }
+    _TheavModalSheetRouteScope.maybeRouteOf(context)?.setRestingOpaque(opaque);
   }
 
   static bool prepareDragDismiss(
@@ -169,8 +186,8 @@ abstract final class TheavSheetRoutePerfControl {
     required double sheetHeight,
     required double velocityPxPerSec,
   }) {
-    final route = ModalRoute.of(context);
-    if (route is _TheavModalSheetRoute) {
+    final route = _TheavModalSheetRouteScope.maybeRouteOf(context);
+    if (route != null) {
       return route.prepareDragDismiss(
         dragOffsetPx: dragOffsetPx,
         sheetHeight: sheetHeight,
@@ -365,7 +382,10 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
             enableDrag: enableDrag,
             child: Builder(builder: builder),
           );
-    return capturedThemes.wrap(page);
+    return _TheavModalSheetRouteScope(
+      route: this,
+      child: capturedThemes.wrap(page),
+    );
   }
 
   @override
@@ -582,6 +602,7 @@ class TheavModalSheet extends StatefulWidget {
 class _TheavModalSheetState extends State<TheavModalSheet>
     with SingleTickerProviderStateMixin {
   late final AnimationController _reboundController;
+  ModalRoute<dynamic>? _enclosingRoute;
   double _dragOffset = 0.0;
   double _reboundFrom = 0.0;
   bool _didHapticThreshold = false;
@@ -604,6 +625,18 @@ class _TheavModalSheetState extends State<TheavModalSheet>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _enclosingRoute = ModalRoute.of(context);
+  }
+
+  @override
+  void deactivate() {
+    _enclosingRoute = null;
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     _reboundController.dispose();
@@ -611,12 +644,12 @@ class _TheavModalSheetState extends State<TheavModalSheet>
   }
 
   bool _handleHardwareKey(KeyEvent event) {
-    if (!mounted || _isDismissing) return false;
+    if (!mounted || !context.mounted || _isDismissing) return false;
     if (event is! KeyDownEvent ||
         event.logicalKey != LogicalKeyboardKey.escape) {
       return false;
     }
-    final route = ModalRoute.of(context);
+    final route = _enclosingRoute;
     if (route == null ||
         !route.isCurrent ||
         !route.isActive ||

@@ -451,6 +451,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
+  GlobalKey _obtainPrimaryMessageKey(Message message) {
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId &&
+        message.localId != message.id &&
+        _messageKeys.containsKey(message.localId!)) {
+      final promoted = _messageKeys.remove(message.localId!)!;
+      _messageKeys[message.id] = promoted;
+      return promoted;
+    }
+    return _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+  }
+
   // Attachments state
   final ImagePicker _imagePicker = ImagePicker();
   final List<File> _attachedFiles = [];
@@ -688,7 +700,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       // Dynamic threshold: cached height of newest message
       if (!_isDetachedHistoryWindow && offset < 50 && _messages.isNotEmpty) {
         final firstMsgId = _messages.first.id;
-        final key = _messageKeys[firstMsgId];
+        final key = _feedItems.isNotEmpty
+            ? _messageKeys[_feedItems.first.id]
+            : _messageKeys[firstMsgId];
         final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
         if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
           _newestMessageHeight = renderBox.size.height;
@@ -6296,13 +6310,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   Widget _buildAlbumFeedItem(MediaAlbum album, int index) {
     final message = album.primaryMessage;
-    final key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+    final key = _obtainPrimaryMessageKey(message);
     final bool isMe = message.senderId == _currentUserId;
-
-    // Ensure all album item IDs map to this key so reply jumps locate the album
-    for (final ai in album.items) {
-      _messageKeys[ai.id] = key;
-    }
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
@@ -6569,17 +6578,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   Widget _buildMessageItem(Message message, int index) {
     final bool isMe = message.senderId == _currentUserId;
-    final GlobalKey key;
+    final GlobalKey key = _obtainPrimaryMessageKey(message);
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
-    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
-      key = _messageKeys[message.localId!]!;
-      _messageKeys[message.id] = key;
-    } else {
-      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (hasLocalId) {
-        _messageKeys[message.localId!] = key;
-      }
-    }
 
     if (message.messageType == 'system') {
       final prevItem =
