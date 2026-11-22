@@ -2609,5 +2609,104 @@ void main() {
         },
       );
     }
+
+    testWidgets(
+      'InAppBrowserSheet right ⋮ capsule uses single-lens morph, unmounts cleanly off-screen on collapse, and renders spacious 44dp menu items',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final session = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://dzen.ru/',
+            initData: '',
+          ),
+          isBrowser: true,
+        )..pageTitle = 'Дзен';
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: _TestLiquidGlassProvider(GlassMode.full),
+            child: MaterialApp(
+              home: BackdropGroup(
+                child: MediaQuery(
+                  data: const MediaQueryData(
+                    size: Size(400, 800),
+                    padding: EdgeInsets.only(top: 24, bottom: 16),
+                  ),
+                  child: InAppBrowserSheet(session: session),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final headerFinder = find.byType(WebViewFloatingHeader);
+        final rightMorphFinder = find.byKey(const ValueKey('webview_right_morph'));
+        expect(rightMorphFinder, findsOneWidget);
+        final rightMorphWidget = tester.widget<LiquidGlassMorph>(rightMorphFinder);
+        expect(rightMorphWidget.motion.blended, isFalse);
+        expect(rightMorphWidget.smoothness, 0);
+        expect(
+          find.descendant(
+            of: headerFinder,
+            matching: find.byType(LiquidGlassBlender),
+          ),
+          findsNothing,
+        );
+
+        // Opening overflow menu renders spacious 44dp rows without LiquidGlassBlender.
+        await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
+        await tester.pumpAndSettle();
+        final overflowMenu = find.byKey(const ValueKey('in_app_browser_overflow_menu'));
+        expect(overflowMenu, findsOneWidget);
+        final menuItemInk = find
+            .ancestor(
+              of: find.text('Найти на странице'),
+              matching: find.byType(InkWell),
+            )
+            .first;
+        expect(tester.getSize(menuItemInk).height, closeTo(44.0, 0.5));
+        expect(
+          find.descendant(
+            of: headerFinder,
+            matching: find.byType(LiquidGlassBlender),
+          ),
+          findsNothing,
+        );
+
+        // Close menu before testing collapse.
+        await tester.tapAt(const Offset(24, 560));
+        await tester.pumpAndSettle();
+        expect(overflowMenu, findsNothing);
+
+        // Collapse chrome: right capsule unmounts before/at screen edge exit.
+        session.applyBrowserPageMetaPayload('{"collapsed":true}');
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 60));
+        expect(
+          find.descendant(
+            of: headerFinder,
+            matching: find.byType(LiquidGlassBlender),
+          ),
+          findsNothing,
+        );
+        await tester.pump(const Duration(milliseconds: 90));
+        await tester.pump(const Duration(milliseconds: 60));
+        expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsNothing);
+        expect(find.byKey(const ValueKey('in_app_browser_close_button')), findsNothing);
+
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_compact_domain')), findsOneWidget);
+
+        // Expand back and verify right ⋮ capsule returns cleanly.
+        await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsOneWidget);
+      },
+    );
   });
 }

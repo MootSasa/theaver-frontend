@@ -6421,8 +6421,26 @@ class WebViewFloatingHeader extends StatelessWidget {
           child: LiquidGlassMorph(
             key: const ValueKey('webview_right_morph'),
             alignment: Alignment.topRight,
-            motion: LiquidGlassMorphMotion.fluid,
-            smoothness: 28,
+            motion: const LiquidGlassMorphMotion(
+              stiffness: 265,
+              damping: 26.5,
+              stretch: 0.22,
+              anchor: Alignment.topRight,
+              blended: false,
+              advanced: LiquidGlassMorphAdvanced(
+                leadBounce: 0.03,
+                followDelay: 0.0,
+                newScaleFrom: 0.90,
+                oldScaleTo: 0.92,
+                contentBlur: 6.5,
+                contentInStart: 0.18,
+                contentInEnd: 0.78,
+                contentOutEnd: 0.28,
+                thickenBlur: 0.28,
+                thickenRefraction: 0.22,
+              ),
+            ),
+            smoothness: 0,
             style: morphStyle,
             child: menuExpanded ? expandedBox : collapsedBox,
           ),
@@ -6747,7 +6765,15 @@ class WebViewFloatingHeader extends StatelessWidget {
             : ui.lerpDouble(compactHeight, normalHeight, t)!;
         final double pillHeight = ui.lerpDouble(26.0, 44.0, t)!;
         final double pillRadius = pillHeight * 0.5;
-        final bool sideVisible = t > 0.02;
+        final double sideScale = 0.72 + 0.28 * t;
+        final double leftCapsuleRightX = 12.0 - 56.0 * (1.0 - t) + 44.0 * sideScale;
+        final bool leftSideVisible = t > 0.02 && leftCapsuleRightX > -6.0;
+        final double rightCapsuleLeftOffsetFromEdge =
+            -12.0 +
+            (collapsedRightWidth + 24.0) * (1.0 - t) -
+            collapsedRightWidth * sideScale;
+        final bool rightSideVisible =
+            menuExpanded || (t > 0.02 && rightCapsuleLeftOffsetFromEdge < 6.0);
 
         final Widget leftWidget = Positioned(
           key: const ValueKey('webview_header_left_pos'),
@@ -6761,14 +6787,14 @@ class WebViewFloatingHeader extends StatelessWidget {
             child: Transform.translate(
               offset: Offset(-56.0 * (1.0 - t), -8.0 * (1.0 - t)),
               child: Transform.scale(
-                scale: 0.72 + 0.28 * t,
+                scale: sideScale,
                 alignment: Alignment.topLeft,
                 child: WebViewFloatingCapsule(
                   minWidth: 44,
                   height: 44,
                   borderRadius: 22,
                   colorOverride: capsuleColorOverride,
-                  visible: sideVisible,
+                  visible: leftSideVisible,
                   child: leadingBox,
                 ),
               ),
@@ -6892,14 +6918,14 @@ class WebViewFloatingHeader extends StatelessWidget {
           child: IgnorePointer(
             key: const ValueKey('webview_header_right_ignore'),
             ignoring: effectiveCompact,
-            child: sideVisible
+            child: rightSideVisible
                 ? Transform.translate(
                     offset: Offset(
                       (collapsedRightWidth + 24.0) * (1.0 - t),
                       -8.0 * (1.0 - t),
                     ),
                     child: Transform.scale(
-                      scale: 0.72 + 0.28 * t,
+                      scale: sideScale,
                       alignment: Alignment.topRight,
                       child: rightMorphChild,
                     ),

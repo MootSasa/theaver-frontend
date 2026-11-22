@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,8 @@ import 'package:theaver/utils/browser_autofill_script.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/browser/in_app_browser_sheet.dart';
 import 'package:theaver/widgets/browser/safari_autofill_overlays.dart';
+import 'package:theaver/widgets/browser/safari_library_sheet.dart';
+import 'package:theaver/widgets/design_system/theav_design_system.dart';
 
 class _TestLiquidGlassProvider extends LiquidGlassProvider {
   _TestLiquidGlassProvider(this._mode);
@@ -617,6 +620,167 @@ void main() {
         BrowserSiteSettingsService.instance.cookiePolicy,
         BrowserCookiePolicy.blockThirdParty,
       );
+    });
+
+    for (final mode in [GlassMode.full, GlassMode.disabled]) {
+      testWidgets(
+        'BrowserVaultAndDataScreen matches SafariLibrarySheet design tokens & glass safety in $mode',
+        (tester) async {
+          tester.view.physicalSize = const Size(400, 800);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+
+          BrowserSiteSettingsService.instance.debugUserIdOverride = 'alice';
+          final vault = BrowserVaultService.instance
+            ..debugSecureStoreOverride = <String, String>{}
+            ..debugUserIdOverride = 'alice';
+          await vault.ensureLoaded(forceReload: true);
+          for (int i = 0; i < 12; i++) {
+            await vault.saveOrUpdateCredential(
+              url: 'https://site$i.example.org/login',
+              username: 'user$i@example.org',
+              password: 'SecretPassword!$i',
+            );
+          }
+
+          BrowserVaultAuthGate.instance.debugAuthOverride =
+              (_, __, ___) async => true;
+          addTearDown(() => BrowserVaultAuthGate.instance.debugAuthOverride = null);
+
+          await tester.pumpWidget(
+            _wrapTestApp(
+              mode: mode,
+              child: const BrowserVaultAndDataScreen(
+                initialSection: 0,
+                autoUnlockPasswords: false,
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          _expectNoTranslucentOpacityAboveGlass(tester);
+
+          // Unlock passwords
+          await tester.tap(find.byKey(const ValueKey('browser_vault_unlock_btn')));
+          await tester.pumpAndSettle();
+          _expectNoTranslucentOpacityAboveGlass(tester);
+
+          // Transparent borderless search bar + plain close clear icon
+          final searchTf = tester.widget<TextField>(
+            find.byKey(const ValueKey('browser_vault_search_input')),
+          );
+          expect(searchTf.decoration?.filled, isFalse);
+          expect(searchTf.decoration?.fillColor, Colors.transparent);
+          expect(searchTf.decoration?.border, InputBorder.none);
+
+          await tester.enterText(
+            find.byKey(const ValueKey('browser_vault_search_input')),
+            'site3',
+          );
+          await tester.pumpAndSettle();
+          final clearBtn = find.byKey(const ValueKey('browser_vault_search_clear_btn'));
+          expect(clearBtn, findsOneWidget);
+          expect(
+            find.ancestor(of: clearBtn, matching: find.byType(IconButton)),
+            findsNothing,
+          );
+          expect(find.text('site3.example.org'), findsOneWidget);
+          expect(find.text('site0.example.org'), findsNothing);
+
+          await tester.tap(clearBtn);
+          await tester.pumpAndSettle();
+          expect(find.text('site0.example.org'), findsOneWidget);
+
+          // Borderless inset groups & Safari monogram badges
+          final group = tester.widget<TheavInsetGroup>(
+            find.byType(TheavInsetGroup).first,
+          );
+          expect(group.showBorder, isFalse);
+          expect(group.showShadow, isFalse);
+          expect(find.byType(SafariDomainMonogramBadge), findsWidgets);
+          expect(find.byType(SafariFeatherScrollView), findsOneWidget);
+
+          // Scroll list to verify feathered edge overlay mounts
+          await tester.drag(find.byType(ListView).first, const Offset(0, -140));
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('browser_vault_passwords_top_scroll_edge')),
+            findsOneWidget,
+          );
+
+          // Switch to Autofill tab: verify zero ShaderMask/Opacity above LiquidGlassSwitch
+          await tester.tap(find.text('Автозаполнение'), warnIfMissed: false);
+          await tester.pumpAndSettle();
+          _expectNoTranslucentOpacityAboveGlass(tester);
+          if (mode == GlassMode.full) {
+            expect(
+              find.ancestor(
+                of: find.byKey(const ValueKey('browser_setting_save_passwords_switch')),
+                matching: find.byType(ShaderMask),
+              ),
+              findsNothing,
+            );
+          }
+
+          // Switch to Cookie & Sites tab
+          await tester.tap(find.text('Cookie и сайты'), warnIfMissed: false);
+          await tester.pumpAndSettle();
+          _expectNoTranslucentOpacityAboveGlass(tester);
+          final cookieGroup = tester.widget<TheavInsetGroup>(
+            find.byType(TheavInsetGroup).first,
+          );
+          expect(cookieGroup.showBorder, isFalse);
+        },
+      );
+    }
+
+    testWidgets('showBrowserVaultAndDataSheet opens with Safari header & close icon in GlassMode.full', (tester) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      BrowserVaultService.instance.debugSecureStoreOverride = <String, String>{};
+      BrowserVaultService.instance.debugUserIdOverride = 'alice';
+      BrowserVaultAuthGate.instance.debugAuthOverride =
+          (_, __, ___) async => true;
+      addTearDown(() => BrowserVaultAuthGate.instance.debugAuthOverride = null);
+
+      late BuildContext hostCtx;
+      await tester.pumpWidget(
+        _wrapTestApp(
+          mode: GlassMode.full,
+          child: Builder(
+            builder: (ctx) {
+              hostCtx = ctx;
+              return const SizedBox.expand();
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      unawaited(
+        showBrowserVaultAndDataSheet(
+          hostCtx,
+          initialSection: 0,
+          autoUnlockPasswords: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      _expectNoTranslucentOpacityAboveGlass(tester);
+      final sheetClose = find.byKey(const ValueKey('browser_vault_close_btn'));
+      expect(sheetClose, findsOneWidget);
+      expect(
+        find.ancestor(of: sheetClose, matching: find.byType(IconButton)),
+        findsNothing,
+      );
+      expect(find.byKey(const ValueKey('browser_vault_add_password_btn')), findsOneWidget);
+
+      await tester.tap(sheetClose);
+      await tester.pumpAndSettle();
+      expect(sheetClose, findsNothing);
     });
   });
 }

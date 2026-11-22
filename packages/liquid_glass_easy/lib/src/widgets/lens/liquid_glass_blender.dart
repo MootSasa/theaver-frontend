@@ -1010,7 +1010,9 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     if (members.length < LiquidGlassBlender.minLensCount || size.isEmpty) {
       return;
     }
-    _updateImpellerLayer(members, bumpRevision: false);
+    final Rect clipRect = _glassClipRect(members, this, Offset.zero & size);
+    if (clipRect.isEmpty) return;
+    _updateImpellerLayer(members, clipRect: clipRect, bumpRevision: false);
   }
 
   @override
@@ -1037,6 +1039,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
 
   LiquidGlassBatchBackdropLayer _updateImpellerLayer(
     List<_RenderLiquidGlassBlenderMember> members, {
+    required Rect clipRect,
     required bool bumpRevision,
   }) {
     final double sigma = _blurSigma;
@@ -1046,9 +1049,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
         ? subpassAncestor.size
         : _screenSize;
 
-    final Rect glassRect = engineBlur
-        ? _glassClipRect(members, this, Offset.zero & size)
-        : Rect.zero;
+    final Rect glassRect = engineBlur ? clipRect : Rect.zero;
     final Rect glassRectInScreen = engineBlur
         ? MatrixUtils.transformRect(getTransformTo(subpassAncestor), glassRect)
         : Rect.zero;
@@ -1097,10 +1098,19 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     Offset offset,
     List<_RenderLiquidGlassBlenderMember> members,
   ) {
+    final Rect clipRect = _glassClipRect(members, this, Offset.zero & size);
+    if (clipRect.isEmpty) {
+      _shaderLayer.layer = null;
+      _clipLayer.layer = null;
+      return;
+    }
     final double sigma = _blurSigma;
     final bool engineBlur = _useEngineBlur && sigma > 0;
-    final layer = _updateImpellerLayer(members, bumpRevision: true);
-    final Rect clipRect = _glassClipRect(members, this, Offset.zero & size);
+    final layer = _updateImpellerLayer(
+      members,
+      clipRect: clipRect,
+      bumpRevision: true,
+    );
     _clipLayer.layer = context.pushClipRect(
       needsCompositing,
       offset,
@@ -1160,6 +1170,15 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
 
     final Offset surfaceInView =
         MatrixUtils.transformPoint(getTransformTo(viewBox), Offset.zero);
+    // Draw only the glass region (in viewBox space) rather than the whole
+    // surface — fewer shaded fragments, same result (shapeMask still carves
+    // the silhouette).
+    final Rect drawRect =
+        _glassClipRect(members, viewBox, surfaceInView & size);
+    if (drawRect.isEmpty) {
+      return;
+    }
+
     _packShared(
       resolution: viewBox.size,
       lenses: _lensesIn(members, viewBox),
@@ -1169,12 +1188,6 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
       blur: _blurSigma,
     );
     _shader.setImageSampler(0, image);
-
-    // Draw only the glass region (in viewBox space) rather than the whole
-    // surface — fewer shaded fragments, same result (shapeMask still carves
-    // the silhouette).
-    final Rect drawRect =
-        _glassClipRect(members, viewBox, surfaceInView & size);
 
     final ui.Canvas canvas = context.canvas;
     canvas
@@ -1271,8 +1284,9 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
         .inflate(margin)
         .intersect(fullRect)
         .intersect(_screenRectIn(target));
-    // Degenerate (e.g. lenses fully off-surface): fall back to the full rect.
-    return (clip.isEmpty || !clip.isFinite) ? fullRect : clip;
+    // Completely off-surface or off-screen: return empty so callers skip
+    // pushing a full-surface backdrop pass (which shifts shader origin).
+    return (clip.isEmpty || !clip.isFinite) ? Rect.zero : clip;
   }
 
   /// The screen's (or active subpass ancestor's) bounds in [target]'s space.

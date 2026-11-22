@@ -518,7 +518,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
             : cleanCurrentUrl);
 
     if (!showQuickCard && bookmarks.isEmpty) {
-      return _SafariLibraryEmptyState(
+      return SafariSheetEmptyState(
         icon: query.isNotEmpty
             ? Icons.search_off_rounded
             : Icons.bookmarks_outlined,
@@ -538,7 +538,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
       alpha: style.isDark ? 0.06 : 0.045,
     );
 
-    return _SafariFeatherScrollView(
+    return SafariFeatherScrollView(
       controller: _bookmarksScrollCtrl,
       edgeKeyPrefix: 'safari_bookmarks',
       child: ListView(
@@ -555,7 +555,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
               ),
               child: Row(
                 children: [
-                  _DomainMonogramBadge(
+                  SafariDomainMonogramBadge(
                     host: currentSafety.displayHost.isNotEmpty
                         ? currentSafety.displayHost
                         : cleanCurrentUrl,
@@ -661,7 +661,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
             const SizedBox(height: 10),
           ],
           if (bookmarks.isEmpty)
-            _SafariLibraryEmptyState(
+            SafariSheetEmptyState(
               icon: query.isNotEmpty
                   ? Icons.search_off_rounded
                   : Icons.bookmarks_outlined,
@@ -746,7 +746,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
     required String query,
   }) {
     if (entries.isEmpty) {
-      return _SafariLibraryEmptyState(
+      return SafariSheetEmptyState(
         icon: (hasAnyHistory && query.isNotEmpty)
             ? Icons.search_off_rounded
             : Icons.history_rounded,
@@ -785,7 +785,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
       currentBucket.add(entry);
     }
 
-    return _SafariFeatherScrollView(
+    return SafariFeatherScrollView(
       controller: _historyScrollCtrl,
       edgeKeyPrefix: 'safari_history',
       child: ListView.builder(
@@ -874,24 +874,27 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
 }
 
 /// Applies subtle top and bottom alpha feathering via [ShaderMask] together with
-/// sibling [LiquidGlassScrollEdge] soft-blur overlays outside [ListView].
-class _SafariFeatherScrollView extends StatefulWidget {
+/// sibling [LiquidGlassScrollEdge] soft-blur overlays outside scrollables.
+class SafariFeatherScrollView extends StatefulWidget {
   final ScrollController controller;
   final String edgeKeyPrefix;
+  final bool enableShaderMask;
   final Widget child;
 
-  const _SafariFeatherScrollView({
+  const SafariFeatherScrollView({
+    super.key,
     required this.controller,
     required this.edgeKeyPrefix,
+    this.enableShaderMask = true,
     required this.child,
   });
 
   @override
-  State<_SafariFeatherScrollView> createState() =>
+  State<SafariFeatherScrollView> createState() =>
       _SafariFeatherScrollViewState();
 }
 
-class _SafariFeatherScrollViewState extends State<_SafariFeatherScrollView> {
+class _SafariFeatherScrollViewState extends State<SafariFeatherScrollView> {
   double _topStrength = 0.0;
   double _bottomStrength = 0.0;
   bool _postFrameScheduled = false;
@@ -904,7 +907,7 @@ class _SafariFeatherScrollViewState extends State<_SafariFeatherScrollView> {
   }
 
   @override
-  void didUpdateWidget(covariant _SafariFeatherScrollView oldWidget) {
+  void didUpdateWidget(covariant SafariFeatherScrollView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.controller, widget.controller)) {
       oldWidget.controller.removeListener(_updateEdgeStrengths);
@@ -952,7 +955,8 @@ class _SafariFeatherScrollViewState extends State<_SafariFeatherScrollView> {
     final style = TheavSurfaceStyle.of(context);
     final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
     final Color sheetTint = style.overlayFill;
-    final bool needsMask = _topStrength > 0.01 || _bottomStrength > 0.01;
+    final bool needsMask =
+        widget.enableShaderMask && (_topStrength > 0.01 || _bottomStrength > 0.01);
 
     final Widget scrollChild = NotificationListener<ScrollMetricsNotification>(
       onNotification: (_) {
@@ -1036,15 +1040,19 @@ class _SafariFeatherScrollViewState extends State<_SafariFeatherScrollView> {
   }
 }
 
-class _DomainMonogramBadge extends StatelessWidget {
+/// Rounded monogram (or icon) badge matching Safari's domain cards.
+class SafariDomainMonogramBadge extends StatelessWidget {
   final String host;
   final bool isSecure;
   final bool showBookmarkBadge;
+  final IconData? iconOverride;
 
-  const _DomainMonogramBadge({
+  const SafariDomainMonogramBadge({
+    super.key,
     required this.host,
     required this.isSecure,
     this.showBookmarkBadge = false,
+    this.iconOverride,
   });
 
   static const List<Color> _kDomainPalette = <Color>[
@@ -1081,15 +1089,17 @@ class _DomainMonogramBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(11),
       ),
       alignment: Alignment.center,
-      child: Text(
-        letter,
-        style: TextStyle(
-          color: tint,
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          height: 1.0,
-        ),
-      ),
+      child: iconOverride != null
+          ? Icon(iconOverride, size: 19, color: tint)
+          : Text(
+              letter,
+              style: TextStyle(
+                color: tint,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                height: 1.0,
+              ),
+            ),
     );
 
     if (!showBookmarkBadge) return box;
@@ -1155,7 +1165,7 @@ class _SafariLibraryEntryRow extends StatelessWidget {
     return TheavListRow(
       padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
       minHeight: 56.0,
-      leading: _DomainMonogramBadge(
+      leading: SafariDomainMonogramBadge(
         host: host,
         isSecure: isSecure,
         showBookmarkBadge: isBookmarkedBadge,
@@ -1218,25 +1228,43 @@ class _SafariLibraryEntryRow extends StatelessWidget {
   }
 }
 
-class _SafariLibraryEmptyState extends StatelessWidget {
+/// Centered empty / locked state shared across Safari browser sheets.
+class SafariSheetEmptyState extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final Key? actionButtonKey;
+  final IconData? actionIcon;
+  final bool isPrimaryAction;
 
-  const _SafariLibraryEmptyState({
+  const SafariSheetEmptyState({
+    super.key,
     required this.icon,
     required this.title,
     required this.subtitle,
     this.actionLabel,
     this.onAction,
+    this.actionButtonKey,
+    this.actionIcon,
+    this.isPrimaryAction = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
+    final Color pillBg = isPrimaryAction
+        ? (onAction != null
+            ? palette.primary
+            : palette.primary.withValues(alpha: 0.65))
+        : palette.primary.withValues(
+            alpha: style.isDark ? 0.18 : 0.11,
+          );
+    final Color pillFg = isPrimaryAction ? palette.onPrimary : palette.primary;
+    final double pillHeight = isPrimaryAction ? 38.0 : 34.0;
+    final double pillRadius = pillHeight / 2.0;
 
     return Center(
       child: SingleChildScrollView(
@@ -1279,30 +1307,46 @@ class _SafariLibraryEmptyState extends StatelessWidget {
                 height: 1.38,
               ),
             ),
-            if (actionLabel != null && onAction != null) ...[
-              const SizedBox(height: 12),
+            if (actionLabel != null) ...[
+              const SizedBox(height: 14),
               Material(
-                color: palette.primary.withValues(
-                  alpha: style.isDark ? 0.18 : 0.11,
-                ),
-                borderRadius: BorderRadius.circular(17),
+                key: actionButtonKey,
+                color: pillBg,
+                borderRadius: BorderRadius.circular(pillRadius),
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(17),
+                  borderRadius: BorderRadius.circular(pillRadius),
                   onTap: onAction,
                   child: SizedBox(
-                    height: 34,
+                    height: pillHeight,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      child: Center(
-                        widthFactor: 1.0,
-                        child: Text(
-                          actionLabel!,
-                          style: TextStyle(
-                            color: palette.primary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isPrimaryAction ? 18 : 14,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (actionIcon != null) ...[
+                            Icon(
+                              actionIcon,
+                              size: 16.5,
+                              color: pillFg,
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          Flexible(
+                            child: Text(
+                              actionLabel!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: pillFg,
+                                fontSize: isPrimaryAction ? 13.5 : 13.0,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ),

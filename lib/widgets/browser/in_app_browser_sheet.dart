@@ -1103,7 +1103,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         : BrowserVaultService.instance.getHintsForUrl(currentUrl);
     final Widget expandedMenuContent = Padding(
       key: const ValueKey('in_app_browser_overflow_menu'),
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: SingleChildScrollView(
         physics: const ClampingScrollPhysics(),
         child: Column(
@@ -1306,8 +1306,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       ),
       isMenuOpen: _isMenuOpen,
       onDismissMenu: _closeMenu,
-      expandedMenuWidth: 260.0,
-      expandedMenuHeight: 10 * 34.0 + 12.0,
+      expandedMenuWidth: 264.0,
+      expandedMenuHeight: math.min(
+        10 * 44.0 + 16.0,
+        math.max(180.0, mq.size.height - topInset - bottomInset - 24.0),
+      ),
       expandedMenuChild: expandedMenuContent,
       onVerticalDragStart: _handleHeaderDragStart,
       onVerticalDragUpdate: _handleHeaderDragUpdate,
@@ -1928,20 +1931,20 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         onTap();
       },
       child: SizedBox(
-        height: 34,
+        height: 44,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              Icon(icon, size: 18, color: fg),
-              const SizedBox(width: 11),
+              Icon(icon, size: 19, color: fg),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 13.5,
+                    fontSize: 14.5,
                     fontWeight: FontWeight.w500,
                     color: fg,
                   ),

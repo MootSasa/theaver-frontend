@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,8 @@ import '../../services/browser_vault_auth_gate.dart';
 import '../../services/browser_vault_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/safari_url_safety.dart';
+import '../../widgets/browser/safari_library_sheet.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
@@ -62,7 +65,7 @@ Future<void> showBrowserVaultAndDataSheet(
     context: context,
     useRootNavigator: true,
     barrierDismissible: true,
-    maxHeightFactor: 0.88,
+    maxHeightFactor: 0.86,
     padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
     builder: (_) => _BrowserVaultHubContent(
       initialSection: initialSection,
@@ -154,7 +157,11 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _emailCtrl;
   late final TextEditingController _phoneCtrl;
+  final ScrollController _passwordsScrollCtrl = ScrollController();
+  final ScrollController _autofillScrollCtrl = ScrollController();
+  final ScrollController _cookiesScrollCtrl = ScrollController();
 
+  int? _programmaticTargetPage;
   String _searchQuery = '';
   bool _unlocked = false;
   bool _unlockInProgress = false;
@@ -211,6 +218,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
+    _passwordsScrollCtrl.dispose();
+    _autofillScrollCtrl.dispose();
+    _cookiesScrollCtrl.dispose();
     super.dispose();
   }
 
@@ -221,18 +231,228 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   void _selectSection(int idx) {
     if (_activeSection == idx) return;
     HapticUtils.selection();
-    setState(() => _activeSection = idx);
-    if (_pageCtrl.hasClients) {
-      if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
-        _pageCtrl.jumpToPage(idx);
-      } else {
-        _pageCtrl.animateToPage(
-          idx,
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-        );
-      }
+    setState(() {
+      _activeSection = idx;
+      _programmaticTargetPage = idx;
+    });
+    if (!_pageCtrl.hasClients) return;
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      _pageCtrl.jumpToPage(idx);
+      _programmaticTargetPage = null;
+    } else {
+      _pageCtrl
+          .animateToPage(
+            idx,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+        if (mounted) {
+          _programmaticTargetPage = null;
+        }
+      });
     }
+  }
+
+  void _handlePageChanged(int idx) {
+    if (idx < 0 || idx > 2) return;
+    if (_programmaticTargetPage != null) {
+      if (idx == _programmaticTargetPage) {
+        _programmaticTargetPage = null;
+      }
+      return;
+    }
+    if (_activeSection != idx) {
+      HapticUtils.selection();
+      setState(() => _activeSection = idx);
+    }
+  }
+
+  void _clearSearch() {
+    HapticUtils.selection();
+    _searchCtrl.clear();
+    if (_searchQuery.isNotEmpty) {
+      setState(() => _searchQuery = '');
+    }
+  }
+
+  Color _cardFill(TheavSurfaceStyle style) =>
+      style.palette.onSurface.withValues(alpha: style.isDark ? 0.06 : 0.04);
+
+  Color _dividerTint(TheavSurfaceStyle style) =>
+      style.palette.onSurface.withValues(alpha: style.isDark ? 0.06 : 0.045);
+
+  Widget _buildSafariPillButton({
+    Key? buttonKey,
+    required Color backgroundColor,
+    required Color foregroundColor,
+    required String label,
+    IconData? icon,
+    double height = 34.0,
+    double horizontalPadding = 12.0,
+    double fontSize = 13.0,
+    VoidCallback? onTap,
+  }) {
+    final double radius = height / 2.0;
+    return Material(
+      key: buttonKey,
+      color: backgroundColor,
+      borderRadius: BorderRadius.circular(radius),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(radius),
+        onTap: onTap,
+        child: SizedBox(
+          height: height,
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon, size: height <= 30.0 ? 15.0 : 16.0, color: foregroundColor),
+                  const SizedBox(width: 5),
+                ],
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: foregroundColor,
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModalHeaderRow(
+    BuildContext sheetCtx, {
+    required String title,
+    Key? closeButtonKey,
+    Widget? trailing,
+  }) {
+    final palette = TheavSurfaceStyle.of(sheetCtx).palette;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Tooltip(
+            message: 'Закрыть',
+            child: GestureDetector(
+              key: closeButtonKey,
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.tap();
+                Navigator.of(sheetCtx).maybePop();
+              },
+              child: SizedBox(
+                width: 34,
+                height: 34,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 22,
+                    color: palette.subtext,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: palette.onSurface,
+                fontSize: 17.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.25,
+              ),
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 8),
+            trailing,
+          ],
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _transparentFieldDecoration(
+    TheavPalette palette, {
+    required String hintText,
+    Widget? suffixIcon,
+  }) {
+    return InputDecoration(
+      hintText: hintText,
+      hintStyle: TextStyle(
+        color: palette.subtext.withValues(alpha: 0.78),
+        fontSize: 14.5,
+      ),
+      filled: false,
+      fillColor: Colors.transparent,
+      hoverColor: Colors.transparent,
+      border: InputBorder.none,
+      enabledBorder: InputBorder.none,
+      focusedBorder: InputBorder.none,
+      disabledBorder: InputBorder.none,
+      errorBorder: InputBorder.none,
+      focusedErrorBorder: InputBorder.none,
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(vertical: 11),
+      suffixIcon: suffixIcon,
+    );
+  }
+
+  Widget _buildSheetFieldRow({
+    Key? fieldKey,
+    required TheavPalette palette,
+    required IconData icon,
+    required TextEditingController controller,
+    required String hintText,
+    TextInputType? keyboardType,
+    bool obscureText = false,
+    Widget? suffixIcon,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: palette.subtext),
+          const SizedBox(width: 12),
+          Expanded(
+            child: TextField(
+              key: fieldKey,
+              controller: controller,
+              keyboardType: keyboardType,
+              obscureText: obscureText,
+              cursorColor: palette.primary,
+              style: TextStyle(
+                color: palette.onSurface,
+                fontSize: 14.5,
+              ),
+              decoration: _transparentFieldDecoration(
+                palette,
+                hintText: hintText,
+                suffixIcon: suffixIcon,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _unlockPasswords() async {
@@ -276,119 +496,106 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final bool? saved = await showTheavModalSheet<bool>(
       context: context,
       useRootNavigator: true,
-      title: existing == null ? 'Новый пароль' : existing.displayHost,
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 20),
+      maxHeightFactor: 0.84,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheetState) {
           final st = TheavSurfaceStyle.of(sheetCtx);
           final pal = st.palette;
-          return Padding(
-            padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(sheetCtx).bottom),
+          return SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (existing == null) ...[
-                  TextField(
-                    key: const ValueKey('browser_vault_add_url_input'),
-                    controller: urlCtrl,
-                    keyboardType: TextInputType.url,
-                    decoration: InputDecoration(
-                      labelText: 'Адрес сайта (например https://example.com)',
-                      filled: true,
-                      fillColor: pal.onSurface.withValues(alpha: 0.05),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
-                TextField(
-                  key: const ValueKey('browser_vault_add_user_input'),
-                  controller: userCtrl,
-                  decoration: InputDecoration(
-                    labelText: 'Логин или Email',
-                    filled: true,
-                    fillColor: pal.onSurface.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
+                _buildModalHeaderRow(
+                  sheetCtx,
+                  title: existing == null ? 'Новый пароль' : existing.displayHost,
                 ),
-                const SizedBox(height: 10),
-                TextField(
-                  key: const ValueKey('browser_vault_add_pass_input'),
-                  controller: passCtrl,
-                  obscureText: obscure,
-                  decoration: InputDecoration(
-                    labelText: 'Пароль',
-                    filled: true,
-                    fillColor: pal.onSurface.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(14),
-                      borderSide: BorderSide.none,
-                    ),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        obscure
-                            ? Icons.visibility_rounded
-                            : Icons.visibility_off_rounded,
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  borderRadius: 20.0,
+                  dividerIndent: 44.0,
+                  showBorder: false,
+                  showShadow: false,
+                  backgroundColor: _cardFill(st),
+                  dividerColor: _dividerTint(st),
+                  children: [
+                    if (existing == null)
+                      _buildSheetFieldRow(
+                        fieldKey: const ValueKey('browser_vault_add_url_input'),
+                        palette: pal,
+                        icon: Icons.language_rounded,
+                        controller: urlCtrl,
+                        hintText: 'Сайт (https://example.com)',
+                        keyboardType: TextInputType.url,
                       ),
-                      onPressed: () => setSheetState(() => obscure = !obscure),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_add_user_input'),
+                      palette: pal,
+                      icon: Icons.person_outline_rounded,
+                      controller: userCtrl,
+                      hintText: 'Логин или Email',
                     ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  height: 44,
-                  child: Material(
-                    color: pal.primary,
-                    borderRadius: BorderRadius.circular(22),
-                    child: InkWell(
-                      key: const ValueKey('browser_vault_save_manual_btn'),
-                      borderRadius: BorderRadius.circular(22),
-                      onTap: () async {
-                        final rawUrl = urlCtrl.text.trim();
-                        final normUrl = rawUrl.contains('://')
-                            ? rawUrl
-                            : 'https://$rawUrl';
-                        if (BrowserVaultService.normalizeOrigin(normUrl) ==
-                                null ||
-                            passCtrl.text.isEmpty) {
-                          GlassToastService().show(
-                            sheetCtx,
-                            'Укажите корректный URL и непустой пароль',
-                            icon: Icons.error_outline_rounded,
-                          );
-                          return;
-                        }
-                        await BrowserVaultService.instance.saveOrUpdateCredential(
-                          url: normUrl,
-                          username: userCtrl.text.trim(),
-                          password: passCtrl.text,
-                          existingId: existing?.id,
-                          isHttpAuth: existing?.isHttpAuth ?? false,
-                          realm: existing?.realm,
-                        );
-                        if (sheetCtx.mounted) {
-                          Navigator.of(sheetCtx).pop(true);
-                        }
-                      },
-                      child: Center(
-                        child: Text(
-                          'Сохранить',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: pal.onPrimary,
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_add_pass_input'),
+                      palette: pal,
+                      icon: Icons.key_rounded,
+                      controller: passCtrl,
+                      hintText: 'Пароль',
+                      obscureText: obscure,
+                      suffixIcon: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => setSheetState(() => obscure = !obscure),
+                        child: SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: Center(
+                            child: Icon(
+                              obscure
+                                  ? Icons.visibility_rounded
+                                  : Icons.visibility_off_rounded,
+                              size: 18,
+                              color: pal.subtext,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                _buildSafariPillButton(
+                  buttonKey: const ValueKey('browser_vault_save_manual_btn'),
+                  backgroundColor: pal.primary,
+                  foregroundColor: pal.onPrimary,
+                  label: 'Сохранить',
+                  height: 42.0,
+                  fontSize: 14.5,
+                  onTap: () async {
+                    final rawUrl = urlCtrl.text.trim();
+                    final normUrl =
+                        rawUrl.contains('://') ? rawUrl : 'https://$rawUrl';
+                    if (BrowserVaultService.normalizeOrigin(normUrl) == null ||
+                        passCtrl.text.isEmpty) {
+                      GlassToastService().show(
+                        sheetCtx,
+                        'Укажите корректный URL и непустой пароль',
+                        icon: Icons.error_outline_rounded,
+                      );
+                      return;
+                    }
+                    await BrowserVaultService.instance.saveOrUpdateCredential(
+                      url: normUrl,
+                      username: userCtrl.text.trim(),
+                      password: passCtrl.text,
+                      existingId: existing?.id,
+                      isHttpAuth: existing?.isHttpAuth ?? false,
+                      realm: existing?.realm,
+                    );
+                    if (sheetCtx.mounted) {
+                      Navigator.of(sheetCtx).pop(true);
+                    }
+                  },
                 ),
               ],
             ),
@@ -421,41 +628,49 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
 
   Future<void> _openCredentialDetailSheet(BrowserSavedCredential cred) async {
     bool reveal = false;
+    final String hostTitle =
+        cred.displayHost.isNotEmpty ? cred.displayHost : cred.origin;
     await showTheavModalSheet<void>(
       context: context,
       useRootNavigator: true,
-      title: cred.displayHost.isNotEmpty ? cred.displayHost : cred.origin,
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 20),
+      maxHeightFactor: 0.80,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheetState) {
-          final pal = TheavSurfaceStyle.of(sheetCtx).palette;
+          final st = TheavSurfaceStyle.of(sheetCtx);
+          final pal = st.palette;
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              _buildModalHeaderRow(sheetCtx, title: hostTitle),
               TheavInsetGroup(
                 margin: EdgeInsets.zero,
+                borderRadius: 20.0,
+                dividerIndent: 46.0,
+                showBorder: false,
+                showShadow: false,
+                backgroundColor: _cardFill(st),
+                dividerColor: _dividerTint(st),
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.language_rounded, size: 20),
-                    title: const Text('Сайт'),
-                    subtitle: Text(
-                      cred.origin,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                  TheavListRow(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                    minHeight: 50.0,
+                    leading: Icon(Icons.language_rounded, size: 19, color: pal.subtext),
+                    title: 'Сайт',
+                    subtitle: cred.origin,
                   ),
-                  ListTile(
-                    leading: const Icon(Icons.person_outline_rounded, size: 20),
-                    title: const Text('Логин'),
-                    subtitle: Text(
-                      cred.username.isNotEmpty ? cred.username : 'Без логина',
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.copy_rounded, size: 18),
-                      onPressed: cred.username.isEmpty
-                          ? null
-                          : () {
+                  TheavListRow(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                    minHeight: 50.0,
+                    leading: Icon(Icons.person_outline_rounded, size: 19, color: pal.subtext),
+                    title: 'Логин',
+                    subtitle: cred.username.isNotEmpty ? cred.username : 'Без логина',
+                    trailing: cred.username.isEmpty
+                        ? null
+                        : GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
                               Clipboard.setData(
                                 ClipboardData(text: cred.username),
                               );
@@ -466,17 +681,31 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                                 icon: Icons.check_rounded,
                               );
                             },
-                    ),
+                            child: SizedBox(
+                              width: 34,
+                              height: 34,
+                              child: Center(
+                                child: Icon(
+                                  Icons.copy_rounded,
+                                  size: 18,
+                                  color: pal.subtext,
+                                ),
+                              ),
+                            ),
+                          ),
                   ),
-                  ListTile(
+                  TheavListRow(
                     key: const ValueKey('browser_vault_detail_password_tile'),
-                    leading: const Icon(Icons.key_rounded, size: 20),
-                    title: const Text('Пароль'),
-                    subtitle: Text(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                    minHeight: 52.0,
+                    leading: Icon(Icons.key_rounded, size: 19, color: pal.subtext),
+                    title: 'Пароль',
+                    subtitleWidget: Text(
                       reveal
                           ? cred.password
                           : '•' * cred.password.length.clamp(6, 14),
                       style: TextStyle(
+                        fontSize: 13.5,
                         fontWeight: FontWeight.w600,
                         color: pal.onSurface,
                       ),
@@ -484,22 +713,44 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
+                        GestureDetector(
                           key: const ValueKey('browser_vault_detail_reveal_btn'),
-                          icon: Icon(
-                            reveal
-                                ? Icons.visibility_off_rounded
-                                : Icons.visibility_rounded,
-                            size: 19,
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            HapticUtils.selection();
+                            setSheetState(() => reveal = !reveal);
+                          },
+                          child: SizedBox(
+                            width: 34,
+                            height: 34,
+                            child: Center(
+                              child: Icon(
+                                reveal
+                                    ? Icons.visibility_off_rounded
+                                    : Icons.visibility_rounded,
+                                size: 19,
+                                color: pal.subtext,
+                              ),
+                            ),
                           ),
-                          onPressed: () =>
-                              setSheetState(() => reveal = !reveal),
                         ),
-                        IconButton(
+                        const SizedBox(width: 2),
+                        GestureDetector(
                           key: const ValueKey('browser_vault_detail_copy_btn'),
-                          icon: const Icon(Icons.copy_rounded, size: 18),
-                          onPressed: () =>
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () =>
                               _copyPasswordWithAutoWipe(sheetCtx, cred.password),
+                          child: SizedBox(
+                            width: 34,
+                            height: 34,
+                            child: Center(
+                              child: Icon(
+                                Icons.copy_rounded,
+                                size: 18,
+                                color: pal.subtext,
+                              ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -510,10 +761,16 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.edit_rounded, size: 18),
-                      label: const Text('Изменить'),
-                      onPressed: () {
+                    child: _buildSafariPillButton(
+                      backgroundColor: pal.primary.withValues(
+                        alpha: st.isDark ? 0.18 : 0.11,
+                      ),
+                      foregroundColor: pal.primary,
+                      icon: Icons.edit_rounded,
+                      label: 'Изменить',
+                      height: 38.0,
+                      fontSize: 13.5,
+                      onTap: () {
                         Navigator.of(sheetCtx).pop();
                         unawaited(
                           _openAddOrEditCredentialDialog(existing: cred),
@@ -523,14 +780,17 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: OutlinedButton.icon(
-                      key: const ValueKey('browser_vault_detail_delete_btn'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: pal.error,
+                    child: _buildSafariPillButton(
+                      buttonKey: const ValueKey('browser_vault_detail_delete_btn'),
+                      backgroundColor: pal.error.withValues(
+                        alpha: st.isDark ? 0.18 : 0.10,
                       ),
-                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                      label: const Text('Удалить'),
-                      onPressed: () async {
+                      foregroundColor: pal.error,
+                      icon: Icons.delete_outline_rounded,
+                      label: 'Удалить',
+                      height: 38.0,
+                      fontSize: 13.5,
+                      onTap: () async {
                         await BrowserVaultService.instance
                             .deleteCredential(cred.id);
                         _unlockedCredentials
@@ -586,65 +846,92 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final confirmed = await showTheavModalSheet<bool>(
       context: context,
       useRootNavigator: true,
-      title: 'Очистка данных браузера',
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 20),
+      maxHeightFactor: 0.78,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
       builder: (sheetCtx) => StatefulBuilder(
         builder: (sheetCtx, setSheetState) {
-          final pal = TheavSurfaceStyle.of(sheetCtx).palette;
+          final st = TheavSurfaceStyle.of(sheetCtx);
+          final pal = st.palette;
+          Widget checkRow({
+            required Key rowKey,
+            required String label,
+            required bool value,
+            required ValueChanged<bool> onChanged,
+          }) {
+            return TheavListRow(
+              key: rowKey,
+              padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+              minHeight: 50.0,
+              title: label,
+              trailing: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: value
+                      ? pal.primary
+                      : pal.onSurface.withValues(alpha: st.isDark ? 0.10 : 0.08),
+                  shape: BoxShape.circle,
+                ),
+                child: value
+                    ? Icon(Icons.check_rounded, size: 14.5, color: pal.onPrimary)
+                    : null,
+              ),
+              onTap: () {
+                HapticUtils.selection();
+                onChanged(!value);
+              },
+            );
+          }
+
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              CheckboxListTile(
-                key: const ValueKey('clear_opt_history'),
-                value: clearHistory,
-                onChanged: (v) =>
-                    setSheetState(() => clearHistory = v ?? false),
-                title: const Text('История посещений'),
+              _buildModalHeaderRow(
+                sheetCtx,
+                title: 'Очистка данных браузера',
               ),
-              CheckboxListTile(
-                key: const ValueKey('clear_opt_cookies'),
-                value: clearCookies,
-                onChanged: (v) =>
-                    setSheetState(() => clearCookies = v ?? false),
-                title: const Text('Cookie и данные сайтов (WebStorage)'),
-              ),
-              CheckboxListTile(
-                key: const ValueKey('clear_opt_site_settings'),
-                value: clearSiteSettings,
-                onChanged: (v) =>
-                    setSheetState(() => clearSiteSettings = v ?? false),
-                title: const Text('Настройки сайтов и разрешения'),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                child: Text(
-                  'Сохранённые пароли останутся в безопасности.',
-                  style: TextStyle(fontSize: 12, color: pal.subtext),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                height: 44,
-                child: Material(
-                  color: pal.error,
-                  borderRadius: BorderRadius.circular(22),
-                  child: InkWell(
-                    key: const ValueKey('clear_opt_confirm_btn'),
-                    borderRadius: BorderRadius.circular(22),
-                    onTap: () => Navigator.of(sheetCtx).pop(true),
-                    child: const Center(
-                      child: Text(
-                        'Очистить выбранное',
-                        style: TextStyle(
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
+              TheavInsetGroup(
+                margin: EdgeInsets.zero,
+                borderRadius: 20.0,
+                dividerIndent: 14.0,
+                showBorder: false,
+                showShadow: false,
+                backgroundColor: _cardFill(st),
+                dividerColor: _dividerTint(st),
+                footer: 'Сохранённые пароли останутся в безопасности.',
+                children: [
+                  checkRow(
+                    rowKey: const ValueKey('clear_opt_history'),
+                    label: 'История посещений',
+                    value: clearHistory,
+                    onChanged: (v) => setSheetState(() => clearHistory = v),
                   ),
-                ),
+                  checkRow(
+                    rowKey: const ValueKey('clear_opt_cookies'),
+                    label: 'Cookie и данные сайтов (WebStorage)',
+                    value: clearCookies,
+                    onChanged: (v) => setSheetState(() => clearCookies = v),
+                  ),
+                  checkRow(
+                    rowKey: const ValueKey('clear_opt_site_settings'),
+                    label: 'Настройки сайтов и разрешения',
+                    value: clearSiteSettings,
+                    onChanged: (v) => setSheetState(() => clearSiteSettings = v),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _buildSafariPillButton(
+                buttonKey: const ValueKey('clear_opt_confirm_btn'),
+                backgroundColor: pal.error,
+                foregroundColor: Colors.white,
+                label: 'Очистить выбранное',
+                icon: Icons.delete_sweep_rounded,
+                height: 42.0,
+                fontSize: 14.5,
+                onTap: () => Navigator.of(sheetCtx).pop(true),
               ),
             ],
           );
@@ -674,70 +961,176 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
+    final mq = MediaQuery.of(context);
+    final double modalContentHeight = math.min(
+      450.0,
+      math.max(180.0, mq.size.height * 0.56 - mq.viewInsets.bottom * 0.45),
+    );
+    final double hPad = widget.isModalSheet ? 0.0 : 16.0;
+    final bool showSearchBar =
+        (_activeSection == 0 && _unlocked) || _activeSection == 2;
 
-    return Column(
-      children: [
-        if (widget.isModalSheet)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Пароли и данные браузера',
-                    style: TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w700,
-                      color: palette.onSurface,
-                    ),
-                  ),
-                ),
-                InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () => Navigator.of(context).maybePop(),
-                  child: Padding(
-                    padding: const EdgeInsets.all(6),
-                    child: Icon(
-                      Icons.close_rounded,
-                      size: 21,
+    Widget? headerTrailing;
+    if (_activeSection == 0 && _unlocked) {
+      headerTrailing = _buildSafariPillButton(
+        buttonKey: const ValueKey('browser_vault_add_password_btn'),
+        backgroundColor: palette.primary.withValues(
+          alpha: style.isDark ? 0.18 : 0.11,
+        ),
+        foregroundColor: palette.primary,
+        icon: Icons.add_rounded,
+        label: 'Добавить',
+        height: 30.0,
+        horizontalPadding: 10.0,
+        fontSize: 12.5,
+        onTap: () => unawaited(_openAddOrEditCredentialDialog()),
+      );
+    } else if (_activeSection == 2) {
+      headerTrailing = _buildSafariPillButton(
+        buttonKey: const ValueKey('browser_vault_header_clear_btn'),
+        backgroundColor: palette.error.withValues(
+          alpha: style.isDark ? 0.14 : 0.08,
+        ),
+        foregroundColor: palette.error,
+        icon: Icons.delete_sweep_rounded,
+        label: 'Очистить',
+        height: 30.0,
+        horizontalPadding: 10.0,
+        fontSize: 12.5,
+        onTap: _showGranularClearDialog,
+      );
+    }
+
+    final Widget segmentedBar = Padding(
+      padding: EdgeInsets.symmetric(horizontal: hPad),
+      child: TheavSegmentedControl<int>(
+        key: const ValueKey('browser_vault_section_segment'),
+        expand: true,
+        height: 40.0,
+        margin: const EdgeInsets.only(top: 2, bottom: 8),
+        options: const [
+          TheavSegmentOption<int>(value: 0, label: 'Пароли'),
+          TheavSegmentOption<int>(value: 1, label: 'Автозаполнение'),
+          TheavSegmentOption<int>(value: 2, label: 'Cookie и сайты'),
+        ],
+        selected: _activeSection,
+        onChanged: _selectSection,
+      ),
+    );
+
+    final Widget searchBar = AnimatedSize(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      alignment: Alignment.topCenter,
+      child: showSearchBar
+          ? Padding(
+              padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 6),
+              child: SizedBox(
+                key: const ValueKey('browser_vault_search_bar'),
+                height: 38.0,
+                child: Row(
+                  children: [
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.search_rounded,
+                      size: 18,
                       color: palette.subtext,
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        key: const ValueKey('browser_vault_search_input'),
+                        controller: _searchCtrl,
+                        cursorColor: palette.primary,
+                        style: TextStyle(
+                          color: palette.onSurface,
+                          fontSize: 14.5,
+                        ),
+                        decoration: _transparentFieldDecoration(
+                          palette,
+                          hintText: _activeSection == 0
+                              ? 'Поиск по сайтам и логинам...'
+                              : 'Поиск по сайтам...',
+                        ).copyWith(
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 8,
+                          ),
+                        ),
+                        onChanged: (v) => setState(() => _searchQuery = v),
+                      ),
+                    ),
+                    if (_searchQuery.isNotEmpty)
+                      GestureDetector(
+                        key: const ValueKey('browser_vault_search_clear_btn'),
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _clearSearch,
+                        child: SizedBox(
+                          width: 30,
+                          height: 30,
+                          child: Center(
+                            child: Icon(
+                              Icons.close_rounded,
+                              size: 18,
+                              color: palette.subtext,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (!widget.isModalSheet &&
+                        _activeSection == 0 &&
+                        _unlocked) ...[
+                      const SizedBox(width: 6),
+                      headerTrailing!,
+                    ],
+                  ],
                 ),
-              ],
+              ),
+            )
+          : const SizedBox(width: double.infinity, height: 0),
+    );
+
+    final Widget pageView = PageView(
+      key: const ValueKey('browser_vault_page_view'),
+      controller: _pageCtrl,
+      physics: const BouncingScrollPhysics(),
+      onPageChanged: _handlePageChanged,
+      children: [
+        _buildPasswordsTab(context, style),
+        _buildAutofillTab(context, style),
+        _buildCookiesAndSitesTab(context, style),
+      ],
+    );
+
+    return Column(
+      mainAxisSize:
+          widget.isModalSheet ? MainAxisSize.min : MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.isModalSheet)
+          _buildModalHeaderRow(
+            context,
+            title: 'Пароли и данные браузера',
+            closeButtonKey: const ValueKey('browser_vault_close_btn'),
+            trailing: headerTrailing,
+          ),
+        segmentedBar,
+        searchBar,
+        if (widget.isModalSheet)
+          Flexible(
+            fit: FlexFit.loose,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: modalContentHeight,
+                minHeight: math.min(200.0, modalContentHeight),
+              ),
+              child: SizedBox(
+                height: modalContentHeight,
+                child: pageView,
+              ),
             ),
-          ),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: widget.isModalSheet ? 0 : 14),
-          child: TheavSegmentedControl<int>(
-            key: const ValueKey('browser_vault_section_segment'),
-            expand: true,
-            height: 38,
-            options: const [
-              TheavSegmentOption<int>(value: 0, label: 'Пароли'),
-              TheavSegmentOption<int>(value: 1, label: 'Автозаполнение'),
-              TheavSegmentOption<int>(value: 2, label: 'Cookie и сайты'),
-            ],
-            selected: _activeSection,
-            onChanged: _selectSection,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Expanded(
-          child: PageView(
-            controller: _pageCtrl,
-            onPageChanged: (idx) {
-              if (_activeSection != idx) {
-                setState(() => _activeSection = idx);
-              }
-            },
-            children: [
-              _buildPasswordsTab(context, style),
-              _buildAutofillTab(context, style),
-              _buildCookiesAndSitesTab(context, style),
-            ],
-          ),
-        ),
+          )
+        else
+          Expanded(child: pageView),
       ],
     );
   }
@@ -745,7 +1138,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   Widget _buildPasswordsTab(BuildContext context, TheavSurfaceStyle style) {
     final palette = style.palette;
     final vault = BrowserVaultService.instance;
-    final q = _searchQuery.toLowerCase();
+    final double hPad = widget.isModalSheet ? 0.0 : 16.0;
+    final Color cardFill = _cardFill(style);
+    final Color dividerTint = _dividerTint(style);
+    final String q = _searchQuery.trim().toLowerCase();
     final filtered = _unlockedCredentials.where((c) {
       if (q.isEmpty) return true;
       return c.displayHost.toLowerCase().contains(q) ||
@@ -753,295 +1149,387 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
           c.username.toLowerCase().contains(q);
     }).toList();
 
-    return ListView(
-      padding: EdgeInsets.fromLTRB(
-        widget.isModalSheet ? 0 : 16,
-        4,
-        widget.isModalSheet ? 0 : 16,
-        24,
-      ),
-      children: [
-        if (!_unlocked)
-          TheavInsetGroup(
-            margin: EdgeInsets.zero,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.verified_user_rounded,
-                      size: 38,
-                      color: palette.primary,
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Пароли защищены',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: palette.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'В связке сохранено паролей: ${vault.hints.length}. Подтвердите личность для просмотра.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, color: palette.subtext),
-                    ),
-                    const SizedBox(height: 14),
-                    TheavFloatingPillButton(
-                      key: const ValueKey('browser_vault_unlock_btn'),
-                      icon: const Icon(Icons.lock_open_rounded, size: 18),
-                      label: _unlockInProgress
-                          ? 'Проверка...'
-                          : 'Разблокировать пароли',
-                      isPrimary: true,
-                      onTap: _unlockInProgress ? null : _unlockPasswords,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          )
-        else ...[
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('browser_vault_search_input'),
-                  controller: _searchCtrl,
-                  onChanged: (v) => setState(() => _searchQuery = v.trim()),
-                  decoration: InputDecoration(
-                    hintText: 'Поиск по сайтам и логинам...',
-                    prefixIcon: const Icon(Icons.search_rounded, size: 19),
-                    isDense: true,
-                    filled: false,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(18),
-                      borderSide: BorderSide(color: palette.divider),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton.filledTonal(
-                key: const ValueKey('browser_vault_add_password_btn'),
-                tooltip: 'Добавить пароль',
-                icon: const Icon(Icons.add_rounded),
-                onPressed: () => unawaited(_openAddOrEditCredentialDialog()),
-              ),
-            ],
+    Widget buildNeverSaveGroup() {
+      return TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        borderRadius: 20.0,
+        dividerIndent: 64.0,
+        showBorder: false,
+        showShadow: false,
+        backgroundColor: cardFill,
+        dividerColor: dividerTint,
+        header: 'Никогда не сохранять',
+        headerTrailing: Text(
+          '${vault.neverSaveOrigins.length}',
+          style: TextStyle(
+            color: palette.subtext,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
-          const SizedBox(height: 12),
-          if (filtered.isEmpty)
-            TheavInsetGroup(
-              margin: EdgeInsets.zero,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Text(
-                    _searchQuery.isNotEmpty
-                        ? 'Совпадений не найдено'
-                        : 'Нет сохранённых паролей. Они появятся здесь после входа на сайты.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13.5, color: palette.subtext),
+        ),
+        children: [
+          for (final origin in vault.neverSaveOrigins)
+            TheavListRow(
+              padding: const EdgeInsets.fromLTRB(12, 9, 8, 9),
+              minHeight: 54.0,
+              leading: SafariDomainMonogramBadge(
+                host: SafariUrlSafetyAnalyzer.analyzeUrl(origin).displayHost,
+                isSecure: false,
+                iconOverride: Icons.block_rounded,
+              ),
+              title: origin,
+              trailing: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticUtils.selection();
+                  unawaited(vault.removeNeverSaveOrigin(origin));
+                },
+                child: SizedBox(
+                  width: 34,
+                  height: 34,
+                  child: Center(
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 18,
+                      color: palette.subtext.withValues(alpha: 0.78),
+                    ),
                   ),
                 ),
-              ],
-            )
-          else
+              ),
+            ),
+        ],
+      );
+    }
+
+    if (!_unlocked && vault.neverSaveOrigins.isEmpty) {
+      return SafariSheetEmptyState(
+        icon: Icons.verified_user_rounded,
+        title: 'Пароли защищены',
+        subtitle:
+            'В связке сохранено паролей: ${vault.hints.length}. Подтвердите личность для просмотра.',
+        actionLabel:
+            _unlockInProgress ? 'Проверка...' : 'Разблокировать пароли',
+        actionIcon: Icons.lock_open_rounded,
+        isPrimaryAction: true,
+        actionButtonKey: const ValueKey('browser_vault_unlock_btn'),
+        onAction: _unlockInProgress ? null : _unlockPasswords,
+      );
+    }
+
+    if (_unlocked && filtered.isEmpty && vault.neverSaveOrigins.isEmpty) {
+      return SafariSheetEmptyState(
+        icon: q.isNotEmpty ? Icons.search_off_rounded : Icons.key_rounded,
+        title: q.isNotEmpty ? 'Ничего не найдено' : 'Нет сохранённых паролей',
+        subtitle: q.isNotEmpty
+            ? 'Попробуйте изменить запрос поиска.'
+            : 'Добавьте пароль вручную или сохраните его при входе на сайт.',
+        actionLabel: q.isNotEmpty ? 'Сбросить поиск' : 'Добавить пароль',
+        actionIcon: q.isNotEmpty ? null : Icons.add_rounded,
+        isPrimaryAction: q.isEmpty,
+        onAction: q.isNotEmpty
+            ? _clearSearch
+            : () => unawaited(_openAddOrEditCredentialDialog()),
+      );
+    }
+
+    return SafariFeatherScrollView(
+      controller: _passwordsScrollCtrl,
+      edgeKeyPrefix: 'browser_vault_passwords',
+      child: ListView(
+        controller: _passwordsScrollCtrl,
+        padding: EdgeInsets.fromLTRB(hPad, 6, hPad, 20),
+        children: [
+          if (!_unlocked) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: cardFill,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: SafariSheetEmptyState(
+                icon: Icons.verified_user_rounded,
+                title: 'Пароли защищены',
+                subtitle:
+                    'В связке сохранено паролей: ${vault.hints.length}. Подтвердите личность для просмотра.',
+                actionLabel:
+                    _unlockInProgress ? 'Проверка...' : 'Разблокировать пароли',
+                actionIcon: Icons.lock_open_rounded,
+                isPrimaryAction: true,
+                actionButtonKey: const ValueKey('browser_vault_unlock_btn'),
+                onAction: _unlockInProgress ? null : _unlockPasswords,
+              ),
+            ),
+          ] else if (filtered.isEmpty) ...[
+            SafariSheetEmptyState(
+              icon: q.isNotEmpty ? Icons.search_off_rounded : Icons.key_rounded,
+              title: q.isNotEmpty
+                  ? 'Ничего не найдено'
+                  : 'Нет сохранённых паролей',
+              subtitle: q.isNotEmpty
+                  ? 'Попробуйте изменить запрос поиска.'
+                  : 'Добавьте пароль вручную или сохраните его при входе на сайт.',
+              actionLabel: q.isNotEmpty ? 'Сбросить поиск' : 'Добавить пароль',
+              actionIcon: q.isNotEmpty ? null : Icons.add_rounded,
+              onAction: q.isNotEmpty
+                  ? _clearSearch
+                  : () => unawaited(_openAddOrEditCredentialDialog()),
+            ),
+          ] else
             TheavInsetGroup(
               margin: EdgeInsets.zero,
-              header: 'Сохранённые аккаунты (${filtered.length})',
+              borderRadius: 20.0,
+              dividerIndent: 64.0,
+              showBorder: false,
+              showShadow: false,
+              backgroundColor: cardFill,
+              dividerColor: dividerTint,
+              header: 'Сохранённые аккаунты',
+              headerTrailing: Text(
+                '${filtered.length}',
+                style: TextStyle(
+                  color: palette.subtext,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
               children: [
                 for (final cred in filtered)
-                  ListTile(
-                    key: ValueKey('browser_vault_cred_tile_${cred.id}'),
-                    leading: CircleAvatar(
-                      radius: 17,
-                      backgroundColor: palette.primary.withValues(alpha: 0.14),
+                  Dismissible(
+                    key: ValueKey('browser_vault_cred_dismiss_${cred.id}'),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      color: palette.error.withValues(alpha: 0.14),
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 18),
                       child: Icon(
-                        Icons.key_rounded,
-                        size: 17,
-                        color: palette.primary,
+                        Icons.delete_outline_rounded,
+                        color: palette.error,
+                        size: 20,
                       ),
                     ),
-                    title: Text(
-                      cred.displayHost.isNotEmpty
+                    onDismissed: (_) {
+                      HapticUtils.selection();
+                      setState(() {
+                        _unlockedCredentials
+                            .removeWhere((item) => item.id == cred.id);
+                      });
+                      unawaited(vault.deleteCredential(cred.id));
+                    },
+                    child: () {
+                      final String hostLabel = cred.displayHost.isNotEmpty
                           ? cred.displayHost
-                          : cred.origin,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(
-                      [
+                          : cred.origin;
+                      final String subtitleLabel = [
                         cred.username.isNotEmpty ? cred.username : 'Без логина',
                         if (cred.isHttpAuth) 'HTTP Auth',
-                      ].join(' • '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    onTap: () => unawaited(_openCredentialDetailSheet(cred)),
+                      ].join(' • ');
+                      return TheavListRow(
+                        key: ValueKey('browser_vault_cred_tile_${cred.id}'),
+                        padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+                        minHeight: 56.0,
+                        leading: SafariDomainMonogramBadge(
+                          host: hostLabel,
+                          isSecure: cred.origin.startsWith('https://'),
+                        ),
+                        titleWidget: Text(
+                          hostLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: palette.onSurface,
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w600,
+                            height: 1.25,
+                          ),
+                        ),
+                        subtitleWidget: Row(
+                          children: [
+                            Icon(
+                              cred.isHttpAuth
+                                  ? Icons.vpn_key_outlined
+                                  : Icons.person_outline_rounded,
+                              size: 11.5,
+                              color: palette.subtext,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                subtitleLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: palette.subtext,
+                                  fontSize: 12.2,
+                                  height: 1.25,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        trailing: Icon(
+                          Icons.chevron_right_rounded,
+                          size: 19,
+                          color: palette.subtext.withValues(alpha: 0.72),
+                        ),
+                        onTap: () =>
+                            unawaited(_openCredentialDetailSheet(cred)),
+                      );
+                    }(),
                   ),
               ],
             ),
+          if (vault.neverSaveOrigins.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            buildNeverSaveGroup(),
+          ],
         ],
-        if (vault.neverSaveOrigins.isNotEmpty) ...[
-          const SizedBox(height: 14),
-          TheavInsetGroup(
-            margin: EdgeInsets.zero,
-            header: 'Никогда не сохранять',
-            children: [
-              for (final origin in vault.neverSaveOrigins)
-                ListTile(
-                  leading: const Icon(Icons.block_rounded, size: 19),
-                  title: Text(
-                    origin,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                    onPressed: () =>
-                        unawaited(vault.removeNeverSaveOrigin(origin)),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ],
+      ),
     );
   }
 
   Widget _buildAutofillTab(BuildContext context, TheavSurfaceStyle style) {
     final settings = BrowserSiteSettingsService.instance;
     final pal = style.palette;
+    final double hPad = widget.isModalSheet ? 0.0 : 16.0;
+    final Color cardFill = _cardFill(style);
+    final Color dividerTint = _dividerTint(style);
 
-    return ListView(
-      padding: EdgeInsets.fromLTRB(
-        widget.isModalSheet ? 0 : 16,
-        4,
-        widget.isModalSheet ? 0 : 16,
-        24,
+    return SafariFeatherScrollView(
+      controller: _autofillScrollCtrl,
+      edgeKeyPrefix: 'browser_vault_autofill',
+      // ShaderMask introduces an offscreen layer that blocks LiquidGlassSwitch
+      // backdrop sampling in GlassMode; sibling LiquidGlassScrollEdge stays on.
+      enableShaderMask: !style.isGlass,
+      child: ListView(
+        controller: _autofillScrollCtrl,
+        padding: EdgeInsets.fromLTRB(hPad, 6, hPad, 22),
+        children: [
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
+            dividerIndent: 16.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: 'Пароли и система',
+            children: [
+              TheavListRow(
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: 'Предлагать сохранение паролей',
+                subtitle:
+                    'Показывать карточку сохранения после входа на сайте',
+                trailing: AdaptiveSwitch(
+                  key: const ValueKey('browser_setting_save_passwords_switch'),
+                  value: settings.savePasswordsEnabled,
+                  onChanged: (v) =>
+                      unawaited(settings.setSavePasswordsEnabled(v)),
+                ),
+              ),
+              TheavListRow(
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: 'Системное автозаполнение ОС',
+                subtitle:
+                    'Совместимость с Android Autofill и связкой ключей iOS',
+                trailing: AdaptiveSwitch(
+                  key: const ValueKey('browser_setting_os_autofill_switch'),
+                  value: settings.osAutofillEnabled,
+                  onChanged: (v) => unawaited(settings.setOsAutofillEnabled(v)),
+                ),
+              ),
+              TheavListRow(
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: 'Автозаполнение контактов',
+                subtitle: 'Предлагать имя, email и телефон в веб-формах',
+                trailing: AdaptiveSwitch(
+                  key: const ValueKey('browser_setting_contact_autofill_switch'),
+                  value: _contactEnabled,
+                  onChanged: (v) {
+                    setState(() => _contactEnabled = v);
+                    unawaited(settings.setContactAutofillEnabled(v));
+                    if (_contactAutofillCardLoaded) {
+                      unawaited(_saveContactProfile());
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
+            dividerIndent: 44.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: 'Карточка контакта',
+            children: [
+              _buildSheetFieldRow(
+                fieldKey: const ValueKey('browser_contact_name_input'),
+                palette: pal,
+                icon: Icons.badge_outlined,
+                controller: _nameCtrl,
+                hintText: 'Имя и фамилия',
+              ),
+              _buildSheetFieldRow(
+                fieldKey: const ValueKey('browser_contact_email_input'),
+                palette: pal,
+                icon: Icons.alternate_email_rounded,
+                controller: _emailCtrl,
+                hintText: 'Email',
+                keyboardType: TextInputType.emailAddress,
+              ),
+              _buildSheetFieldRow(
+                fieldKey: const ValueKey('browser_contact_phone_input'),
+                palette: pal,
+                icon: Icons.phone_outlined,
+                controller: _phoneCtrl,
+                hintText: 'Телефон',
+                keyboardType: TextInputType.phone,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildSafariPillButton(
+                  buttonKey: const ValueKey('browser_contact_prefill_btn'),
+                  backgroundColor: pal.primary.withValues(
+                    alpha: style.isDark ? 0.18 : 0.11,
+                  ),
+                  foregroundColor: pal.primary,
+                  icon: Icons.person_rounded,
+                  label: 'Из профиля',
+                  height: 38.0,
+                  horizontalPadding: 10.0,
+                  fontSize: 13.5,
+                  onTap: _prefillContactFromAccount,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _buildSafariPillButton(
+                  buttonKey: const ValueKey('browser_contact_save_btn'),
+                  backgroundColor: pal.primary,
+                  foregroundColor: pal.onPrimary,
+                  icon: Icons.check_rounded,
+                  label: 'Сохранить',
+                  height: 38.0,
+                  horizontalPadding: 10.0,
+                  fontSize: 13.5,
+                  onTap: () => unawaited(_saveContactProfile()),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
-      children: [
-        TheavInsetGroup(
-          margin: EdgeInsets.zero,
-          header: 'Пароли и система',
-          children: [
-            ListTile(
-              title: const Text('Предлагать сохранение паролей'),
-              subtitle: const Text(
-                'Показывать карточку сохранения после входа на сайте',
-              ),
-              trailing: AdaptiveSwitch(
-                key: const ValueKey('browser_setting_save_passwords_switch'),
-                value: settings.savePasswordsEnabled,
-                onChanged: (v) =>
-                    unawaited(settings.setSavePasswordsEnabled(v)),
-              ),
-            ),
-            ListTile(
-              title: const Text('Системное автозаполнение ОС'),
-              subtitle: const Text(
-                'Совместимость с Android Autofill и связкой ключей iOS',
-              ),
-              trailing: AdaptiveSwitch(
-                key: const ValueKey('browser_setting_os_autofill_switch'),
-                value: settings.osAutofillEnabled,
-                onChanged: (v) => unawaited(settings.setOsAutofillEnabled(v)),
-              ),
-            ),
-            ListTile(
-              title: const Text('Автозаполнение контактов'),
-              subtitle: const Text(
-                'Предлагать имя, email и телефон в веб-формах',
-              ),
-              trailing: AdaptiveSwitch(
-                key: const ValueKey('browser_setting_contact_autofill_switch'),
-                value: _contactEnabled,
-                onChanged: (v) {
-                  setState(() => _contactEnabled = v);
-                  unawaited(settings.setContactAutofillEnabled(v));
-                  if (_contactAutofillCardLoaded) {
-                    unawaited(_saveContactProfile());
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        TheavInsetGroup(
-          margin: EdgeInsets.zero,
-          header: 'Карточка контакта',
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextField(
-                    key: const ValueKey('browser_contact_name_input'),
-                    controller: _nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Имя и фамилия',
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    key: const ValueKey('browser_contact_email_input'),
-                    controller: _emailCtrl,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Email',
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    key: const ValueKey('browser_contact_phone_input'),
-                    controller: _phoneCtrl,
-                    keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Телефон',
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          key: const ValueKey('browser_contact_prefill_btn'),
-                          icon: const Icon(Icons.person_rounded, size: 17),
-                          label: const Text('Из профиля'),
-                          onPressed: _prefillContactFromAccount,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton(
-                          key: const ValueKey('browser_contact_save_btn'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: pal.primary,
-                            foregroundColor: pal.onPrimary,
-                          ),
-                          onPressed: () => unawaited(_saveContactProfile()),
-                          child: const Text('Сохранить'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 
@@ -1052,6 +1540,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final settings = BrowserSiteSettingsService.instance;
     final dataSvc = BrowserDataService.instance;
     final pal = style.palette;
+    final double hPad = widget.isModalSheet ? 0.0 : 16.0;
+    final Color cardFill = _cardFill(style);
+    final Color dividerTint = _dividerTint(style);
+    final String q = _searchQuery.trim().toLowerCase();
 
     final Map<String, BrowserSitePreference> prefsMap =
         settings.sitePreferences;
@@ -1062,137 +1554,211 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
           .where((h) => h.isNotEmpty),
     };
     final List<String> sortedHosts = allHosts.toList()..sort();
+    final List<String> filteredHosts = q.isEmpty
+        ? sortedHosts
+        : sortedHosts.where((h) {
+            final pref = prefsMap[h];
+            final display = pref?.displayHost ?? '';
+            return h.toLowerCase().contains(q) ||
+                display.toLowerCase().contains(q);
+          }).toList();
 
-    return ListView(
-      padding: EdgeInsets.fromLTRB(
-        widget.isModalSheet ? 0 : 16,
-        4,
-        widget.isModalSheet ? 0 : 16,
-        24,
-      ),
-      children: [
-        TheavInsetGroup(
-          margin: EdgeInsets.zero,
-          header: 'Политика cookie',
-          footer:
-              'Режим «Без сторонних cookie» усиливает приватность, но может нарушать OAuth-вход на некоторых сайтах.',
-          children: [
-            for (final option in [
-              (
-                policy: BrowserCookiePolicy.allowAll,
-                title: 'Разрешить все cookie',
-                sub: 'Рекомендуется для стабильной работы сайтов и входа',
-              ),
-              (
-                policy: BrowserCookiePolicy.blockThirdParty,
-                title: 'Блокировать сторонние cookie',
-                sub: 'Запрещает межсайтовое отслеживание',
-              ),
-              (
-                policy: BrowserCookiePolicy.blockAll,
-                title: 'Блокировать все cookie',
-                sub: 'Сайты не смогут сохранять сессии входа',
-              ),
-            ])
-              ListTile(
-                key: ValueKey('browser_cookie_policy_${option.policy.name}'),
-                title: Text(option.title),
-                subtitle: Text(
-                  option.sub,
-                  style: TextStyle(fontSize: 12, color: pal.subtext),
+    return SafariFeatherScrollView(
+      controller: _cookiesScrollCtrl,
+      edgeKeyPrefix: 'browser_vault_cookies',
+      child: ListView(
+        controller: _cookiesScrollCtrl,
+        padding: EdgeInsets.fromLTRB(hPad, 6, hPad, 22),
+        children: [
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
+            dividerIndent: 16.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: 'Политика cookie',
+            footer:
+                'Режим «Без сторонних cookie» усиливает приватность, но может нарушать OAuth-вход на некоторых сайтах.',
+            children: [
+              for (final option in [
+                (
+                  policy: BrowserCookiePolicy.allowAll,
+                  title: 'Разрешить все cookie',
+                  sub: 'Рекомендуется для стабильной работы сайтов и входа',
                 ),
-                trailing: settings.cookiePolicy == option.policy
-                    ? Icon(Icons.check_rounded, color: pal.primary)
-                    : null,
-                onTap: () {
-                  HapticUtils.selection();
-                  unawaited(settings.setCookiePolicy(option.policy));
-                },
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        TheavInsetGroup(
-          margin: EdgeInsets.zero,
-          header: 'Настройки и данные сайтов (${sortedHosts.length})',
-          children: [
-            if (sortedHosts.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Нет сохранённых данных или индивидуальных настроек сайтов',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: pal.subtext),
+                (
+                  policy: BrowserCookiePolicy.blockThirdParty,
+                  title: 'Блокировать сторонние cookie',
+                  sub: 'Запрещает межсайтовое отслеживание',
                 ),
-              )
-            else
-              for (final host in sortedHosts)
-                Builder(
-                  builder: (ctx) {
-                    final pref = prefsMap[host];
-                    final tags = <String>[
-                      if (pref?.desktopMode == true) 'ПК-версия',
-                      if (pref?.cameraPolicy == SitePermissionDecision.allow)
-                        'Камера',
-                      if (pref?.microphonePolicy ==
-                          SitePermissionDecision.allow)
-                        'Микрофон',
-                      if (pref?.muteJsDialogs == true) 'Без JS-окон',
-                    ];
-                    return ListTile(
-                      leading: const Icon(Icons.public_rounded, size: 19),
-                      title: Text(
-                        pref?.displayHost.isNotEmpty == true
-                            ? pref!.displayHost
-                            : host,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        tags.isNotEmpty ? tags.join(' • ') : 'Cookie и кэш сайта',
-                        style: TextStyle(fontSize: 12, color: pal.subtext),
-                      ),
-                      trailing: TextButton(
-                        onPressed: () async {
-                          await dataSvc.clearSiteData('https://$host/');
-                          await settings.resetHost(host);
-                          if (context.mounted) {
-                            GlassToastService().show(
-                              context,
-                              'Данные $host очищены',
-                              icon: Icons.cleaning_services_rounded,
-                            );
-                          }
-                        },
-                        child: const Text('Очистить'),
-                      ),
-                    );
+                (
+                  policy: BrowserCookiePolicy.blockAll,
+                  title: 'Блокировать все cookie',
+                  sub: 'Сайты не смогут сохранять сессии входа',
+                ),
+              ])
+                TheavListRow(
+                  key: ValueKey('browser_cookie_policy_${option.policy.name}'),
+                  padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                  minHeight: 54.0,
+                  title: option.title,
+                  subtitle: option.sub,
+                  trailing: settings.cookiePolicy == option.policy
+                      ? Icon(Icons.check_rounded, size: 19, color: pal.primary)
+                      : const SizedBox(width: 19),
+                  onTap: () {
+                    HapticUtils.selection();
+                    unawaited(settings.setCookiePolicy(option.policy));
                   },
                 ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        TheavInsetGroup(
-          margin: EdgeInsets.zero,
-          children: [
-            ListTile(
-              key: const ValueKey('browser_clear_data_granular_btn'),
-              leading: Icon(Icons.delete_sweep_rounded, color: pal.error),
-              title: Text(
-                'Очистить данные браузера...',
-                style: TextStyle(
-                  color: pal.error,
-                  fontWeight: FontWeight.w600,
-                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
+            dividerIndent: 64.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: 'Настройки и данные сайтов',
+            headerTrailing: Text(
+              '${filteredHosts.length}',
+              style: TextStyle(
+                color: pal.subtext,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
               ),
-              subtitle: const Text(
-                'Выборочная очистка истории, cookie и настроек сайтов',
-              ),
-              onTap: _showGranularClearDialog,
             ),
-          ],
-        ),
-      ],
+            children: [
+              if (filteredHosts.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text(
+                    q.isNotEmpty
+                        ? 'Сайты по запросу не найдены'
+                        : 'Нет сохранённых данных или индивидуальных настроек сайтов',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 13, color: pal.subtext),
+                  ),
+                )
+              else
+                for (final host in filteredHosts)
+                  Builder(
+                    builder: (ctx) {
+                      final pref = prefsMap[host];
+                      final String displayHost =
+                          pref?.displayHost.isNotEmpty == true
+                              ? pref!.displayHost
+                              : host;
+                      final tags = <String>[
+                        if (pref?.desktopMode == true) 'ПК-версия',
+                        if (pref?.cameraPolicy == SitePermissionDecision.allow)
+                          'Камера',
+                        if (pref?.microphonePolicy ==
+                            SitePermissionDecision.allow)
+                          'Микрофон',
+                        if (pref?.muteJsDialogs == true) 'Без JS-окон',
+                      ];
+                      return TheavListRow(
+                        padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+                        minHeight: 56.0,
+                        leading: SafariDomainMonogramBadge(
+                          host: displayHost,
+                          isSecure: true,
+                        ),
+                        titleWidget: Text(
+                          displayHost,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: pal.onSurface,
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w600,
+                            height: 1.25,
+                          ),
+                        ),
+                        subtitleWidget: Text(
+                          tags.isNotEmpty
+                              ? tags.join(' • ')
+                              : 'Cookie и кэш сайта',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.2,
+                            color: pal.subtext,
+                            height: 1.25,
+                          ),
+                        ),
+                        trailing: _buildSafariPillButton(
+                          backgroundColor: pal.onSurface.withValues(
+                            alpha: style.isDark ? 0.08 : 0.055,
+                          ),
+                          foregroundColor: pal.primary,
+                          label: 'Очистить',
+                          height: 28.0,
+                          horizontalPadding: 10.0,
+                          fontSize: 12.0,
+                          onTap: () async {
+                            HapticUtils.selection();
+                            await dataSvc.clearSiteData('https://$host/');
+                            await settings.resetHost(host);
+                            if (context.mounted) {
+                              GlassToastService().show(
+                                context,
+                                'Данные $host очищены',
+                                icon: Icons.cleaning_services_rounded,
+                              );
+                            }
+                          },
+                        ),
+                      );
+                    },
+                  ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: pal.error.withValues(
+              alpha: style.isDark ? 0.11 : 0.06,
+            ),
+            children: [
+              TheavListRow(
+                key: const ValueKey('browser_clear_data_granular_btn'),
+                padding: const EdgeInsets.fromLTRB(14, 11, 12, 11),
+                minHeight: 54.0,
+                leading: Icon(
+                  Icons.delete_sweep_rounded,
+                  size: 20,
+                  color: pal.error,
+                ),
+                titleWidget: Text(
+                  'Очистить данные браузера...',
+                  style: TextStyle(
+                    color: pal.error,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: 'Выборочная очистка истории, cookie и настроек сайтов',
+                trailing: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 19,
+                  color: pal.error.withValues(alpha: 0.72),
+                ),
+                onTap: _showGranularClearDialog,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
