@@ -273,6 +273,12 @@ class _SafariSavePasswordSheetState extends State<SafariSavePasswordSheet> {
     final bool disableAnims =
         MediaQuery.maybeDisableAnimationsOf(context) ?? false;
 
+    final BoxDecoration fieldBoxDecoration = BoxDecoration(
+      color: palette.onSurface.withValues(alpha: style.isDark ? 0.09 : 0.05),
+      borderRadius: BorderRadius.circular(14),
+    );
+    const double fieldBoxHeight = 46.0;
+
     final String maskedOrPlain = _obscurePassword
         ? '•' * widget.candidate.password.length.clamp(6, 16)
         : widget.candidate.password;
@@ -359,79 +365,118 @@ class _SafariSavePasswordSheetState extends State<SafariSavePasswordSheet> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: palette.onSurface
-                        .withValues(alpha: style.isDark ? 0.09 : 0.05),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: TextField(
-                    key: const ValueKey('safari_save_password_username'),
-                    controller: _usernameCtrl,
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w500,
-                      color: palette.onSurface,
-                    ),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: InputBorder.none,
-                      labelText: 'Логин / Email',
-                      labelStyle: TextStyle(
-                        fontSize: 11.5,
-                        color: palette.subtext,
+                SizedBox(
+                  key: const ValueKey('safari_save_password_username_box'),
+                  width: double.infinity,
+                  height: fieldBoxHeight,
+                  child: DecoratedBox(
+                    decoration: fieldBoxDecoration,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.person_outline_rounded,
+                            size: 17,
+                            color: palette.subtext,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              key: const ValueKey(
+                                'safari_save_password_username',
+                              ),
+                              controller: _usernameCtrl,
+                              cursorColor: palette.primary,
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w500,
+                                color: palette.onSurface,
+                              ),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                isCollapsed: true,
+                                filled: false,
+                                fillColor: Colors.transparent,
+                                hoverColor: Colors.transparent,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                disabledBorder: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                hintText: 'Логин или Email',
+                                hintStyle: TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w400,
+                                  color: palette.subtext.withValues(alpha: 0.78),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ),
                 const SizedBox(height: 6),
-                Container(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
-                  decoration: BoxDecoration(
-                    color: palette.onSurface
-                        .withValues(alpha: style.isDark ? 0.09 : 0.05),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          maskedOrPlain,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: _obscurePassword ? 2.0 : 0.0,
-                            color: palette.onSurface,
-                          ),
-                        ),
-                      ),
-                      InkWell(
-                        key: const ValueKey(
-                          'safari_save_password_toggle_visibility',
-                        ),
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: () {
-                          HapticUtils.tap();
-                          setState(() => _obscurePassword = !_obscurePassword);
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(6),
-                          child: Icon(
-                            _obscurePassword
-                                ? Icons.visibility_rounded
-                                : Icons.visibility_off_rounded,
-                            size: 18,
+                SizedBox(
+                  key: const ValueKey('safari_save_password_password_box'),
+                  width: double.infinity,
+                  height: fieldBoxHeight,
+                  child: DecoratedBox(
+                    decoration: fieldBoxDecoration,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 6, 0),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.lock_outline_rounded,
+                            size: 17,
                             color: palette.subtext,
                           ),
-                        ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              maskedOrPlain,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: _obscurePassword ? 2.0 : 0.0,
+                                color: palette.onSurface,
+                              ),
+                            ),
+                          ),
+                          InkWell(
+                            key: const ValueKey(
+                              'safari_save_password_toggle_visibility',
+                            ),
+                            borderRadius: BorderRadius.circular(14),
+                            onTap: () {
+                              HapticUtils.tap();
+                              setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              );
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.all(6),
+                              child: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_rounded
+                                    : Icons.visibility_off_rounded,
+                                size: 18,
+                                color: palette.subtext,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),

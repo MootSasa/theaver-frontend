@@ -45,12 +45,13 @@ class _TestLiquidGlassProvider extends LiquidGlassProvider {
 Widget _wrapTestApp({
   required Widget child,
   GlassMode mode = GlassMode.disabled,
+  ThemeData? theme,
 }) {
   final glass = _TestLiquidGlassProvider(mode);
   return ChangeNotifierProvider<LiquidGlassProvider>.value(
     value: glass,
     child: MaterialApp(
-      theme: ThemeData.light(),
+      theme: theme ?? ThemeData.light(),
       home: BackdropGroup(
         child: Scaffold(body: child),
       ),
@@ -420,6 +421,12 @@ void main() {
         await tester.pumpWidget(
           _wrapTestApp(
             mode: mode,
+            theme: ThemeData.light().copyWith(
+              inputDecorationTheme: const InputDecorationTheme(
+                filled: true,
+                fillColor: Color(0xFF1C1C1E),
+              ),
+            ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -471,6 +478,24 @@ void main() {
         expect(find.byKey(const ValueKey('safari_autofill_accessory_bar')), findsOneWidget);
         expect(find.byKey(const ValueKey('safari_save_password_sheet')), findsOneWidget);
         expect(find.text('Сохранить пароль?'), findsOneWidget);
+
+        final TextField usernameField = tester.widget<TextField>(
+          find.byKey(const ValueKey('safari_save_password_username')),
+        );
+        expect(usernameField.decoration?.filled, isFalse);
+        expect(usernameField.decoration?.fillColor, Colors.transparent);
+        expect(usernameField.decoration?.border, InputBorder.none);
+        expect(usernameField.decoration?.enabledBorder, InputBorder.none);
+        expect(usernameField.decoration?.focusedBorder, InputBorder.none);
+
+        final Size usernameBoxSize = tester.getSize(
+          find.byKey(const ValueKey('safari_save_password_username_box')),
+        );
+        final Size passwordBoxSize = tester.getSize(
+          find.byKey(const ValueKey('safari_save_password_password_box')),
+        );
+        expect(usernameBoxSize, passwordBoxSize);
+        expect(usernameBoxSize.height, 46.0);
 
         await tester.tap(find.byKey(const ValueKey('safari_autofill_credential_chip_c1')));
         await tester.pump();

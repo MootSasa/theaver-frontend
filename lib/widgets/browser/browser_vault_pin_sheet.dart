@@ -204,7 +204,13 @@ class _BrowserVaultPinSheetBodyState extends State<_BrowserVaultPinSheetBody> {
                 color: palette.onSurface,
               ),
               decoration: InputDecoration(
+                filled: false,
+                fillColor: Colors.transparent,
+                hoverColor: Colors.transparent,
                 border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
                 hintText: '•' * widget.lockService.pinLength,
                 hintStyle: TextStyle(
                   color: palette.subtext.withValues(alpha: 0.5),

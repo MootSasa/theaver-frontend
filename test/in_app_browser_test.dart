@@ -3024,5 +3024,139 @@ void main() {
         },
       );
     }
+
+    for (final mode in [GlassMode.full, GlassMode.disabled]) {
+      testWidgets(
+        'Find-in-Page bar overrides global InputDecorationTheme fill and animates open and closed without translucent Opacity in $mode',
+        (tester) async {
+          tester.view.physicalSize = const Size(400, 800);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+
+          final glass = _TestLiquidGlassProvider(mode);
+          final session = MiniAppSession(
+            launchData: const MiniAppLaunchData(
+              url: 'https://duckduckgo.com/',
+              initData: '',
+              botId: '',
+              botUsername: '',
+              botDisplayName: 'duckduckgo.com',
+            ),
+            isBrowser: true,
+            initialUrl: 'https://duckduckgo.com/',
+          );
+
+          await tester.pumpWidget(
+            ChangeNotifierProvider<LiquidGlassProvider>.value(
+              value: glass,
+              child: MaterialApp(
+                theme: ThemeData.light().copyWith(
+                  inputDecorationTheme: const InputDecorationTheme(
+                    filled: true,
+                    fillColor: Color(0xFF1C1C1E),
+                  ),
+                ),
+                home: MediaQuery(
+                  data: const MediaQueryData(
+                    size: Size(400, 800),
+                    padding: EdgeInsets.only(top: 24, bottom: 16),
+                  ),
+                  child: InAppBrowserSheet(session: session),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          const double settledTop = 24.0 + 60.0;
+          final findBarFinder =
+              find.byKey(const ValueKey('in_app_browser_find_bar'));
+          final findInputFinder =
+              find.byKey(const ValueKey('in_app_browser_find_input'));
+
+          expect(findBarFinder, findsNothing);
+          expect(findInputFinder, findsNothing);
+
+          // Open overflow menu and tap "Найти на странице".
+          await tester.tap(
+            find.byKey(const ValueKey('in_app_browser_menu_button')),
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Найти на странице'));
+
+          // Mid-entrance (~90ms): Find bar is mounted and gliding downward from above.
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 90));
+          expect(findBarFinder, findsOneWidget);
+          expect(findInputFinder, findsOneWidget);
+          final Rect midOpenRect = tester.getRect(findBarFinder);
+          expect(midOpenRect.top, lessThan(settledTop));
+          if (mode == GlassMode.full) {
+            final sheetFinder =
+                find.byKey(const ValueKey('in_app_browser_sheet'));
+            expect(
+              find.ancestor(
+                of: findBarFinder,
+                matching: find.descendant(
+                  of: sheetFinder,
+                  matching: find.byWidgetPredicate(
+                    (w) =>
+                        w is FadeTransition ||
+                        (w is Opacity && w.opacity > 0.0 && w.opacity < 1.0),
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          }
+
+          // Settled open: positioned at topInset + 60.0 with transparent input decoration.
+          await tester.pumpAndSettle();
+          expect(tester.getRect(findBarFinder).top, closeTo(settledTop, 0.5));
+          final TextField findField = tester.widget<TextField>(findInputFinder);
+          expect(findField.decoration?.filled, isFalse);
+          expect(findField.decoration?.fillColor, Colors.transparent);
+          expect(findField.decoration?.border, InputBorder.none);
+          expect(findField.decoration?.enabledBorder, InputBorder.none);
+          expect(findField.decoration?.focusedBorder, InputBorder.none);
+
+          // Tap close button inside Find bar and inspect mid-exit (~80ms).
+          final findCloseBtn = find.descendant(
+            of: findBarFinder,
+            matching: find.byIcon(Icons.close_rounded),
+          );
+          await tester.tap(findCloseBtn);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 80));
+
+          expect(findBarFinder, findsOneWidget);
+          expect(tester.getRect(findBarFinder).top, lessThan(settledTop - 0.5));
+          if (mode == GlassMode.full) {
+            final sheetFinder =
+                find.byKey(const ValueKey('in_app_browser_sheet'));
+            expect(
+              find.ancestor(
+                of: findBarFinder,
+                matching: find.descendant(
+                  of: sheetFinder,
+                  matching: find.byWidgetPredicate(
+                    (w) =>
+                        w is FadeTransition ||
+                        (w is Opacity && w.opacity > 0.0 && w.opacity < 1.0),
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          }
+
+          // Settled closed: unmounts completely.
+          await tester.pumpAndSettle();
+          expect(findBarFinder, findsNothing);
+          expect(findInputFinder, findsNothing);
+        },
+      );
+    }
   });
 }

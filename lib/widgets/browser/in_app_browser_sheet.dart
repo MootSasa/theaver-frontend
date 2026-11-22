@@ -85,8 +85,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   late final MiniAppSession _session;
   late final BrowserUiDialogDelegate _dialogDelegate;
   late final AnimationController _dragResetController;
+  late final AnimationController _findBarController;
+  late final CurvedAnimation _findBarAnimation;
   final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier<double>(0.0);
   final TextEditingController _findCtrl = TextEditingController();
+  final FocusNode _findFocusNode = FocusNode();
 
   BrowserContactProfile _contactProfile = const BrowserContactProfile();
   bool _isMenuOpen = false;
@@ -240,6 +243,21 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             Curves.easeOutCubic.transform(_dragResetController.value);
         _dragOffsetNotifier.value = _dragResetFrom * (1.0 - t);
       });
+    _findBarController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+      reverseDuration: const Duration(milliseconds: 220),
+    )..addStatusListener((status) {
+        if (!mounted) return;
+        if (status == AnimationStatus.dismissed && !_isFindOpen) {
+          setState(() {});
+        }
+      });
+    _findBarAnimation = CurvedAnimation(
+      parent: _findBarController,
+      curve: const Cubic(0.22, 1.06, 0.32, 1.0),
+      reverseCurve: Curves.easeInCubic,
+    );
     _dialogDelegate = SheetBrowserUiDialogDelegate(
       contextResolver: () => context,
       mountedResolver: () => mounted,
@@ -301,11 +319,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       return true;
     }
     if (_isFindOpen) {
-      setState(() {
-        _isFindOpen = false;
-        _findStatus = '';
-      });
-      _updateBrowserSafeClearances();
+      _closeFindBar();
       return true;
     }
     return false;
@@ -397,6 +411,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     }
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
+    _findBarAnimation.dispose();
+    _findBarController.dispose();
+    _findFocusNode.dispose();
     _findCtrl.dispose();
     _releaseFullScreenRegistration();
     super.dispose();
@@ -408,6 +425,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }) async {
     if (_isMinimizing) return;
     _isMinimizing = true;
+    _findFocusNode.unfocus();
     _closeMenu();
     _closeSiteInfoPopover();
     if (!mounted) return;
@@ -508,6 +526,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _closeTab() {
+    _findFocusNode.unfocus();
     _closeMenu();
     _isSiteInfoOpen = false;
     unawaited(_session.setWebPageInteractionLocked(false));
@@ -562,6 +581,43 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _closeSiteInfoPopover() {
     if (_isSiteInfoOpen) {
       setState(() => _isSiteInfoOpen = false);
+    }
+  }
+
+  void _openFindBar() {
+    final bool disableAnims =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    setState(() => _isFindOpen = true);
+    _updateBrowserSafeClearances();
+    if (_session.browserChromeCollapsed) {
+      unawaited(_session.setBrowserChromeCollapsed(false));
+    }
+    if (disableAnims) {
+      _findBarController.value = 1.0;
+    } else {
+      _findBarController.forward();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _isFindOpen) {
+        _findFocusNode.requestFocus();
+      }
+    });
+  }
+
+  void _closeFindBar() {
+    if (!_isFindOpen) return;
+    final bool disableAnims =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    _findFocusNode.unfocus();
+    setState(() {
+      _isFindOpen = false;
+      _findStatus = '';
+    });
+    _updateBrowserSafeClearances();
+    if (disableAnims) {
+      _findBarController.value = 0.0;
+    } else {
+      _findBarController.reverse();
     }
   }
 
@@ -1021,11 +1077,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               fg: resolved.headerFg,
               onTap: () {
                 _closeMenu();
-                setState(() => _isFindOpen = true);
-                _updateBrowserSafeClearances();
-                if (_session.browserChromeCollapsed) {
-                  unawaited(_session.setBrowserChromeCollapsed(false));
-                }
+                _openFindBar();
               },
             ),
             _browserMenuItem(
@@ -1248,84 +1300,136 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       ],
     );
 
-    final Widget? floatingFindBar = _isFindOpen
-        ? Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-            child: WebViewFloatingCapsule(
-              height: 46,
-              borderRadius: 22,
-              padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _findCtrl,
-                      autofocus: true,
+    final bool mountFindBar = _isFindOpen || !_findBarController.isDismissed;
+    final Widget? floatingFindBar = mountFindBar
+        ? AnimatedBuilder(
+            animation: _findBarAnimation,
+            child: Row(
+              children: [
+                Icon(
+                  Icons.search_rounded,
+                  size: 18,
+                  color: resolved.headerFg.withValues(alpha: 0.65),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextField(
+                    key: const ValueKey('in_app_browser_find_input'),
+                    controller: _findCtrl,
+                    focusNode: _findFocusNode,
+                    autofocus: true,
+                    cursorColor: resolved.palette.primary,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: resolved.headerFg,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Найти на странице...',
+                      hintStyle: TextStyle(
+                        fontSize: 13.5,
+                        color: resolved.headerFg.withValues(alpha: 0.55),
+                      ),
+                      isDense: true,
+                      filled: false,
+                      fillColor: Colors.transparent,
+                      hoverColor: Colors.transparent,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 8,
+                      ),
+                    ),
+                    onSubmitted: (v) => _findInPage(v),
+                  ),
+                ),
+                if (_findStatus.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(
+                      _findStatus,
                       style: TextStyle(
-                        fontSize: 14,
-                        color: resolved.headerFg,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'Найти на странице...',
-                        hintStyle: TextStyle(
-                          fontSize: 13.5,
-                          color: resolved.headerFg.withValues(alpha: 0.55),
-                        ),
-                        isDense: true,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 8,
-                        ),
-                      ),
-                      onSubmitted: (v) => _findInPage(v),
-                    ),
-                  ),
-                  if (_findStatus.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      child: Text(
-                        _findStatus,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: resolved.headerFg.withValues(alpha: 0.7),
-                        ),
+                        fontSize: 11.5,
+                        color: resolved.headerFg.withValues(alpha: 0.7),
                       ),
                     ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.keyboard_arrow_up_rounded,
-                      size: 21,
-                      color: resolved.headerFg,
-                    ),
-                    onPressed: () =>
-                        _findInPage(_findCtrl.text, backwards: true),
                   ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.keyboard_arrow_down_rounded,
-                      size: 21,
-                      color: resolved.headerFg,
-                    ),
-                    onPressed: () => _findInPage(_findCtrl.text),
+                IconButton(
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
                   ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.close_rounded,
-                      size: 19,
-                      color: resolved.headerFg,
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _isFindOpen = false;
-                        _findStatus = '';
-                      });
-                      _updateBrowserSafeClearances();
-                    },
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    Icons.keyboard_arrow_up_rounded,
+                    size: 21,
+                    color: resolved.headerFg,
                   ),
-                ],
-              ),
+                  onPressed: () =>
+                      _findInPage(_findCtrl.text, backwards: true),
+                ),
+                IconButton(
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 21,
+                    color: resolved.headerFg,
+                  ),
+                  onPressed: () => _findInPage(_findCtrl.text),
+                ),
+                IconButton(
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    Icons.close_rounded,
+                    size: 19,
+                    color: resolved.headerFg,
+                  ),
+                  onPressed: _closeFindBar,
+                ),
+              ],
             ),
+            builder: (context, rowChild) {
+              final double rawT = _findBarController.value;
+              final double eased = _findBarAnimation.value;
+              final double travelY = topInset + 116.0;
+              final double dy = -travelY * (1.0 - eased);
+              final double clamped = eased.clamp(0.0, 1.03);
+              final double scaleX = 0.90 + 0.10 * clamped.clamp(0.0, 1.015);
+              final double scaleY = 0.84 + 0.16 * clamped;
+              final double visualBottomY =
+                  (topInset + 60.0) + dy + 46.0 * scaleY;
+              final bool capsuleVisible =
+                  rawT > 0.01 && visualBottomY > -2.0;
+
+              return Transform.translate(
+                offset: Offset(0.0, dy),
+                child: Transform(
+                  alignment: Alignment.topCenter,
+                  transform: Matrix4.diagonal3Values(scaleX, scaleY, 1.0),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                    child: WebViewFloatingCapsule(
+                      key: const ValueKey('in_app_browser_find_bar'),
+                      height: 46,
+                      borderRadius: 22,
+                      visible: capsuleVisible,
+                      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+                      child: rowChild!,
+                    ),
+                  ),
+                ),
+              );
+            },
           )
         : null;
 
@@ -1545,9 +1649,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             left: 0,
             right: 0,
             child: IgnorePointer(
-              ignoring: isPageInteractionBlocked,
+              ignoring: !_isFindOpen || isPageInteractionBlocked,
               child: ExcludeFocus(
-                excluding: isPageInteractionBlocked,
+                excluding: !_isFindOpen || isPageInteractionBlocked,
                 child: floatingFindBar,
               ),
             ),
@@ -1695,11 +1799,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               return;
             }
             if (_isFindOpen) {
-              setState(() {
-                _isFindOpen = false;
-                _findStatus = '';
-              });
-              _updateBrowserSafeClearances();
+              _closeFindBar();
               return;
             }
             final movedBack = await _session.performWebBack();
