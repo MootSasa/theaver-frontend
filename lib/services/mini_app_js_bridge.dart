@@ -245,6 +245,8 @@ class MiniAppJsBridge {
     String platform = 'android',
     double topClearance = 0,
     double bottomClearance = 0,
+    double systemTopInset = 0,
+    double systemBottomInset = 0,
   }) {
     final initDataJson = jsonEncode(launch.initData);
     final initDataUnsafeJson = jsonEncode(launch.initDataUnsafe);
@@ -259,6 +261,12 @@ class MiniAppJsBridge {
     final vpHeight = viewportHeight.round();
     final topSafe = topClearance > 0 ? topClearance.round() : 0;
     final bottomSafe = bottomClearance > 0 ? bottomClearance.round() : 0;
+    final sysTop = systemTopInset > 0 ? systemTopInset.round() : 0;
+    final sysBottom = systemBottomInset > 0 ? systemBottomInset.round() : 0;
+    final contentTop = math.max(0, topSafe - sysTop);
+    final contentBottom = math.max(0, bottomSafe - sysBottom);
+    final initialContentTopCss = sysTop > 0 ? contentTop : topSafe;
+    final initialContentBottomCss = sysBottom > 0 ? contentBottom : bottomSafe;
 
     return '''
 (function() {
@@ -305,7 +313,7 @@ class MiniAppJsBridge {
     }
   }
 
-  function _applyThemeCssVars(tp, scheme, vpH, vpStableH, topClear, bottomClear) {
+  function _applyThemeCssVars(tp, scheme, vpH, vpStableH, topClear, bottomClear, contentTopClear, contentBottomClear) {
     try {
       if (typeof document === 'undefined' || !document.documentElement) return;
       var rootStyle = document.documentElement.style;
@@ -317,10 +325,24 @@ class MiniAppJsBridge {
         rootStyle.setProperty('--tg-viewport-stable-height', Math.round(vpStableH) + 'px');
       }
       if (typeof topClear === 'number' && topClear >= 0) {
-        rootStyle.setProperty('--theaver-header-clearance', Math.round(topClear) + 'px');
+        var topPx = Math.round(topClear) + 'px';
+        var contentTopPx = Math.round(typeof contentTopClear === 'number' && contentTopClear >= 0 ? contentTopClear : topClear) + 'px';
+        rootStyle.setProperty('--theaver-header-clearance', topPx);
+        rootStyle.setProperty('--theaver-top-obscured', topPx);
+        rootStyle.setProperty('--tg-safe-area-inset-top', topPx);
+        rootStyle.setProperty('--tg-safe-area-inset-left', '0px');
+        rootStyle.setProperty('--tg-safe-area-inset-right', '0px');
+        rootStyle.setProperty('--tg-content-safe-area-inset-top', contentTopPx);
+        rootStyle.setProperty('--tg-content-safe-area-inset-left', '0px');
+        rootStyle.setProperty('--tg-content-safe-area-inset-right', '0px');
       }
       if (typeof bottomClear === 'number' && bottomClear >= 0) {
-        rootStyle.setProperty('--theaver-bottom-clearance', Math.round(bottomClear) + 'px');
+        var bottomPx = Math.round(bottomClear) + 'px';
+        var contentBottomPx = Math.round(typeof contentBottomClear === 'number' && contentBottomClear >= 0 ? contentBottomClear : bottomClear) + 'px';
+        rootStyle.setProperty('--theaver-bottom-clearance', bottomPx);
+        rootStyle.setProperty('--theaver-safe-bottom', bottomPx);
+        rootStyle.setProperty('--tg-safe-area-inset-bottom', bottomPx);
+        rootStyle.setProperty('--tg-content-safe-area-inset-bottom', contentBottomPx);
       }
       if (tp && typeof tp === 'object') {
         var keys = Object.keys(tp);
@@ -335,7 +357,7 @@ class MiniAppJsBridge {
     } catch (e) {}
   }
 
-  _applyThemeCssVars(_theme, $colorSchemeJson, $vpHeight, $vpHeight, $topSafe, $bottomSafe);
+  _applyThemeCssVars(_theme, $colorSchemeJson, $vpHeight, $vpHeight, $topSafe, $bottomSafe, $initialContentTopCss, $initialContentBottomCss);
   try {
     if (typeof document !== 'undefined' && document.head) {
       var insetStyle = document.getElementById('__theaver_hud_insets');
@@ -365,6 +387,10 @@ class MiniAppJsBridge {
       }
       if (typeof eventData.is_expanded === 'boolean') webApp.isExpanded = eventData.is_expanded;
       _applyThemeCssVars(webApp.themeParams, webApp.colorScheme, webApp.viewportHeight, webApp.viewportStableHeight);
+    } else if (eventType === 'safe_area_changed' && eventData && typeof eventData === 'object') {
+      webApp.safeAreaInset = eventData;
+    } else if (eventType === 'content_safe_area_changed' && eventData && typeof eventData === 'object') {
+      webApp.contentSafeAreaInset = eventData;
     }
     _emit(eventType, eventData);
     var camelMap = {
@@ -377,7 +403,9 @@ class MiniAppJsBridge {
       popup_closed: 'popupClosed',
       clipboard_text_received: 'clipboardTextReceived',
       write_access_requested: 'writeAccessRequested',
-      contact_requested: 'contactRequested'
+      contact_requested: 'contactRequested',
+      safe_area_changed: 'safeAreaChanged',
+      content_safe_area_changed: 'contentSafeAreaChanged'
     };
     if (camelMap[eventType]) {
       _emit(camelMap[eventType], eventData);
@@ -488,6 +516,8 @@ class MiniAppJsBridge {
     isClosingConfirmationEnabled: false,
     isVerticalSwipesEnabled: true,
     isActive: true,
+    safeAreaInset: (window.Telegram.WebApp && window.Telegram.WebApp.safeAreaInset) || { top: $sysTop, bottom: $sysBottom, left: 0, right: 0 },
+    contentSafeAreaInset: (window.Telegram.WebApp && window.Telegram.WebApp.contentSafeAreaInset) || { top: $contentTop, bottom: $contentBottom, left: 0, right: 0 },
     BackButton: backBtn,
     MainButton: mainBtn,
     SecondaryButton: secondaryBtn,

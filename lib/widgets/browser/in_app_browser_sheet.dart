@@ -1829,7 +1829,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             left: 0,
             right: 0,
             child: IgnorePointer(
-              child: _BrowserScrollPocket(
+              child: BrowserScrollPocket(
                 edge: LiquidGlassEdge.top,
                 height: topInset + (isCompact ? 20.0 : 24.0),
                 color: topPocketBase.withValues(alpha: 0.88),
@@ -1843,7 +1843,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             left: 0,
             right: 0,
             child: IgnorePointer(
-              child: _BrowserScrollPocket(
+              child: BrowserScrollPocket(
                 edge: LiquidGlassEdge.bottom,
                 height: math.max(
                   isCompact
@@ -1954,47 +1954,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Smoothly adapts Safari iOS 26 style feathered edge "Scroll Pocket" color
-/// and height over the top status bar and bottom gesture area.
-class _BrowserScrollPocket extends StatelessWidget {
-  final LiquidGlassEdge edge;
-  final double height;
-  final Color color;
-  final double blurSigma;
-
-  const _BrowserScrollPocket({
-    required this.edge,
-    required this.height,
-    required this.color,
-    required this.blurSigma,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<Color?>(
-      tween: ColorTween(begin: color, end: color),
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOutCubic,
-      builder: (context, animatedColor, _) {
-        final Color resolvedColor = animatedColor ?? color;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOutCubic,
-          height: height,
-          child: height <= 0.5
-              ? const SizedBox.shrink()
-              : LiquidGlassScrollEdge(
-                  edge: edge,
-                  color: resolvedColor,
-                  blur: blurSigma,
-                  style: LiquidGlassScrollEdgeStyle.soft,
-                ),
-        );
-      },
     );
   }
 }

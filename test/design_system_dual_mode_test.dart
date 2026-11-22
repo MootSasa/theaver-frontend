@@ -729,6 +729,13 @@ void main() {
           expect(
             find.descendant(
               of: headerFinder,
+              matching: find.byKey(const ValueKey('webview_center_morph')),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: headerFinder,
               matching: find.byKey(const ValueKey('webview_right_morph')),
             ),
             findsOneWidget,
@@ -738,7 +745,14 @@ void main() {
               of: headerFinder,
               matching: find.byType(LiquidGlassMorph),
             ),
-            findsOneWidget,
+            findsNWidgets(2),
+          );
+          expect(
+            find.descendant(
+              of: headerFinder,
+              matching: find.byType(LiquidGlassBlender),
+            ),
+            findsNothing,
           );
           expect(
             find.descendant(
@@ -748,6 +762,15 @@ void main() {
             findsNothing,
           );
         } else {
+          expect(
+            find.descendant(
+              of: headerFinder,
+              matching: find.byKey(
+                const ValueKey('webview_center_matte_morph'),
+              ),
+            ),
+            findsOneWidget,
+          );
           expect(
             find.descendant(
               of: headerFinder,

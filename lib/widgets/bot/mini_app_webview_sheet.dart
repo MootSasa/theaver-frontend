@@ -536,6 +536,8 @@ class MiniAppSession {
   bool canGoBack = false;
   bool canGoForward = false;
   bool isDesktopMode = false;
+  double browserSystemTopInset = 0.0;
+  double browserSystemBottomInset = 0.0;
   double browserTopClearance = 58.0;
   double browserCompactTopClearance = 32.0;
   double browserBottomClearance = 64.0;
@@ -561,7 +563,7 @@ class MiniAppSession {
       MiniAppSessionController.instance.notifySessionUpdated();
     }
     final ctrl = controller;
-    if (ctrl != null && isBrowser && WebViewPlatform.instance != null) {
+    if (ctrl != null && WebViewPlatform.instance != null) {
       try {
         await ctrl.runJavaScript(
           'if (window.__theaverSetCollapsedFromHost) { window.__theaverSetCollapsedFromHost(${collapsed ? 'true' : 'false'}); }',
@@ -1246,11 +1248,15 @@ class MiniAppSession {
     required int bottomPx,
     int? compactTopPx,
     int? compactBottomPx,
+    int systemTopPx = 0,
+    int systemBottomPx = 0,
     int flutterViewportHeight = 0,
     bool forceExpanded = false,
   }) {
     final int safeTop = topPx.clamp(0, 320);
     final int safeBottom = bottomPx.clamp(0, 320);
+    final int safeSysTop = systemTopPx.clamp(0, safeTop);
+    final int safeSysBottom = systemBottomPx.clamp(0, safeBottom);
     final int safeCompactTop =
         (compactTopPx ?? math.max(0, safeTop - 26)).clamp(0, safeTop);
     final int safeCompactBottom = (compactBottomPx ?? 0).clamp(0, safeBottom);
@@ -1264,6 +1270,8 @@ class MiniAppSession {
     window.__theaverCompactTopClear = __COMPACT_TOP_PX__;
     window.__theaverBottomClear = __BOTTOM_PX__;
     window.__theaverCompactBottomClear = __COMPACT_BOTTOM_PX__;
+    window.__theaverSysTop = __SYS_TOP_PX__;
+    window.__theaverSysBottom = __SYS_BOTTOM_PX__;
     window.__theaverFlutterVh = __FLUTTER_VH__;
     window.__theaverForceExpanded = __FORCE_EXPANDED__;
 
@@ -1576,6 +1584,52 @@ class MiniAppSession {
       return out;
     }
 
+    function hasTopSafeVarRef(str) {
+      if (!str) return false;
+      return str.indexOf('safe-area-inset-top') !== -1 ||
+        str.indexOf('--theaver-top-obscured') !== -1 ||
+        str.indexOf('--theaver-header-clearance') !== -1;
+    }
+
+    function hasBottomSafeVarRef(str) {
+      if (!str) return false;
+      return str.indexOf('safe-area-inset-bottom') !== -1 ||
+        str.indexOf('--theaver-safe-bottom') !== -1 ||
+        str.indexOf('--theaver-bottom-clearance') !== -1;
+    }
+
+    function isLayoutSafeProp(propName) {
+      if (!propName) return false;
+      var p = String(propName).toLowerCase();
+      if (p.indexOf('--') === 0) return false;
+      if (p.indexOf('scroll-padding') === 0) return false;
+      return true;
+    }
+
+    function trackCombinedTgVars(str) {
+      if (!str) return;
+      if (
+        /var\(\s*--tg-safe-area-inset-top\b/.test(str) ||
+        /(?:env|constant)\(\s*safe-area-inset-top/i.test(str)
+      ) {
+        window.__theaverSawTgSysTop = true;
+      }
+      if (/var\(\s*--tg-content-safe-area-inset-top\b/.test(str)) {
+        window.__theaverSawTgContentTop = true;
+      }
+      if (
+        /var\(\s*--tg-safe-area-inset-bottom\b/.test(str) ||
+        /(?:env|constant)\(\s*safe-area-inset-bottom/i.test(str)
+      ) {
+        window.__theaverSawTgSysBottom = true;
+      }
+      if (/var\(\s*--tg-content-safe-area-inset-bottom\b/.test(str)) {
+        window.__theaverSawTgContentBottom = true;
+      }
+      window.__theaverUsesBothTgTop = !!(window.__theaverSawTgSysTop && window.__theaverSawTgContentTop);
+      window.__theaverUsesBothTgBottom = !!(window.__theaverSawTgSysBottom && window.__theaverSawTgContentBottom);
+    }
+
     function markSelectorEnvTop(selectorText) {
       if (!selectorText) return;
       try {
@@ -1600,61 +1654,93 @@ class MiniAppSession {
       } catch (e) {}
     }
 
-    function scanStyleRulesForEnv(ruleList) {
+    function scanStyleRulesForEnv(ruleList, topOut, bottomOut) {
       if (!ruleList) return;
       for (var ri = 0; ri < ruleList.length; ri++) {
         var rule = ruleList[ri];
         if (!rule) continue;
         if (rule.style) {
-          var csTxt = '';
-          try {
-            csTxt = rule.style.cssText || '';
-          } catch (e) {
-            csTxt = '';
-          }
-          if (csTxt.indexOf('safe-area-inset-bottom') !== -1 || csTxt.indexOf('safe-area-inset-top') !== -1) {
-            if (csTxt.indexOf('safe-area-inset-top') !== -1 && rule.selectorText) {
-              markSelectorEnvTop(rule.selectorText);
+          var usesTopLayout = false;
+          var usesBottomLayout = false;
+          for (var pi = 0; pi < rule.style.length; pi++) {
+            var prop = rule.style.item(pi);
+            if (!prop) continue;
+            var val = rule.style.getPropertyValue(prop);
+            if (!val) continue;
+            trackCombinedTgVars(val);
+            if (isLayoutSafeProp(prop)) {
+              if (hasTopSafeVarRef(val)) usesTopLayout = true;
+              if (hasBottomSafeVarRef(val)) usesBottomLayout = true;
             }
-            if (csTxt.indexOf('safe-area-inset-bottom') !== -1 && rule.selectorText) {
-              markSelectorEnvBottom(rule.selectorText);
-            }
-            for (var pi = 0; pi < rule.style.length; pi++) {
-              var prop = rule.style.item(pi);
-              if (!prop) continue;
-              var val = rule.style.getPropertyValue(prop);
-              if (!val || (val.indexOf('safe-area-inset-bottom') === -1 && val.indexOf('safe-area-inset-top') === -1)) {
-                continue;
-              }
+            if (val.indexOf('safe-area-inset-bottom') !== -1 || val.indexOf('safe-area-inset-top') !== -1) {
               var prio = rule.style.getPropertyPriority(prop);
               var repl = replaceSafeAreaEnvStr(val);
               if (repl !== val) {
                 rule.style.setProperty(prop, repl, prio);
               }
             }
-          } else {
-            if (csTxt.indexOf('--theaver-top-obscured') !== -1 && rule.selectorText) {
-              markSelectorEnvTop(rule.selectorText);
+          }
+          var shorthands = ['padding', 'margin', 'inset', 'padding-block', 'margin-block'];
+          for (var shi = 0; shi < shorthands.length; shi++) {
+            var shProp = shorthands[shi];
+            var shVal = rule.style.getPropertyValue(shProp);
+            if (shVal && (shVal.indexOf('safe-area-inset-bottom') !== -1 || shVal.indexOf('safe-area-inset-top') !== -1)) {
+              var shPrio = rule.style.getPropertyPriority(shProp);
+              var shRepl = replaceSafeAreaEnvStr(shVal);
+              if (shRepl !== shVal) {
+                rule.style.setProperty(shProp, shRepl, shPrio);
+              }
             }
-            if (csTxt.indexOf('--theaver-safe-bottom') !== -1 && rule.selectorText) {
-              markSelectorEnvBottom(rule.selectorText);
+          }
+          var rawCssText = '';
+          try {
+            rawCssText = rule.style.cssText || '';
+          } catch (e) {
+            rawCssText = '';
+          }
+          if (rawCssText) {
+            var decls = rawCssText.split(';');
+            for (var di = 0; di < decls.length; di++) {
+              var colonIdx = decls[di].indexOf(':');
+              if (colonIdx <= 0) continue;
+              var dProp = decls[di].slice(0, colonIdx).trim();
+              var dVal = decls[di].slice(colonIdx + 1).trim();
+              if (!dVal) continue;
+              trackCombinedTgVars(dVal);
+              if (isLayoutSafeProp(dProp)) {
+                if (hasTopSafeVarRef(dVal)) usesTopLayout = true;
+                if (hasBottomSafeVarRef(dVal)) usesBottomLayout = true;
+              }
             }
+          }
+          if (usesTopLayout && rule.selectorText) {
+            markSelectorEnvTop(rule.selectorText);
+            if (topOut) topOut.push(rule.selectorText);
+          }
+          if (usesBottomLayout && rule.selectorText) {
+            markSelectorEnvBottom(rule.selectorText);
+            if (bottomOut) bottomOut.push(rule.selectorText);
           }
         } else if (rule.cssRules) {
           try {
-            scanStyleRulesForEnv(rule.cssRules);
+            scanStyleRulesForEnv(rule.cssRules, topOut, bottomOut);
           } catch (e) {}
         }
       }
+    }
+
+    function isInternalInsetId(id) {
+      return id === '__theaver_browser_insets' || id === '__theaver_hud_insets';
     }
 
     function polyfillSafeAreaEnv() {
       var styleNodes = document.querySelectorAll ? document.querySelectorAll('style') : [];
       for (var si = 0; si < styleNodes.length; si++) {
         var sNode = styleNodes[si];
-        if (!sNode || sNode.id === '__theaver_browser_insets') continue;
-        if (sNode.dataset && sNode.dataset.theaverEnvPolyfilled === '1') continue;
+        if (!sNode || isInternalInsetId(sNode.id)) continue;
         var txt = sNode.textContent || '';
+        trackCombinedTgVars(txt);
+        if (sNode.dataset && sNode.dataset.theaverEnvPolyfilled === '1') continue;
         if (txt.indexOf('safe-area-inset-bottom') !== -1 || txt.indexOf('safe-area-inset-top') !== -1) {
           var nextTxt = replaceSafeAreaEnvStr(txt);
           if (nextTxt !== txt) {
@@ -1668,15 +1754,30 @@ class MiniAppSession {
       var sheets = document.styleSheets || [];
       for (var ji = 0; ji < sheets.length; ji++) {
         var sheet = sheets[ji];
-        if (!sheet || sheet.__theaverEnvPolyfilled) continue;
-        if (sheet.ownerNode && sheet.ownerNode.id === '__theaver_browser_insets') {
+        if (!sheet) continue;
+        if (sheet.ownerNode && isInternalInsetId(sheet.ownerNode.id)) {
           sheet.__theaverEnvPolyfilled = true;
+          continue;
+        }
+        if (sheet.__theaverEnvPolyfilled) {
+          var cachedTop = sheet.__theaverTopSelectors || [];
+          for (var ti = 0; ti < cachedTop.length; ti++) {
+            markSelectorEnvTop(cachedTop[ti]);
+          }
+          var cachedBot = sheet.__theaverBottomSelectors || [];
+          for (var bi = 0; bi < cachedBot.length; bi++) {
+            markSelectorEnvBottom(cachedBot[bi]);
+          }
           continue;
         }
         try {
           var rules = sheet.cssRules;
           if (rules) {
-            scanStyleRulesForEnv(rules);
+            var topSelectors = [];
+            var bottomSelectors = [];
+            scanStyleRulesForEnv(rules, topSelectors, bottomSelectors);
+            sheet.__theaverTopSelectors = topSelectors;
+            sheet.__theaverBottomSelectors = bottomSelectors;
           }
         } catch (e) {
           // Cross-origin CSSStyleSheet raises SecurityError; intentionally skipped.
@@ -1694,6 +1795,8 @@ class MiniAppSession {
       var ctc = Math.round(Math.max(0, Number(window.__theaverCompactTopClear) || 0) * scale);
       var bc = Math.round(Math.max(0, Number(window.__theaverBottomClear) || 0) * scale);
       var cbc = Math.round(Math.max(0, Number(window.__theaverCompactBottomClear) || 0) * scale);
+      var sysTop = Math.round(Math.max(0, Number(window.__theaverSysTop) || 0) * scale);
+      var sysBottom = Math.round(Math.max(0, Number(window.__theaverSysBottom) || 0) * scale);
       var isCol = !!(collapseState && collapseState.collapsed && !window.__theaverForceExpanded);
       return {
         vw: vw,
@@ -1702,6 +1805,8 @@ class MiniAppSession {
         ctc: ctc,
         bc: bc,
         cbc: cbc,
+        sysTop: sysTop,
+        sysBottom: sysBottom,
         collapsed: isCol,
         activeTop: isCol ? ctc : tc,
         activeBottom: isCol ? cbc : bc
@@ -1710,12 +1815,52 @@ class MiniAppSession {
 
     function applyCssInsetVariables(m) {
       var rootStyle = document.documentElement.style;
+      var useBothTop = !!window.__theaverUsesBothTgTop;
+      var useBothBottom = !!window.__theaverUsesBothTgBottom;
+      var tgTop = useBothTop ? m.sysTop : m.activeTop;
+      var tgContentTop = useBothTop ? Math.max(0, m.activeTop - m.sysTop) : m.activeTop;
+      var tgBottom = useBothBottom ? m.sysBottom : m.activeBottom;
+      var tgContentBottom = useBothBottom ? Math.max(0, m.activeBottom - m.sysBottom) : m.activeBottom;
+
       rootStyle.setProperty('--theaver-top-obscured', m.activeTop + 'px');
       rootStyle.setProperty('--theaver-safe-bottom', m.activeBottom + 'px');
       rootStyle.setProperty('--theaver-header-clearance', m.tc + 'px');
       rootStyle.setProperty('--theaver-bottom-clearance', m.bc + 'px');
-      rootStyle.setProperty('--tg-safe-area-inset-top', m.activeTop + 'px');
-      rootStyle.setProperty('--tg-safe-area-inset-bottom', m.activeBottom + 'px');
+      rootStyle.setProperty('--tg-safe-area-inset-top', tgTop + 'px');
+      rootStyle.setProperty('--tg-safe-area-inset-bottom', tgBottom + 'px');
+      rootStyle.setProperty('--tg-safe-area-inset-left', '0px');
+      rootStyle.setProperty('--tg-safe-area-inset-right', '0px');
+      rootStyle.setProperty('--tg-content-safe-area-inset-top', tgContentTop + 'px');
+      rootStyle.setProperty('--tg-content-safe-area-inset-bottom', tgContentBottom + 'px');
+      rootStyle.setProperty('--tg-content-safe-area-inset-left', '0px');
+      rootStyle.setProperty('--tg-content-safe-area-inset-right', '0px');
+
+      var tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) {
+        var nextSysInset = { top: m.sysTop, bottom: m.sysBottom, left: 0, right: 0 };
+        var nextContentInset = {
+          top: Math.max(0, m.activeTop - m.sysTop),
+          bottom: Math.max(0, m.activeBottom - m.sysBottom),
+          left: 0,
+          right: 0
+        };
+        var sysKey = nextSysInset.top + ':' + nextSysInset.bottom;
+        var contentKey = nextContentInset.top + ':' + nextContentInset.bottom;
+        var prevSysKey = window.__theaverLastSysInsetKey;
+        var prevContentKey = window.__theaverLastContentInsetKey;
+        tg.safeAreaInset = nextSysInset;
+        tg.contentSafeAreaInset = nextContentInset;
+        window.__theaverLastSysInsetKey = sysKey;
+        window.__theaverLastContentInsetKey = contentKey;
+        if (typeof window.__theaverWebAppReceive === 'function') {
+          if (prevSysKey && prevSysKey !== sysKey) {
+            window.__theaverWebAppReceive('safe_area_changed', nextSysInset, '');
+          }
+          if (prevContentKey && prevContentKey !== contentKey) {
+            window.__theaverWebAppReceive('content_safe_area_changed', nextContentInset, '');
+          }
+        }
+      }
 
       var st = document.getElementById('__theaver_browser_insets');
       if (!st && document.head) {
@@ -1729,8 +1874,14 @@ class MiniAppSession {
           '--theaver-safe-bottom: ' + m.activeBottom + 'px; ' +
           '--theaver-header-clearance: ' + m.tc + 'px; ' +
           '--theaver-bottom-clearance: ' + m.bc + 'px; ' +
-          '--tg-safe-area-inset-top: ' + m.activeTop + 'px; ' +
-          '--tg-safe-area-inset-bottom: ' + m.activeBottom + 'px; ' +
+          '--tg-safe-area-inset-top: ' + tgTop + 'px; ' +
+          '--tg-safe-area-inset-bottom: ' + tgBottom + 'px; ' +
+          '--tg-safe-area-inset-left: 0px; ' +
+          '--tg-safe-area-inset-right: 0px; ' +
+          '--tg-content-safe-area-inset-top: ' + tgContentTop + 'px; ' +
+          '--tg-content-safe-area-inset-bottom: ' + tgContentBottom + 'px; ' +
+          '--tg-content-safe-area-inset-left: 0px; ' +
+          '--tg-content-safe-area-inset-right: 0px; ' +
         '} ' +
         'html { scroll-padding-top: var(--theaver-top-obscured) !important; scroll-padding-bottom: var(--theaver-safe-bottom) !important; }';
       if (st && st.textContent !== insetCss) {
@@ -1840,30 +1991,83 @@ class MiniAppSession {
       return metaPayload;
     }
 
-    function usesEnvTopVar(el) {
+    function inlineStyleHasLayoutSafeVar(el, isTop) {
+      if (!el) return false;
+      var checker = isTop ? hasTopSafeVarRef : hasBottomSafeVarRef;
+      var inlineAttr =
+        (el.getAttribute && el.getAttribute('style')) ||
+        (el.style && el.style.cssText) ||
+        '';
+      if (inlineAttr) {
+        var decls = inlineAttr.split(';');
+        for (var di = 0; di < decls.length; di++) {
+          var colonIdx = decls[di].indexOf(':');
+          if (colonIdx <= 0) continue;
+          var dProp = decls[di].slice(0, colonIdx).trim();
+          var dVal = decls[di].slice(colonIdx + 1).trim();
+          if (!dVal) continue;
+          trackCombinedTgVars(dVal);
+          if (isLayoutSafeProp(dProp) && checker(dVal)) {
+            return true;
+          }
+        }
+      }
+      if (el.style && el.style.length) {
+        for (var i = 0; i < el.style.length; i++) {
+          var prop = el.style.item(i);
+          var val = el.style.getPropertyValue(prop);
+          if (val) trackCombinedTgVars(val);
+          if (isLayoutSafeProp(prop) && checker(val)) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function usesSelfTopSafeVar(el) {
       if (!el || !el.dataset) return false;
       if (el.dataset.theaverUsesEnvTop === '1') return true;
-      var inlineStyle = (el.getAttribute && el.getAttribute('style')) || '';
-      if (inlineStyle.indexOf('--theaver-top-obscured') !== -1 || inlineStyle.indexOf('safe-area-inset-top') !== -1) {
-        return true;
-      }
-      if (el.querySelector && el.querySelector('[data-theaver-uses-env-top="1"]')) {
+      return inlineStyleHasLayoutSafeVar(el, true);
+    }
+
+    function usesSelfBottomSafeVar(el) {
+      if (!el || !el.dataset) return false;
+      if (el.dataset.theaverUsesEnvBottom === '1') return true;
+      return inlineStyleHasLayoutSafeVar(el, false);
+    }
+
+    function usesEnvTopVar(el) {
+      if (usesSelfTopSafeVar(el)) return true;
+      if (el && el.querySelector && el.querySelector('[data-theaver-uses-env-top="1"]')) {
         return true;
       }
       return false;
     }
 
     function usesEnvBottomVar(el) {
-      if (!el || !el.dataset) return false;
-      if (el.dataset.theaverUsesEnvBottom === '1') return true;
-      var inlineStyle = (el.getAttribute && el.getAttribute('style')) || '';
-      if (inlineStyle.indexOf('--theaver-safe-bottom') !== -1 || inlineStyle.indexOf('safe-area-inset-bottom') !== -1) {
-        return true;
-      }
-      if (el.querySelector && el.querySelector('[data-theaver-uses-env-bottom="1"]')) {
+      if (usesSelfBottomSafeVar(el)) return true;
+      if (el && el.querySelector && el.querySelector('[data-theaver-uses-env-bottom="1"]')) {
         return true;
       }
       return false;
+    }
+
+    function findSingleFlowWrapperChild(body) {
+      if (!body || !body.children) return null;
+      var visibleFlow = null;
+      for (var bi = 0; bi < body.children.length; bi++) {
+        var ch = body.children[bi];
+        if (!ch || !ch.tagName) continue;
+        var ct = ch.tagName;
+        if (ct === 'SCRIPT' || ct === 'STYLE' || ct === 'LINK' || ct === 'META') continue;
+        var ccs = window.getComputedStyle(ch);
+        if (ccs.display === 'none') continue;
+        if (ccs.position === 'fixed' || ccs.position === 'absolute') continue;
+        if (visibleFlow) return null;
+        visibleFlow = ch;
+      }
+      return visibleFlow;
     }
 
     function hasTrackedTopAncestor(el) {
@@ -2067,10 +2271,24 @@ class MiniAppSession {
         var vh = window.innerHeight || document.documentElement.clientHeight || 0;
         if (!document.body || vw <= 0 || vh <= 0) return null;
 
+        polyfillSafeAreaEnv();
+
         var m = getScaledMetrics();
         var hasTopInset = (m.tc > 0 || m.ctc > 0);
         var docEl = document.documentElement;
         var body = document.body;
+        var rootWrapper = findSingleFlowWrapperChild(body);
+        var rootHandlesTop =
+          usesSelfTopSafeVar(docEl) ||
+          usesSelfTopSafeVar(body) ||
+          (rootWrapper ? usesSelfTopSafeVar(rootWrapper) : false);
+        var rootHandlesBottom =
+          usesSelfBottomSafeVar(docEl) ||
+          usesSelfBottomSafeVar(body) ||
+          (rootWrapper ? usesSelfBottomSafeVar(rootWrapper) : false);
+
+        applyCssInsetVariables(m);
+
         var htmlCs = window.getComputedStyle(docEl);
         var bodyCs = window.getComputedStyle(body);
 
@@ -2110,14 +2328,20 @@ class MiniAppSession {
               var lpt = parseFloat(lel.dataset.theaverScrollContainerPt) || 0;
               var lpb = parseFloat(lel.dataset.theaverScrollContainerPb) || 0;
               setImp(lel, 'box-sizing', 'border-box');
-              if (hasTopInset) {
+              if (hasTopInset && !rootHandlesTop && !usesSelfTopSafeVar(lel)) {
                 lel.dataset.theaverAppliedTopPad = '1';
                 setImp(lel, 'padding-top', Math.round(lpt <= 180 ? lpt + m.tc : Math.max(lpt, m.tc)) + 'px');
               } else if (lel.dataset.theaverAppliedTopPad === '1') {
                 setImp(lel, 'padding-top', Math.round(lpt) + 'px');
                 delete lel.dataset.theaverAppliedTopPad;
               }
-              setImp(lel, 'padding-bottom', Math.round(lpb <= 180 ? lpb + m.bc : Math.max(lpb, m.bc)) + 'px');
+              if (!rootHandlesBottom && !usesSelfBottomSafeVar(lel)) {
+                lel.dataset.theaverAppliedBottomPad = '1';
+                setImp(lel, 'padding-bottom', Math.round(lpb <= 180 ? lpb + m.bc : Math.max(lpb, m.bc)) + 'px');
+              } else if (lel.dataset.theaverAppliedBottomPad === '1') {
+                setImp(lel, 'padding-bottom', Math.round(lpb) + 'px');
+                delete lel.dataset.theaverAppliedBottomPad;
+              }
               break;
             }
           }
@@ -2131,7 +2355,7 @@ class MiniAppSession {
             setImp(body, 'padding-top', Math.round(basePt) + 'px');
             delete body.dataset.theaverAppliedTopPad;
           }
-          if (hasTopInset) {
+          if (hasTopInset && !rootHandlesTop) {
             if (docEl.dataset.theaverOrigPos === 'static' || htmlCs.position === 'static') {
               docEl.dataset.theaverSetRel = '1';
               setImp(docEl, 'position', 'relative');
@@ -2142,7 +2366,13 @@ class MiniAppSession {
           } else {
             restoreRootTopInset(docEl);
           }
-          setImp(body, 'padding-bottom', Math.round(nextPb) + 'px');
+          if (!rootHandlesBottom) {
+            body.dataset.theaverAppliedBottomPad = '1';
+            setImp(body, 'padding-bottom', Math.round(nextPb) + 'px');
+          } else if (body.dataset.theaverAppliedBottomPad === '1') {
+            setImp(body, 'padding-bottom', Math.round(basePb) + 'px');
+            delete body.dataset.theaverAppliedBottomPad;
+          }
 
           var htmlColRaw = parseCssColor(htmlCs.backgroundColor);
           var bodyColRaw = parseCssColor(bodyCs.backgroundColor);
@@ -2167,9 +2397,6 @@ class MiniAppSession {
             }
           }
         }
-
-        applyCssInsetVariables(m);
-        polyfillSafeAreaEnv();
 
         if (!hasTopInset) {
           var prevPinnedList = window.__theaverTrackedTopPinned || [];
@@ -2547,6 +2774,8 @@ class MiniAppSession {
         .replaceAll('__COMPACT_TOP_PX__', safeCompactTop.toString())
         .replaceAll('__BOTTOM_PX__', safeBottom.toString())
         .replaceAll('__COMPACT_BOTTOM_PX__', safeCompactBottom.toString())
+        .replaceAll('__SYS_TOP_PX__', safeSysTop.toString())
+        .replaceAll('__SYS_BOTTOM_PX__', safeSysBottom.toString())
         .replaceAll('__FLUTTER_VH__', safeFlutterVh.toString())
         .replaceAll('__FORCE_EXPANDED__', forceExpandedLit);
   }
@@ -2613,18 +2842,23 @@ class MiniAppSession {
 
   Future<void> injectBrowserSafeInsets() async {
     final ctrl = controller;
-    if (ctrl == null || !isBrowser || WebViewPlatform.instance == null) return;
+    if (ctrl == null || WebViewPlatform.instance == null) return;
     final int topPx = browserTopClearance.round().clamp(0, 320);
     final int compactTopPx = browserCompactTopClearance.round().clamp(0, 320);
     final int bottomPx = browserBottomClearance.round().clamp(0, 320);
     final int compactBottomPx =
         browserCompactBottomClearance.round().clamp(0, 320);
+    final int sysTopPx = browserSystemTopInset.round().clamp(0, topPx);
+    final int sysBottomPx =
+        browserSystemBottomInset.round().clamp(0, bottomPx);
     final int vhPx = browserViewportHeight.round().clamp(0, 4096);
     final js = buildBrowserSafeInsetsScript(
       topPx: topPx,
       compactTopPx: compactTopPx,
       bottomPx: bottomPx,
       compactBottomPx: compactBottomPx,
+      systemTopPx: sysTopPx,
+      systemBottomPx: sysBottomPx,
       flutterViewportHeight: vhPx,
       forceExpanded: browserForceExpanded,
     );
@@ -2938,24 +3172,74 @@ class MiniAppSession {
           handleBridgeMessageFromJs(msg.message);
         },
       )
+      ..addJavaScriptChannel(
+        'TheaverBrowserTheme',
+        onMessageReceived: (JavaScriptMessage msg) {
+          applyBrowserPageMetaPayload(msg.message);
+        },
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onProgress: (p) {
             updateLoadProgress(p);
+            if (p >= 35 && _earlyBrowserInsetsStage < 1) {
+              _earlyBrowserInsetsStage = 1;
+              unawaited(injectBrowserSafeInsets());
+            } else if (p >= 75 && _earlyBrowserInsetsStage < 2) {
+              _earlyBrowserInsetsStage = 2;
+              unawaited(injectBrowserSafeInsets());
+            }
           },
           onPageStarted: (urlStr) {
-            if (urlStr.trim().isNotEmpty) {
-              currentUrl = urlStr.trim();
+            _earlyBrowserInsetsStage = 0;
+            browserChromeCollapsed = false;
+            final nextUrl = urlStr.trim();
+            if (nextUrl.isNotEmpty) {
+              final prevHost = BrowserDataService.extractHost(currentUrl);
+              final nextHost = BrowserDataService.extractHost(nextUrl);
+              if (prevHost != nextHost) {
+                browserTopIsDark = null;
+                browserCanvasColor = null;
+                browserTopPocketColor = null;
+                browserBottomPocketColor = null;
+              }
+              currentUrl = nextUrl;
             }
             currentPageHasSslWarning =
                 acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
+            loadProgress = 0.08;
+            onSheetStateChanged?.call();
             onRequestBridgeInjection?.call();
           },
-          onPageFinished: (_) {
+          onUrlChange: (change) {
+            final next = change.url?.trim() ?? '';
+            if (next.isNotEmpty && next != currentUrl) {
+              currentUrl = next;
+              currentPageHasSslWarning =
+                  acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
+              onSheetStateChanged?.call();
+              MiniAppSessionController.instance.notifySessionUpdated();
+              Future<void>.delayed(const Duration(milliseconds: 150), () {
+                if (controller != null) {
+                  unawaited(injectBrowserSafeInsets());
+                }
+              });
+            }
+          },
+          onPageFinished: (urlStr) async {
+            if (urlStr.trim().isNotEmpty) {
+              currentUrl = urlStr.trim();
+            }
             loadProgress = 1.0;
             isWebContentReady = true;
             onSheetStateChanged?.call();
             onRequestBridgeInjection?.call();
+            await injectBrowserSafeInsets();
+            Future<void>.delayed(const Duration(milliseconds: 300), () {
+              if (controller != null && !isMinimized) {
+                unawaited(injectBrowserSafeInsets());
+              }
+            });
             Future<void>.delayed(const Duration(milliseconds: 500), () {
               if (controller != null && !isMinimized) {
                 unawaited(capturePreviewSnapshot());
@@ -7472,15 +7756,53 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
+  void _updateMiniAppSafeClearances([MediaQueryData? mediaOverride]) {
+    final media = mediaOverride ?? MediaQuery.of(context);
+    final bool hasActionButtons =
+        _session.mainButton.isVisible || _session.secondaryButton.isVisible;
+    final double nextTop = media.padding.top + 58.0;
+    final double nextCompactTop = media.padding.top + 38.0;
+    final double nextBottom =
+        media.padding.bottom + (hasActionButtons ? 66.0 : 0.0);
+    final double nextCompactBottom = nextBottom;
+    final double nextVh = media.size.height;
+    final bool nextForceExpanded = _isMenuOpen;
+    final double nextSysTop = media.padding.top;
+    final double nextSysBottom = media.padding.bottom;
+
+    final bool clearanceChanged =
+        (nextTop - _session.browserTopClearance).abs() > 0.5 ||
+            (nextCompactTop - _session.browserCompactTopClearance).abs() > 0.5 ||
+            (nextBottom - _session.browserBottomClearance).abs() > 0.5 ||
+            (nextCompactBottom - _session.browserCompactBottomClearance).abs() >
+                0.5 ||
+            (nextVh - _session.browserViewportHeight).abs() > 0.5 ||
+            (nextSysTop - _session.browserSystemTopInset).abs() > 0.5 ||
+            (nextSysBottom - _session.browserSystemBottomInset).abs() > 0.5 ||
+            nextForceExpanded != _session.browserForceExpanded;
+
+    _computedTopClearance = nextTop;
+    _computedBottomClearance = nextBottom;
+    _session.browserSystemTopInset = nextSysTop;
+    _session.browserSystemBottomInset = nextSysBottom;
+    _session.browserTopClearance = nextTop;
+    _session.browserCompactTopClearance = nextCompactTop;
+    _session.browserBottomClearance = nextBottom;
+    _session.browserCompactBottomClearance = nextCompactBottom;
+    _session.browserViewportHeight = nextVh;
+    _session.browserForceExpanded = nextForceExpanded;
+    if (nextForceExpanded && _session.browserChromeCollapsed) {
+      _session.browserChromeCollapsed = false;
+    }
+    if (clearanceChanged && _isTransitionReady && _session.controller != null) {
+      unawaited(_session.injectBrowserSafeInsets());
+    }
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final mediaPadding = MediaQuery.paddingOf(context);
-    _computedTopClearance = mediaPadding.top + 60.0;
-    _computedBottomClearance = mediaPadding.bottom +
-        ((_session.mainButton.isVisible || _session.secondaryButton.isVisible)
-            ? 64.0
-            : 0.0);
+    _updateMiniAppSafeClearances(MediaQuery.of(context));
 
     final nextRouteAnim = ModalRoute.of(context)?.animation;
     if (!identical(nextRouteAnim, _routeAnimation)) {
@@ -7575,22 +7897,26 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     if (ctrl == null || !mounted) return;
     final theme = Theme.of(context);
     final themeParams = MiniAppJsBridge.buildThemeParams(theme);
-    final vpHeight = MediaQuery.sizeOf(context).height;
+    final media = MediaQuery.of(context);
+    _updateMiniAppSafeClearances(media);
     final js = MiniAppJsBridge.buildInjectionScript(
       _session.launchData,
       themeParams,
       colorScheme: theme.brightness == Brightness.dark ? 'dark' : 'light',
-      viewportHeight: vpHeight,
+      viewportHeight: media.size.height,
       isExpanded: true,
       platform: _runtimePlatformName,
       topClearance: _computedTopClearance,
       bottomClearance: _computedBottomClearance,
+      systemTopInset: media.padding.top,
+      systemBottomInset: media.padding.bottom,
     );
     try {
       await ctrl.runJavaScript(js);
     } catch (e) {
       debugPrint('MiniApp JS injection warning: $e');
     }
+    unawaited(_session.injectBrowserSafeInsets());
   }
 
   Future<void> _dispatchEventToWebView(
@@ -7751,6 +8077,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_setup_main_button':
         if (mounted) {
           setState(() => _applyButtonSetup(_session.mainButton, data));
+          _updateMiniAppSafeClearances();
+          unawaited(_session.injectBrowserSafeInsets());
           Future<void>.delayed(const Duration(milliseconds: 400), () {
             if (mounted && _session.controller != null) {
               unawaited(_session.capturePreviewSnapshot());
@@ -7762,6 +8090,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_setup_secondary_button':
         if (mounted) {
           setState(() => _applyButtonSetup(_session.secondaryButton, data));
+          _updateMiniAppSafeClearances();
+          unawaited(_session.injectBrowserSafeInsets());
         }
         break;
 
@@ -8011,6 +8341,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
   }
 
+  void _expandMiniAppChrome() {
+    HapticUtils.selection();
+    unawaited(_session.setBrowserChromeCollapsed(false));
+  }
+
   Future<void> _handleSystemBack() async {
     if (_isMenuOpen) {
       _closeMenu();
@@ -8021,7 +8356,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     );
     if (didGoBack) {
       HapticUtils.tap();
+      if (_session.browserChromeCollapsed) {
+        unawaited(_session.setBrowserChromeCollapsed(false));
+      }
       if (mounted) setState(() {});
+    } else if (_session.browserChromeCollapsed) {
+      _expandMiniAppChrome();
     }
   }
 
@@ -8231,6 +8571,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final media = MediaQuery.of(context);
     final double sheetHeight = media.size.height;
     final double topInset = media.padding.top;
+    _updateMiniAppSafeClearances(media);
     final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
     final bool isPageInteractionBlocked =
         isRouteCovered || _isMenuOpen || activeSafariWebAlertCount.value > 0;
@@ -8268,13 +8609,30 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         unameLower == 'botfather' ||
         unameLower == 'walt';
 
-    final double bottomClearance = media.padding.bottom +
-        ((_session.mainButton.isVisible || _session.secondaryButton.isVisible)
-            ? 66.0
-            : 0.0);
-    final double topHudClearance = topInset + 60.0;
-    _computedTopClearance = topHudClearance;
-    _computedBottomClearance = bottomClearance;
+    final bool hasActionButtons =
+        _session.mainButton.isVisible || _session.secondaryButton.isVisible;
+    final double bottomClearance = _computedBottomClearance;
+    final double topHudClearance = _computedTopClearance;
+    final bool isCompact = _session.browserChromeCollapsed && !_isMenuOpen;
+    final Color topPocketBase =
+        _session.browserTopPocketColor ?? _session.customHeaderColor ?? bodyBg;
+    final Color bottomPocketBase = _session.browserBottomPocketColor ??
+        _session.customBottomBarColor ??
+        bodyBg;
+    final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
+    final bool isTopDark = _session.customHeaderColor != null
+        ? isHeaderDark
+        : (_session.browserTopIsDark ?? (bodyBg.computeLuminance() <= 0.55));
+    final SystemUiOverlayStyle overlayStyle =
+        (isTopDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+            .copyWith(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isTopDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isTopDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarIconBrightness:
+          isTopDark ? Brightness.light : Brightness.dark,
+    );
 
     final double expandedMenuHeight =
         (_session.settingsButtonVisible ? 5 : 4) * 44.0 + 12.0;
@@ -8376,6 +8734,39 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       progressColor: palette.primary,
       progressListenable: _session.loadProgressNotifier,
       onCenterTap: _openTabsSwitcherFromHeader,
+      isCompact: isCompact,
+      onExpandCompact: _expandMiniAppChrome,
+      compactCenterChild: Row(
+        key: const ValueKey('mini_app_compact_title_row'),
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(
+            child: Text(
+              displayTitle,
+              key: const ValueKey('mini_app_compact_title'),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12.0,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.1,
+                height: 1.0,
+                color: headerFg.withValues(alpha: 0.88),
+              ),
+            ),
+          ),
+          if (effectiveIsVerified) ...[
+            const SizedBox(width: 4),
+            MiniAppVerifiedSeal(
+              key: const ValueKey('mini_app_compact_verified_seal'),
+              size: 13,
+              color: sealColor,
+              checkColor: sealCheckColor,
+            ),
+          ],
+        ],
+      ),
       isMenuOpen: _isMenuOpen,
       onDismissMenu: _closeMenu,
       expandedMenuWidth: 244.0,
@@ -8657,6 +9048,40 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 ),
               ),
             ),
+            Positioned(
+              key: const ValueKey('mini_app_top_scroll_pocket'),
+              top: 0,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: BrowserScrollPocket(
+                  edge: LiquidGlassEdge.top,
+                  height: topInset + (isCompact ? 34.0 : 56.0),
+                  color: topPocketBase.withValues(alpha: 0.88),
+                  blurSigma: allowEdgeBlur ? 3.5 : 0.0,
+                ),
+              ),
+            ),
+            Positioned(
+              key: const ValueKey('mini_app_bottom_scroll_pocket'),
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: BrowserScrollPocket(
+                  edge: LiquidGlassEdge.bottom,
+                  height: hasActionButtons
+                      ? (media.padding.bottom + 68.0)
+                      : (media.padding.bottom > 0
+                          ? media.padding.bottom + 18.0
+                          : 20.0),
+                  color: bottomPocketBase.withValues(
+                    alpha: hasActionButtons ? 0.86 : (isCompact ? 0.65 : 0.84),
+                  ),
+                  blurSigma: allowEdgeBlur ? 3.0 : 0.0,
+                ),
+              ),
+            ),
             Positioned.fill(
               child: style.isGlass
                   ? LiquidGlassBatch(child: hudOverlayStack)
@@ -8669,13 +9094,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
     return BackdropGroup(
       child: AnnotatedRegion<SystemUiOverlayStyle>(
-        value: isHeaderDark
-            ? SystemUiOverlayStyle.light.copyWith(
-                statusBarColor: Colors.transparent,
-              )
-            : SystemUiOverlayStyle.dark.copyWith(
-                statusBarColor: Colors.transparent,
-              ),
+        value: overlayStyle,
         child: PopScope(
           canPop: _allowRoutePop,
           onPopInvokedWithResult: (didPop, _) {
@@ -8938,6 +9357,48 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Smoothly adapts Safari iOS 26 style feathered edge "Scroll Pocket" color
+/// and height over the top status bar and bottom gesture area.
+class BrowserScrollPocket extends StatelessWidget {
+  final LiquidGlassEdge edge;
+  final double height;
+  final Color color;
+  final double blurSigma;
+
+  const BrowserScrollPocket({
+    super.key,
+    required this.edge,
+    required this.height,
+    required this.color,
+    required this.blurSigma,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<Color?>(
+      tween: ColorTween(begin: color, end: color),
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      builder: (context, animatedColor, _) {
+        final Color resolvedColor = animatedColor ?? color;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          height: height,
+          child: height <= 0.5
+              ? const SizedBox.shrink()
+              : LiquidGlassScrollEdge(
+                  edge: edge,
+                  color: resolvedColor,
+                  blur: blurSigma,
+                  style: LiquidGlassScrollEdgeStyle.soft,
+                ),
+        );
+      },
     );
   }
 }

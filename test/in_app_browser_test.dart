@@ -319,12 +319,21 @@ void main() {
         viewportHeight: 720,
         topClearance: 88,
         bottomClearance: 64,
+        systemTopInset: 24,
+        systemBottomInset: 16,
       );
       expect(js, contains('openInvoice'));
       expect(js, contains('web_app_open_invoice'));
       expect(js, contains('invoiceClosed'));
       expect(js, contains('--theaver-header-clearance'));
       expect(js, contains('--theaver-bottom-clearance'));
+      expect(js, contains('--tg-safe-area-inset-top'));
+      expect(js, contains('--tg-content-safe-area-inset-top'));
+      expect(js, contains('--tg-content-safe-area-inset-bottom'));
+      expect(js, contains('safeAreaInset'));
+      expect(js, contains('contentSafeAreaInset'));
+      expect(js, contains('safeAreaChanged'));
+      expect(js, contains('contentSafeAreaChanged'));
       expect(js, contains('theaver_webapp_ready'));
     });
 
@@ -388,12 +397,16 @@ void main() {
         compactTopPx: 56,
         bottomPx: 80,
         compactBottomPx: 16,
+        systemTopPx: 24,
+        systemBottomPx: 16,
         flutterViewportHeight: 800,
       );
       expect(js, contains('window.__theaverTopClear = 82;'));
       expect(js, contains('window.__theaverCompactTopClear = 56;'));
       expect(js, contains('window.__theaverBottomClear = 80;'));
       expect(js, contains('window.__theaverCompactBottomClear = 16;'));
+      expect(js, contains('window.__theaverSysTop = 24;'));
+      expect(js, contains('window.__theaverSysBottom = 16;'));
       expect(js, contains('window.__theaverFlutterVh = 800;'));
       expect(js, contains('window.__theaverSyncSafeZones('));
       expect(js, contains('--theaver-top-obscured'));
@@ -402,6 +415,12 @@ void main() {
       expect(js, contains('--theaver-bottom-clearance'));
       expect(js, contains('--tg-safe-area-inset-top'));
       expect(js, contains('--tg-safe-area-inset-bottom'));
+      expect(js, contains('--tg-content-safe-area-inset-top'));
+      expect(js, contains('--tg-content-safe-area-inset-bottom'));
+      expect(js, contains('__theaver_hud_insets'));
+      expect(js, contains('hasTopSafeVarRef'));
+      expect(js, contains('trackCombinedTgVars'));
+      expect(js, contains('usesSelfTopSafeVar'));
       expect(js, contains('safe-area-inset-bottom'));
       expect(js, contains('__theaverSetCollapsedFromHost'));
       expect(js, contains('elementsFromPoint'));
@@ -2708,5 +2727,302 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_menu_button')), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'MiniAppWebViewSheet keeps full-bleed viewport with soft BrowserScrollPocket overlays and dynamic clearances',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final miniSession = MiniAppSession(
+          launchData: const MiniAppLaunchData(
+            url: 'https://api.theaver.app/api/miniapps/wallet',
+            initData: 'hash=walt',
+            botId: '2',
+            botUsername: 'walt',
+            botDisplayName: 'Walt',
+            botIsVerified: true,
+          ),
+          botName: 'Walt',
+          botUsername: 'walt',
+          isVerified: true,
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(400, 800),
+                padding: EdgeInsets.only(top: 24, bottom: 16),
+              ),
+              child: MiniAppWebViewSheet(
+                launchData: miniSession.launchData,
+                botName: 'Walt',
+                botUsername: 'walt',
+                isVerified: true,
+                session: miniSession,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final topPocketFinder = find.byKey(
+          const ValueKey('mini_app_top_scroll_pocket'),
+        );
+        final bottomPocketFinder = find.byKey(
+          const ValueKey('mini_app_bottom_scroll_pocket'),
+        );
+        expect(topPocketFinder, findsOneWidget);
+        expect(bottomPocketFinder, findsOneWidget);
+
+        final viewportGuard = find.byKey(
+          const ValueKey('mini_app_web_interaction_guard'),
+        );
+        expect(
+          tester.getRect(viewportGuard),
+          const Rect.fromLTWH(0, 0, 400, 800),
+        );
+        final topEdge = tester.widget<LiquidGlassScrollEdge>(
+          find.descendant(
+            of: topPocketFinder,
+            matching: find.byType(LiquidGlassScrollEdge),
+          ),
+        );
+        expect(topEdge.style, LiquidGlassScrollEdgeStyle.soft);
+
+        expect(miniSession.browserTopClearance, closeTo(82.0, 0.01));
+        expect(miniSession.browserCompactTopClearance, closeTo(62.0, 0.01));
+        expect(miniSession.browserBottomClearance, closeTo(16.0, 0.01));
+        expect(miniSession.browserCompactBottomClearance, closeTo(16.0, 0.01));
+        expect(miniSession.browserSystemTopInset, closeTo(24.0, 0.01));
+        expect(miniSession.browserSystemBottomInset, closeTo(16.0, 0.01));
+        expect(miniSession.browserViewportHeight, closeTo(800.0, 0.01));
+        expect(miniSession.browserForceExpanded, isFalse);
+
+        // Showing Telegram MainButton increases bottom clearance even when chrome collapses.
+        miniSession.handleBridgeMessageFromJs(
+          jsonEncode({
+            'eventType': 'web_app_setup_main_button',
+            'eventData': {'is_visible': true, 'text': 'Оплатить'},
+          }),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Оплатить'), findsOneWidget);
+        expect(miniSession.browserBottomClearance, closeTo(82.0, 0.01));
+        expect(miniSession.browserCompactBottomClearance, closeTo(82.0, 0.01));
+      },
+    );
+
+    for (final mode in const <GlassMode>[GlassMode.full, GlassMode.disabled]) {
+      testWidgets(
+        'MiniAppWebViewSheet morphs 3 top capsules into compact title pill on scroll and expands on pill tap or System Back in $mode',
+        (tester) async {
+          tester.view.physicalSize = const Size(400, 800);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+
+          final miniSession = MiniAppSession(
+            launchData: const MiniAppLaunchData(
+              url: 'https://api.theaver.app/api/miniapps/wallet',
+              initData: 'hash=walt',
+              botId: '2',
+              botUsername: 'walt',
+              botDisplayName: 'Walt',
+              botIsVerified: true,
+            ),
+            botName: 'Walt',
+            botUsername: 'walt',
+            isVerified: true,
+          );
+
+          await tester.pumpWidget(
+            ChangeNotifierProvider<LiquidGlassProvider>.value(
+              value: _TestLiquidGlassProvider(mode),
+              child: MaterialApp(
+                home: MediaQuery(
+                  data: const MediaQueryData(
+                    size: Size(400, 800),
+                    padding: EdgeInsets.only(top: 24, bottom: 16),
+                  ),
+                  child: MiniAppWebViewSheet(
+                    launchData: miniSession.launchData,
+                    botName: 'Walt',
+                    botUsername: 'walt',
+                    isVerified: true,
+                    session: miniSession,
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final headerFinder = find.byType(WebViewFloatingHeader);
+          expect(
+            find.byKey(const ValueKey('mini_app_close_or_back_button')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_collapse_expand_button')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_more_menu_button')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_verified_seal')),
+            findsOneWidget,
+          );
+
+          final morphKey = ValueKey(
+            mode == GlassMode.full
+                ? 'webview_center_morph'
+                : 'webview_center_matte_morph',
+          );
+          final centerMorphFinder = find.byKey(morphKey);
+          expect(centerMorphFinder, findsOneWidget);
+          final State centerMorphState = tester.state(centerMorphFinder);
+
+          if (mode == GlassMode.full) {
+            expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
+            final centerLens = find.descendant(
+              of: centerMorphFinder,
+              matching: find.byType(LiquidGlassLens),
+            );
+            expect(centerLens, findsOneWidget);
+            expect(tester.getRect(centerLens).height, closeTo(44.0, 0.5));
+            expect(
+              find.ancestor(
+                of: centerLens,
+                matching: find.descendant(
+                  of: headerFinder,
+                  matching: find.byWidgetPredicate(
+                    (w) =>
+                        w is FadeTransition ||
+                        (w is Opacity && w.opacity > 0.0 && w.opacity < 1.0),
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          } else {
+            expect(
+              tester
+                  .getSize(find.byKey(const ValueKey('webview_header_center_pill')))
+                  .height,
+              closeTo(44.0, 0.5),
+            );
+          }
+
+          // Simulate downward scroll inside Mini App web viewport.
+          miniSession.applyBrowserPageMetaPayload(
+            '{"collapsed":true,"topIsDark":true,"topColor":"rgb(22, 27, 34)","bottomColor":"rgb(22, 27, 34)","canvasColor":"rgb(22, 27, 34)"}',
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 70));
+
+          expect(identical(tester.state(centerMorphFinder), centerMorphState), isTrue);
+          if (mode == GlassMode.full) {
+            final centerLens = find.descendant(
+              of: centerMorphFinder,
+              matching: find.byType(LiquidGlassLens),
+            );
+            expect(
+              tester.getRect(centerLens).height,
+              inInclusiveRange(25.9, 44.1),
+            );
+          } else {
+            final midH = tester
+                .getSize(find.byKey(const ValueKey('webview_header_center_pill')))
+                .height;
+            expect(midH, inInclusiveRange(26.0, 44.0));
+          }
+
+          await tester.pumpAndSettle();
+
+          expect(miniSession.browserChromeCollapsed, isTrue);
+          expect(miniSession.browserTopPocketColor, const Color(0xFF161B22));
+          expect(
+            find.byKey(const ValueKey('mini_app_close_or_back_button')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_collapse_expand_button')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_more_menu_button')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_compact_title_row')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_compact_verified_seal')),
+            findsOneWidget,
+          );
+          if (mode == GlassMode.full) {
+            final centerLens = find.descendant(
+              of: centerMorphFinder,
+              matching: find.byType(LiquidGlassLens),
+            );
+            expect(tester.getRect(centerLens).height, closeTo(26.0, 0.5));
+          } else {
+            expect(
+              tester
+                  .getSize(find.byKey(const ValueKey('webview_header_center_pill')))
+                  .height,
+              closeTo(26.0, 0.5),
+            );
+          }
+
+          // Tapping compact center pill expands chrome back without opening tabs switcher.
+          await tester.tap(
+            find.byKey(const ValueKey('webview_header_center_pill')),
+          );
+          await tester.pumpAndSettle();
+
+          expect(identical(tester.state(centerMorphFinder), centerMorphState), isTrue);
+          expect(miniSession.browserChromeCollapsed, isFalse);
+          expect(
+            find.byKey(const ValueKey('mini_app_tabs_switcher')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_close_or_back_button')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_collapse_expand_button')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('mini_app_more_menu_button')),
+            findsOneWidget,
+          );
+
+          // System Back at root expands collapsed header without closing Mini App.
+          miniSession.applyBrowserPageMetaPayload('{"collapsed":true}');
+          await tester.pumpAndSettle();
+          expect(miniSession.browserChromeCollapsed, isTrue);
+
+          await tester.binding.handlePopRoute();
+          await tester.pumpAndSettle();
+
+          expect(find.byType(MiniAppWebViewSheet), findsOneWidget);
+          expect(miniSession.browserChromeCollapsed, isFalse);
+          expect(
+            find.byKey(const ValueKey('mini_app_more_menu_button')),
+            findsOneWidget,
+          );
+        },
+      );
+    }
   });
 }
