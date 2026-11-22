@@ -13,7 +13,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../screens/settings/browser_vault_and_data_screen.dart';
 import '../../services/bot_service.dart';
-import '../../services/browser_cookie_jar_vault.dart';
 import '../../services/browser_data_service.dart';
 import '../../services/browser_site_settings_service.dart';
 import '../../services/browser_vault_service.dart';
@@ -29,20 +28,17 @@ import 'safari_browser_dialogs.dart';
 import 'safari_library_sheet.dart';
 
 /// Opens [url] inside Theaver's Telegram-style full-screen WebView browser,
-/// or restores an already minimized browser tab with the same URL and privacy mode.
+/// or restores an already minimized browser tab with the same URL.
 Future<void> openInAppBrowser(
   BuildContext context, {
   required String url,
-  bool isIncognito = false,
 }) async {
   final cleanUrl = url.trim();
   if (cleanUrl.isEmpty) return;
 
   final sessionCtrl = MiniAppSessionController.instance;
   for (final existing in sessionCtrl.minimizedSessions.reversed) {
-    if (existing.isBrowser &&
-        existing.isIncognito == isIncognito &&
-        existing.currentUrl == cleanUrl) {
+    if (existing.isBrowser && existing.currentUrl == cleanUrl) {
       await sessionCtrl.restoreSession(existing);
       return;
     }
@@ -57,12 +53,8 @@ Future<void> openInAppBrowser(
       botDisplayName: BrowserDataService.extractHost(cleanUrl),
     ),
     isBrowser: true,
-    isIncognito: isIncognito,
     initialUrl: cleanUrl,
   );
-  if (isIncognito) {
-    await BrowserCookieJarVault.instance.onIncognitoSessionOpened(session.id);
-  }
   if (!context.mounted) return;
 
   await showTheavModalSheet<void>(
@@ -72,132 +64,6 @@ Future<void> openInAppBrowser(
     useRootNavigator: true,
     customSheetBuilder: (_) => InAppBrowserSheet(session: session),
     builder: (_) => const SizedBox.shrink(),
-  );
-}
-
-/// Prompts the user for a website URL or search query (with bookmark shortcuts)
-/// and opens a new normal or «Частный доступ» browser tab.
-Future<void> openNewBrowserTabPrompt(
-  BuildContext context, {
-  bool isIncognito = false,
-}) async {
-  await BrowserDataService.instance.ensureLoaded();
-  if (!context.mounted) return;
-
-  final ctrl = TextEditingController();
-  final bookmarks = BrowserDataService.instance.bookmarks.take(4).toList();
-  final String? entered = await showTheavModalSheet<String>(
-    context: context,
-    useRootNavigator: true,
-    barrierDismissible: true,
-    maxHeightFactor: 0.56,
-    title: isIncognito ? 'Новая частная вкладка' : 'Новая вкладка',
-    padding: const EdgeInsets.fromLTRB(18, 6, 18, 20),
-    builder: (sheetCtx) {
-      final pal = TheavSurfaceStyle.of(sheetCtx).palette;
-      return Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(sheetCtx).bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (isIncognito)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Text(
-                  'История, cookie и пароли в частном доступе не сохраняются.',
-                  style: TextStyle(fontSize: 12.5, color: pal.subtext),
-                ),
-              ),
-            TextField(
-              key: const ValueKey('browser_new_tab_url_input'),
-              controller: ctrl,
-              autofocus: true,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.go,
-              decoration: InputDecoration(
-                hintText: 'Введите адрес или поисковый запрос',
-                prefixIcon: Icon(
-                  isIncognito ? Icons.visibility_off_rounded : Icons.search_rounded,
-                  size: 19,
-                ),
-                filled: true,
-                fillColor: pal.onSurface.withValues(alpha: 0.06),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-              onSubmitted: (v) => Navigator.of(sheetCtx).pop(v.trim()),
-            ),
-            if (bookmarks.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  for (final bm in bookmarks)
-                    ActionChip(
-                      label: Text(
-                        bm.title.isNotEmpty
-                            ? bm.title
-                            : BrowserDataService.extractHost(bm.url),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onPressed: () => Navigator.of(sheetCtx).pop(bm.url),
-                    ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 14),
-            SizedBox(
-              height: 44,
-              child: Material(
-                color: pal.primary,
-                borderRadius: BorderRadius.circular(22),
-                child: InkWell(
-                  key: const ValueKey('browser_new_tab_go_btn'),
-                  borderRadius: BorderRadius.circular(22),
-                  onTap: () => Navigator.of(sheetCtx).pop(ctrl.text.trim()),
-                  child: Center(
-                    child: Text(
-                      'Открыть',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w700,
-                        color: pal.onPrimary,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-  ctrl.dispose();
-
-  if (!context.mounted || entered == null) return;
-  final raw = entered.trim();
-  if (raw.isEmpty) return;
-
-  final String targetUrl;
-  if (raw.startsWith('http://') || raw.startsWith('https://')) {
-    targetUrl = raw;
-  } else if (!raw.contains(' ') && raw.contains('.')) {
-    targetUrl = 'https://$raw';
-  } else {
-    targetUrl = 'https://ya.ru/search/?text=${Uri.encodeQueryComponent(raw)}';
-  }
-  await openInAppBrowser(
-    context,
-    url: targetUrl,
-    isIncognito: isIncognito,
   );
 }
 
@@ -386,7 +252,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     unawaited(BrowserVaultService.instance.ensureLoaded());
     unawaited(
       BrowserSiteSettingsService.instance.ensureLoaded().then((_) {
-        if (!mounted || _session.isIncognito || _session.controller != null) {
+        if (!mounted || _session.controller != null) {
           return;
         }
         final savedDesktop = BrowserSiteSettingsService.instance
@@ -613,7 +479,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         pageBuilder: (routeCtx, _, __) => MiniAppTabsSwitcher(
           key: const ValueKey('mini_app_tabs_switcher'),
           sessions: sessions,
-          initialPrivateMode: _session.isIncognito,
           onDismiss: () => Navigator.of(routeCtx).maybePop(),
           onSelectSession: (selected) {
             Navigator.of(routeCtx).maybePop();
@@ -635,12 +500,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             Navigator.of(routeCtx).maybePop();
             if (mounted) {
               _closeTab();
-            }
-          },
-          onOpenNewBrowserTab: (isPrivate) {
-            Navigator.of(routeCtx).maybePop();
-            if (mounted) {
-              unawaited(openNewBrowserTabPrompt(context, isIncognito: isPrivate));
             }
           },
         ),
@@ -790,12 +649,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _closeMenu();
     final nextDesktop = !_session.isDesktopMode;
     setState(() => _session.isDesktopMode = nextDesktop);
-    if (!_session.isIncognito) {
-      unawaited(
-        BrowserSiteSettingsService.instance
-            .setDesktopModeForUrl(_session.currentUrl, nextDesktop),
-      );
-    }
+    unawaited(
+      BrowserSiteSettingsService.instance
+          .setDesktopModeForUrl(_session.currentUrl, nextDesktop),
+    );
     final ctrl = _session.controller;
     if (ctrl != null && _hasPlatformWebView) {
       await ctrl.setUserAgent(
@@ -1098,9 +955,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         resolved.bodyBg;
     final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
 
-    final List<BrowserCredentialHint> savedHintsForCurrent = _session.isIncognito
-        ? const <BrowserCredentialHint>[]
-        : BrowserVaultService.instance.getHintsForUrl(currentUrl);
+    final List<BrowserCredentialHint> savedHintsForCurrent =
+        BrowserVaultService.instance.getHintsForUrl(currentUrl);
     final Widget expandedMenuContent = Padding(
       key: const ValueKey('in_app_browser_overflow_menu'),
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1183,15 +1039,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               onTap: _toggleDesktopMode,
             ),
             _browserMenuItem(
-              icon: Icons.visibility_off_outlined,
-              label: 'Новая частная вкладка',
-              fg: resolved.headerFg,
-              onTap: () {
-                _closeMenu();
-                unawaited(openNewBrowserTabPrompt(context, isIncognito: true));
-              },
-            ),
-            _browserMenuItem(
               icon: Icons.copy_rounded,
               label: 'Копировать ссылку',
               fg: resolved.headerFg,
@@ -1218,7 +1065,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       hasAcceptedSslWarning: _session.hasAcceptedSslWarningForUrl(currentUrl),
       savedPasswordCount: savedHintsForCurrent.length,
       cookiePolicy: BrowserSiteSettingsService.instance.cookiePolicy,
-      isIncognito: _session.isIncognito,
       onCopyUrl: () {
         _closeSiteInfoPopover();
         unawaited(_copyCurrentUrl());
@@ -1272,14 +1118,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         key: const ValueKey('in_app_browser_compact_domain_row'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (_session.isIncognito) ...[
-            Icon(
-              Icons.visibility_off_rounded,
-              size: 10.5,
-              color: resolved.palette.primary,
-            ),
-            const SizedBox(width: 3),
-          ],
           Icon(
             isFullySecure ? Icons.lock_rounded : Icons.warning_amber_rounded,
             size: 10.5,
@@ -1308,7 +1146,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       onDismissMenu: _closeMenu,
       expandedMenuWidth: 264.0,
       expandedMenuHeight: math.min(
-        10 * 44.0 + 16.0,
+        9 * 44.0 + 16.0,
         math.max(180.0, mq.size.height - topInset - bottomInset - 24.0),
       ),
       expandedMenuChild: expandedMenuContent,
@@ -1361,45 +1199,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                     color: resolved.headerFg,
                   ),
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_session.isIncognito) ...[
-                      Container(
-                        key: const ValueKey('in_app_browser_incognito_badge'),
-                        margin: const EdgeInsets.only(right: 5),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        decoration: BoxDecoration(
-                          color: resolved.palette.primary.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          'Частный',
-                          style: TextStyle(
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w700,
-                            height: 1.1,
-                            color: resolved.palette.primary,
-                          ),
-                        ),
-                      ),
-                    ],
-                    Flexible(
-                      child: Text(
-                        host,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          height: 1.15,
-                          color: resolved.headerFg.withValues(alpha: 0.68),
-                        ),
-                      ),
-                    ),
-                  ],
+                Text(
+                  host,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.15,
+                    color: resolved.headerFg.withValues(alpha: 0.68),
+                  ),
                 ),
               ],
             ),
@@ -1745,7 +1553,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
           ),
         floatingBottomBar,
-        if (!_session.isIncognito && _session.focusedAutofillField != null)
+        if (_session.focusedAutofillField != null)
           Positioned(
             left: 0,
             right: 0,
@@ -1775,7 +1583,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               ),
             ),
           ),
-        if (!_session.isIncognito && _session.pendingCredentialPrompt != null)
+        if (_session.pendingCredentialPrompt != null)
           Positioned(
             left: 0,
             right: 0,

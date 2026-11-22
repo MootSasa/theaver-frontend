@@ -16,7 +16,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../services/bot_service.dart';
-import '../../services/browser_cookie_jar_vault.dart';
 import '../../services/browser_data_service.dart';
 import '../../services/browser_site_settings_service.dart';
 import '../../services/browser_storage_bridge.dart';
@@ -239,7 +238,6 @@ abstract interface class BrowserUiDialogDelegate {
     required String host,
     String? realm,
     String? url,
-    bool isIncognito = false,
   });
 }
 
@@ -390,7 +388,6 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
     required String host,
     String? realm,
     String? url,
-    bool isIncognito = false,
   }) async {
     if (!isDialogHostMounted) return null;
     final cleanHost = host.trim();
@@ -424,12 +421,10 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
                 originScope: effectiveUrl,
               );
             },
-      offerSaveOption:
-          !isIncognito && BrowserSiteSettingsService.instance.savePasswordsEnabled,
+      offerSaveOption: BrowserSiteSettingsService.instance.savePasswordsEnabled,
     );
     if (res == null) return null;
     if (res.saveCredential &&
-        !isIncognito &&
         res.password.isNotEmpty &&
         effectiveUrl.isNotEmpty) {
       unawaited(
@@ -530,7 +525,6 @@ class MiniAppSession {
       '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
   final bool isBrowser;
-  final bool isIncognito;
   String currentUrl;
   String pageTitle = '';
   bool canGoBack = false;
@@ -732,11 +726,6 @@ class MiniAppSession {
       if (pageOrigin == null || msgOrigin != pageOrigin) return;
 
       if (type == 'fieldFocused') {
-        if (isIncognito) {
-          focusedAutofillField = null;
-          onSheetStateChanged?.call();
-          return;
-        }
         final kind = decoded['kind']?.toString() ?? '';
         final subtype = decoded['subtype']?.toString() ?? '';
         if (kind != 'login' && kind != 'contact') return;
@@ -752,7 +741,6 @@ class MiniAppSession {
           onSheetStateChanged?.call();
         }
       } else if (type == 'credentialsSubmitted') {
-        if (isIncognito) return;
         await BrowserSiteSettingsService.instance.ensureLoaded();
         if (!BrowserSiteSettingsService.instance.savePasswordsEnabled) return;
         final username = decoded['username']?.toString() ?? '';
@@ -784,9 +772,8 @@ class MiniAppSession {
   List<String> grantedPermissionLabelsForUrl(String rawUrl) {
     final hostKey = _hostKeyForUrl(rawUrl);
     final perms = sessionSitePermissions[hostKey];
-    final persistent = !isIncognito
-        ? BrowserSiteSettingsService.instance.preferenceForHost(hostKey)
-        : null;
+    final persistent =
+        BrowserSiteSettingsService.instance.preferenceForHost(hostKey);
     final bool hasCam =
         perms?[WebViewPermissionResourceType.camera.name] == true ||
             persistent?.cameraPolicy == SitePermissionDecision.allow;
@@ -802,13 +789,10 @@ class MiniAppSession {
   bool hasMutedJsDialogsForUrl(String rawUrl) {
     final hostKey = _hostKeyForUrl(rawUrl);
     if (mutedJsDialogHosts.contains(hostKey)) return true;
-    if (!isIncognito) {
-      return BrowserSiteSettingsService.instance
-              .preferenceForHost(hostKey)
-              ?.muteJsDialogs ??
-          false;
-    }
-    return false;
+    return BrowserSiteSettingsService.instance
+            .preferenceForHost(hostKey)
+            ?.muteJsDialogs ??
+        false;
   }
 
   bool hasAcceptedSslWarningForUrl(String rawUrl) =>
@@ -820,7 +804,7 @@ class MiniAppSession {
     mutedJsDialogHosts.remove(hostKey);
     acceptedSslWarningHosts.remove(hostKey);
     acceptedSuspiciousHosts.remove(hostKey);
-    if (isBrowser && !isIncognito && hostKey.isNotEmpty) {
+    if (isBrowser && hostKey.isNotEmpty) {
       unawaited(BrowserSiteSettingsService.instance.resetHost(hostKey));
     }
     if (_hostKeyForUrl(currentUrl) == hostKey) {
@@ -881,10 +865,10 @@ class MiniAppSession {
       return;
     }
     final origin = _resolveDialogOrigin(null);
-    if (isBrowser && !isIncognito) {
+    if (isBrowser) {
       await BrowserSiteSettingsService.instance.ensureLoaded();
     }
-    final persistentPref = (isBrowser && !isIncognito)
+    final persistentPref = isBrowser
         ? BrowserSiteSettingsService.instance.preferenceForHost(origin.hostKey)
         : null;
     final hostPerms = sessionSitePermissions.putIfAbsent(
@@ -932,7 +916,7 @@ class MiniAppSession {
           await uiDialogDelegate!.onSitePermissionChoiceRequest(
         host: origin.label,
         types: request.types,
-        offerPersistentAlways: isBrowser && !isIncognito,
+        offerPersistentAlways: isBrowser,
       );
       final bool siteAllowed = choice != SafariSitePermissionChoice.deny;
       for (final t in request.types) {
@@ -940,7 +924,6 @@ class MiniAppSession {
       }
       if (choice == SafariSitePermissionChoice.allowAlways &&
           isBrowser &&
-          !isIncognito &&
           origin.hostKey.isNotEmpty) {
         await BrowserSiteSettingsService.instance.setPermissionForHost(
           origin.hostKey,
@@ -1023,11 +1006,10 @@ class MiniAppSession {
     final origin = _resolveDialogOrigin(request.url);
     final bool isMuted = origin.hostKey.isNotEmpty &&
         (mutedJsDialogHosts.contains(origin.hostKey) ||
-            (!isIncognito &&
-                (BrowserSiteSettingsService.instance
-                        .preferenceForHost(origin.hostKey)
-                        ?.muteJsDialogs ??
-                    false)));
+            (BrowserSiteSettingsService.instance
+                    .preferenceForHost(origin.hostKey)
+                    ?.muteJsDialogs ??
+                false));
     if (!_hasActiveDialogHost || isMuted) {
       return;
     }
@@ -1040,7 +1022,7 @@ class MiniAppSession {
       onMuteHost: () {
         if (origin.hostKey.isNotEmpty) {
           mutedJsDialogHosts.add(origin.hostKey);
-          if (isBrowser && !isIncognito) {
+          if (isBrowser) {
             unawaited(
               BrowserSiteSettingsService.instance
                   .setMuteJsDialogsForHost(origin.hostKey, true),
@@ -1058,11 +1040,10 @@ class MiniAppSession {
     final origin = _resolveDialogOrigin(request.url);
     final bool isMuted = origin.hostKey.isNotEmpty &&
         (mutedJsDialogHosts.contains(origin.hostKey) ||
-            (!isIncognito &&
-                (BrowserSiteSettingsService.instance
-                        .preferenceForHost(origin.hostKey)
-                        ?.muteJsDialogs ??
-                    false)));
+            (BrowserSiteSettingsService.instance
+                    .preferenceForHost(origin.hostKey)
+                    ?.muteJsDialogs ??
+                false));
     if (!_hasActiveDialogHost || isMuted) {
       return false;
     }
@@ -1075,7 +1056,7 @@ class MiniAppSession {
       onMuteHost: () {
         if (origin.hostKey.isNotEmpty) {
           mutedJsDialogHosts.add(origin.hostKey);
-          if (isBrowser && !isIncognito) {
+          if (isBrowser) {
             unawaited(
               BrowserSiteSettingsService.instance
                   .setMuteJsDialogsForHost(origin.hostKey, true),
@@ -1093,11 +1074,10 @@ class MiniAppSession {
     final origin = _resolveDialogOrigin(request.url);
     final bool isMuted = origin.hostKey.isNotEmpty &&
         (mutedJsDialogHosts.contains(origin.hostKey) ||
-            (!isIncognito &&
-                (BrowserSiteSettingsService.instance
-                        .preferenceForHost(origin.hostKey)
-                        ?.muteJsDialogs ??
-                    false)));
+            (BrowserSiteSettingsService.instance
+                    .preferenceForHost(origin.hostKey)
+                    ?.muteJsDialogs ??
+                false));
     if (!_hasActiveDialogHost || isMuted) {
       return '';
     }
@@ -1111,7 +1091,7 @@ class MiniAppSession {
       onMuteHost: () {
         if (origin.hostKey.isNotEmpty) {
           mutedJsDialogHosts.add(origin.hostKey);
-          if (isBrowser && !isIncognito) {
+          if (isBrowser) {
             unawaited(
               BrowserSiteSettingsService.instance
                   .setMuteJsDialogsForHost(origin.hostKey, true),
@@ -1135,7 +1115,6 @@ class MiniAppSession {
       host: cleanHost,
       realm: request.realm,
       url: isBrowser ? currentUrl : launchData.url,
-      isIncognito: isIncognito,
     );
     if (cred != null) {
       request.onProceed(cred);
@@ -1182,7 +1161,6 @@ class MiniAppSession {
     this.buttonText = '',
     this.onSwitchInlineQuery,
     this.isBrowser = false,
-    this.isIncognito = false,
     String? initialUrl,
     Future<MiniAppLaunchData?>? pendingLaunchFuture,
   })  : id = id ?? '${isBrowser ? 'browser_tab' : 'mini_app'}_${++_nextSessionSeq}',
@@ -2987,7 +2965,6 @@ class MiniAppSession {
           settings.cookiePolicy == BrowserCookiePolicy.allowAll,
       blockAllCookies: settings.cookiePolicy == BrowserCookiePolicy.blockAll,
       enableOsAutofill: settings.osAutofillEnabled,
-      isIncognito: isIncognito,
     );
   }
 
@@ -3012,16 +2989,12 @@ class MiniAppSession {
     if (uri == null) return;
 
     if (isBrowser) {
-      if (isIncognito) {
-        unawaited(BrowserCookieJarVault.instance.onIncognitoSessionOpened(id));
-      } else {
-        unawaited(BrowserVaultService.instance.ensureLoaded());
-        final savedDesktop = BrowserSiteSettingsService.instance
-            .preferenceForUrl(targetUrl)
-            ?.desktopMode;
-        if (savedDesktop != null) {
-          isDesktopMode = savedDesktop;
-        }
+      unawaited(BrowserVaultService.instance.ensureLoaded());
+      final savedDesktop = BrowserSiteSettingsService.instance
+          .preferenceForUrl(targetUrl)
+          ?.desktopMode;
+      if (savedDesktop != null) {
+        isDesktopMode = savedDesktop;
       }
       _lastAutofillOrigin = BrowserVaultService.normalizeOrigin(targetUrl);
 
@@ -3065,19 +3038,17 @@ class MiniAppSession {
                   browserCanvasColor = null;
                   browserTopPocketColor = null;
                   browserBottomPocketColor = null;
-                  if (!isIncognito) {
-                    final siteDesktop = BrowserSiteSettingsService.instance
-                        .preferenceForUrl(nextUrl)
-                        ?.desktopMode;
-                    if (siteDesktop != null && siteDesktop != isDesktopMode) {
-                      isDesktopMode = siteDesktop;
-                      unawaited(
-                        controller?.setUserAgent(
-                          siteDesktop ? desktopUserAgent : null,
-                        ) ??
-                            Future<void>.value(),
-                      );
-                    }
+                  final siteDesktop = BrowserSiteSettingsService.instance
+                      .preferenceForUrl(nextUrl)
+                      ?.desktopMode;
+                  if (siteDesktop != null && siteDesktop != isDesktopMode) {
+                    isDesktopMode = siteDesktop;
+                    unawaited(
+                      controller?.setUserAgent(
+                        siteDesktop ? desktopUserAgent : null,
+                      ) ??
+                          Future<void>.value(),
+                    );
                   }
                 }
                 currentUrl = nextUrl;
@@ -3123,13 +3094,9 @@ class MiniAppSession {
                 );
               } catch (_) {}
               await refreshBrowserNavState();
-              if (isIncognito) {
-                BrowserCookieJarVault.instance.onIncognitoUrlVisited(currentUrl);
-              } else {
-                await BrowserDataService.instance
-                    .recordVisit(currentUrl, displayTitle);
-                unawaited(BrowserStorageBridge.instance.flushCookies());
-              }
+              await BrowserDataService.instance
+                  .recordVisit(currentUrl, displayTitle);
+              unawaited(BrowserStorageBridge.instance.flushCookies());
               Future<void>.delayed(const Duration(milliseconds: 300), () {
                 if (controller != null && !isMinimized) {
                   unawaited(injectBrowserSafeInsets());
@@ -3671,7 +3638,6 @@ class MiniAppSessionController extends ChangeNotifier {
               s.launchData.url == session.launchData.url) ||
           (session.isBrowser &&
               s.isBrowser &&
-              s.isIncognito == session.isIncognito &&
               s.currentUrl.isNotEmpty &&
               s.currentUrl == session.currentUrl),
     );
@@ -3723,7 +3689,6 @@ class MiniAppSessionController extends ChangeNotifier {
               s.launchData.url == session.launchData.url) ||
           (session.isBrowser &&
               s.isBrowser &&
-              s.isIncognito == session.isIncognito &&
               s.currentUrl.isNotEmpty &&
               s.currentUrl == session.currentUrl),
     );
@@ -3824,9 +3789,6 @@ class MiniAppSessionController extends ChangeNotifier {
 
   void closeSession(MiniAppSession session) {
     session.clearAutofillOverlays(notify: false);
-    if (session.isBrowser && session.isIncognito) {
-      unawaited(BrowserCookieJarVault.instance.onIncognitoSessionClosed(session.id));
-    }
     final idx = _minimizedSessions.indexWhere((s) => identical(s, session));
     if (idx == -1) return;
     _minimizedSessions.removeAt(idx);
@@ -3849,9 +3811,6 @@ class MiniAppSessionController extends ChangeNotifier {
     if (_minimizedSessions.isEmpty && !_isSwitcherOpen) return;
     for (final s in _minimizedSessions) {
       s.clearAutofillOverlays(notify: false);
-      if (s.isBrowser && s.isIncognito) {
-        unawaited(BrowserCookieJarVault.instance.onIncognitoSessionClosed(s.id));
-      }
       s.isMinimized = false;
     }
     _minimizedSessions.clear();
@@ -4336,9 +4295,6 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                   key: const ValueKey('mini_app_tabs_switcher'),
                   sessions: ctrl.minimizedSessions,
                   frozenBackdropImage: _frozenBackdropImage,
-                  initialPrivateMode: ctrl.minimizedSessions.isNotEmpty &&
-                      ctrl.minimizedSessions.last.isBrowser &&
-                      ctrl.minimizedSessions.last.isIncognito,
                   onDismiss: ctrl.closeSwitcher,
                   onSelectSession: (s) => ctrl.restoreSession(
                     s,
@@ -4346,25 +4302,6 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
                   ),
                   onCloseSession: _handleCloseSession,
                   onCloseAll: _handleCloseAllSessions,
-                  onOpenNewBrowserTab: (isPrivate) {
-                    final BuildContext targetCtx = (ctrl
-                                .minimizedSessions.isNotEmpty
-                            ? _resolveNavigatorFor(ctrl.minimizedSessions.last)
-                                ?.overlay
-                                ?.context
-                            : null) ??
-                        widget.navigatorKey?.currentState?.overlay?.context ??
-                        context;
-                    ctrl.closeSwitcher();
-                    if (targetCtx.mounted) {
-                      unawaited(
-                        openNewBrowserTabPrompt(
-                          targetCtx,
-                          isIncognito: isPrivate,
-                        ),
-                      );
-                    }
-                  },
                 ),
               ],
             );
@@ -4662,17 +4599,14 @@ class MinimizedMiniAppBar extends StatelessWidget {
 }
 
 /// Telegram-style full-screen 3D perspective card switcher for multiple open
-/// minimized Mini Apps and browser tabs, including a Safari-style Regular /
-/// Private («Частный доступ») switcher toggle when browser tabs are open.
+/// minimized Mini Apps and browser tabs.
 class MiniAppTabsSwitcher extends StatefulWidget {
   final List<MiniAppSession> sessions;
   final ui.Image? frozenBackdropImage;
-  final bool initialPrivateMode;
   final VoidCallback onDismiss;
   final ValueChanged<MiniAppSession> onSelectSession;
   final ValueChanged<MiniAppSession> onCloseSession;
   final VoidCallback onCloseAll;
-  final ValueChanged<bool>? onOpenNewBrowserTab;
 
   /// Test-only override for supplying synthetic gyroscope events without native sensors.
   @visibleForTesting
@@ -4682,12 +4616,10 @@ class MiniAppTabsSwitcher extends StatefulWidget {
     super.key,
     required this.sessions,
     this.frozenBackdropImage,
-    this.initialPrivateMode = false,
     required this.onDismiss,
     required this.onSelectSession,
     required this.onCloseSession,
     required this.onCloseAll,
-    this.onOpenNewBrowserTab,
   });
 
   @override
@@ -4706,7 +4638,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   late final AnimationController _gyroTicker;
   final ValueNotifier<Offset> _gyroTiltNotifier =
       ValueNotifier<Offset>(Offset.zero);
-  late bool _privateMode;
   double _targetPitch = 0.0;
   double _targetYaw = 0.0;
   double _currentPitch = 0.0;
@@ -4722,7 +4653,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   @override
   void initState() {
     super.initState();
-    _privateMode = widget.initialPrivateMode;
     WidgetsBinding.instance.addObserver(this);
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     _gyroTicker = AnimationController(
@@ -4981,85 +4911,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
             child: closeAllChild,
           );
 
-    final bool showBrowserControls = widget.sessions.any((s) => s.isBrowser);
-    final List<MiniAppSession> visibleSessions = showBrowserControls
-        ? (_privateMode
-            ? widget.sessions
-                .where((s) => s.isBrowser && s.isIncognito)
-                .toList()
-            : widget.sessions
-                .where((s) => !s.isBrowser || !s.isIncognito)
-                .toList())
-        : widget.sessions;
-
-    final Widget? browserModeDock = showBrowserControls
-        ? Positioned(
-            bottom: math.max(14.0, mq.padding.bottom + 10.0),
-            left: 16,
-            right: 16,
-            child: Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: TheavSegmentedControl<bool>(
-                      key: const ValueKey('browser_switcher_mode_segment'),
-                      height: 38.0,
-                      options: const [
-                        TheavSegmentOption<bool>(
-                          value: false,
-                          label: 'Вкладки',
-                        ),
-                        TheavSegmentOption<bool>(
-                          value: true,
-                          label: 'Частный доступ',
-                        ),
-                      ],
-                      selected: _privateMode,
-                      onChanged: (nextPrivate) {
-                        if (_privateMode == nextPrivate) return;
-                        HapticUtils.selection();
-                        setState(() => _privateMode = nextPrivate);
-                      },
-                    ),
-                  ),
-                  if (widget.onOpenNewBrowserTab != null) ...[
-                    const SizedBox(width: 8),
-                    TheavFloatingSurface(
-                      borderRadius: 19,
-                      enableFlex: false,
-                      refractionIndex: 1.06,
-                      refractionWidth: 14.0,
-                      padding: EdgeInsets.zero,
-                      child: Material(
-                        type: MaterialType.transparency,
-                        child: InkWell(
-                          key: const ValueKey(
-                            'browser_switcher_new_tab_button',
-                          ),
-                          borderRadius: BorderRadius.circular(19),
-                          onTap: () {
-                            HapticUtils.tap();
-                            widget.onOpenNewBrowserTab!(_privateMode);
-                          },
-                          child: SizedBox(
-                            width: 38,
-                            height: 38,
-                            child: Icon(
-                              Icons.add_rounded,
-                              size: 22,
-                              color: resolved.headerFg,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          )
-        : null;
+    final List<MiniAppSession> visibleSessions = widget.sessions;
 
     return Stack(
       fit: StackFit.expand,
@@ -5073,8 +4925,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
               final int n = visibleSessions.length;
               final double stepY = n <= 1
                   ? 0.0
-                  : ((availH - cardHeight - (showBrowserControls ? 78.0 : 24.0)) /
-                          (n - 1))
+                  : ((availH - cardHeight - 24.0) / (n - 1))
                       .clamp(200.0, 268.0);
               final double stackHeight =
                   n == 0 ? 0.0 : cardHeight + (n - 1) * stepY;
@@ -5103,71 +4954,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                     ((viewBottom / stepY).ceil() + 1).clamp(firstIdx, n - 1);
               }
 
-              if (n == 0 && showBrowserControls) {
-                return Center(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _handleDismissTap,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 28),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _privateMode
-                                ? Icons.visibility_off_rounded
-                                : Icons.tab_rounded,
-                            size: 40,
-                            color: resolved.palette.subtext,
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            _privateMode
-                                ? 'Частный доступ'
-                                : 'Нет открытых вкладок',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: resolved.headerFg,
-                              decoration: TextDecoration.none,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            _privateMode
-                                ? 'История посещений, cookie и пароли не сохраняются, а данные удаляются при закрытии.'
-                                : 'Откройте новую вкладку или перейдите в частный доступ.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13.5,
-                              height: 1.38,
-                              color: resolved.palette.subtext,
-                              decoration: TextDecoration.none,
-                            ),
-                          ),
-                          if (widget.onOpenNewBrowserTab != null) ...[
-                            const SizedBox(height: 18),
-                            TheavFloatingPillButton(
-                              key: const ValueKey(
-                                'browser_switcher_empty_new_tab_btn',
-                              ),
-                              icon: const Icon(Icons.add_rounded, size: 18),
-                              label: _privateMode
-                                  ? 'Открыть частную вкладку'
-                                  : 'Новая вкладка',
-                              isPrimary: true,
-                              onTap: () =>
-                                  widget.onOpenNewBrowserTab!(_privateMode),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              }
-
               return RepaintBoundary(
                 child: NotificationListener<ScrollNotification>(
                   onNotification: (ScrollNotification notification) {
@@ -5194,10 +4980,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                         16,
                         contentTopOffset,
                         16,
-                        math.max(
-                          showBrowserControls ? 76.0 : 24.0,
-                          mq.padding.bottom + (showBrowserControls ? 68 : 16),
-                        ),
+                        math.max(24.0, mq.padding.bottom + 16),
                       ),
                       child: SizedBox(
                         height: stackHeight,
@@ -5237,7 +5020,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
               ),
             ),
           ),
-        if (browserModeDock != null) browserModeDock,
       ],
     );
   }
@@ -5372,18 +5154,15 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                                       children: [
                                         if (session.isBrowser) ...[
                                           Icon(
-                                            session.isIncognito
-                                                ? Icons.visibility_off_rounded
-                                                : (session.currentUrl
-                                                        .toLowerCase()
-                                                        .startsWith('https://')
-                                                    ? Icons.lock_outline_rounded
-                                                    : Icons.public_rounded),
+                                            session.currentUrl
+                                                    .toLowerCase()
+                                                    .startsWith('https://')
+                                                ? Icons.lock_outline_rounded
+                                                : Icons.public_rounded,
                                             size: 16,
-                                            color: session.isIncognito
-                                                ? resolved.palette.primary
-                                                : cardHeaderFg
-                                                    .withValues(alpha: 0.78),
+                                            color: cardHeaderFg.withValues(
+                                              alpha: 0.78,
+                                            ),
                                           ),
                                           const SizedBox(width: 6),
                                         ],
@@ -5401,34 +5180,6 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                                             ),
                                           ),
                                         ),
-                                        if (session.isBrowser &&
-                                            session.isIncognito) ...[
-                                          const SizedBox(width: 6),
-                                          Container(
-                                            key: ValueKey(
-                                              'mini_app_tab_incognito_badge_${session.id}',
-                                            ),
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 7,
-                                              vertical: 2,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: resolved.palette.primary
-                                                  .withValues(alpha: 0.16),
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                            ),
-                                            child: Text(
-                                              'Частный',
-                                              style: TextStyle(
-                                                fontSize: 10.5,
-                                                fontWeight: FontWeight.w700,
-                                                color: resolved.palette.primary,
-                                                decoration: TextDecoration.none,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
                                         if (isVerified) ...[
                                           const SizedBox(width: 6),
                                           MiniAppVerifiedSeal(

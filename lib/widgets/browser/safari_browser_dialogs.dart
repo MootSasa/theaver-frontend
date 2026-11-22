@@ -1323,7 +1323,6 @@ class SafariSiteInfoPopover extends StatelessWidget {
   final bool hasAcceptedSslWarning;
   final int savedPasswordCount;
   final BrowserCookiePolicy? cookiePolicy;
-  final bool isIncognito;
   final VoidCallback onCopyUrl;
   final VoidCallback? onUpgradeToHttps;
   final VoidCallback? onResetPermissions;
@@ -1341,7 +1340,6 @@ class SafariSiteInfoPopover extends StatelessWidget {
     this.hasAcceptedSslWarning = false,
     this.savedPasswordCount = 0,
     this.cookiePolicy,
-    this.isIncognito = false,
     required this.onCopyUrl,
     this.onUpgradeToHttps,
     this.onResetPermissions,
@@ -1520,32 +1518,7 @@ class SafariSiteInfoPopover extends StatelessWidget {
               ],
             ),
           ),
-          if (isIncognito) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-              decoration: BoxDecoration(
-                color: palette.primary.withValues(alpha: style.isDark ? 0.18 : 0.10),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.visibility_off_rounded, size: 17, color: palette.primary),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Частный доступ: история, cookie и пароли не сохраняются',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: palette.onSurface.withValues(alpha: 0.88),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ] else if (cookiePolicy != null &&
+          if (cookiePolicy != null &&
               cookiePolicy != BrowserCookiePolicy.allowAll) ...[
             const SizedBox(height: 8),
             Text(

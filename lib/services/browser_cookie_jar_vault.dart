@@ -8,7 +8,7 @@ import 'browser_storage_bridge.dart';
 import 'browser_vault_service.dart';
 
 /// Isolates live WebView cookie jars across multiple Theaver accounts
-/// (`u_<userId>`) and transient Private Browsing («Частный доступ») tabs.
+/// (`u_<userId>`).
 class BrowserCookieJarVault {
   BrowserCookieJarVault._internal({
     BrowserStorageBridge? bridge,
@@ -36,23 +36,9 @@ class BrowserCookieJarVault {
   final BrowserStorageBridge _bridge;
   final BrowserVaultService _vaultService;
 
-  final Set<String> _activeIncognitoSessionIds = <String>{};
-  final Set<String> _incognitoVisitedOrigins = <String>{};
-  List<BrowserCookieRecord>? _preIncognitoNormalSnapshot;
-
-  bool get isIncognitoActive => _activeIncognitoSessionIds.isNotEmpty;
-  int get activeIncognitoCount => _activeIncognitoSessionIds.length;
-  List<String> get incognitoVisitedOrigins =>
-      List<String>.unmodifiable(_incognitoVisitedOrigins);
-
   /// Exports and AES-256-GCM encrypts the outgoing account's live WebView
   /// cookies before clearing live WebView storage for an account switch.
   Future<void> snapshotAndClearForOutgoingAccount(String? fromUserId) async {
-    // Never leak private-tab cookies into the user's saved account jar.
-    if (isIncognitoActive) {
-      await _discardIncognitoWithoutRestoring();
-    }
-
     final uid = fromUserId?.trim() ?? '';
     if (uid.isNotEmpty) {
       final knownOrigins = BrowserDataService.instance.knownOriginsForAccount(uid);
@@ -117,76 +103,10 @@ class BrowserCookieJarVault {
       } catch (_) {}
     }
     if (isCurrentAccount) {
-      _activeIncognitoSessionIds.clear();
-      _incognitoVisitedOrigins.clear();
-      _preIncognitoNormalSnapshot = null;
       await _bridge.clearAllWebData();
     }
   }
 
-  /// Stashes the active normal browsing cookie jar (only on opening the first
-  /// private tab) and starts with an empty cookie jar so private tabs cannot
-  /// see existing signed-in normal sessions.
-  Future<void> onIncognitoSessionOpened(String sessionId) async {
-    final firstPrivateTab = _activeIncognitoSessionIds.isEmpty;
-    _activeIncognitoSessionIds.add(sessionId);
-    if (!firstPrivateTab) return;
-
-    await _bridge.flushCookies();
-    _preIncognitoNormalSnapshot = await _bridge.exportAllCookies(
-      knownOrigins: BrowserDataService.instance.knownOrigins,
-    );
-    await _bridge.clearAllWebData();
-  }
-
-  /// Records a private-tab origin purely in ephemeral memory so all traces
-  /// are wiped when the last private tab closes.
-  void onIncognitoUrlVisited(String url) {
-    final origin = BrowserVaultService.normalizeOrigin(url);
-    if (origin != null) {
-      _incognitoVisitedOrigins.add(origin);
-    }
-  }
-
-  Future<void> _discardIncognitoWithoutRestoring() async {
-    final origins = List<String>.from(_incognitoVisitedOrigins);
-    _activeIncognitoSessionIds.clear();
-    _incognitoVisitedOrigins.clear();
-    for (final origin in origins) {
-      await _bridge.clearSiteData(origin);
-    }
-    await _bridge.clearAllWebData();
-    _preIncognitoNormalSnapshot = null;
-  }
-
-  /// Closes a private tab; when the last active private tab closes, wipes all
-  /// incognito cookies/site storage and restores the normal cookie snapshot.
-  Future<void> onIncognitoSessionClosed(String sessionId) async {
-    final removed = _activeIncognitoSessionIds.remove(sessionId);
-    if (!removed || _activeIncognitoSessionIds.isNotEmpty) {
-      return;
-    }
-
-    final originsToWipe = List<String>.from(_incognitoVisitedOrigins);
-    _incognitoVisitedOrigins.clear();
-
-    for (final origin in originsToWipe) {
-      await _bridge.clearSiteData(origin);
-    }
-    await _bridge.clearAllWebData();
-
-    final normalCookies = _preIncognitoNormalSnapshot;
-    _preIncognitoNormalSnapshot = null;
-    if (normalCookies != null && normalCookies.isNotEmpty) {
-      await _bridge.importCookies(normalCookies);
-      await _bridge.flushCookies();
-    }
-  }
-
   @visibleForTesting
-  void resetForTesting() {
-    _activeIncognitoSessionIds.clear();
-    _incognitoVisitedOrigins.clear();
-    _preIncognitoNormalSnapshot = null;
-  }
+  void resetForTesting() {}
 }

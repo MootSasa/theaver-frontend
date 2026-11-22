@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -314,8 +313,8 @@ void main() {
     });
   });
 
-  group('BrowserCookieJarVault Multi-Account & Private Mode Isolation', () {
-    test('swaps encrypted cookie jars across accounts and isolates Private tabs', () async {
+  group('BrowserCookieJarVault Multi-Account Isolation', () {
+    test('swaps encrypted cookie jars across accounts and wipes account cookies', () async {
       final backend = InMemoryBrowserStorageBackend();
       BrowserStorageBridge.instance.debugBackendOverride = backend;
       final vault = BrowserVaultService.instance
@@ -361,61 +360,6 @@ void main() {
       expect(backend.currentCookies.length, 1);
       expect(backend.currentCookies.first.value, 'alice_httponly_token');
       expect(backend.currentCookies.first.isHttpOnly, isTrue);
-
-      // Enter Private Browsing («Частный доступ») -> stashes normal cookie & starts empty
-      await cookieVault.onIncognitoSessionOpened('priv_1');
-      expect(cookieVault.isIncognitoActive, isTrue);
-      expect(backend.currentCookies, isEmpty);
-
-      cookieVault.onIncognitoUrlVisited('https://secret.onion.test/login');
-      backend.seedCookie(
-        const BrowserCookieRecord(
-          hostKey: 'secret.onion.test',
-          name: 'INCOGNITO_SID',
-          value: 'ephemeral',
-        ),
-      );
-
-      // Second private tab opens -> closing first keeps incognito alive
-      await cookieVault.onIncognitoSessionOpened('priv_2');
-      await cookieVault.onIncognitoSessionClosed('priv_1');
-      expect(cookieVault.isIncognitoActive, isTrue);
-      expect(backend.currentCookies.length, 1);
-
-      // Closing last private tab wipes incognito cookie & restores Alice's normal jar
-      await cookieVault.onIncognitoSessionClosed('priv_2');
-      expect(cookieVault.isIncognitoActive, isFalse);
-      expect(
-        backend.clearedSites.any((u) => u.contains('secret.onion.test')),
-        isTrue,
-      );
-      expect(backend.currentCookies.length, 1);
-      expect(backend.currentCookies.first.value, 'alice_httponly_token');
-
-      // Verify private MiniAppSession ignores history and save-password messages
-      await BrowserDataService.instance.ensureLoaded(forceReload: true);
-      final privSession = MiniAppSession(
-        id: 'priv_session_msg',
-        launchData: const MiniAppLaunchData(
-          url: 'https://example.org/login',
-          initData: '',
-          botId: '',
-          botUsername: '',
-        ),
-        isBrowser: true,
-        isIncognito: true,
-        initialUrl: 'https://example.org/login',
-      );
-      await privSession.handleAutofillChannelMessage(
-        jsonEncode({
-          'type': 'credentialsSubmitted',
-          'origin': 'https://example.org',
-          'username': 'hidden',
-          'password': 'hiddenPassword',
-        }),
-      );
-      expect(privSession.pendingCredentialPrompt, isNull);
-      expect(BrowserDataService.instance.history, isEmpty);
 
       // Wiping account clears snapshot + live cookies
       await cookieVault.wipeAccountCookies('alice', isCurrentAccount: true);
@@ -546,7 +490,7 @@ void main() {
       });
     }
 
-    testWidgets('InAppBrowserSheet shows Частный badge & new overflow items in Incognito mode', (tester) async {
+    testWidgets('InAppBrowserSheet omits incognito and manual new-tab controls across header, overflow menu, and tabs switcher', (tester) async {
       tester.view.physicalSize = const Size(400, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -561,7 +505,6 @@ void main() {
           botDisplayName: 'duckduckgo.com',
         ),
         isBrowser: true,
-        isIncognito: true,
         initialUrl: 'https://duckduckgo.com/',
       );
 
@@ -575,12 +518,25 @@ void main() {
 
       _expectNoTranslucentOpacityAboveGlass(tester);
       expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
-      expect(find.byKey(const ValueKey('in_app_browser_incognito_badge')), findsOneWidget);
+      expect(find.byKey(const ValueKey('in_app_browser_incognito_badge')), findsNothing);
+      expect(find.text('Частный'), findsNothing);
 
       await tester.tap(find.byKey(const ValueKey('in_app_browser_menu_button')));
       await tester.pumpAndSettle();
-      expect(find.text('Новая частная вкладка'), findsOneWidget);
       expect(find.text('Пароли и автозаполнение'), findsOneWidget);
+      expect(find.text('Новая частная вкладка'), findsNothing);
+      expect(find.text('Новая вкладка'), findsNothing);
+
+      await tester.tapAt(const Offset(24, 560));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('webview_header_center_pill')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('mini_app_tabs_switcher')), findsOneWidget);
+      expect(find.byKey(const ValueKey('browser_switcher_mode_segment')), findsNothing);
+      expect(find.byKey(const ValueKey('browser_switcher_new_tab_button')), findsNothing);
+      expect(find.byKey(const ValueKey('browser_switcher_empty_new_tab_btn')), findsNothing);
+      expect(find.text('Частный доступ'), findsNothing);
     });
 
     testWidgets('BrowserVaultAndDataScreen navigates sections and updates cookie policy', (tester) async {

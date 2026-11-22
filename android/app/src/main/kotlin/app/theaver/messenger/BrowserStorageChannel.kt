@@ -58,7 +58,6 @@ object BrowserStorageChannel {
                     val url = call.argument<String>("url")
                     val acceptThirdParty = call.argument<Boolean>("acceptThirdPartyCookies") ?: true
                     val enableOsAutofill = call.argument<Boolean>("enableOsAutofill") ?: true
-                    val isIncognito = call.argument<Boolean>("isIncognito") ?: false
                     val blockAllCookies = call.argument<Boolean>("blockAllCookies") ?: false
                     mainHandler.post {
                         try {
@@ -68,17 +67,13 @@ object BrowserStorageChannel {
                             if (wv != null) {
                                 cm.setAcceptThirdPartyCookies(wv, acceptThirdParty && !blockAllCookies)
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    wv.importantForAutofill = if (enableOsAutofill && !isIncognito) {
+                                    wv.importantForAutofill = if (enableOsAutofill) {
                                         View.IMPORTANT_FOR_AUTOFILL_YES
                                     } else {
                                         View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
                                     }
                                 }
-                                wv.settings.cacheMode = if (isIncognito) {
-                                    WebSettings.LOAD_NO_CACHE
-                                } else {
-                                    WebSettings.LOAD_DEFAULT
-                                }
+                                wv.settings.cacheMode = WebSettings.LOAD_DEFAULT
                             }
                             result.success(true)
                         } catch (_: Throwable) {

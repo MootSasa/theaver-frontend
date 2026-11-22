@@ -67,7 +67,6 @@ abstract interface class BrowserStorageBackend {
     String? url,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
-    required bool isIncognito,
     required bool blockAllCookies,
   });
 
@@ -107,7 +106,6 @@ class MethodChannelBrowserStorageBackend implements BrowserStorageBackend {
     String? url,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
-    required bool isIncognito,
     required bool blockAllCookies,
   }) async {
     if (kIsWeb) return;
@@ -118,7 +116,6 @@ class MethodChannelBrowserStorageBackend implements BrowserStorageBackend {
           if (url != null) 'url': url,
           'acceptThirdPartyCookies': acceptThirdPartyCookies,
           'enableOsAutofill': enableOsAutofill,
-          'isIncognito': isIncognito,
           'blockAllCookies': blockAllCookies,
         },
       );
@@ -228,14 +225,12 @@ class InMemoryBrowserStorageBackend implements BrowserStorageBackend {
     String? url,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
-    required bool isIncognito,
     required bool blockAllCookies,
   }) async {
     lastConfiguredPolicy = <String, dynamic>{
       'url': url,
       'acceptThirdPartyCookies': acceptThirdPartyCookies,
       'enableOsAutofill': enableOsAutofill,
-      'isIncognito': isIncognito,
       'blockAllCookies': blockAllCookies,
     };
   }
@@ -301,14 +296,12 @@ class BrowserStorageBridge {
     String? url,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
-    required bool isIncognito,
     required bool blockAllCookies,
   }) =>
       _backend.configureWebViewPolicies(
         url: url,
         acceptThirdPartyCookies: acceptThirdPartyCookies,
         enableOsAutofill: enableOsAutofill,
-        isIncognito: isIncognito,
         blockAllCookies: blockAllCookies,
       );
 
