@@ -500,6 +500,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       _setRouteRestingOpaque(false);
       _releaseFullScreenRegistration();
       _allowRoutePop = true;
+      TheavSheetRoutePerfControl.prepareInstantSwitcherDismiss(context);
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimizeAndOpenSwitcher(
         _session,
@@ -520,9 +521,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     await navigator.push<void>(
       PageRouteBuilder<void>(
         opaque: false,
+        transitionDuration: const Duration(milliseconds: 260),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
         pageBuilder: (routeCtx, _, __) => MiniAppTabsSwitcher(
           key: const ValueKey('mini_app_tabs_switcher'),
           sessions: sessions,
+          enterSpec: MiniAppSwitcherEnterSpec(
+            source: MiniAppSwitcherOpenSource.fromActiveSession,
+            outgoingSession: _session,
+          ),
           onDismiss: () => Navigator.of(routeCtx).maybePop(),
           onSelectSession: (selected) {
             Navigator.of(routeCtx).maybePop();

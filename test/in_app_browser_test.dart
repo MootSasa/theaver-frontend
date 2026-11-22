@@ -3461,5 +3461,243 @@ void main() {
         expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsNothing);
       },
     );
+
+    for (final mode in const <GlassMode>[GlassMode.full, GlassMode.disabled]) {
+      testWidgets(
+        'Tabs switcher plays full-cycle Zoom-Out Cascade Deck transitions across page, switcher, and dock without Opacity over LiquidGlassLens in $mode',
+        (tester) async {
+          tester.view.physicalSize = const Size(400, 800);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          addTearDown(MiniAppSessionController.instance.resetForTesting);
+          LinkOpener.debugForceInAppSupportedForTest = true;
+
+          final navKey = GlobalKey<NavigatorState>();
+          late BuildContext homeCtx;
+
+          await tester.pumpWidget(
+            ChangeNotifierProvider<LiquidGlassProvider>.value(
+              value: _TestLiquidGlassProvider(mode),
+              child: MaterialApp(
+                navigatorKey: navKey,
+                builder: (context, child) => MinimizedMiniAppHost(
+                  navigatorKey: navKey,
+                  child: child ?? const SizedBox.shrink(),
+                ),
+                home: MediaQuery(
+                  data: const MediaQueryData(
+                    size: Size(400, 800),
+                    padding: EdgeInsets.only(top: 24, bottom: 16),
+                  ),
+                  child: Builder(
+                    builder: (context) {
+                      homeCtx = context;
+                      return const Scaffold(
+                        body: Center(child: Text('HomeHost')),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final waltSession = MiniAppSession(
+            id: 'cascade_walt',
+            launchData: const MiniAppLaunchData(
+              url: 'https://api.theaver.app/api/miniapps/wallet',
+              initData: 'hash=walt',
+              botId: '2',
+              botUsername: 'walt',
+              botDisplayName: 'Walt',
+              botIsVerified: true,
+            ),
+            botName: 'Walt',
+            botUsername: 'walt',
+            isVerified: true,
+          );
+          MiniAppSessionController.instance.minimize(
+            waltSession,
+            navigator: navKey.currentState,
+          );
+          await tester.pumpAndSettle();
+
+          final dzenSession = MiniAppSession(
+            id: 'cascade_dzen',
+            launchData: const MiniAppLaunchData(
+              url: 'https://dzen.ru/',
+              initData: '',
+              botDisplayName: 'dzen.ru',
+            ),
+            isBrowser: true,
+            initialUrl: 'https://dzen.ru/',
+          )..pageTitle = 'Дзен';
+
+          unawaited(
+            showTheavModalSheet<void>(
+              context: homeCtx,
+              enableDrag: false,
+              barrierDismissible: true,
+              useRootNavigator: true,
+              customSheetBuilder: (_) =>
+                  InAppBrowserSheet(session: dzenSession),
+              builder: (_) => const SizedBox.shrink(),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final browserFinder = find.byKey(
+            const ValueKey('in_app_browser_sheet'),
+          );
+          final switcherFinder = find.byKey(
+            const ValueKey('mini_app_tabs_switcher'),
+          );
+          final ghostFinder = find.byKey(
+            const ValueKey('mini_app_switcher_zoom_out_ghost'),
+          );
+          final dzenCardFinder = find.byKey(
+            const ValueKey('mini_app_tab_card_cascade_dzen'),
+          );
+
+          expect(browserFinder, findsOneWidget);
+
+          // 1. Active Page -> Switcher: instant route handoff, raster zoom-out ghost, upward card cascade.
+          await tester.tap(
+            find.byKey(const ValueKey('webview_header_center_pill')),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 70));
+
+          expect(browserFinder, findsNothing);
+          expect(switcherFinder, findsOneWidget);
+          expect(ghostFinder, findsOneWidget);
+          final double midEnterDy = tester.getTopLeft(dzenCardFinder).dy;
+
+          if (mode == GlassMode.full) {
+            final switcherLens = find.descendant(
+              of: switcherFinder,
+              matching: find.byType(LiquidGlassLens),
+            );
+            expect(switcherLens, findsOneWidget);
+            expect(
+              find.ancestor(
+                of: switcherLens,
+                matching: find.descendant(
+                  of: switcherFinder,
+                  matching: find.byWidgetPredicate(
+                    (w) => w is Opacity || w is FadeTransition,
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          }
+
+          await tester.pumpAndSettle();
+          expect(ghostFinder, findsNothing);
+          final double settledDy = tester.getTopLeft(dzenCardFinder).dy;
+          expect(midEnterDy, greaterThan(settledDy + 1.0));
+
+          // 2. Switcher -> Active Page: selected card surges forward while page zooms from depth (not bottom slide).
+          await tester.tap(dzenCardFinder);
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 80));
+
+          expect(browserFinder, findsOneWidget);
+          final Rect midRestoreRect = tester.getRect(browserFinder);
+          expect(midRestoreRect.width, greaterThan(400.0 * 0.94 - 0.5));
+          expect(midRestoreRect.width, lessThan(399.5));
+          expect(midRestoreRect.top, lessThan(40.0));
+
+          if (mode == GlassMode.full) {
+            expect(
+              find.ancestor(
+                of: browserFinder,
+                matching: find.descendant(
+                  of: find.byType(Navigator),
+                  matching: find.byWidgetPredicate(
+                    (w) =>
+                        w is Opacity ||
+                        w is FadeTransition ||
+                        w is ClipRRect,
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          }
+
+          await tester.pumpAndSettle();
+          expect(
+            tester.getRect(browserFinder),
+            const Rect.fromLTWH(0, 0, 400, 800),
+          );
+          expect(switcherFinder, findsNothing);
+
+          // 3. Dock Bar -> Switcher: card stack rises smoothly from bottom dock without page ghost.
+          await tester.tap(
+            find.byKey(const ValueKey('in_app_browser_minimize_button')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('minimized_mini_app_bar')),
+            findsOneWidget,
+          );
+
+          await tester.tap(
+            find.byKey(const ValueKey('minimized_mini_app_bar')),
+          );
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 80));
+
+          expect(switcherFinder, findsOneWidget);
+          expect(ghostFinder, findsNothing);
+          final double midDockOpenDy = tester.getTopLeft(dzenCardFinder).dy;
+
+          await tester.pumpAndSettle();
+          final double settledAfterDockDy = tester.getTopLeft(dzenCardFinder).dy;
+          expect(midDockOpenDy, greaterThan(settledAfterDockDy + 1.0));
+
+          // 4. Dismiss Switcher -> Dock Bar: isSwitcherOpen flips immediately while cards glide down over 200ms.
+          await tester.tapAt(const Offset(24, 28));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 80));
+
+          expect(MiniAppSessionController.instance.isSwitcherOpen, isFalse);
+          expect(switcherFinder, findsOneWidget);
+          final double midDismissDy = tester.getTopLeft(dzenCardFinder).dy;
+          expect(midDismissDy, greaterThan(settledAfterDockDy + 0.5));
+
+          if (mode == GlassMode.full) {
+            final switcherLens = find.descendant(
+              of: switcherFinder,
+              matching: find.byType(LiquidGlassLens),
+            );
+            expect(switcherLens, findsOneWidget);
+            expect(
+              find.ancestor(
+                of: switcherLens,
+                matching: find.descendant(
+                  of: switcherFinder,
+                  matching: find.byWidgetPredicate(
+                    (w) => w is Opacity || w is FadeTransition,
+                  ),
+                ),
+              ),
+              findsNothing,
+            );
+          }
+
+          await tester.pumpAndSettle();
+          expect(switcherFinder, findsNothing);
+          expect(
+            find.byKey(const ValueKey('minimized_mini_app_bar')),
+            findsOneWidget,
+          );
+        },
+      );
+    }
   });
 }

@@ -3497,6 +3497,42 @@ class _MiniAppSwitcherBackObserver with WidgetsBindingObserver {
   Future<bool> didPopRoute() async => _controller.handleSystemBack();
 }
 
+enum MiniAppSwitcherOpenSource {
+  fromDockBar,
+  fromActiveSession,
+}
+
+enum MiniAppSwitcherExitReason {
+  dismissToDock,
+  selectSession,
+  closeSingle,
+  closeAll,
+}
+
+class MiniAppSwitcherEnterSpec {
+  final MiniAppSwitcherOpenSource source;
+  final MiniAppSession? outgoingSession;
+
+  const MiniAppSwitcherEnterSpec({
+    this.source = MiniAppSwitcherOpenSource.fromDockBar,
+    this.outgoingSession,
+  });
+
+  const MiniAppSwitcherEnterSpec.fromDock()
+      : source = MiniAppSwitcherOpenSource.fromDockBar,
+        outgoingSession = null;
+}
+
+class MiniAppSwitcherExitSpec {
+  final MiniAppSwitcherExitReason reason;
+  final String? selectedSessionId;
+
+  const MiniAppSwitcherExitSpec({
+    required this.reason,
+    this.selectedSessionId,
+  });
+}
+
 /// Coordinates multiple minimized [MiniAppSession] entries, the bottom stacked
 /// capsule bar, and the 3D tabs switcher across navigation routes.
 class MiniAppSessionController extends ChangeNotifier {
@@ -3513,9 +3549,29 @@ class MiniAppSessionController extends ChangeNotifier {
   bool _pendingSheetMinimizeFastLayout = false;
   bool _pendingRestoreTransition = false;
   DateTime? _lastMinimizeToSwitcherAt;
+  MiniAppSwitcherOpenSource _lastSwitcherOpenSource =
+      MiniAppSwitcherOpenSource.fromDockBar;
+  MiniAppSession? _lastMinimizedToSwitcherSession;
+  MiniAppSwitcherExitReason _lastSwitcherExitReason =
+      MiniAppSwitcherExitReason.dismissToDock;
+  String? _lastSelectedSwitcherSessionId;
+  String? _lastClosedSwitcherSessionId;
   bool _backObserverRegistered = false;
   late final _MiniAppSwitcherBackObserver _backObserver =
       _MiniAppSwitcherBackObserver(this);
+
+  MiniAppSwitcherOpenSource get lastSwitcherOpenSource =>
+      _lastSwitcherOpenSource;
+
+  MiniAppSession? get lastMinimizedToSwitcherSession =>
+      _lastMinimizedToSwitcherSession;
+
+  MiniAppSwitcherExitReason get lastSwitcherExitReason =>
+      _lastSwitcherExitReason;
+
+  String? get lastSelectedSwitcherSessionId => _lastSelectedSwitcherSessionId;
+
+  String? get lastClosedSwitcherSessionId => _lastClosedSwitcherSessionId;
 
   /// Delay before snapshotting the underlying route into a frozen blurred
   /// backdrop so an active sheet pop animation finishes clearing first.
@@ -3648,6 +3704,7 @@ class MiniAppSessionController extends ChangeNotifier {
     );
     _minimizedSessions.add(session);
     _isSwitcherOpen = false;
+    _lastMinimizedToSwitcherSession = null;
     if (navigator != null) {
       _pendingSheetMinimizeFastLayout = true;
     }
@@ -3669,6 +3726,8 @@ class MiniAppSessionController extends ChangeNotifier {
   void openSwitcher() {
     if (_minimizedSessions.isEmpty || _isSwitcherOpen) return;
     _lastMinimizeToSwitcherAt = null;
+    _lastSwitcherOpenSource = MiniAppSwitcherOpenSource.fromDockBar;
+    _lastMinimizedToSwitcherSession = null;
     _isSwitcherOpen = true;
     _syncPlatformBackState();
     notifyListeners();
@@ -3698,7 +3757,9 @@ class MiniAppSessionController extends ChangeNotifier {
               s.currentUrl == session.currentUrl),
     );
     _minimizedSessions.add(session);
-    _lastMinimizeToSwitcherAt = DateTime.now();
+    _lastMinimizeToSwitcherAt = null;
+    _lastSwitcherOpenSource = MiniAppSwitcherOpenSource.fromActiveSession;
+    _lastMinimizedToSwitcherSession = session;
     _isSwitcherOpen = true;
     _syncPlatformBackState();
     if (!session.isBrowser) {
@@ -3710,6 +3771,10 @@ class MiniAppSessionController extends ChangeNotifier {
   void closeSwitcher() {
     if (!_isSwitcherOpen) return;
     _lastMinimizeToSwitcherAt = null;
+    _lastSwitcherExitReason = MiniAppSwitcherExitReason.dismissToDock;
+    _lastSelectedSwitcherSessionId = null;
+    _lastClosedSwitcherSessionId = null;
+    _lastMinimizedToSwitcherSession = null;
     _isSwitcherOpen = false;
     notifyListeners();
   }
@@ -3757,6 +3822,13 @@ class MiniAppSessionController extends ChangeNotifier {
     final BuildContext? restoreContext = nav.overlay?.context;
     if (restoreContext == null || !restoreContext.mounted) return;
 
+    final bool wasSwitcherOpen = _isSwitcherOpen;
+    if (wasSwitcherOpen) {
+      _lastSwitcherExitReason = MiniAppSwitcherExitReason.selectSession;
+      _lastSelectedSwitcherSessionId = session.id;
+      _lastClosedSwitcherSessionId = null;
+    }
+    _lastMinimizedToSwitcherSession = null;
     _minimizedSessions.removeWhere((s) => identical(s, session));
     session.isMinimized = false;
     _isSwitcherOpen = false;
@@ -3772,6 +3844,9 @@ class MiniAppSessionController extends ChangeNotifier {
         enableDrag: false,
         barrierDismissible: true,
         useRootNavigator: true,
+        transitionStyle: wasSwitcherOpen
+            ? TheavSheetTransitionStyle.zoomFromSwitcher
+            : TheavSheetTransitionStyle.slideFromBottom,
         customSheetBuilder: (_) => session.isBrowser
             ? InAppBrowserSheet(session: session)
             : MiniAppWebViewSheet(
@@ -3796,9 +3871,16 @@ class MiniAppSessionController extends ChangeNotifier {
     session.clearAutofillOverlays(notify: false);
     final idx = _minimizedSessions.indexWhere((s) => identical(s, session));
     if (idx == -1) return;
+    final bool wasSwitcherOpen = _isSwitcherOpen;
     _minimizedSessions.removeAt(idx);
     session.isMinimized = false;
     if (_minimizedSessions.isEmpty) {
+      if (wasSwitcherOpen) {
+        _lastSwitcherExitReason = MiniAppSwitcherExitReason.closeSingle;
+        _lastClosedSwitcherSessionId = session.id;
+        _lastSelectedSwitcherSessionId = null;
+      }
+      _lastMinimizedToSwitcherSession = null;
       _isSwitcherOpen = false;
     }
     notifyListeners();
@@ -3814,6 +3896,12 @@ class MiniAppSessionController extends ChangeNotifier {
 
   void closeAllMinimized() {
     if (_minimizedSessions.isEmpty && !_isSwitcherOpen) return;
+    if (_isSwitcherOpen) {
+      _lastSwitcherExitReason = MiniAppSwitcherExitReason.closeAll;
+      _lastSelectedSwitcherSessionId = null;
+      _lastClosedSwitcherSessionId = null;
+    }
+    _lastMinimizedToSwitcherSession = null;
     for (final s in _minimizedSessions) {
       s.clearAutofillOverlays(notify: false);
       s.isMinimized = false;
@@ -3834,6 +3922,12 @@ class MiniAppSessionController extends ChangeNotifier {
     _settledFullScreenCount = 0;
     _pendingSheetMinimizeFastLayout = false;
     _pendingRestoreTransition = false;
+    _lastMinimizeToSwitcherAt = null;
+    _lastSwitcherOpenSource = MiniAppSwitcherOpenSource.fromDockBar;
+    _lastMinimizedToSwitcherSession = null;
+    _lastSwitcherExitReason = MiniAppSwitcherExitReason.dismissToDock;
+    _lastSelectedSwitcherSessionId = null;
+    _lastClosedSwitcherSessionId = null;
     notifyListeners();
   }
 }
@@ -3907,6 +4001,12 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   ui.Image? _frozenBackdropImage;
   Timer? _backdropCaptureTimer;
   bool _backdropCaptureInFlight = false;
+  bool _wasSwitcherOpen = false;
+  bool _isSwitcherExiting = false;
+  List<MiniAppSession> _exitingSwitcherSessions = const [];
+  MiniAppSwitcherEnterSpec _switcherEnterSpec =
+      const MiniAppSwitcherEnterSpec.fromDock();
+  MiniAppSwitcherExitSpec? _switcherExitSpec;
 
   @override
   void initState() {
@@ -3930,7 +4030,15 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
 
     MiniAppSessionController.instance.addListener(_onSessionChanged);
     final ctrl = MiniAppSessionController.instance;
-    if (ctrl.shouldShowMinimizedBar) {
+    if (ctrl.isSwitcherOpen) {
+      _wasSwitcherOpen = true;
+      _exitingSwitcherSessions =
+          List<MiniAppSession>.unmodifiable(ctrl.minimizedSessions);
+      _switcherEnterSpec = MiniAppSwitcherEnterSpec(
+        source: ctrl.lastSwitcherOpenSource,
+        outgoingSession: ctrl.lastMinimizedToSwitcherSession,
+      );
+    } else if (ctrl.shouldShowMinimizedBar) {
       _displayedSessions = ctrl.minimizedSessions;
       _animController.value = 1.0;
     }
@@ -4043,12 +4151,62 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
     super.dispose();
   }
 
+  void _handleSwitcherExitComplete() {
+    if (!mounted) return;
+    if (MiniAppSessionController.instance.isSwitcherOpen) return;
+    _isSwitcherExiting = false;
+    _switcherExitSpec = null;
+    _exitingSwitcherSessions = const [];
+    _disposeFrozenBackdrop();
+    setState(() {});
+  }
+
   void _onSessionChanged() {
     if (!mounted) return;
     final ctrl = MiniAppSessionController.instance;
-    if (!ctrl.isSwitcherOpen) {
+    final bool nowOpen = ctrl.isSwitcherOpen;
+    if (nowOpen && !_wasSwitcherOpen) {
+      _wasSwitcherOpen = true;
+      _isSwitcherExiting = false;
+      _switcherExitSpec = null;
+      _exitingSwitcherSessions =
+          List<MiniAppSession>.unmodifiable(ctrl.minimizedSessions);
+      _switcherEnterSpec = MiniAppSwitcherEnterSpec(
+        source: ctrl.lastSwitcherOpenSource,
+        outgoingSession: ctrl.lastMinimizedToSwitcherSession,
+      );
+    } else if (nowOpen && _wasSwitcherOpen) {
+      _exitingSwitcherSessions =
+          List<MiniAppSession>.unmodifiable(ctrl.minimizedSessions);
+    } else if (!nowOpen && _wasSwitcherOpen) {
+      _wasSwitcherOpen = false;
+      final bool disableAnim = WidgetsBinding
+          .instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+      final MiniAppSwitcherExitReason exitReason = ctrl.lastSwitcherExitReason;
+      if (exitReason == MiniAppSwitcherExitReason.closeSingle &&
+          ctrl.lastClosedSwitcherSessionId != null) {
+        _exitingSwitcherSessions = _exitingSwitcherSessions
+            .where((s) => s.id != ctrl.lastClosedSwitcherSessionId)
+            .toList(growable: false);
+      }
+      final bool isResetEmpty = ctrl.minimizedSessions.isEmpty &&
+          exitReason == MiniAppSwitcherExitReason.dismissToDock;
+      if (!disableAnim && !isResetEmpty) {
+        _isSwitcherExiting = true;
+        _switcherExitSpec = MiniAppSwitcherExitSpec(
+          reason: exitReason,
+          selectedSessionId: ctrl.lastSelectedSwitcherSessionId,
+        );
+      } else {
+        _isSwitcherExiting = false;
+        _switcherExitSpec = null;
+        _exitingSwitcherSessions = const [];
+        _disposeFrozenBackdrop();
+      }
+    } else if (!nowOpen && !_isSwitcherExiting) {
       _disposeFrozenBackdrop();
     }
+
     if (ctrl.shouldShowMinimizedBar) {
       final bool fastLayout = ctrl.consumeSheetMinimizeFastLayout();
       final bool willRunForward =
@@ -4073,6 +4231,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
       // Keep the underlying screen layout rock-steady while a full-screen sheet
       // slides up over it, avoiding 20+ full chat tree relayout passes.
       if (ctrl.isFullScreenTransitioningIn && !ctrl.isSwitcherOpen) {
+        if (_isSwitcherExiting) {
+          setState(() {});
+        }
         return;
       }
       // Once covered by a settled full-screen sheet or the tabs switcher,
@@ -4152,9 +4313,10 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   Widget build(BuildContext context) {
     final ctrl = MiniAppSessionController.instance;
     final bool switcherOpen = ctrl.isSwitcherOpen;
+    final bool mountSwitcher = switcherOpen || _isSwitcherExiting;
     if (_displayedSessions.isEmpty &&
         _animController.isDismissed &&
-        !switcherOpen) {
+        !mountSwitcher) {
       return _MinimizedMiniAppHostScope(child: widget.child);
     }
 
@@ -4277,8 +4439,9 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
             ],
           );
 
-          if (switcherOpen) {
-            if (BlurUtils.shouldBlurMaterialHud(context, listen: false)) {
+          if (mountSwitcher) {
+            if (switcherOpen &&
+                BlurUtils.shouldBlurMaterialHud(context, listen: false)) {
               _captureFrozenBackdropIfNeeded(
                 devicePixelRatio: mq.devicePixelRatio,
                 fallbackBg: resolved.bodyBg,
@@ -4288,25 +4451,34 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
               fit: StackFit.expand,
               children: [
                 Offstage(
-                  offstage: _frozenBackdropImage != null,
+                  offstage: switcherOpen && _frozenBackdropImage != null,
                   child: IgnorePointer(
+                    ignoring: switcherOpen,
                     child: RepaintBoundary(
                       key: _backdropBoundaryKey,
                       child: columnLayout,
                     ),
                   ),
                 ),
-                MiniAppTabsSwitcher(
-                  key: const ValueKey('mini_app_tabs_switcher'),
-                  sessions: ctrl.minimizedSessions,
-                  frozenBackdropImage: _frozenBackdropImage,
-                  onDismiss: ctrl.closeSwitcher,
-                  onSelectSession: (s) => ctrl.restoreSession(
-                    s,
-                    fallbackNavigatorKey: widget.navigatorKey,
+                IgnorePointer(
+                  ignoring: !switcherOpen,
+                  child: MiniAppTabsSwitcher(
+                    key: const ValueKey('mini_app_tabs_switcher'),
+                    sessions: switcherOpen
+                        ? ctrl.minimizedSessions
+                        : _exitingSwitcherSessions,
+                    frozenBackdropImage: _frozenBackdropImage,
+                    enterSpec: _switcherEnterSpec,
+                    exitSpec: switcherOpen ? null : _switcherExitSpec,
+                    onExitAnimationComplete: _handleSwitcherExitComplete,
+                    onDismiss: ctrl.closeSwitcher,
+                    onSelectSession: (s) => ctrl.restoreSession(
+                      s,
+                      fallbackNavigatorKey: widget.navigatorKey,
+                    ),
+                    onCloseSession: _handleCloseSession,
+                    onCloseAll: _handleCloseAllSessions,
                   ),
-                  onCloseSession: _handleCloseSession,
-                  onCloseAll: _handleCloseAllSessions,
                 ),
               ],
             );
@@ -4608,6 +4780,9 @@ class MinimizedMiniAppBar extends StatelessWidget {
 class MiniAppTabsSwitcher extends StatefulWidget {
   final List<MiniAppSession> sessions;
   final ui.Image? frozenBackdropImage;
+  final MiniAppSwitcherEnterSpec enterSpec;
+  final MiniAppSwitcherExitSpec? exitSpec;
+  final VoidCallback? onExitAnimationComplete;
   final VoidCallback onDismiss;
   final ValueChanged<MiniAppSession> onSelectSession;
   final ValueChanged<MiniAppSession> onCloseSession;
@@ -4621,6 +4796,9 @@ class MiniAppTabsSwitcher extends StatefulWidget {
     super.key,
     required this.sessions,
     this.frozenBackdropImage,
+    this.enterSpec = const MiniAppSwitcherEnterSpec.fromDock(),
+    this.exitSpec,
+    this.onExitAnimationComplete,
     required this.onDismiss,
     required this.onSelectSession,
     required this.onCloseSession,
@@ -4632,15 +4810,18 @@ class MiniAppTabsSwitcher extends StatefulWidget {
 }
 
 class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   static const double _kBasePitchX = 0.14;
   static const double _kMaxGyroPitch = 0.055;
   static const double _kMaxGyroYaw = 0.075;
   static const double _kGyroDeadzone = 0.045;
+  static const Cubic _kCascadeEnterCurve = Cubic(0.22, 1.0, 0.36, 1.0);
 
   final ScrollController _scrollController = ScrollController();
   StreamSubscription<GyroscopeEvent>? _gyroSub;
   late final AnimationController _gyroTicker;
+  late final AnimationController _enterController;
+  late final AnimationController _exitController;
   final ValueNotifier<Offset> _gyroTiltNotifier =
       ValueNotifier<Offset>(Offset.zero);
   double _targetPitch = 0.0;
@@ -4649,6 +4830,8 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   double _currentYaw = 0.0;
   double _lastCullingOffset = 0.0;
   ModalRoute<dynamic>? _enclosingRoute;
+  Animation<double>? _attachedRouteAnimation;
+  bool _exitCompletionScheduled = false;
 
   bool get _shouldUseGyro =>
       MiniAppTabsSwitcher.debugGyroscopeStreamOverride != null ||
@@ -4665,26 +4848,76 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
       vsync: this,
       duration: const Duration(milliseconds: 16),
     )..addListener(_onGyroTick);
+    _enterController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+    );
+    _exitController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    if (WidgetsBinding
+        .instance.platformDispatcher.accessibilityFeatures.disableAnimations) {
+      _enterController.value = 1.0;
+    } else {
+      _enterController.forward(from: 0.0);
+    }
     MiniAppSessionController.instance.addListener(_onControllerUpdated);
     _captureMissingPreviews();
     _syncGyroSubscription();
+  }
+
+  void _onRouteAnimationChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _attachRouteAnimation(Animation<double>? nextAnim) {
+    if (identical(_attachedRouteAnimation, nextAnim)) return;
+    _attachedRouteAnimation?.removeListener(_onRouteAnimationChanged);
+    _attachedRouteAnimation = nextAnim;
+    _attachedRouteAnimation?.addListener(_onRouteAnimationChanged);
+  }
+
+  void _scheduleImmediateExitComplete() {
+    if (_exitCompletionScheduled) return;
+    _exitCompletionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _exitCompletionScheduled = false;
+      if (mounted && widget.exitSpec != null) {
+        widget.onExitAnimationComplete?.call();
+      }
+    });
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _enclosingRoute = ModalRoute.of(context);
+    _attachRouteAnimation(_enclosingRoute?.animation);
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+      if (_enterController.value < 1.0) {
+        _enterController.value = 1.0;
+      }
+      if (widget.exitSpec != null) {
+        _exitController.value = 1.0;
+        _scheduleImmediateExitComplete();
+      }
+    }
   }
 
   @override
   void deactivate() {
     _enclosingRoute = null;
+    _attachRouteAnimation(null);
     super.deactivate();
   }
 
   bool _handleHardwareKey(KeyEvent event) {
     if (!mounted ||
         !context.mounted ||
+        widget.exitSpec != null ||
         activeSafariWebAlertCount.value > 0) {
       return false;
     }
@@ -4702,6 +4935,32 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   @override
   void didUpdateWidget(covariant MiniAppTabsSwitcher oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.exitSpec != null && oldWidget.exitSpec == null) {
+      final bool disableAnim =
+          (MediaQuery.maybeDisableAnimationsOf(context) ?? false) ||
+              WidgetsBinding.instance.platformDispatcher.accessibilityFeatures
+                  .disableAnimations;
+      if (disableAnim) {
+        _exitController.value = 1.0;
+        _scheduleImmediateExitComplete();
+      } else {
+        _exitCompletionScheduled = false;
+        _exitController.forward(from: 0.0).whenComplete(() {
+          if (mounted && widget.exitSpec != null) {
+            widget.onExitAnimationComplete?.call();
+          }
+        });
+      }
+    } else if (widget.exitSpec == null && oldWidget.exitSpec != null) {
+      _exitCompletionScheduled = false;
+      _exitController.stop();
+      _exitController.value = 0.0;
+      if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) {
+        _enterController.value = 1.0;
+      } else {
+        _enterController.forward(from: 0.0);
+      }
+    }
     _captureMissingPreviews();
     _syncGyroSubscription();
   }
@@ -4806,9 +5065,12 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     WidgetsBinding.instance.removeObserver(this);
+    _attachRouteAnimation(null);
     _scrollController.dispose();
     _stopGyroListening(resetTilt: false);
     _gyroTicker.dispose();
+    _enterController.dispose();
+    _exitController.dispose();
     _gyroTiltNotifier.dispose();
     MiniAppSessionController.instance.removeListener(_onControllerUpdated);
     super.dispose();
@@ -4821,6 +5083,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
   }
 
   void _handleDismissTap() {
+    if (widget.exitSpec != null) return;
     HapticUtils.tap();
     widget.onDismiss();
   }
@@ -4841,15 +5104,16 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     final resolved = MiniAppJsBridge.resolveThemeColors(theme);
     final style = TheavSurfaceStyle.of(context);
     final mq = MediaQuery.of(context);
+    final bool disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     final bool allowBlur = BlurUtils.shouldBlurMaterialHud(context);
     final ui.Image? frozenBg = widget.frozenBackdropImage;
     final Color dimTint = resolved.bodyBg.withValues(
       alpha: allowBlur ? (style.isDark ? 0.76 : 0.70) : 0.95,
     );
 
-    final Widget backdrop;
+    final Widget? frozenBackdrop;
     if (frozenBg != null && allowBlur) {
-      backdrop = RepaintBoundary(
+      frozenBackdrop = RepaintBoundary(
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: _handleDismissTap,
@@ -4867,22 +5131,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
         ),
       );
     } else {
-      final blurFilter =
-          allowBlur ? BlurUtils.createMaterialHudBlur(sigma: 16.0) : null;
-      Widget liveBackdrop = GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _handleDismissTap,
-        child: ColoredBox(color: dimTint),
-      );
-      if (blurFilter != null) {
-        liveBackdrop = ClipRect(
-          child: BackdropFilter(
-            filter: blurFilter,
-            child: liveBackdrop,
-          ),
-        );
-      }
-      backdrop = RepaintBoundary(child: liveBackdrop);
+      frozenBackdrop = null;
     }
 
     final Widget closeAllChild = Material(
@@ -4934,115 +5183,239 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
           );
 
     final List<MiniAppSession> visibleSessions = widget.sessions;
+    final Listenable transitionListenable = Listenable.merge(<Listenable>[
+      _enterController,
+      _exitController,
+      if (_attachedRouteAnimation != null) _attachedRouteAnimation!,
+    ]);
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned.fill(child: backdrop),
-        Positioned.fill(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final double availH = constraints.maxHeight;
-              final double cardHeight = (availH * 0.56).clamp(240.0, 380.0);
-              final int n = visibleSessions.length;
-              final double stepY = n <= 1
-                  ? 0.0
-                  : ((availH - cardHeight - 24.0) / (n - 1))
-                      .clamp(200.0, 268.0);
-              final double stackHeight =
-                  n == 0 ? 0.0 : cardHeight + (n - 1) * stepY;
-              final double topPad =
-                  ((availH - mq.padding.top - 72.0 - stackHeight) * 0.30)
-                      .clamp(4.0, 48.0);
-              final double contentTopOffset = mq.padding.top + 64 + topPad;
-              final double scrollOffset = _scrollController.hasClients
-                  ? _scrollController.offset
-                  : _lastCullingOffset;
-              final int firstIdx;
-              final int lastIdx;
-              if (n == 0) {
-                firstIdx = 0;
-                lastIdx = -1;
-              } else if (n <= 4 || stepY <= 0.0) {
-                firstIdx = 0;
-                lastIdx = n - 1;
-              } else {
-                final double viewTop = scrollOffset - contentTopOffset;
-                final double viewBottom =
-                    scrollOffset + availH - contentTopOffset;
-                firstIdx = (((viewTop - cardHeight) / stepY).floor() - 1)
-                    .clamp(0, n - 1);
-                lastIdx =
-                    ((viewBottom / stepY).ceil() + 1).clamp(firstIdx, n - 1);
-              }
+    return AnimatedBuilder(
+      animation: transitionListenable,
+      child: closeAllPill,
+      builder: (context, cachedCloseAllPill) {
+        final double enterRaw =
+            disableAnim ? 1.0 : _enterController.value.clamp(0.0, 1.0);
+        final bool routeReversing = widget.exitSpec == null &&
+            _attachedRouteAnimation?.status == AnimationStatus.reverse;
+        final double exitRaw = disableAnim
+            ? ((widget.exitSpec != null || routeReversing) ? 1.0 : 0.0)
+            : (widget.exitSpec != null
+                ? _exitController.value.clamp(0.0, 1.0)
+                : (routeReversing
+                    ? (1.0 - _attachedRouteAnimation!.value).clamp(0.0, 1.0)
+                    : 0.0));
 
-              return RepaintBoundary(
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: (ScrollNotification notification) {
-                    if (notification is ScrollUpdateNotification &&
-                        n > 4 &&
-                        stepY > 0.0 &&
-                        (notification.metrics.pixels - _lastCullingOffset)
-                                .abs() >=
-                            stepY * 0.45) {
-                      _lastCullingOffset = notification.metrics.pixels;
-                      if (mounted) {
-                        setState(() {});
-                      }
-                    }
-                    return false;
-                  },
-                  child: GestureDetector(
-                    key: const ValueKey('mini_app_tabs_empty_area_detector'),
-                    behavior: HitTestBehavior.translucent,
-                    onTap: _handleDismissTap,
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
-                      padding: EdgeInsets.fromLTRB(
-                        16,
-                        contentTopOffset,
-                        16,
-                        math.max(24.0, mq.padding.bottom + 16),
-                      ),
-                      child: SizedBox(
-                        height: stackHeight,
-                        width: double.infinity,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            for (int i = firstIdx; i <= lastIdx; i++)
-                              _buildStackedCard(
-                                context,
-                                session: visibleSessions[i],
-                                index: i,
-                                totalCount: n,
-                                top: i * stepY,
-                                cardHeight: cardHeight,
-                                resolved: resolved,
-                                style: style,
-                              ),
-                          ],
-                        ),
-                      ),
+        final double bdEnter = Curves.easeOutCubic.transform(
+          (enterRaw / 0.58).clamp(0.0, 1.0),
+        );
+        final double bdExit = 1.0 - Curves.easeInCubic.transform(exitRaw);
+        final double bdAlpha = (bdEnter * bdExit).clamp(0.0, 1.0);
+
+        final MiniAppSession? outgoing = widget.enterSpec.outgoingSession;
+        final bool showGhost = !disableAnim &&
+            widget.enterSpec.source ==
+                MiniAppSwitcherOpenSource.fromActiveSession &&
+            outgoing != null &&
+            enterRaw < 0.62 &&
+            exitRaw <= 0.001;
+        Widget? ghostLayer;
+        if (showGhost) {
+          final double gt = Curves.easeOutCubic.transform(
+            (enterRaw / 0.62).clamp(0.0, 1.0),
+          );
+          final double ghostScale = 1.0 - 0.10 * gt;
+          final double ghostDy = 16.0 * gt;
+          final double ghostAlpha = (1.0 - gt).clamp(0.0, 1.0);
+          final double ghostRadius = 20.0 * gt;
+          final Matrix4 ghostMatrix = Matrix4.identity()
+            ..translateByDouble(0.0, ghostDy, 0.0, 1.0)
+            ..scaleByDouble(ghostScale, ghostScale, 1.0, 1.0);
+          ghostLayer = Positioned.fill(
+            child: IgnorePointer(
+              key: const ValueKey('mini_app_switcher_zoom_out_ghost'),
+              child: RepaintBoundary(
+                child: Opacity(
+                  opacity: ghostAlpha,
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: ghostMatrix,
+                    child: _OutgoingPageGhostSurface(
+                      session: outgoing,
+                      resolved: resolved,
+                      cornerRadius: ghostRadius,
                     ),
                   ),
                 ),
-              );
-            },
-          ),
-        ),
-        if (visibleSessions.isNotEmpty)
-          Positioned(
-            top: mq.padding.top + 14,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: RepaintBoundary(
-                child: SizedBox(height: 36, child: closeAllPill),
               ),
             ),
-          ),
-      ],
+          );
+        }
+
+        final double pillEnterT = _kCascadeEnterCurve.transform(
+          ((enterRaw - 0.14) / 0.78).clamp(0.0, 1.0),
+        );
+        final double pillExitT = Curves.easeInCubic.transform(
+          (exitRaw / 0.85).clamp(0.0, 1.0),
+        );
+        final double pillProgress =
+            (pillEnterT * (1.0 - pillExitT)).clamp(0.0, 1.0);
+        final double pillHideDistance = mq.padding.top + 64.0;
+        final double pillDy = -pillHideDistance * (1.0 - pillProgress);
+        final double pillScale = 0.90 + 0.10 * pillProgress;
+        final Matrix4 pillMatrix = pillProgress >= 0.9999
+            ? Matrix4.identity()
+            : (Matrix4.identity()
+              ..translateByDouble(0.0, pillDy, 0.0, 1.0)
+              ..scaleByDouble(pillScale, pillScale, 1.0, 1.0));
+
+        final Widget animatedBackdrop;
+        if (frozenBackdrop != null) {
+          animatedBackdrop = Opacity(opacity: bdAlpha, child: frozenBackdrop);
+        } else {
+          final Color animatedDimTint = dimTint.withValues(
+            alpha: (dimTint.a * bdAlpha).clamp(0.0, 1.0),
+          );
+          final ui.ImageFilter? blurFilter = (allowBlur && bdAlpha > 0.02)
+              ? BlurUtils.createMaterialHudBlur(sigma: 16.0 * bdAlpha)
+              : null;
+          Widget liveBackdrop = GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _handleDismissTap,
+            child: ColoredBox(color: animatedDimTint),
+          );
+          if (blurFilter != null) {
+            liveBackdrop = ClipRect(
+              child: BackdropFilter(
+                filter: blurFilter,
+                child: liveBackdrop,
+              ),
+            );
+          }
+          animatedBackdrop = RepaintBoundary(child: liveBackdrop);
+        }
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(child: animatedBackdrop),
+            if (ghostLayer != null) ghostLayer,
+            Positioned.fill(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final double availH = constraints.maxHeight;
+                  final double cardHeight = (availH * 0.56).clamp(240.0, 380.0);
+                  final int n = visibleSessions.length;
+                  final double stepY = n <= 1
+                      ? 0.0
+                      : ((availH - cardHeight - 24.0) / (n - 1))
+                          .clamp(200.0, 268.0);
+                  final double stackHeight =
+                      n == 0 ? 0.0 : cardHeight + (n - 1) * stepY;
+                  final double topPad =
+                      ((availH - mq.padding.top - 72.0 - stackHeight) * 0.30)
+                          .clamp(4.0, 48.0);
+                  final double contentTopOffset = mq.padding.top + 64 + topPad;
+                  final double scrollOffset = _scrollController.hasClients
+                      ? _scrollController.offset
+                      : _lastCullingOffset;
+                  final int firstIdx;
+                  final int lastIdx;
+                  if (n == 0) {
+                    firstIdx = 0;
+                    lastIdx = -1;
+                  } else if (n <= 4 || stepY <= 0.0) {
+                    firstIdx = 0;
+                    lastIdx = n - 1;
+                  } else {
+                    final double viewTop = scrollOffset - contentTopOffset;
+                    final double viewBottom =
+                        scrollOffset + availH - contentTopOffset;
+                    firstIdx = (((viewTop - cardHeight) / stepY).floor() - 1)
+                        .clamp(0, n - 1);
+                    lastIdx = ((viewBottom / stepY).ceil() + 1)
+                        .clamp(firstIdx, n - 1);
+                  }
+                  final int visibleCount = math.max(1, lastIdx - firstIdx + 1);
+
+                  return RepaintBoundary(
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: (ScrollNotification notification) {
+                        if (notification is ScrollUpdateNotification &&
+                            n > 4 &&
+                            stepY > 0.0 &&
+                            (notification.metrics.pixels - _lastCullingOffset)
+                                    .abs() >=
+                                stepY * 0.45) {
+                          _lastCullingOffset = notification.metrics.pixels;
+                          if (mounted) {
+                            setState(() {});
+                          }
+                        }
+                        return false;
+                      },
+                      child: GestureDetector(
+                        key: const ValueKey(
+                            'mini_app_tabs_empty_area_detector'),
+                        behavior: HitTestBehavior.translucent,
+                        onTap: _handleDismissTap,
+                        child: SingleChildScrollView(
+                          controller: _scrollController,
+                          padding: EdgeInsets.fromLTRB(
+                            16,
+                            contentTopOffset,
+                            16,
+                            math.max(24.0, mq.padding.bottom + 16),
+                          ),
+                          child: SizedBox(
+                            height: stackHeight,
+                            width: double.infinity,
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                for (int i = firstIdx; i <= lastIdx; i++)
+                                  _buildStackedCard(
+                                    context,
+                                    session: visibleSessions[i],
+                                    index: i,
+                                    totalCount: n,
+                                    localIndex: i - firstIdx,
+                                    visibleCount: visibleCount,
+                                    enterRaw: enterRaw,
+                                    exitRaw: exitRaw,
+                                    top: i * stepY,
+                                    cardHeight: cardHeight,
+                                    resolved: resolved,
+                                    style: style,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            if (visibleSessions.isNotEmpty)
+              Positioned(
+                top: mq.padding.top + 14,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: RepaintBoundary(
+                    child: Transform(
+                      key: const ValueKey('mini_app_close_all_pill_motion'),
+                      alignment: Alignment.topCenter,
+                      transform: pillMatrix,
+                      child: SizedBox(height: 36, child: cachedCloseAllPill),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -5051,6 +5424,10 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     required MiniAppSession session,
     required int index,
     required int totalCount,
+    required int localIndex,
+    required int visibleCount,
+    required double enterRaw,
+    required double exitRaw,
     required double top,
     required double cardHeight,
     required MiniAppThemeColors resolved,
@@ -5088,169 +5465,311 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
     final double depthFactor =
         totalCount <= 1 ? 1.0 : (0.82 + 0.18 * (index / (totalCount - 1)));
 
+    final double staggerStart = (localIndex * 0.09).clamp(0.0, 0.36);
+    final double staggerSpan = (1.0 - staggerStart).clamp(0.40, 1.0);
+    final double cardEnterLinear =
+        ((enterRaw - staggerStart) / staggerSpan).clamp(0.0, 1.0);
+    final double cardEnterEase =
+        _kCascadeEnterCurve.transform(cardEnterLinear);
+    final double baseEnterDy =
+        widget.enterSpec.source == MiniAppSwitcherOpenSource.fromDockBar
+            ? 68.0
+            : 48.0;
+    final double baseEnterScale =
+        widget.enterSpec.source == MiniAppSwitcherOpenSource.fromDockBar
+            ? 0.92
+            : 0.94;
+    double dy = (1.0 - cardEnterEase) * baseEnterDy;
+    double scale = baseEnterScale + (1.0 - baseEnterScale) * cardEnterEase;
+    double alpha =
+        Curves.easeOut.transform((cardEnterLinear / 0.65).clamp(0.0, 1.0));
+
+    if (exitRaw > 0.0001) {
+      final MiniAppSwitcherExitReason reason =
+          widget.exitSpec?.reason ?? MiniAppSwitcherExitReason.dismissToDock;
+      switch (reason) {
+        case MiniAppSwitcherExitReason.selectSession:
+          if (session.id == widget.exitSpec?.selectedSessionId) {
+            final double selEase = Curves.easeOutCubic.transform(exitRaw);
+            dy += -12.0 * selEase;
+            scale *= (1.0 + 0.06 * selEase);
+            alpha *= (1.0 -
+                Curves.easeIn.transform(
+                  ((exitRaw - 0.35) / 0.65).clamp(0.0, 1.0),
+                ));
+          } else {
+            final double recEase = Curves.easeInCubic.transform(exitRaw);
+            dy += 24.0 * recEase;
+            scale *= (1.0 - 0.05 * recEase);
+            alpha *= (1.0 -
+                Curves.easeOut.transform((exitRaw / 0.75).clamp(0.0, 1.0)));
+          }
+          break;
+        case MiniAppSwitcherExitReason.closeAll:
+        case MiniAppSwitcherExitReason.closeSingle:
+          final double closeEase = Curves.easeInCubic.transform(exitRaw);
+          dy += 20.0 * closeEase;
+          scale *= (1.0 - 0.10 * closeEase);
+          alpha *= (1.0 - closeEase);
+          break;
+        case MiniAppSwitcherExitReason.dismissToDock:
+          final int revIndex =
+              (visibleCount - 1 - localIndex).clamp(0, visibleCount - 1);
+          final double exitStart = (revIndex * 0.07).clamp(0.0, 0.28);
+          final double cardExitLinear =
+              ((exitRaw - exitStart) / (1.0 - exitStart)).clamp(0.0, 1.0);
+          final double dockEase = Curves.easeInCubic.transform(cardExitLinear);
+          dy += 52.0 * dockEase;
+          scale *= (1.0 - 0.07 * dockEase);
+          alpha *= (1.0 - dockEase);
+          break;
+      }
+    }
+
+    final Matrix4 cascadeMatrix =
+        (dy.abs() < 0.05 && (scale - 1.0).abs() < 0.001)
+            ? Matrix4.identity()
+            : (Matrix4.identity()
+              ..translateByDouble(0.0, dy, 0.0, 1.0)
+              ..scaleByDouble(scale, scale, 1.0, 1.0));
+    final double clampedAlpha = alpha.clamp(0.0, 1.0);
+
     return Positioned(
       top: top,
       left: 0,
       right: 0,
       height: cardHeight,
-      child: Dismissible(
-        key: ValueKey('mini_app_tab_dismiss_${session.id}'),
-        direction: DismissDirection.horizontal,
-        onDismissed: (_) => widget.onCloseSession(session),
-        child: ValueListenableBuilder<Offset>(
-          valueListenable: _gyroTiltNotifier,
-          child: RepaintBoundary(
-            child: GestureDetector(
-              key: ValueKey('mini_app_tab_card_${session.id}'),
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                HapticUtils.selection();
-                widget.onSelectSession(session);
-              },
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: cardBodyBg,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black
-                          .withValues(alpha: style.isDark ? 0.36 : 0.14),
-                      blurRadius: 12,
-                      offset: const Offset(0, 6),
+      child: Transform(
+        key: ValueKey('mini_app_tab_cascade_${session.id}'),
+        alignment: Alignment.topCenter,
+        transform: cascadeMatrix,
+        child: Opacity(
+          opacity: clampedAlpha,
+          child: Dismissible(
+            key: ValueKey('mini_app_tab_dismiss_${session.id}'),
+            direction: DismissDirection.horizontal,
+            onDismissed: (_) => widget.onCloseSession(session),
+            child: ValueListenableBuilder<Offset>(
+              valueListenable: _gyroTiltNotifier,
+              child: RepaintBoundary(
+                child: GestureDetector(
+                  key: ValueKey('mini_app_tab_card_${session.id}'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.selection();
+                    widget.onSelectSession(session);
+                  },
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: cardBodyBg,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black
+                              .withValues(alpha: style.isDark ? 0.36 : 0.14),
+                          blurRadius: 12,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: DecoratedBox(
-                  position: DecorationPosition.foreground,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: cardDivider, width: 0.8),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    clipBehavior: Clip.hardEdge,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Container(
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: cardHeaderBg,
-                            border: Border(
-                              bottom: BorderSide(color: cardDivider, width: 0.75),
-                            ),
-                          ),
-                          child: Material(
-                            type: MaterialType.transparency,
-                            child: Row(
-                              children: [
-                                SizedBox(
-                                  width: 46,
-                                  height: 48,
-                                  child: Semantics(
-                                    button: true,
-                                    label: 'Закрыть',
-                                    child: InkWell(
-                                      key: ValueKey(
-                                          'mini_app_tab_close_${session.id}'),
-                                      borderRadius: BorderRadius.circular(24),
-                                      onTap: () {
-                                        HapticUtils.tap();
-                                        widget.onCloseSession(session);
-                                      },
-                                      child: Center(
-                                        child: Icon(
-                                          Icons.close_rounded,
-                                          size: 22,
-                                          color: cardHeaderFg,
+                    child: DecoratedBox(
+                      position: DecorationPosition.foreground,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: cardDivider, width: 0.8),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        clipBehavior: Clip.hardEdge,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Container(
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: cardHeaderBg,
+                                border: Border(
+                                  bottom: BorderSide(
+                                    color: cardDivider,
+                                    width: 0.75,
+                                  ),
+                                ),
+                              ),
+                              child: Material(
+                                type: MaterialType.transparency,
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 46,
+                                      height: 48,
+                                      child: Semantics(
+                                        button: true,
+                                        label: 'Закрыть',
+                                        child: InkWell(
+                                          key: ValueKey(
+                                            'mini_app_tab_close_${session.id}',
+                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(24),
+                                          onTap: () {
+                                            HapticUtils.tap();
+                                            widget.onCloseSession(session);
+                                          },
+                                          child: Center(
+                                            child: Icon(
+                                              Icons.close_rounded,
+                                              size: 22,
+                                              color: cardHeaderFg,
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Padding(
-                                    padding: const EdgeInsets.only(right: 14),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (session.isBrowser) ...[
-                                          Icon(
-                                            session.currentUrl
-                                                    .toLowerCase()
-                                                    .startsWith('https://')
-                                                ? Icons.lock_outline_rounded
-                                                : Icons.public_rounded,
-                                            size: 16,
-                                            color: cardHeaderFg.withValues(
-                                              alpha: 0.78,
+                                    Expanded(
+                                      child: Padding(
+                                        padding:
+                                            const EdgeInsets.only(right: 14),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (session.isBrowser) ...[
+                                              Icon(
+                                                session.currentUrl
+                                                        .toLowerCase()
+                                                        .startsWith('https://')
+                                                    ? Icons.lock_outline_rounded
+                                                    : Icons.public_rounded,
+                                                size: 16,
+                                                color: cardHeaderFg.withValues(
+                                                  alpha: 0.78,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 6),
+                                            ],
+                                            Flexible(
+                                              child: Text(
+                                                session.displayTitle,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 16.5,
+                                                  fontWeight: FontWeight.w700,
+                                                  letterSpacing: -0.15,
+                                                  color: cardHeaderFg,
+                                                  decoration:
+                                                      TextDecoration.none,
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                          const SizedBox(width: 6),
-                                        ],
-                                        Flexible(
-                                          child: Text(
-                                            session.displayTitle,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              fontSize: 16.5,
-                                              fontWeight: FontWeight.w700,
-                                              letterSpacing: -0.15,
-                                              color: cardHeaderFg,
-                                              decoration: TextDecoration.none,
-                                            ),
-                                          ),
+                                            if (isVerified) ...[
+                                              const SizedBox(width: 6),
+                                              MiniAppVerifiedSeal(
+                                                size: 17,
+                                                color: sealColor,
+                                                checkColor: sealCheckColor,
+                                              ),
+                                            ],
+                                          ],
                                         ),
-                                        if (isVerified) ...[
-                                          const SizedBox(width: 6),
-                                          MiniAppVerifiedSeal(
-                                            size: 17,
-                                            color: sealColor,
-                                            checkColor: sealCheckColor,
-                                          ),
-                                        ],
-                                      ],
+                                      ),
                                     ),
-                                  ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
-                          ),
+                            Expanded(
+                              child: _MiniAppSessionCardPreview(
+                                key: ValueKey(
+                                  'mini_app_tab_preview_${session.id}',
+                                ),
+                                session: session,
+                                resolved: resolved,
+                              ),
+                            ),
+                          ],
                         ),
-                        Expanded(
-                          child: _MiniAppSessionCardPreview(
-                            key: ValueKey('mini_app_tab_preview_${session.id}'),
-                            session: session,
-                            resolved: resolved,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
               ),
+              builder: (context, gyroTilt, cardChild) {
+                final double pitch = _kBasePitchX + gyroTilt.dx * depthFactor;
+                final double yaw = gyroTilt.dy * depthFactor;
+                final double shiftX = yaw * 18.0;
+                final double shiftY = (gyroTilt.dx * depthFactor) * 10.0;
+                final Matrix4 tiltMatrix = Matrix4.identity()
+                  ..translateByDouble(shiftX, shiftY, 0.0, 1.0)
+                  ..setEntry(3, 2, 0.0011)
+                  ..rotateX(pitch)
+                  ..rotateY(yaw);
+                return Transform(
+                  key: ValueKey('mini_app_tab_transform_${session.id}'),
+                  alignment: Alignment.topCenter,
+                  transform: tiltMatrix,
+                  child: cardChild,
+                );
+              },
             ),
           ),
-          builder: (context, gyroTilt, cardChild) {
-            final double pitch = _kBasePitchX + gyroTilt.dx * depthFactor;
-            final double yaw = gyroTilt.dy * depthFactor;
-            final double shiftX = yaw * 18.0;
-            final double shiftY = (gyroTilt.dx * depthFactor) * 10.0;
-            final Matrix4 tiltMatrix = Matrix4.identity()
-              ..translateByDouble(shiftX, shiftY, 0.0, 1.0)
-              ..setEntry(3, 2, 0.0011)
-              ..rotateX(pitch)
-              ..rotateY(yaw);
-            return Transform(
-              key: ValueKey('mini_app_tab_transform_${session.id}'),
-              alignment: Alignment.topCenter,
-              transform: tiltMatrix,
-              child: cardChild,
-            );
-          },
         ),
       ),
+    );
+  }
+}
+
+/// Lightweight raster/canvas stand-in for the outgoing full-screen web page or
+/// Mini App receding into depth when opening [MiniAppTabsSwitcher].
+class _OutgoingPageGhostSurface extends StatelessWidget {
+  final MiniAppSession session;
+  final MiniAppThemeColors resolved;
+  final double cornerRadius;
+
+  const _OutgoingPageGhostSurface({
+    required this.session,
+    required this.resolved,
+    required this.cornerRadius,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final Color bodyBg = session.domPreview?.bgColor ??
+        session.browserCanvasColor ??
+        session.customBackgroundColor ??
+        resolved.bodyBg;
+    final Color headerBg = session.customHeaderColor ?? resolved.headerBg;
+    final ImageProvider? provider =
+        session.fullViewportPreviewProvider ?? session.previewImageProvider;
+    final Widget body = provider != null
+        ? ColoredBox(
+            color: bodyBg,
+            child: Image(
+              image: provider,
+              fit: BoxFit.cover,
+              alignment: Alignment.topCenter,
+              width: double.infinity,
+              height: double.infinity,
+              filterQuality: FilterQuality.low,
+              gaplessPlayback: true,
+            ),
+          )
+        : ColoredBox(
+            color: bodyBg,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  height: 64,
+                  color: headerBg.withValues(alpha: 0.72),
+                ),
+              ],
+            ),
+          );
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(cornerRadius),
+      clipBehavior: cornerRadius > 0.5 ? Clip.hardEdge : Clip.none,
+      child: body,
     );
   }
 }
@@ -8224,6 +8743,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       _isMinimizing = true;
       _setRouteRestingOpaque(false);
       _releaseFullScreenRegistration();
+      TheavSheetRoutePerfControl.prepareInstantSwitcherDismiss(context);
       final nav = Navigator.of(context, rootNavigator: true);
       MiniAppSessionController.instance.minimizeAndOpenSwitcher(
         _session,
@@ -8242,9 +8762,15 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     await navigator.push<void>(
       PageRouteBuilder<void>(
         opaque: false,
+        transitionDuration: const Duration(milliseconds: 260),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
         pageBuilder: (routeCtx, _, __) => MiniAppTabsSwitcher(
           key: const ValueKey('mini_app_tabs_switcher'),
           sessions: sessions,
+          enterSpec: MiniAppSwitcherEnterSpec(
+            source: MiniAppSwitcherOpenSource.fromActiveSession,
+            outgoingSession: _session,
+          ),
           onDismiss: () => Navigator.of(routeCtx).maybePop(),
           onSelectSession: (selected) {
             Navigator.of(routeCtx).maybePop();

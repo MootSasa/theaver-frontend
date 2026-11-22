@@ -26,6 +26,12 @@ class TheavModalSheetScope extends InheritedWidget {
   bool updateShouldNotify(TheavModalSheetScope oldWidget) => false;
 }
 
+/// Transition choreography used when presenting a [showTheavModalSheet] route.
+enum TheavSheetTransitionStyle {
+  slideFromBottom,
+  zoomFromSwitcher,
+}
+
 /// Opens a dual-mode [TheavModalSheet] that can be stretched or dismissed via its
 /// top handle bar while rendering a real [LiquidGlassLens] surface in
 /// `full`/`lite` modes and a crisp Material 3 surface when disabled.
@@ -42,6 +48,8 @@ Future<T?> showTheavModalSheet<T>({
   double maxHeightFactor = 0.92,
   bool barrierDismissible = true,
   bool useRootNavigator = false,
+  TheavSheetTransitionStyle transitionStyle =
+      TheavSheetTransitionStyle.slideFromBottom,
 }) {
   final NavigatorState navigator =
       Navigator.of(context, rootNavigator: useRootNavigator);
@@ -66,6 +74,7 @@ Future<T?> showTheavModalSheet<T>({
             MaterialLocalizations,
           )?.modalBarrierDismissLabel ??
           'Dismiss',
+      transitionStyle: transitionStyle,
     ),
   );
 }
@@ -196,11 +205,23 @@ abstract final class TheavSheetRoutePerfControl {
     }
     return false;
   }
+
+  /// Disables the route's default downward slide pop animation so opening
+  /// the 3D tabs switcher hands off cleanly to its zoom-out cascade without
+  /// dragging the live WebView sheet downward first.
+  static bool prepareInstantSwitcherDismiss(BuildContext context) {
+    final route = _TheavModalSheetRouteScope.maybeRouteOf(context);
+    if (route != null) {
+      return route.prepareInstantSwitcherDismiss();
+    }
+    return false;
+  }
 }
 
 class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   static const Cubic _kSheetEnterCurve = Cubic(0.32, 0.72, 0.0, 1.0);
   static const Cubic _kSheetExitCurve = Cubic(0.24, 0.84, 0.36, 1.0);
+  static const Cubic _kSwitcherZoomEnterCurve = Cubic(0.22, 1.0, 0.36, 1.0);
 
   final WidgetBuilder builder;
   final WidgetBuilder? customSheetBuilder;
@@ -211,6 +232,7 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   final bool enableDrag;
   final bool showCloseButton;
   final double maxHeightFactor;
+  final TheavSheetTransitionStyle transitionStyle;
   @override
   final bool barrierDismissible;
   @override
@@ -220,6 +242,7 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   bool _overlaySyncScheduled = false;
   bool _isDisposed = false;
   bool _dismissingFromDrag = false;
+  bool _instantSwitcherDismiss = false;
   double _dragDismissUnitVelocity = 2.6;
   double _dragDismissStartProgress = 1.0;
   double _dragDismissStartOffsetPx = 0.0;
@@ -238,6 +261,7 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     required this.maxHeightFactor,
     required this.barrierDismissible,
     required this.barrierLabel,
+    this.transitionStyle = TheavSheetTransitionStyle.slideFromBottom,
   });
 
   CurvedAnimation _obtainCurvedAnimation(Animation<double> parent) {
@@ -248,10 +272,24 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     _curvedParent = parent;
     _curvedAnimation = CurvedAnimation(
       parent: parent,
-      curve: _kSheetEnterCurve,
+      curve: transitionStyle == TheavSheetTransitionStyle.zoomFromSwitcher
+          ? _kSwitcherZoomEnterCurve
+          : _kSheetEnterCurve,
       reverseCurve: _kSheetExitCurve,
     );
     return _curvedAnimation!;
+  }
+
+  bool prepareInstantSwitcherDismiss() {
+    final ctrl = controller;
+    if (_isDisposed || ctrl == null) {
+      return false;
+    }
+    _instantSwitcherDismiss = true;
+    _dismissingFromDrag = false;
+    ctrl.reverseDuration = Duration.zero;
+    setRestingOpaque(false);
+    return true;
   }
 
   bool prepareDragDismiss({
@@ -360,10 +398,15 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
       _restingOpaque && animation?.status == AnimationStatus.completed;
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 280);
+  Duration get transitionDuration =>
+      transitionStyle == TheavSheetTransitionStyle.zoomFromSwitcher
+          ? const Duration(milliseconds: 240)
+          : const Duration(milliseconds: 280);
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 220);
+  Duration get reverseTransitionDuration => _instantSwitcherDismiss
+      ? Duration.zero
+      : const Duration(milliseconds: 220);
 
   @override
   Widget buildPage(
@@ -418,6 +461,29 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
             return _SheetVerticalOffset(
               offsetY: offsetPx,
               child: innerChild!,
+            );
+          }
+          if (_instantSwitcherDismiss) {
+            return animation.value <= 0.001
+                ? const SizedBox.shrink()
+                : innerChild!;
+          }
+          if (transitionStyle == TheavSheetTransitionStyle.zoomFromSwitcher &&
+              (animation.status == AnimationStatus.forward ||
+                  animation.status == AnimationStatus.completed)) {
+            final double progress = curved.value.clamp(0.0, 1.0);
+            if (progress >= 0.9999) {
+              return innerChild!;
+            }
+            final double scale = 0.94 + 0.06 * progress;
+            final double dy = (1.0 - progress) * 22.0;
+            return Transform.translate(
+              offset: Offset(0.0, dy),
+              child: Transform.scale(
+                scale: scale,
+                alignment: Alignment.center,
+                child: innerChild,
+              ),
             );
           }
           final double progress = curved.value.clamp(0.0, 1.0);
