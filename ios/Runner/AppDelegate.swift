@@ -10,6 +10,8 @@ import WebKit
   private var proximityEventSink: FlutterEventSink?
   private var mediaSessionChannel: FlutterMethodChannel?
   private var remoteCommandsConfigured = false
+  private var blockAllCookiesRuleList: WKContentRuleList?
+  private var blockThirdPartyCookiesRuleList: WKContentRuleList?
 
   override func application(
     _ application: UIApplication,
@@ -27,6 +29,7 @@ import WebKit
       setupProximityAndMediaSession(messenger: messenger)
       setupNativeNotifications(messenger: messenger)
       setupBrowserStorageChannel(messenger: messenger)
+      setupWebViewSnapshotChannel(messenger: messenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -38,6 +41,7 @@ import WebKit
     setupProximityAndMediaSession(messenger: messenger)
     setupNativeNotifications(messenger: messenger)
     setupBrowserStorageChannel(messenger: messenger)
+    setupWebViewSnapshotChannel(messenger: messenger)
   }
 
   private func setupProximityAndMediaSession(messenger: FlutterBinaryMessenger) {
@@ -542,12 +546,163 @@ import WebKit
     }
   }
 
+  private func activeKeyWindow() -> UIWindow? {
+    if #available(iOS 13.0, *) {
+      let scenes = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+      let activeScene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+      if let key = activeScene?.windows.first(where: { $0.isKeyWindow }) ?? activeScene?.windows.first {
+        return key
+      }
+    }
+    if let appWindow = self.window {
+      return appWindow
+    }
+    return UIApplication.shared.windows.first(where: { $0.isKeyWindow }) ?? UIApplication.shared.windows.first
+  }
+
+  private func collectWebViews(in view: UIView?, onlyVisible: Bool, out: inout [WKWebView]) {
+    guard let view = view else { return }
+    if onlyVisible && (view.isHidden || view.alpha <= 0.01 || view.bounds.width <= 0 || view.bounds.height <= 0) {
+      return
+    }
+    if let webView = view as? WKWebView {
+      out.append(webView)
+      return
+    }
+    for subview in view.subviews {
+      collectWebViews(in: subview, onlyVisible: onlyVisible, out: &out)
+    }
+  }
+
+  private func findTargetWebView(targetUrl: String?) -> WKWebView? {
+    guard let root = activeKeyWindow() else { return nil }
+    var candidates = [WKWebView]()
+    collectWebViews(in: root, onlyVisible: true, out: &candidates)
+    if candidates.isEmpty { return nil }
+    let query = targetUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !query.isEmpty {
+      if let exact = candidates.last(where: { ($0.url?.absoluteString ?? "") == query }) {
+        return exact
+      }
+      if let queryHost = URL(string: query)?.host?.lowercased(), !queryHost.isEmpty {
+        if let hostMatch = candidates.last(where: { $0.url?.host?.lowercased() == queryHost }) {
+          return hostMatch
+        }
+      }
+    }
+    var best: WKWebView?
+    var bestArea: CGFloat = -1
+    for wv in candidates {
+      let area = wv.bounds.width * wv.bounds.height
+      if area >= bestArea {
+        best = wv
+        bestArea = area
+      }
+    }
+    return best
+  }
+
+  private func allMountedWebViews() -> [WKWebView] {
+    var result = [WKWebView]()
+    if let root = activeKeyWindow() {
+      collectWebViews(in: root, onlyVisible: false, out: &result)
+    }
+    return result
+  }
+
+  private func setupWebViewSnapshotChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "app.theaver.messenger/webview_snapshot",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { [weak self] (call, result) in
+      guard let self = self else {
+        result(nil)
+        return
+      }
+      let args = call.arguments as? [String: Any]
+      switch call.method {
+      case "captureWebView":
+        let urlArg = args?["url"] as? String
+        let rawMaxWidth = (args?["maxWidth"] as? NSNumber)?.intValue ?? 960
+        let maxWidth = min(max(rawMaxWidth, 120), 1080)
+        let rawQuality = (args?["quality"] as? NSNumber)?.intValue ?? 86
+        let quality = min(max(rawQuality, 20), 95)
+        let topCropDp = max((args?["topCropDp"] as? NSNumber)?.doubleValue ?? 0.0, 0.0)
+        DispatchQueue.main.async {
+          guard let webView = self.findTargetWebView(targetUrl: urlArg),
+                webView.bounds.width > 0,
+                webView.bounds.height > 0 else {
+            result(nil)
+            return
+          }
+          let config = WKSnapshotConfiguration()
+          config.afterScreenUpdates = false
+          let rawTopCrop = CGFloat(topCropDp)
+          let effectiveTopCrop = min(
+            max(rawTopCrop - max(webView.scrollView.contentOffset.y, 0), 0),
+            webView.bounds.height * 0.35
+          )
+          if effectiveTopCrop > 0 && webView.bounds.height > 1 {
+            config.rect = CGRect(
+              x: 0,
+              y: effectiveTopCrop,
+              width: webView.bounds.width,
+              height: max(1, webView.bounds.height - effectiveTopCrop)
+            )
+          }
+          let targetWidth = min(CGFloat(maxWidth), webView.bounds.width)
+          if targetWidth > 0 {
+            config.snapshotWidth = NSNumber(value: Double(targetWidth))
+          }
+          webView.takeSnapshot(with: config) { image, _ in
+            guard let image = image else {
+              result(nil)
+              return
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+              let jpegData = image.jpegData(compressionQuality: CGFloat(quality) / 100.0)
+              DispatchQueue.main.async {
+                if let data = jpegData, !data.isEmpty {
+                  result(FlutterStandardTypedData(bytes: data))
+                } else {
+                  result(nil)
+                }
+              }
+            }
+          }
+        }
+
+      case "setWebViewInteractionLocked":
+        let urlArg = args?["url"] as? String
+        let locked = (args?["locked"] as? Bool) ?? false
+        DispatchQueue.main.async {
+          if let webView = self.findTargetWebView(targetUrl: urlArg) {
+            let scrollView = webView.scrollView
+            if locked {
+              scrollView.setContentOffset(scrollView.contentOffset, animated: false)
+              scrollView.isScrollEnabled = false
+            } else {
+              scrollView.isScrollEnabled = true
+              scrollView.setContentOffset(scrollView.contentOffset, animated: false)
+            }
+          }
+          result(true)
+        }
+
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
   private func setupBrowserStorageChannel(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(
       name: "app.theaver.messenger/browser_storage",
       binaryMessenger: messenger
     )
-    channel.setMethodCallHandler { (call, result) in
+    channel.setMethodCallHandler { [weak self] (call, result) in
       let dataStore = WKWebsiteDataStore.default()
       let cookieStore = dataStore.httpCookieStore
 
@@ -556,7 +711,120 @@ import WebKit
         result(true)
 
       case "configureWebViewPolicies":
-        result(true)
+        let args = call.arguments as? [String: Any]
+        let blockAllCookies = (args?["blockAllCookies"] as? Bool) ?? false
+        let acceptThirdPartyCookies = (args?["acceptThirdPartyCookies"] as? Bool) ?? true
+        DispatchQueue.main.async {
+          guard let self = self else {
+            result(true)
+            return
+          }
+          let webViews = self.allMountedWebViews()
+          let ruleStore: WKContentRuleListStore? = WKContentRuleListStore.default()
+          let blockAllId = "theaver_block_cookies"
+          let blockThirdPartyId = "theaver_block_third_party_cookies"
+          let group = DispatchGroup()
+
+          if blockAllCookies {
+            let ruleJson = "[{\"trigger\":{\"url-filter\":\".*\"},\"action\":{\"type\":\"block-cookies\"}}]"
+            if let store = ruleStore {
+              group.enter()
+              store.compileContentRuleList(
+                forIdentifier: blockAllId,
+                encodedContentRuleList: ruleJson
+              ) { ruleList, _ in
+                DispatchQueue.main.async {
+                  if let prev = self.blockAllCookiesRuleList {
+                    for wv in webViews {
+                      wv.configuration.userContentController.remove(prev)
+                    }
+                  }
+                  self.blockAllCookiesRuleList = ruleList
+                  if let ruleList = ruleList {
+                    for wv in webViews {
+                      wv.configuration.userContentController.add(ruleList)
+                    }
+                  }
+                  group.leave()
+                }
+              }
+            }
+          } else {
+            if let prev = self.blockAllCookiesRuleList {
+              for wv in webViews {
+                wv.configuration.userContentController.remove(prev)
+              }
+              self.blockAllCookiesRuleList = nil
+            }
+            if let store = ruleStore {
+              group.enter()
+              store.lookUpContentRuleList(forIdentifier: blockAllId) { existing, _ in
+                DispatchQueue.main.async {
+                  if let existing = existing {
+                    for wv in webViews {
+                      wv.configuration.userContentController.remove(existing)
+                    }
+                  }
+                  store.removeContentRuleList(forIdentifier: blockAllId) { _ in
+                    group.leave()
+                  }
+                }
+              }
+            }
+          }
+
+          if !blockAllCookies && !acceptThirdPartyCookies {
+            let thirdPartyJson = "[{\"trigger\":{\"url-filter\":\".*\",\"load-type\":[\"third-party\"]},\"action\":{\"type\":\"block-cookies\"}}]"
+            if let store = ruleStore {
+              group.enter()
+              store.compileContentRuleList(
+                forIdentifier: blockThirdPartyId,
+                encodedContentRuleList: thirdPartyJson
+              ) { ruleList, _ in
+                DispatchQueue.main.async {
+                  if let prev = self.blockThirdPartyCookiesRuleList {
+                    for wv in webViews {
+                      wv.configuration.userContentController.remove(prev)
+                    }
+                  }
+                  self.blockThirdPartyCookiesRuleList = ruleList
+                  if let ruleList = ruleList {
+                    for wv in webViews {
+                      wv.configuration.userContentController.add(ruleList)
+                    }
+                  }
+                  group.leave()
+                }
+              }
+            }
+          } else {
+            if let prev = self.blockThirdPartyCookiesRuleList {
+              for wv in webViews {
+                wv.configuration.userContentController.remove(prev)
+              }
+              self.blockThirdPartyCookiesRuleList = nil
+            }
+            if let store = ruleStore {
+              group.enter()
+              store.lookUpContentRuleList(forIdentifier: blockThirdPartyId) { existing, _ in
+                DispatchQueue.main.async {
+                  if let existing = existing {
+                    for wv in webViews {
+                      wv.configuration.userContentController.remove(existing)
+                    }
+                  }
+                  store.removeContentRuleList(forIdentifier: blockThirdPartyId) { _ in
+                    group.leave()
+                  }
+                }
+              }
+            }
+          }
+
+          group.notify(queue: .main) {
+            result(true)
+          }
+        }
 
       case "exportAllCookies":
         cookieStore.getAllCookies { cookies in
@@ -610,13 +878,19 @@ import WebKit
           }
           let path = (item["path"] as? String)?.isEmpty == false ? (item["path"] as! String) : "/"
           let isSecure = (item["isSecure"] as? Bool) ?? false
+          let isHttpOnly = (item["isHttpOnly"] as? Bool) ?? false
           var props: [HTTPCookiePropertyKey: Any] = [
             .domain: domain,
             .name: name,
             .value: value,
             .path: path,
-            .secure: isSecure ? "TRUE" : "FALSE",
           ]
+          if isSecure {
+            props[.secure] = "TRUE"
+          }
+          if isHttpOnly {
+            props[HTTPCookiePropertyKey("HttpOnly")] = "TRUE"
+          }
           if expiresMs > 0 {
             props[.expires] = Date(timeIntervalSince1970: Double(expiresMs) / 1000.0)
           }

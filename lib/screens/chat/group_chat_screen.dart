@@ -101,6 +101,7 @@ import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../call/group_call_screen.dart';
 import '../../services/bot_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_instant_cache.dart';
@@ -636,6 +637,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
     }
     _messageController.addListener(_onControllerDraftSync);
+    DeepLinkService.pendingInlinePrefill.addListener(
+      _onPendingInlinePrefillChanged,
+    );
+    final pendingPrefill = DeepLinkService.consumeInlinePrefill(widget.chatId);
+    final initialInlineText =
+        (pendingPrefill != null && pendingPrefill.isNotEmpty)
+            ? pendingPrefill
+            : (draft != null &&
+                    BotService.parseInlineBotInput(draft.text) != null
+                ? draft.text
+                : null);
+    if (initialInlineText != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _insertInlineQueryText(initialInlineText);
+      });
+    }
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.registerChat(
@@ -4025,6 +4043,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           ),
         );
         break;
+      case AttachmentPickerAction.miniApp:
+        final shortcut = result.miniAppShortcut;
+        if (shortcut != null) {
+          final bid = (shortcut['bot_id'] ?? '').toString().trim();
+          final buser = (shortcut['bot_username'] ?? '').toString().trim();
+          final targetBotId = bid.isNotEmpty ? bid : buser;
+          if (targetBotId.isNotEmpty) {
+            await openMiniAppSheet(
+              context,
+              botId: targetBotId,
+              botName: shortcut['bot_name']?.toString(),
+              botUsername: buser.isNotEmpty ? buser : null,
+              isVerified: shortcut['is_verified'] == true,
+              url: shortcut['url']?.toString(),
+              appShortName: shortcut['app_short_name']?.toString(),
+              chatId: widget.chatId,
+              mode: (shortcut['mode'] ?? 'attach').toString(),
+              buttonText: (shortcut['title'] ?? '').toString(),
+              onSwitchInlineQuery: _insertInlineQueryText,
+            );
+          }
+        }
+        break;
       case null:
         break;
     }
@@ -5087,6 +5128,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _emojiPanelController.dispose();
     StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _inputFocusNode.removeListener(_onFocusChanged);
+    DeepLinkService.pendingInlinePrefill.removeListener(
+      _onPendingInlinePrefillChanged,
+    );
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
@@ -7252,6 +7296,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     );
   }
 
+  void _onPendingInlinePrefillChanged() {
+    if (!mounted) return;
+    final prefill = DeepLinkService.consumeInlinePrefill(widget.chatId);
+    if (prefill != null && prefill.isNotEmpty) {
+      _insertInlineQueryText(prefill);
+    }
+  }
+
   void _insertInlineQueryText(String text) {
     if (_isBotCommandsOpen) {
       setState(() => _isBotCommandsOpen = false);
@@ -7266,6 +7318,115 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       chatId: widget.chatId,
       chatType: 'group',
     );
+  }
+
+  Future<void> _handleInlinePopupHeaderButtonTap(
+    BuildContext ctx,
+    BotInlineResultsButton btn,
+  ) async {
+    final inlineUsername =
+        (_inlineQueryController.activeBotUsername ?? '').trim();
+    final respBotId = (_inlineQueryController.response?.botId ?? '').trim();
+    BotInfo? botMeta;
+    for (final b in _inlineDirectoryBots) {
+      if ((respBotId.isNotEmpty && b.userId == respBotId) ||
+          (inlineUsername.isNotEmpty &&
+              (b.username ?? '').toLowerCase() ==
+                  inlineUsername.toLowerCase())) {
+        botMeta = b;
+        break;
+      }
+    }
+    if (botMeta == null && respBotId.isNotEmpty) {
+      botMeta = BotService.getCachedBotInfo(respBotId);
+    }
+    if (botMeta == null && inlineUsername.isNotEmpty) {
+      botMeta = await BotService.resolveBotByUsername(inlineUsername);
+    }
+    if (!ctx.mounted) return;
+
+    final effectiveBotId = respBotId.isNotEmpty
+        ? respBotId
+        : (botMeta?.userId.isNotEmpty == true ? botMeta!.userId : inlineUsername);
+    final effectiveUsername = (botMeta?.username?.isNotEmpty == true)
+        ? botMeta!.username!
+        : inlineUsername;
+
+    if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+      if (effectiveBotId.isEmpty) return;
+      await openMiniAppSheet(
+        ctx,
+        botId: effectiveBotId,
+        botName: botMeta?.displayName,
+        botUsername: effectiveUsername.isNotEmpty ? effectiveUsername : null,
+        isVerified: botMeta?.isVerified,
+        url: btn.webAppUrl,
+        chatId: widget.chatId,
+        mode: 'inline',
+        buttonText: btn.text,
+        onSwitchInlineQuery: _insertInlineQueryText,
+      );
+      return;
+    }
+
+    if (btn.startParameter != null) {
+      final startCmd = btn.startParameter!.isNotEmpty
+          ? '/start ${btn.startParameter}'
+          : '/start';
+      final targetBotUserId = (botMeta != null && botMeta.userId.isNotEmpty)
+          ? botMeta.userId
+          : (int.tryParse(respBotId) != null ? respBotId : '');
+      if (targetBotUserId.isEmpty) return;
+
+      final res = await ChatService.createChat(
+        chatType: 'private',
+        participantIds: [targetBotUserId],
+      );
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final chat = res['chat'];
+        final targetChatId = chat is Chat
+            ? chat.id
+            : (res['chat_id']?.toString() ?? '');
+        if (targetChatId.isNotEmpty) {
+          await ChatService.sendMessage(
+            chatId: targetChatId,
+            content: startCmd,
+          );
+          _inlineQueryController.clear();
+          _messageController.clear();
+          if (!mounted) return;
+          final botTitle = (botMeta?.displayName.isNotEmpty == true)
+              ? botMeta!.displayName
+              : (effectiveUsername.isNotEmpty ? '@$effectiveUsername' : 'Бот');
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: targetChatId,
+              chatType: 'private',
+              chatName: botTitle,
+              avatarUrl: botMeta?.avatarUrl,
+              otherUserId: targetBotUserId,
+            );
+          } else {
+            await Navigator.of(context).push(
+              SwipeBackPageRoute(
+                builder: (_) => PrivateChatScreen(
+                  chatId: targetChatId,
+                  otherUserId: targetBotUserId,
+                  otherUserName: botTitle,
+                  otherUserAvatar: botMeta?.avatarUrl,
+                ),
+              ),
+            );
+          }
+        }
+      } else {
+        GlassToastService().showError(
+          context,
+          res['message']?.toString() ?? 'Не удалось открыть чат с ботом',
+        );
+      }
+    }
   }
 
   ({
@@ -7314,20 +7475,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 chatId: widget.chatId,
                 chatType: 'group',
               ),
-              onTapHeaderButton: (btn) async {
-                final botId = _inlineQueryController.activeBotUsername ?? '';
-                if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
-                  await openMiniAppSheet(
-                    ctx,
-                    botId: botId,
-                    botUsername: botId,
-                    url: btn.webAppUrl,
-                    chatId: widget.chatId,
-                    mode: 'inline',
-                    onSwitchInlineQuery: _insertInlineQueryText,
-                  );
-                }
-              },
+              onTapHeaderButton: (btn) =>
+                  _handleInlinePopupHeaderButtonTap(ctx, btn),
               onSelectResult: (item) async {
                 final ok = await _inlineQueryController.sendSelectedResult(
                   chatId: widget.chatId,
@@ -7490,20 +7639,32 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 setState(() => _isReplyKeyboardOpen = false);
               }
               final wa = btn['web_app'];
-              final waUrl = wa is Map ? wa['url']?.toString() : null;
+              final waMap = wa is Map ? wa : null;
+              final waUrl = waMap != null
+                  ? waMap['url']?.toString()
+                  : (wa is String ? wa : null);
+              final targetBotId = (waMap?['bot_id'] ?? btn['bot_id'] ?? replyKbInfo.botId)
+                  ?.toString()
+                  .trim();
               if (waUrl != null &&
                   waUrl.isNotEmpty &&
-                  replyKbInfo.botId != null &&
-                  replyKbInfo.botId!.isNotEmpty) {
+                  targetBotId != null &&
+                  targetBotId.isNotEmpty) {
                 openMiniAppSheet(
                   context,
-                  botId: replyKbInfo.botId!,
+                  botId: targetBotId,
+                  botUsername: (waMap?['bot_username'] ?? btn['bot_username'])
+                      ?.toString(),
                   url: waUrl,
                   chatId: widget.chatId,
                   mode: 'keyboard',
                   buttonText: (btn['text'] ?? '').toString(),
                   onSwitchInlineQuery: _insertInlineQueryText,
                 );
+              } else if (btn['request_location'] == true) {
+                _sendRequestedLocation();
+              } else if (btn['request_contact'] == true) {
+                _sendOwnContact();
               } else if (btn['request_poll'] != null && perms.canSendPolls) {
                 Navigator.push(
                   context,
@@ -8800,6 +8961,211 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       GlassToastService().showError(
         context,
         res['message']?.toString() ?? 'Не удалось остановить трансляцию',
+      );
+    }
+  }
+
+  Future<void> _sendRequestedLocation() async {
+    if (!_canSendMessages) return;
+    final confirmed = await showTheavDialog<bool>(
+          context: context,
+          title: 'Отправить геопозицию',
+          message: 'Отправить ваше текущее местоположение в этот чат?',
+          actions: const [
+            TheavDialogAction<bool>(label: 'Отмена', result: false),
+            TheavDialogAction<bool>(
+              label: 'Отправить',
+              result: true,
+              isPrimary: true,
+            ),
+          ],
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          GlassToastService().showError(
+            context,
+            'Службы геолокации отключены',
+          );
+        }
+        return;
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          GlassToastService().showError(
+            context,
+            'Нет разрешения на доступ к геопозиции',
+          );
+        }
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+      if (!mounted) return;
+
+      final res = await ChatService.sendMessage(
+        chatId: widget.chatId,
+        content: '',
+        messageType: 'location',
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        horizontalAccuracy: pos.accuracy > 0 ? pos.accuracy : null,
+        topicId: _activeTopicId,
+        sendAsChatId: _selectedSendAsChatId,
+        sendAsAnonymous: _isAnonymousAdminActive,
+      );
+      if (!mounted) return;
+      if (res['success'] == true && res['message'] is Message) {
+        final sent = res['message'] as Message;
+        setState(() {
+          if (!_messages.any((m) => m.id == sent.id)) {
+            _messages.insert(0, sent);
+            _updateFeedItems();
+          }
+        });
+        await AppDatabase().saveMessage(_messageToCompanion(sent));
+        _scrollToBottom();
+      } else {
+        GlassToastService().showError(
+          context,
+          res['message']?.toString() ?? 'Не удалось отправить геопозицию',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().showError(
+          context,
+          'Не удалось получить геопозицию',
+        );
+      }
+    }
+  }
+
+  Future<void> _sendOwnContact() async {
+    if (!_canSendMessages) return;
+    var acc = AccountManager().currentAccount;
+    String phone = acc?.phone?.trim() ?? '';
+    String firstName = acc?.name?.trim() ?? '';
+    String lastName = acc?.surname?.trim() ?? '';
+    String displayName = acc?.displayName?.trim() ?? '';
+    String username = acc?.username?.trim() ?? '';
+    String avatarUrl = acc?.avatarUrl?.trim() ?? '';
+    String userId = acc?.userId ?? _currentUserId ?? '';
+
+    if (phone.isEmpty || (firstName.isEmpty && displayName.isEmpty)) {
+      final profileRes = await AuthService.getCurrentUser();
+      if (!mounted) return;
+      acc = AccountManager().currentAccount;
+      final u = profileRes['user'] is Map
+          ? Map<String, dynamic>.from(profileRes['user'] as Map)
+          : const <String, dynamic>{};
+      if (phone.isEmpty) {
+        phone = (acc?.phone ?? u['phone'] ?? '').toString().trim();
+      }
+      if (firstName.isEmpty) {
+        firstName = (acc?.name ?? u['name'] ?? '').toString().trim();
+      }
+      if (lastName.isEmpty) {
+        lastName = (acc?.surname ?? u['surname'] ?? '').toString().trim();
+      }
+      if (displayName.isEmpty) {
+        displayName =
+            (acc?.displayName ?? u['display_name'] ?? '').toString().trim();
+      }
+      if (username.isEmpty) {
+        username = (acc?.username ?? u['username'] ?? '').toString().trim();
+      }
+      if (avatarUrl.isEmpty) {
+        avatarUrl =
+            (acc?.avatarUrl ?? u['avatar_url'] ?? '').toString().trim();
+      }
+      if (userId.isEmpty) {
+        userId = (acc?.userId ?? u['id'] ?? '').toString().trim();
+      }
+    }
+
+    if (firstName.isEmpty && displayName.isNotEmpty) {
+      final parts = displayName.split(RegExp(r'\s+'));
+      firstName = parts.first;
+      if (lastName.isEmpty && parts.length > 1) {
+        lastName = parts.sublist(1).join(' ');
+      }
+    }
+    if (firstName.isEmpty) {
+      firstName = username.isNotEmpty ? username : 'Пользователь';
+    }
+
+    if (!mounted) return;
+    final confirmed = await showTheavDialog<bool>(
+          context: context,
+          title: 'Поделиться контактом',
+          message: phone.isNotEmpty
+              ? 'Отправить ваш номер телефона ($phone) в этот чат?'
+              : 'Отправить ваш профиль контакта в этот чат?',
+          actions: const [
+            TheavDialogAction<bool>(label: 'Отмена', result: false),
+            TheavDialogAction<bool>(
+              label: 'Поделиться',
+              result: true,
+              isPrimary: true,
+            ),
+          ],
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+
+    final fullName = '$firstName $lastName'.trim();
+    final contactPayload = <String, dynamic>{
+      if (userId.isNotEmpty) 'user_id': userId,
+      'first_name': firstName,
+      if (lastName.isNotEmpty) 'last_name': lastName,
+      if (displayName.isNotEmpty) 'display_name': displayName,
+      if (phone.isNotEmpty) 'phone_number': phone,
+      if (username.isNotEmpty) 'username': username,
+      if (avatarUrl.isNotEmpty) 'avatar_url': avatarUrl,
+    };
+
+    final res = await ChatService.sendMessage(
+      chatId: widget.chatId,
+      content: fullName.isNotEmpty
+          ? fullName
+          : (phone.isNotEmpty ? phone : 'Контакт'),
+      messageType: 'contact',
+      contact: contactPayload,
+      topicId: _activeTopicId,
+      sendAsChatId: _selectedSendAsChatId,
+      sendAsAnonymous: _isAnonymousAdminActive,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить контакт',
       );
     }
   }

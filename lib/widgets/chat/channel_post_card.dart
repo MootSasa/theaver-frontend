@@ -592,8 +592,13 @@ class ChannelPostCard extends StatelessWidget {
                     messageId: msg.id,
                     rows: msg.inlineKeyboard,
                     maxWidth: cardWidth,
-                    botId: msg.viaBotId ?? msg.senderId,
-                    botUsername: msg.viaBotUsername,
+                    botId: msg.viaBotId ??
+                        msg.mediaPayload?['bot_id']?.toString() ??
+                        msg.senderId,
+                    botUsername: msg.viaBotUsername ??
+                        msg.mediaPayload?['bot_username']?.toString(),
+                    viaBotId: msg.viaBotId,
+                    viaBotUsername: msg.viaBotUsername,
                     onInsertText: onInsertInlineQuery,
                     onSwitchInlineQuery: onInsertInlineQuery,
                   ),
@@ -732,6 +737,30 @@ class ChannelPostCard extends StatelessWidget {
                     ),
                 ],
               ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 1b. Inline @bot ("через @bot") attribution for posts sent via inline bots
+    if (msg.isViaBot && (msg.viaBotUsername ?? '').trim().isNotEmpty) {
+      children.add(
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            12.0,
+            showTopAuthorHeader ? 2.0 : 8.0,
+            12.0,
+            4.0,
+          ),
+          child: Text(
+            'через @${msg.viaBotUsername!.trim()}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.0,
+              fontWeight: FontWeight.w500,
+              color: accentColor,
             ),
           ),
         ),
@@ -1018,6 +1047,77 @@ class ChannelPostCard extends StatelessWidget {
             textColor: textColor,
             subtextColor: subtextColor,
             accentColor: accentColor,
+          ),
+        ),
+      ];
+    }
+
+    if (msg.hasWebAppData) {
+      final waData = msg.webAppData!;
+      final buttonText = (waData['button_text'] ?? '').toString().trim();
+      final rawData = (waData['data'] ?? msg.content).toString().trim();
+      final summary =
+          rawData.length > 120 ? '${rawData.substring(0, 120)}…' : rawData;
+      final badgeTitle = buttonText.isNotEmpty
+          ? 'Данные Mini App: $buttonText'
+          : 'Данные Mini App';
+      return [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            12.0,
+            hasTopHeader ? 2.0 : 10.0,
+            12.0,
+            2.0,
+          ),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: textColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: textColor.withValues(alpha: 0.16),
+                width: 0.7,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    iconoir.AppWindow(
+                      width: 14,
+                      height: 14,
+                      color: textColor,
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        badgeTitle,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (summary.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    summary,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: subtextColor,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ];

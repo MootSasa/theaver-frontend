@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/bot_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
+import '../bot/mini_app_chat_picker_sheet.dart';
 import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
 
@@ -18,7 +20,8 @@ import '../design_system/theav_design_system.dart';
 /// - `web_app` buttons (opens an interactive Mini App WebView sheet with signed initData)
 /// - `url` & `login_url` buttons (opens external or internal link with a subtle corner icon)
 /// - `copy_text` buttons (copies text to clipboard with toast confirmation)
-/// - `switch_inline_query` / `switch_inline_query_current_chat` buttons
+/// - `switch_inline_query` / `switch_inline_query_current_chat` /
+///   `switch_inline_query_chosen_chat` buttons
 class InlineKeyboardWidget extends StatefulWidget {
   final String chatId;
   final String messageId;
@@ -27,8 +30,12 @@ class InlineKeyboardWidget extends StatefulWidget {
   final void Function(String text)? onInsertText;
   final String? botId;
   final String? botUsername;
+  final String? viaBotId;
+  final String? viaBotUsername;
   final void Function(String url, String buttonText)? onOpenWebApp;
   final void Function(String query)? onSwitchInlineQuery;
+  final Future<void> Function(String targetChatId, String prefillText)?
+      onSwitchInlineQueryOtherChat;
 
   const InlineKeyboardWidget({
     super.key,
@@ -39,8 +46,11 @@ class InlineKeyboardWidget extends StatefulWidget {
     this.onInsertText,
     this.botId,
     this.botUsername,
+    this.viaBotId,
+    this.viaBotUsername,
     this.onOpenWebApp,
     this.onSwitchInlineQuery,
+    this.onSwitchInlineQueryOtherChat,
   });
 
   @override
@@ -49,6 +59,34 @@ class InlineKeyboardWidget extends StatefulWidget {
 
 class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
   final Set<String> _loadingKeys = {};
+
+  String? _nonEmpty(dynamic value) {
+    final s = value?.toString().trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
+
+  Future<String> _resolveEffectiveBotUsername(Map<String, dynamic> btn) async {
+    final direct = _nonEmpty(btn['bot_username']) ??
+        _nonEmpty(widget.botUsername) ??
+        _nonEmpty(widget.viaBotUsername);
+    if (direct != null) {
+      return direct.replaceFirst(RegExp(r'^@+'), '');
+    }
+    final candidateId = _nonEmpty(btn['bot_id']) ??
+        _nonEmpty(widget.viaBotId) ??
+        _nonEmpty(widget.botId);
+    if (candidateId != null) {
+      final cached = BotService.getCachedBotInfo(candidateId);
+      if (cached?.username != null && cached!.username!.trim().isNotEmpty) {
+        return cached.username!.trim().replaceFirst(RegExp(r'^@+'), '');
+      }
+      final fetched = await BotService.getBotInfo(candidateId);
+      if (fetched?.username != null && fetched!.username!.trim().isNotEmpty) {
+        return fetched.username!.trim().replaceFirst(RegExp(r'^@+'), '');
+      }
+    }
+    return '';
+  }
 
   Future<void> _handleButtonTap(
     Map<String, dynamic> btn,
@@ -75,18 +113,29 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
     }
 
     final webAppRaw = btn['web_app'];
-    final webAppUrl = webAppRaw is Map
-        ? webAppRaw['url']?.toString()
+    final webAppMap = webAppRaw is Map ? webAppRaw : null;
+    final webAppUrl = webAppMap != null
+        ? webAppMap['url']?.toString()
         : (webAppRaw is String ? webAppRaw : null);
     if (webAppUrl != null && webAppUrl.isNotEmpty) {
       final btnText = (btn['text'] ?? '').toString();
+      final effectiveBotUsername = _nonEmpty(webAppMap?['bot_username']) ??
+          _nonEmpty(btn['bot_username']) ??
+          _nonEmpty(widget.botUsername) ??
+          _nonEmpty(widget.viaBotUsername);
+      final effectiveBotId = _nonEmpty(webAppMap?['bot_id']) ??
+          _nonEmpty(btn['bot_id']) ??
+          _nonEmpty(widget.botId) ??
+          _nonEmpty(widget.viaBotId) ??
+          effectiveBotUsername;
+
       if (widget.onOpenWebApp != null) {
         widget.onOpenWebApp!(webAppUrl, btnText);
-      } else if (widget.botId != null && widget.botId!.isNotEmpty) {
+      } else if (effectiveBotId != null && effectiveBotId.isNotEmpty) {
         await openMiniAppSheet(
           context,
-          botId: widget.botId!,
-          botUsername: widget.botUsername,
+          botId: effectiveBotId,
+          botUsername: effectiveBotUsername,
           url: webAppUrl,
           chatId: widget.chatId,
           mode: 'inline',
@@ -127,17 +176,78 @@ class _InlineKeyboardWidgetState extends State<InlineKeyboardWidget> {
       return;
     }
 
-    final switchInline =
-        (btn['switch_inline_query_current_chat'] ?? btn['switch_inline_query'])
-            ?.toString();
-    if (switchInline != null) {
+    if (btn.containsKey('switch_inline_query_current_chat') &&
+        btn['switch_inline_query_current_chat'] != null) {
+      final query = btn['switch_inline_query_current_chat'].toString();
+      final uname = await _resolveEffectiveBotUsername(btn);
+      final inserted = (uname.isNotEmpty && !query.startsWith('@'))
+          ? '@$uname $query'
+          : query;
+      if (!mounted) return;
       final handler = widget.onSwitchInlineQuery ?? widget.onInsertText;
-      if (handler != null) {
-        final uname = widget.botUsername?.trim() ?? '';
-        final inserted = (uname.isNotEmpty && !switchInline.startsWith('@'))
-            ? '@$uname $switchInline'
-            : switchInline;
-        handler(inserted);
+      handler?.call(inserted);
+      return;
+    }
+
+    final hasChosenChat = btn.containsKey('switch_inline_query_chosen_chat') &&
+        btn['switch_inline_query_chosen_chat'] != null;
+    final hasOtherChat = btn.containsKey('switch_inline_query') &&
+        btn['switch_inline_query'] != null;
+    if (hasChosenChat || hasOtherChat) {
+      String query = '';
+      bool allowUserChats = true;
+      bool allowBotChats = true;
+      bool allowGroupChats = true;
+      bool allowChannelChats = true;
+      if (hasChosenChat) {
+        final rawChosen = btn['switch_inline_query_chosen_chat'];
+        if (rawChosen is Map) {
+          query = (rawChosen['query'] ?? '').toString();
+          if (rawChosen.containsKey('allow_user_chats')) {
+            allowUserChats = rawChosen['allow_user_chats'] == true;
+          }
+          if (rawChosen.containsKey('allow_bot_chats')) {
+            allowBotChats = rawChosen['allow_bot_chats'] == true;
+          }
+          if (rawChosen.containsKey('allow_group_chats')) {
+            allowGroupChats = rawChosen['allow_group_chats'] == true;
+          }
+          if (rawChosen.containsKey('allow_channel_chats')) {
+            allowChannelChats = rawChosen['allow_channel_chats'] == true;
+          }
+        } else {
+          query = rawChosen.toString();
+        }
+      } else {
+        query = btn['switch_inline_query'].toString();
+      }
+
+      final uname = await _resolveEffectiveBotUsername(btn);
+      final inserted = (uname.isNotEmpty && !query.startsWith('@'))
+          ? '@$uname $query'
+          : query;
+      if (!mounted) return;
+
+      final selectedChatId = await showMiniAppChatPickerSheet(
+        context,
+        allowUserChats: allowUserChats,
+        allowBotChats: allowBotChats,
+        allowGroupChats: allowGroupChats,
+        allowChannelChats: allowChannelChats,
+      );
+      if (!mounted || selectedChatId == null || selectedChatId.isEmpty) return;
+
+      if (widget.onSwitchInlineQueryOtherChat != null) {
+        await widget.onSwitchInlineQueryOtherChat!(selectedChatId, inserted);
+      } else if (selectedChatId == widget.chatId) {
+        final handler = widget.onSwitchInlineQuery ?? widget.onInsertText;
+        handler?.call(inserted);
+      } else {
+        await DeepLinkService.navigateToChatWithInlinePrefill(
+          context,
+          targetChatId: selectedChatId,
+          prefillText: inserted,
+        );
       }
       return;
     }

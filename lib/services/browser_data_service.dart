@@ -137,8 +137,19 @@ class BrowserDataService extends ChangeNotifier {
     return '';
   }
 
-  Future<void> ensureLoaded({bool forceReload = false}) async {
-    final scope = _currentScope();
+  Future<void> ensureLoaded({
+    bool forceReload = false,
+    String? scopeOverride,
+  }) async {
+    final String scope;
+    if (scopeOverride != null) {
+      final cleanOverride = scopeOverride.trim();
+      scope = cleanOverride.startsWith('u_') && cleanOverride.endsWith('_')
+          ? cleanOverride
+          : _scopeForUserId(cleanOverride);
+    } else {
+      scope = _currentScope();
+    }
     if (!forceReload && _loadedScope == scope) return;
     _loadedScope = scope;
     try {

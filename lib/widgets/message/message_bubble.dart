@@ -1005,9 +1005,11 @@ class MessageBubble extends StatelessWidget {
     final bool isViewOnceOrTtlMedia =
         (message.isViewOnce || message.ttlSeconds > 0) && !isUnsupported;
     final bool hasCaption = !isUnsupported && _hasCaption;
-    final bool isDice = _isDice;
+    final bool isDice = !message.hasWebAppData && _isDice;
     final int emojiCount =
-        (!isUnsupported && !hasMedia && !isDice) ? _emojiOnlyCount : 0;
+        (!isUnsupported && !hasMedia && !isDice && !message.hasWebAppData)
+            ? _emojiOnlyCount
+            : 0;
     final bool isBigEmoji = (emojiCount > 0) || isDice;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
@@ -1162,6 +1164,7 @@ class MessageBubble extends StatelessWidget {
         message.messageType == 'live_location' ||
         message.messageType == 'venue' ||
         message.messageType == 'contact' ||
+        message.hasWebAppData ||
         (isViewOnceOrTtlMedia && !hasMedia) ||
         isTranslating ||
         translation != null ||
@@ -1694,6 +1697,65 @@ class MessageBubble extends StatelessWidget {
           ),
         );
       }
+    } else if (message.hasWebAppData) {
+      final waData = message.webAppData!;
+      final buttonText = (waData['button_text'] ?? '').toString().trim();
+      final rawData = (waData['data'] ?? message.content).toString().trim();
+      final summary =
+          rawData.length > 120 ? '${rawData.substring(0, 120)}…' : rawData;
+      final badgeTitle = buttonText.isNotEmpty
+          ? 'Данные Mini App: $buttonText'
+          : 'Данные Mini App';
+      textBodyWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: bubbleTextColor.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: bubbleTextColor.withValues(alpha: 0.18),
+            width: 0.7,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                iconoir.AppWindow(
+                  width: 14,
+                  height: 14,
+                  color: bubbleTextColor,
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    badgeTitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: bubbleTextColor,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (summary.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(
+                summary,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: bubbleSubtextColor,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
     } else {
       textBodyWidget = MetaData(
         metaData: 'message_selectable_content',
@@ -2111,8 +2173,13 @@ class MessageBubble extends StatelessWidget {
                 messageId: message.id,
                 rows: message.inlineKeyboard,
                 maxWidth: maxOuterBubbleWidth,
-                botId: message.viaBotId ?? message.senderId,
-                botUsername: message.viaBotUsername,
+                botId: message.viaBotId ??
+                    message.mediaPayload?['bot_id']?.toString() ??
+                    message.senderId,
+                botUsername: message.viaBotUsername ??
+                    message.mediaPayload?['bot_username']?.toString(),
+                viaBotId: message.viaBotId,
+                viaBotUsername: message.viaBotUsername,
                 onInsertText: onInsertInlineQuery,
                 onSwitchInlineQuery: onInsertInlineQuery,
               ),

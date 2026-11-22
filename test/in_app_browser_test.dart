@@ -12,6 +12,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:theaver/screens/settings/browser_vault_and_data_screen.dart';
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/browser_data_service.dart';
+import 'package:theaver/services/browser_vault_auth_gate.dart';
 import 'package:theaver/services/browser_vault_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/mini_app_js_bridge.dart';
@@ -3699,5 +3700,160 @@ void main() {
         },
       );
     }
+
+    test('extractThvInvoiceSlug supports web path and tg://invoice query format', () {
+      expect(
+        extractThvInvoiceSlug('https://theaver.app/invoice/inv_123456'),
+        'inv_123456',
+      );
+      expect(
+        extractThvInvoiceSlug('tg://invoice?slug=inv_abcdef'),
+        'inv_abcdef',
+      );
+      expect(
+        extractThvInvoiceSlug('theaver://invoice/inv_z98765'),
+        'inv_z98765',
+      );
+    });
+
+    test('MiniAppSession enforces trusted origin, records step1 username, and resets errors on retry', () async {
+      final session = MiniAppSession(
+        launchData: const MiniAppLaunchData(
+          url: 'https://shop.theaver.app/app',
+          initData: 'hash=ok',
+          botId: '42',
+          botUsername: 'shop_bot',
+        ),
+      );
+      expect(session.isOnTrustedMiniAppOrigin, isTrue);
+
+      session.currentUrl = 'https://shop.theaver.app/orders?id=5';
+      expect(session.isOnTrustedMiniAppOrigin, isTrue);
+
+      session.currentUrl = 'https://attacker.example/phish';
+      expect(session.isOnTrustedMiniAppOrigin, isFalse);
+
+      session.webResourceErrorDescription = 'ERR_NAME_NOT_RESOLVED';
+      session.webResourceErrorUrl = 'https://broken.example';
+      session.loadProgress = 1.0;
+      await session.retryMainFrameLoad();
+      expect(session.webResourceErrorDescription, isNull);
+      expect(session.webResourceErrorUrl, isNull);
+      expect(session.loadProgress, lessThan(0.5));
+    });
+
+    testWidgets('showBrowserVaultAndDataSheet triggers onSelectForAutofill when tapping credential hint', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      BrowserVaultAuthGate.instance.debugAuthOverride = (_, __, ___) async => true;
+      addTearDown(() => BrowserVaultAuthGate.instance.debugAuthOverride = null);
+      BrowserVaultService.instance.resetForTesting();
+      final vault = BrowserVaultService.instance
+        ..debugSecureStoreOverride = <String, String>{}
+        ..debugUserIdOverride = 'alice';
+      await vault.ensureLoaded(forceReload: true);
+      final savedHint = await vault.saveOrUpdateCredential(
+        url: 'https://portal.example.org/login',
+        username: 'alice_sso',
+        password: 'Password!234',
+      );
+
+      BrowserCredentialHint? selected;
+      late BuildContext hostCtx;
+      await tester.pumpWidget(
+        ChangeNotifierProvider<LiquidGlassProvider>.value(
+          value: _TestLiquidGlassProvider(GlassMode.disabled),
+          child: MaterialApp(
+            home: Builder(
+              builder: (ctx) {
+                hostCtx = ctx;
+                return const Scaffold(body: SizedBox.expand());
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      unawaited(
+        showBrowserVaultAndDataSheet(
+          hostCtx,
+          initialSection: 0,
+          autoUnlockPasswords: true,
+          onSelectForAutofill: (hint) => selected = hint,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final btnFinder = find.byKey(
+        ValueKey('browser_vault_autofill_btn_${savedHint.id}'),
+      );
+      expect(btnFinder, findsOneWidget);
+      await tester.tap(btnFinder);
+      await tester.pumpAndSettle();
+
+      expect(selected?.username, 'alice_sso');
+      expect(find.byKey(const ValueKey('browser_vault_close_btn')), findsNothing);
+    });
+
+    testWidgets('Safari geolocation, download confirm, and insecure HTTP auth dialogs resolve choices', (tester) async {
+      late BuildContext hostCtx;
+      await tester.pumpWidget(
+        ChangeNotifierProvider<LiquidGlassProvider>.value(
+          value: _TestLiquidGlassProvider(GlassMode.disabled),
+          child: MaterialApp(
+            home: Builder(
+              builder: (ctx) {
+                hostCtx = ctx;
+                return const Scaffold(body: SizedBox.expand());
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      bool? geoAllowed;
+      unawaited(
+        showSafariGeolocationPermissionDialog(
+          hostCtx,
+          host: 'maps.example.org',
+        ).then((v) => geoAllowed = v),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('safari_geolocation_allow_btn')));
+      await tester.pumpAndSettle();
+      expect(geoAllowed, isTrue);
+
+      bool? dlAllowed;
+      unawaited(
+        showSafariDownloadConfirmDialog(
+          hostCtx,
+          host: 'cdn.example.org',
+          filenameOrUrl: 'report.zip',
+        ).then((v) => dlAllowed = v),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('safari_download_confirm_btn')));
+      await tester.pumpAndSettle();
+      expect(dlAllowed, isTrue);
+
+      SafariHttpAuthResult? authResult;
+      unawaited(
+        showSafariHttpAuthDialog(
+          hostCtx,
+          host: 'intranet.local',
+          originIsSecure: false,
+        ).then((v) => authResult = v),
+      );
+      await tester.pumpAndSettle();
+      final authCard = tester.widget<SafariWebAlertCard<bool>>(
+        find.byKey(const ValueKey('safari_http_auth_dialog')),
+      );
+      expect(authCard.originIsSecure, isFalse);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('safari_http_auth_cancel_btn')));
+      await tester.pumpAndSettle();
+      expect(authResult, isNull);
+    });
   });
 }

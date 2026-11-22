@@ -87,6 +87,7 @@ import 'poll_create_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../services/bot_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/notification_settings_provider.dart';
@@ -569,6 +570,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       }
     }
     _textController.addListener(_onControllerDraftSync);
+    DeepLinkService.pendingInlinePrefill.addListener(
+      _onPendingInlinePrefillChanged,
+    );
+    final pendingPrefill = DeepLinkService.consumeInlinePrefill(widget.chatId);
+    final initialInlineText =
+        (pendingPrefill != null && pendingPrefill.isNotEmpty)
+            ? pendingPrefill
+            : (draft != null &&
+                    BotService.parseInlineBotInput(draft.text) != null
+                ? draft.text
+                : null);
+    if (initialInlineText != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _insertInlineQueryText(initialInlineText);
+      });
+    }
 
     // Connect continuous media playback (voice + video notes) with coordinator
     MediaPlaybackCoordinator.instance.registerChat(
@@ -5605,6 +5623,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     return false;
   }
 
+  void _onPendingInlinePrefillChanged() {
+    if (!mounted) return;
+    final prefill = DeepLinkService.consumeInlinePrefill(widget.chatId);
+    if (prefill != null && prefill.isNotEmpty) {
+      _insertInlineQueryText(prefill);
+    }
+  }
+
   void _insertInlineQueryText(String text) {
     if (_isBotCommandsOpen) {
       setState(() => _isBotCommandsOpen = false);
@@ -5619,6 +5645,127 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       chatId: widget.chatId,
       chatType: _chatType,
     );
+  }
+
+  Future<void> _handleInlinePopupHeaderButtonTap(
+    BuildContext ctx,
+    BotInlineResultsButton btn,
+  ) async {
+    final inlineUsername =
+        (_inlineQueryController.activeBotUsername ?? '').trim();
+    final respBotId = (_inlineQueryController.response?.botId ?? '').trim();
+    BotInfo? botMeta;
+    for (final b in _inlineDirectoryBots) {
+      if ((respBotId.isNotEmpty && b.userId == respBotId) ||
+          (inlineUsername.isNotEmpty &&
+              (b.username ?? '').toLowerCase() ==
+                  inlineUsername.toLowerCase())) {
+        botMeta = b;
+        break;
+      }
+    }
+    if (botMeta == null && respBotId.isNotEmpty) {
+      botMeta = BotService.getCachedBotInfo(respBotId);
+    }
+    if (botMeta == null && inlineUsername.isNotEmpty) {
+      botMeta = await BotService.resolveBotByUsername(inlineUsername);
+    }
+    if (!ctx.mounted) return;
+
+    final effectiveBotId = respBotId.isNotEmpty
+        ? respBotId
+        : (botMeta?.userId.isNotEmpty == true ? botMeta!.userId : inlineUsername);
+    final effectiveUsername = (botMeta?.username?.isNotEmpty == true)
+        ? botMeta!.username!
+        : inlineUsername;
+
+    if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+      if (effectiveBotId.isEmpty) return;
+      await openMiniAppSheet(
+        ctx,
+        botId: effectiveBotId,
+        botName: botMeta?.displayName,
+        botUsername: effectiveUsername.isNotEmpty ? effectiveUsername : null,
+        isVerified: botMeta?.isVerified,
+        url: btn.webAppUrl,
+        chatId: widget.chatId,
+        mode: 'inline',
+        buttonText: btn.text,
+        onSwitchInlineQuery: _insertInlineQueryText,
+      );
+      return;
+    }
+
+    if (btn.startParameter != null) {
+      final startCmd = btn.startParameter!.isNotEmpty
+          ? '/start ${btn.startParameter}'
+          : '/start';
+      final isSameBotDm = _isBot &&
+          ((effectiveBotId.isNotEmpty && effectiveBotId == _otherUserId) ||
+              (effectiveUsername.isNotEmpty &&
+                  effectiveUsername.toLowerCase() ==
+                      (_otherUsername ?? '').toLowerCase()));
+      if (isSameBotDm) {
+        _inlineQueryController.clear();
+        _textController.clear();
+        await _sendMessage(cleanText: startCmd);
+        return;
+      }
+
+      final targetBotUserId = (botMeta != null && botMeta.userId.isNotEmpty)
+          ? botMeta.userId
+          : (int.tryParse(respBotId) != null ? respBotId : '');
+      if (targetBotUserId.isEmpty) return;
+
+      final res = await ChatService.createChat(
+        chatType: 'private',
+        participantIds: [targetBotUserId],
+      );
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final chat = res['chat'];
+        final targetChatId = chat is Chat
+            ? chat.id
+            : (res['chat_id']?.toString() ?? '');
+        if (targetChatId.isNotEmpty) {
+          await ChatService.sendMessage(
+            chatId: targetChatId,
+            content: startCmd,
+          );
+          _inlineQueryController.clear();
+          _textController.clear();
+          if (!mounted) return;
+          final botTitle = (botMeta?.displayName.isNotEmpty == true)
+              ? botMeta!.displayName
+              : (effectiveUsername.isNotEmpty ? '@$effectiveUsername' : 'Бот');
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: targetChatId,
+              chatType: 'private',
+              chatName: botTitle,
+              avatarUrl: botMeta?.avatarUrl,
+              otherUserId: targetBotUserId,
+            );
+          } else {
+            await Navigator.of(context).push(
+              SwipeBackPageRoute(
+                builder: (_) => PrivateChatScreen(
+                  chatId: targetChatId,
+                  otherUserId: targetBotUserId,
+                  otherUserName: botTitle,
+                  otherUserAvatar: botMeta?.avatarUrl,
+                ),
+              ),
+            );
+          }
+        }
+      } else {
+        GlassToastService().showError(
+          context,
+          res['message']?.toString() ?? 'Не удалось открыть чат с ботом',
+        );
+      }
+    }
   }
 
   Future<void> _openBotMiniApp({
@@ -5944,23 +6091,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 chatId: widget.chatId,
                 chatType: _chatType,
               ),
-              onTapHeaderButton: (btn) async {
-                final botId = _inlineQueryController.activeBotUsername ?? '';
-                if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
-                  await openMiniAppSheet(
-                    ctx,
-                    botId: botId,
-                    botUsername: botId,
-                    url: btn.webAppUrl,
-                    chatId: widget.chatId,
-                    mode: 'inline',
-                    onSwitchInlineQuery: _insertInlineQueryText,
-                  );
-                } else if (btn.startParameter != null && _isBot) {
-                  _inlineQueryController.clear();
-                  await _sendMessage(cleanText: '/start ${btn.startParameter}');
-                }
-              },
+              onTapHeaderButton: (btn) =>
+                  _handleInlinePopupHeaderButtonTap(ctx, btn),
               onSelectResult: (item) async {
                 final replyId = _replyToMessage?.id;
                 final ok = await _inlineQueryController.sendSelectedResult(
@@ -6118,17 +6250,37 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 setState(() => _isReplyKeyboardOpen = false);
               }
               final wa = btn['web_app'];
-              final waUrl = wa is Map ? wa['url']?.toString() : null;
+              final waMap = wa is Map ? wa : null;
+              final waUrl = waMap != null
+                  ? waMap['url']?.toString()
+                  : (wa is String ? wa : null);
               if (waUrl != null && waUrl.isNotEmpty) {
-                _openBotMiniApp(
-                  url: waUrl,
-                  mode: 'keyboard',
-                  buttonText: (btn['text'] ?? '').toString(),
-                );
+                final explicitBotId =
+                    (waMap?['bot_id'] ?? btn['bot_id'])?.toString().trim();
+                final btnLabel = (btn['text'] ?? '').toString();
+                if (explicitBotId != null && explicitBotId.isNotEmpty) {
+                  openMiniAppSheet(
+                    context,
+                    botId: explicitBotId,
+                    botUsername: (waMap?['bot_username'] ?? btn['bot_username'])
+                        ?.toString(),
+                    url: waUrl,
+                    chatId: widget.chatId,
+                    mode: 'keyboard',
+                    buttonText: btnLabel,
+                    onSwitchInlineQuery: _insertInlineQueryText,
+                  );
+                } else {
+                  _openBotMiniApp(
+                    url: waUrl,
+                    mode: 'keyboard',
+                    buttonText: btnLabel,
+                  );
+                }
               } else if (btn['request_location'] == true) {
                 _sendLocation();
               } else if (btn['request_contact'] == true) {
-                _sendContact();
+                _sendOwnContact();
               } else if (btn['request_poll'] != null) {
                 Navigator.push(
                   context,
@@ -6849,10 +7001,45 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     );
   }
 
+  List<Map<String, dynamic>> _buildMiniAppShortcuts() {
+    final shortcuts = <Map<String, dynamic>>[];
+    if (_isBot && _botInfo != null && _botInfo!.hasAnyWebApp) {
+      final bot = _botInfo!;
+      final targetBot = (_otherUserId != null && _otherUserId!.isNotEmpty)
+          ? _otherUserId!
+          : ((widget.otherUserId != null && widget.otherUserId!.isNotEmpty)
+              ? widget.otherUserId!
+              : (_otherUsername ?? bot.userId));
+      final title = bot.menuButton.text.isNotEmpty
+          ? bot.menuButton.text
+          : (_chatName.isNotEmpty ? _chatName : 'Mini App');
+      shortcuts.add({
+        'bot_id': targetBot,
+        'bot_username': _otherUsername ?? bot.username ?? '',
+        'bot_name': _chatName.isNotEmpty ? _chatName : bot.displayName,
+        'title': title,
+        'avatar_url': _chatAvatar ?? bot.avatarUrl ?? '',
+        'url': bot.effectiveWebAppUrl ??
+            (bot.webApps.isNotEmpty ? bot.webApps.first.url : ''),
+        if (bot.webApps.isNotEmpty)
+          'app_short_name': bot.webApps.first.shortName
+        else if (bot.shortName.isNotEmpty)
+          'app_short_name': bot.shortName,
+        'is_verified': _isVerified || bot.isVerified,
+        'mode': 'attach',
+      });
+    }
+    return shortcuts;
+  }
+
   /// Show attachment picker bottom sheet
   void _showAttachmentPicker() async {
     _dismissKeyboardAndEmoji();
-    final result = await AttachmentPickerBottomSheet.show(context, allowPoll: true);
+    final result = await AttachmentPickerBottomSheet.show(
+      context,
+      allowPoll: true,
+      miniAppShortcuts: _buildMiniAppShortcuts(),
+    );
     if (result == null || !mounted) return;
 
     if (result.files != null && result.files!.isNotEmpty) {
@@ -6906,6 +7093,29 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             builder: (_) => PollCreateScreen(chatId: widget.chatId),
           ),
         );
+        break;
+      case AttachmentPickerAction.miniApp:
+        final shortcut = result.miniAppShortcut;
+        if (shortcut != null) {
+          final bid = (shortcut['bot_id'] ?? '').toString().trim();
+          final buser = (shortcut['bot_username'] ?? '').toString().trim();
+          final targetBotId = bid.isNotEmpty ? bid : buser;
+          if (targetBotId.isNotEmpty) {
+            await openMiniAppSheet(
+              context,
+              botId: targetBotId,
+              botName: shortcut['bot_name']?.toString(),
+              botUsername: buser.isNotEmpty ? buser : null,
+              isVerified: shortcut['is_verified'] == true,
+              url: shortcut['url']?.toString(),
+              appShortName: shortcut['app_short_name']?.toString(),
+              chatId: widget.chatId,
+              mode: (shortcut['mode'] ?? 'attach').toString(),
+              buttonText: (shortcut['title'] ?? '').toString(),
+              onSwitchInlineQuery: _insertInlineQueryText,
+            );
+          }
+        }
         break;
       case null:
         break;
@@ -7233,6 +7443,117 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  /// Share the current authenticated user's own contact (for ReplyKeyboard `request_contact`)
+  Future<void> _sendOwnContact() async {
+    var acc = AccountManager().currentAccount;
+    String phone = acc?.phone?.trim() ?? '';
+    String firstName = acc?.name?.trim() ?? '';
+    String lastName = acc?.surname?.trim() ?? '';
+    String displayName = acc?.displayName?.trim() ?? '';
+    String username = acc?.username?.trim() ?? '';
+    String avatarUrl = acc?.avatarUrl?.trim() ?? '';
+    String userId = acc?.userId ?? _currentUserId ?? '';
+
+    if (phone.isEmpty || (firstName.isEmpty && displayName.isEmpty)) {
+      final profileRes = await AuthService.getCurrentUser();
+      if (!mounted) return;
+      acc = AccountManager().currentAccount;
+      final u = profileRes['user'] is Map
+          ? Map<String, dynamic>.from(profileRes['user'] as Map)
+          : const <String, dynamic>{};
+      if (phone.isEmpty) {
+        phone = (acc?.phone ?? u['phone'] ?? '').toString().trim();
+      }
+      if (firstName.isEmpty) {
+        firstName = (acc?.name ?? u['name'] ?? '').toString().trim();
+      }
+      if (lastName.isEmpty) {
+        lastName = (acc?.surname ?? u['surname'] ?? '').toString().trim();
+      }
+      if (displayName.isEmpty) {
+        displayName =
+            (acc?.displayName ?? u['display_name'] ?? '').toString().trim();
+      }
+      if (username.isEmpty) {
+        username = (acc?.username ?? u['username'] ?? '').toString().trim();
+      }
+      if (avatarUrl.isEmpty) {
+        avatarUrl =
+            (acc?.avatarUrl ?? u['avatar_url'] ?? '').toString().trim();
+      }
+      if (userId.isEmpty) {
+        userId = (acc?.userId ?? u['id'] ?? '').toString().trim();
+      }
+    }
+
+    if (firstName.isEmpty && displayName.isNotEmpty) {
+      final parts = displayName.split(RegExp(r'\s+'));
+      firstName = parts.first;
+      if (lastName.isEmpty && parts.length > 1) {
+        lastName = parts.sublist(1).join(' ');
+      }
+    }
+    if (firstName.isEmpty) {
+      firstName = username.isNotEmpty ? username : 'Пользователь';
+    }
+
+    if (!mounted) return;
+    final confirmed = await showTheavDialog<bool>(
+          context: context,
+          title: 'Поделиться контактом',
+          message: phone.isNotEmpty
+              ? 'Отправить ваш номер телефона ($phone) в этот чат?'
+              : 'Отправить ваш профиль контакта в этот чат?',
+          actions: const [
+            TheavDialogAction<bool>(label: 'Отмена', result: false),
+            TheavDialogAction<bool>(
+              label: 'Поделиться',
+              result: true,
+              isPrimary: true,
+            ),
+          ],
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+
+    final fullName = '$firstName $lastName'.trim();
+    final contactPayload = <String, dynamic>{
+      if (userId.isNotEmpty) 'user_id': userId,
+      'first_name': firstName,
+      if (lastName.isNotEmpty) 'last_name': lastName,
+      if (displayName.isNotEmpty) 'display_name': displayName,
+      if (phone.isNotEmpty) 'phone_number': phone,
+      if (username.isNotEmpty) 'username': username,
+      if (avatarUrl.isNotEmpty) 'avatar_url': avatarUrl,
+    };
+
+    final res = await ChatService.sendMessage(
+      chatId: widget.chatId,
+      content: fullName.isNotEmpty
+          ? fullName
+          : (phone.isNotEmpty ? phone : 'Контакт'),
+      messageType: 'contact',
+      contact: contactPayload,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить контакт',
+      );
+    }
+  }
+
   /// Send a contact card from ContactsService picker
   Future<void> _sendContact() async {
     final picked = await showContactPickerSheet(context);
@@ -7363,6 +7684,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    DeepLinkService.pendingInlinePrefill.removeListener(
+      _onPendingInlinePrefillChanged,
+    );
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
     HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     _syncDebounceTimer?.cancel();

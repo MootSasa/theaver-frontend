@@ -9,6 +9,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../../screens/settings/browser_vault_and_data_screen.dart';
 import '../../services/bot_service.dart';
@@ -104,6 +105,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   double _dragResetFrom = 0.0;
   double _dragAccumulated = 0.0;
   bool _isMinimizing = false;
+  bool _isDisposing = false;
   bool _allowRoutePop = false;
   bool _hasFullScreenRegistration = false;
   bool _hasSettledRegistration = false;
@@ -114,11 +116,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   ModalRoute<dynamic>? _enclosingRoute;
   Animation<double>? _routeAnimation;
   bool? _lastRequestedRestingOpaque;
+  bool? _lastScheduledInteractionLock;
 
   bool get _hasPlatformWebView => !kIsWeb && WebViewPlatform.instance != null;
 
+  OverlayState? _resolveRootOverlay() =>
+      mounted ? Overlay.maybeOf(context, rootOverlay: true) : null;
+
   void _onSessionStateChanged() {
-    if (mounted) setState(() {});
+    if (mounted && !_isDisposing) setState(() {});
   }
 
   void _onActiveSafariAlertChanged() {
@@ -271,6 +277,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       mountedResolver: () => mounted && context.mounted,
     );
     _session.uiDialogDelegate = _dialogDelegate;
+    _session.overlayResolver = _resolveRootOverlay;
     _session.onSheetStateChanged = _onSessionStateChanged;
     _session.onBrowserPageFinished = _handleBrowserPageFinished;
     activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
@@ -304,6 +311,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   void _onVaultOrSettingsChanged() {
     unawaited(_reloadContactProfile());
+    unawaited(_session.syncNativeBrowserPolicies(_session.currentUrl));
     if (mounted) setState(() {});
   }
 
@@ -413,6 +421,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   @override
   void dispose() {
+    _isDisposing = true;
     HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     activeSafariWebAlertCount.removeListener(_onActiveSafariAlertChanged);
     unawaited(_session.setWebPageInteractionLocked(false));
@@ -429,11 +438,17 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (identical(_session.uiDialogDelegate, _dialogDelegate)) {
       _session.uiDialogDelegate = null;
     }
+    if (identical(_session.overlayResolver, _resolveRootOverlay)) {
+      _session.overlayResolver = null;
+    }
     if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
       _session.onSheetStateChanged = null;
     }
     if (identical(_session.onBrowserPageFinished, _handleBrowserPageFinished)) {
       _session.onBrowserPageFinished = null;
+    }
+    if (!_isMinimizing) {
+      _session.disposeResources();
     }
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
@@ -454,6 +469,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _findFocusNode.unfocus();
     _closeMenu();
     _closeSiteInfoPopover();
+    await _session.dismissFullscreenVideoOverlay();
     if (!mounted) return;
     unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
@@ -484,6 +500,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     HapticUtils.selection();
     _closeMenu();
     _closeSiteInfoPopover();
+    await _session.dismissFullscreenVideoOverlay();
+    if (!mounted) return;
     if (_session.previewImageBytes == null) {
       await _session.capturePreviewSnapshot().timeout(
             const Duration(milliseconds: 45),
@@ -565,6 +583,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _closeMenu();
     _isSiteInfoOpen = false;
     unawaited(_session.setWebPageInteractionLocked(false));
+    unawaited(_session.dismissFullscreenVideoOverlay());
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
     HapticUtils.tap();
@@ -741,6 +760,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (_session.loadProgress > 0.0 && _session.loadProgress < 1.0) {
       await ctrl.runJavaScript('window.stop();');
       if (mounted) setState(() => _session.loadProgress = 1.0);
+    } else if (_session.webResourceErrorDescription != null) {
+      await _session.retryMainFrameLoad();
     } else {
       await ctrl.reload();
     }
@@ -759,6 +780,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       await ctrl.setUserAgent(
         nextDesktop ? MiniAppSession.desktopUserAgent : null,
       );
+      final plat = ctrl.platform;
+      if (plat is AndroidWebViewController) {
+        await plat.setUseWideViewPort(nextDesktop);
+      }
       await ctrl.reload();
     }
     if (mounted) {
@@ -779,6 +804,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       originScope: hint.origin,
     );
     if (!mounted || cred == null) return;
+    if (cred.username.trim().isNotEmpty) {
+      _session.recordPendingStep1Username(cred.username, cred.origin);
+    }
     final ctrl = _session.controller;
     if (ctrl != null && _hasPlatformWebView) {
       try {
@@ -1037,13 +1065,46 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final uri = Uri.tryParse(rawUrl);
     if (uri == null) return;
     _isSiteInfoOpen = false;
+    final prevHost = BrowserDataService.extractHost(_session.currentUrl);
+    final nextHost = BrowserDataService.extractHost(rawUrl);
+    final bool hostChanged = prevHost != nextHost;
     setState(() {
       _session.currentUrl = rawUrl;
       _session.pageTitle = '';
-      final nextHost = SafariUrlSafetyAnalyzer.analyzeUrl(rawUrl).asciiHost;
+      _session.webResourceErrorDescription = null;
+      _session.webResourceErrorUrl = null;
+      _session.browserChromeCollapsed = false;
+      if (hostChanged) {
+        _session.browserTopIsDark = null;
+        _session.browserCanvasColor = null;
+        _session.browserTopPocketColor = null;
+        _session.browserBottomPocketColor = null;
+      }
+      final nextAsciiHost = SafariUrlSafetyAnalyzer.analyzeUrl(rawUrl).asciiHost;
       _session.currentPageHasSslWarning =
-          _session.acceptedSslWarningHosts.contains(nextHost.toLowerCase());
+          _session.acceptedSslWarningHosts.contains(nextAsciiHost.toLowerCase());
     });
+    if (hostChanged) {
+      final bool nextDesktop = BrowserSiteSettingsService.instance
+              .preferenceForUrl(rawUrl)
+              ?.desktopMode ??
+          false;
+      if (nextDesktop != _session.isDesktopMode) {
+        _session.isDesktopMode = nextDesktop;
+        final ctrl = _session.controller;
+        if (ctrl != null && _hasPlatformWebView) {
+          unawaited(
+            ctrl.setUserAgent(
+              nextDesktop ? MiniAppSession.desktopUserAgent : null,
+            ),
+          );
+          final plat = ctrl.platform;
+          if (plat is AndroidWebViewController) {
+            unawaited(plat.setUseWideViewPort(nextDesktop));
+          }
+        }
+      }
+    }
     _session.controller?.loadRequest(uri);
   }
 
@@ -1153,7 +1214,13 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         _isSiteInfoOpen ||
         _isMenuOpen ||
         activeSafariWebAlertCount.value > 0;
-    unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
+    if (_lastScheduledInteractionLock != isPageInteractionBlocked) {
+      _lastScheduledInteractionLock = isPageInteractionBlocked;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
+      });
+    }
     final Color topPocketBase = _session.browserTopPocketColor ??
         _session.browserCanvasColor ??
         resolved.bodyBg;
@@ -1638,7 +1705,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                           child: WebViewWidget(controller: _session.controller!),
                         ),
                 ),
-              if (standInSnapshot == null && !mountWebView)
+              if (standInSnapshot == null &&
+                  !mountWebView &&
+                  _session.webResourceErrorDescription == null)
                 Positioned.fill(
                   child: ColoredBox(
                     color: resolved.bodyBg,
@@ -1648,6 +1717,74 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                         bodyColor: resolved.bodyBg,
                         foregroundColor: resolved.headerFg,
                         animate: true,
+                      ),
+                    ),
+                  ),
+                ),
+              if (_session.webResourceErrorDescription != null)
+                Positioned.fill(
+                  key: const ValueKey('in_app_browser_web_error_overlay'),
+                  child: ColoredBox(
+                    color: resolved.bodyBg,
+                    child: Center(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          24,
+                          topInset + (_isFindOpen ? 124 : 72),
+                          24,
+                          bottomInset + 80,
+                        ),
+                        child: Container(
+                          constraints: const BoxConstraints(maxWidth: 340),
+                          padding: const EdgeInsets.all(22),
+                          decoration: BoxDecoration(
+                            color: resolved.surfaceBg,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: resolved.divider),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.wifi_off_rounded,
+                                size: 36,
+                                color: resolved.palette.subtext,
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Не удалось открыть страницу',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: resolved.headerFg,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _session.webResourceErrorDescription!,
+                                textAlign: TextAlign.center,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  color: resolved.palette.subtext,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              FilledButton.icon(
+                                key: const ValueKey(
+                                  'in_app_browser_web_retry_button',
+                                ),
+                                onPressed: () =>
+                                    unawaited(_session.retryMainFrameLoad()),
+                                icon:
+                                    const Icon(Icons.refresh_rounded, size: 18),
+                                label: const Text('Повторить'),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -1853,6 +1990,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                     context,
                     initialSection: 0,
                     initialSearchQuery: host,
+                    onSelectForAutofill: (hint) =>
+                        unawaited(_handleAutofillSelectCredential(hint)),
                   ),
                 ),
                 onFillContact: () => unawaited(_handleAutofillFillContact()),
@@ -1961,6 +2100,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           canPop: _allowRoutePop,
           onPopInvokedWithResult: (didPop, _) async {
             if (didPop) return;
+            if (await _session.dismissFullscreenVideoOverlay()) {
+              HapticUtils.tap();
+              return;
+            }
             if (_session.pendingCredentialPrompt != null) {
               setState(() => _session.pendingCredentialPrompt = null);
               return;

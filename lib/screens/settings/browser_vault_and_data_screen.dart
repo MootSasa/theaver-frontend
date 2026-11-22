@@ -54,6 +54,7 @@ Future<void> showBrowserVaultAndDataSheet(
   int initialSection = 0,
   String? initialSearchQuery,
   bool autoUnlockPasswords = true,
+  ValueChanged<BrowserCredentialHint>? onSelectForAutofill,
 }) async {
   await Future.wait([
     BrowserVaultService.instance.ensureLoaded(),
@@ -72,6 +73,7 @@ Future<void> showBrowserVaultAndDataSheet(
       initialSearchQuery: initialSearchQuery,
       autoUnlockPasswords: autoUnlockPasswords,
       isModalSheet: true,
+      onSelectForAutofill: onSelectForAutofill,
     ),
   );
 }
@@ -137,12 +139,14 @@ class _BrowserVaultHubContent extends StatefulWidget {
   final String? initialSearchQuery;
   final bool autoUnlockPasswords;
   final bool isModalSheet;
+  final ValueChanged<BrowserCredentialHint>? onSelectForAutofill;
 
   const _BrowserVaultHubContent({
     required this.initialSection,
     this.initialSearchQuery,
     required this.autoUnlockPasswords,
     required this.isModalSheet,
+    this.onSelectForAutofill,
   });
 
   @override
@@ -211,7 +215,8 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     _phoneCtrl.text = profile.phone;
     _syncContactDirtyFlag();
     setState(() {
-      _contactEnabled = profile.enabled;
+      _contactEnabled = profile.enabled &&
+          BrowserSiteSettingsService.instance.contactAutofillEnabled;
       _contactAutofillCardLoaded = true;
     });
     if (widget.autoUnlockPasswords && _activeSection == 0) {
@@ -510,13 +515,15 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   Future<void> _openAddOrEditCredentialDialog({
     BrowserSavedCredential? existing,
   }) async {
-    final bool ok = await BrowserVaultAuthGate.instance.authenticate(
-      context,
-      reason: existing == null
-          ? 'Подтвердите личность для добавления пароля'
-          : 'Подтвердите личность для изменения пароля',
-    );
-    if (!ok || !mounted) return;
+    if (!_unlocked) {
+      final bool ok = await BrowserVaultAuthGate.instance.authenticate(
+        context,
+        reason: existing == null
+            ? 'Подтвердите личность для добавления пароля'
+            : 'Подтвердите личность для изменения пароля',
+      );
+      if (!ok || !mounted) return;
+    }
 
     final urlCtrl = TextEditingController(
       text: existing?.origin ?? 'https://',
@@ -525,7 +532,8 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final passCtrl = TextEditingController(text: existing?.password ?? '');
     bool obscure = true;
 
-    final bool? saved = await showTheavModalSheet<bool>(
+    final ({BrowserCredentialHint hint, String password})? savedResult =
+        await showTheavModalSheet<({BrowserCredentialHint hint, String password})>(
       context: context,
       useRootNavigator: true,
       maxHeightFactor: 0.84,
@@ -616,16 +624,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                       );
                       return;
                     }
-                    await BrowserVaultService.instance.saveOrUpdateCredential(
+                    final enteredPassword = passCtrl.text;
+                    final savedHint =
+                        await BrowserVaultService.instance.saveOrUpdateCredential(
                       url: normUrl,
                       username: userCtrl.text.trim(),
-                      password: passCtrl.text,
+                      password: enteredPassword,
                       existingId: existing?.id,
                       isHttpAuth: existing?.isHttpAuth ?? false,
                       realm: existing?.realm,
                     );
                     if (sheetCtx.mounted) {
-                      Navigator.of(sheetCtx).pop(true);
+                      Navigator.of(sheetCtx).pop(
+                        (hint: savedHint, password: enteredPassword),
+                      );
                     }
                   },
                 ),
@@ -639,23 +651,39 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     userCtrl.dispose();
     passCtrl.dispose();
 
-    if (saved == true && mounted) {
+    if (savedResult != null && mounted) {
       GlassToastService().show(
         context,
         'Пароль сохранён',
         icon: Icons.check_rounded,
       );
       if (_unlocked) {
-        final refreshed =
-            await BrowserVaultService.instance.unlockAndReadAllCredentials(
-          context,
-          reason: 'Обновление списка паролей',
+        final updatedCred = BrowserSavedCredential(
+          hint: savedResult.hint,
+          password: savedResult.password,
         );
-        if (mounted && refreshed != null) {
-          setState(() => _unlockedCredentials = refreshed);
-        }
+        setState(() {
+          final existingIdx = _unlockedCredentials.indexWhere(
+            (c) => c.id == savedResult.hint.id,
+          );
+          if (existingIdx >= 0) {
+            _unlockedCredentials[existingIdx] = updatedCred;
+          } else {
+            _unlockedCredentials.insert(0, updatedCred);
+          }
+        });
       }
     }
+  }
+
+  void _triggerAutofillSelection(BrowserCredentialHint hint) {
+    final cb = widget.onSelectForAutofill;
+    if (cb == null) return;
+    HapticUtils.selection();
+    if (widget.isModalSheet && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    cb(hint);
   }
 
   Future<void> _openCredentialDetailSheet(BrowserSavedCredential cred) async {
@@ -790,6 +818,22 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 ],
               ),
               const SizedBox(height: 14),
+              if (widget.onSelectForAutofill != null) ...[
+                _buildSafariPillButton(
+                  buttonKey: const ValueKey('browser_vault_detail_autofill_btn'),
+                  backgroundColor: pal.primary,
+                  foregroundColor: pal.onPrimary,
+                  icon: Icons.login_rounded,
+                  label: 'Автозаполнить',
+                  height: 40.0,
+                  fontSize: 14.0,
+                  onTap: () {
+                    Navigator.of(sheetCtx).pop();
+                    _triggerAutofillSelection(cred.hint);
+                  },
+                ),
+                const SizedBox(height: 10),
+              ],
               Row(
                 children: [
                   Expanded(
@@ -851,6 +895,8 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       enabled: _contactEnabled,
     );
     await BrowserVaultService.instance.saveContactProfile(profile);
+    await BrowserSiteSettingsService.instance
+        .setContactAutofillEnabled(_contactEnabled);
     if (!mounted) return;
     _savedContactProfile = profile;
     _hasSavedContactSnapshot = true;
@@ -1412,13 +1458,54 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                             ),
                           ],
                         ),
-                        trailing: Icon(
-                          Icons.chevron_right_rounded,
-                          size: 19,
-                          color: palette.subtext.withValues(alpha: 0.72),
-                        ),
-                        onTap: () =>
-                            unawaited(_openCredentialDetailSheet(cred)),
+                        trailing: widget.onSelectForAutofill != null
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildSafariPillButton(
+                                    buttonKey: ValueKey(
+                                      'browser_vault_autofill_btn_${cred.id}',
+                                    ),
+                                    backgroundColor: palette.primary.withValues(
+                                      alpha: style.isDark ? 0.18 : 0.11,
+                                    ),
+                                    foregroundColor: palette.primary,
+                                    label: 'Автозаполнить',
+                                    height: 28.0,
+                                    horizontalPadding: 9.0,
+                                    fontSize: 11.5,
+                                    onTap: () =>
+                                        _triggerAutofillSelection(cred.hint),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () => unawaited(
+                                      _openCredentialDetailSheet(cred),
+                                    ),
+                                    child: SizedBox(
+                                      width: 28,
+                                      height: 28,
+                                      child: Center(
+                                        child: Icon(
+                                          Icons.chevron_right_rounded,
+                                          size: 19,
+                                          color: palette.subtext
+                                              .withValues(alpha: 0.72),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Icon(
+                                Icons.chevron_right_rounded,
+                                size: 19,
+                                color: palette.subtext.withValues(alpha: 0.72),
+                              ),
+                        onTap: widget.onSelectForAutofill != null
+                            ? () => _triggerAutofillSelection(cred.hint)
+                            : () => unawaited(_openCredentialDetailSheet(cred)),
                       );
                     }(),
                   ),
@@ -1495,7 +1582,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 subtitle: 'Предлагать имя, email и телефон в веб-формах',
                 trailing: AdaptiveSwitch(
                   key: const ValueKey('browser_setting_contact_autofill_switch'),
-                  value: _contactEnabled,
+                  value: _contactAutofillCardLoaded
+                      ? _contactEnabled
+                      : settings.contactAutofillEnabled,
                   onChanged: (v) {
                     final nextSaved = BrowserContactProfile(
                       fullName: _savedContactProfile.fullName,
@@ -1687,11 +1776,19 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
 
     final Map<String, BrowserSitePreference> prefsMap =
         settings.sitePreferences;
+    final Map<String, List<Uri>> originsByHost = <String, List<Uri>>{};
+    for (final rawOrigin in dataSvc.knownOrigins) {
+      final hostKey = BrowserSiteSettingsService.normalizeHostKey(rawOrigin);
+      if (hostKey.isEmpty) continue;
+      final list = originsByHost.putIfAbsent(hostKey, () => <Uri>[]);
+      final parsed = Uri.tryParse(rawOrigin.trim());
+      if (parsed != null && parsed.host.isNotEmpty) {
+        list.add(parsed);
+      }
+    }
     final Set<String> allHosts = <String>{
       ...prefsMap.keys,
-      ...dataSvc.knownOrigins
-          .map(BrowserSiteSettingsService.normalizeHostKey)
-          .where((h) => h.isNotEmpty),
+      ...originsByHost.keys,
     };
     final List<String> sortedHosts = allHosts.toList()..sort();
     final List<String> filteredHosts = q.isEmpty
@@ -1699,8 +1796,12 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
         : sortedHosts.where((h) {
             final pref = prefsMap[h];
             final display = pref?.displayHost ?? '';
+            final originMatch = (originsByHost[h] ?? const <Uri>[]).any(
+              (u) => u.toString().toLowerCase().contains(q),
+            );
             return h.toLowerCase().contains(q) ||
-                display.toLowerCase().contains(q);
+                display.toLowerCase().contains(q) ||
+                originMatch;
           }).toList();
 
     return SafariFeatherScrollView(
@@ -1790,6 +1891,15 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   Builder(
                     builder: (ctx) {
                       final pref = prefsMap[host];
+                      final List<Uri> siteOrigins =
+                          originsByHost[host] ?? const <Uri>[];
+                      final Uri? primaryOrigin =
+                          siteOrigins.isNotEmpty ? siteOrigins.first : null;
+                      final String primaryOriginStr =
+                          primaryOrigin?.toString() ?? 'https://$host';
+                      final bool isSiteSecure = siteOrigins.isEmpty
+                          ? true
+                          : primaryOriginStr.startsWith('https://');
                       final String displayHost =
                           pref?.displayHost.isNotEmpty == true
                               ? pref!.displayHost
@@ -1808,7 +1918,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                         minHeight: 56.0,
                         leading: SafariDomainMonogramBadge(
                           host: displayHost,
-                          isSecure: true,
+                          isSecure: isSiteSecure,
                         ),
                         titleWidget: Text(
                           displayHost,
@@ -1844,7 +1954,18 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                           fontSize: 12.0,
                           onTap: () async {
                             HapticUtils.selection();
-                            await dataSvc.clearSiteData('https://$host/');
+                            if (siteOrigins.isEmpty) {
+                              await dataSvc.clearSiteData('https://$host/');
+                            } else {
+                              for (final u in siteOrigins) {
+                                final scheme = u.scheme.isNotEmpty
+                                    ? u.scheme
+                                    : 'https';
+                                final targetUrl =
+                                    '$scheme://${u.host}${u.hasPort && u.port > 0 ? ':${u.port}' : ''}/';
+                                await dataSvc.clearSiteData(targetUrl);
+                              }
+                            }
                             await settings.resetHost(host);
                             if (context.mounted) {
                               GlassToastService().show(

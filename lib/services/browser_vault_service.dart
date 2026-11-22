@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:flutter/foundation.dart'
     show ChangeNotifier, Uint8List, visibleForTesting;
+import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:flutter/widgets.dart' show BuildContext;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -317,7 +318,9 @@ class BrowserVaultService extends ChangeNotifier {
     if (override != null) return override[key];
     try {
       return await _secureStorage.read(key: key);
-    } catch (_) {
+    } on MissingPluginException {
+      return _fallbackKeyStore[key];
+    } on UnimplementedError {
       return _fallbackKeyStore[key];
     }
   }
@@ -330,7 +333,9 @@ class BrowserVaultService extends ChangeNotifier {
     }
     try {
       await _secureStorage.write(key: key, value: value);
-    } catch (_) {
+    } on MissingPluginException {
+      _fallbackKeyStore[key] = value;
+    } on UnimplementedError {
       _fallbackKeyStore[key] = value;
     }
   }
@@ -343,7 +348,9 @@ class BrowserVaultService extends ChangeNotifier {
     }
     try {
       await _secureStorage.delete(key: key);
-    } catch (_) {
+    } on MissingPluginException {
+      _fallbackKeyStore.remove(key);
+    } on UnimplementedError {
       _fallbackKeyStore.remove(key);
     }
   }
@@ -466,36 +473,142 @@ class BrowserVaultService extends ChangeNotifier {
   String _secretPrefsKey(String uid, String credId) =>
       '$_secretKeyPrefix${uid}_$credId';
 
-  /// Returns non-secret credential hints strictly matching the normalized origin
-  /// (`scheme://asciiHost[:port]`) of [rawUrl].
+  static const Set<String> _multiLabelSuffixes = <String>{
+    'co.uk',
+    'org.uk',
+    'gov.uk',
+    'ac.uk',
+    'net.uk',
+    'com.au',
+    'net.au',
+    'org.au',
+    'co.jp',
+    'ne.jp',
+    'or.jp',
+    'com.br',
+    'com.tr',
+    'com.cn',
+    'com.ua',
+    'co.za',
+    'co.kr',
+    'com.mx',
+    'co.in',
+    'net.ru',
+    'com.ru',
+    'org.ru',
+    'github.io',
+    'gitlab.io',
+    'pages.dev',
+    'vercel.app',
+    'netlify.app',
+    'herokuapp.com',
+    'appspot.com',
+  };
+
+  static final RegExp _ipv4RegExp = RegExp(r'^\d{1,3}(\.\d{1,3}){3}$');
+
+  static String? _registrableBaseDomain(String host) {
+    final clean = host.trim().toLowerCase();
+    if (clean.isEmpty ||
+        clean == 'localhost' ||
+        clean.contains(':') ||
+        _ipv4RegExp.hasMatch(clean)) {
+      return null;
+    }
+    final labels = clean.split('.').where((l) => l.isNotEmpty).toList();
+    if (labels.length < 2) return null;
+    if (labels.length >= 3) {
+      final lastTwo = '${labels[labels.length - 2]}.${labels.last}';
+      if (_multiLabelSuffixes.contains(lastTwo)) {
+        return '${labels[labels.length - 3]}.$lastTwo';
+      }
+    }
+    return '${labels[labels.length - 2]}.${labels.last}';
+  }
+
+  static bool _hostsShareRegistrableDomain(String a, String b) {
+    if (a == b) return true;
+    final baseA = _registrableBaseDomain(a);
+    final baseB = _registrableBaseDomain(b);
+    if (baseA != null && baseB != null && baseA == baseB) {
+      return true;
+    }
+    if (baseB != null && b == baseB && a.endsWith('.$b')) return true;
+    if (baseA != null && a == baseA && b.endsWith('.$a')) return true;
+    return false;
+  }
+
+  static int _effectivePortFor(Uri uri) {
+    if (uri.hasPort) return uri.port;
+    return uri.scheme.toLowerCase() == 'https' ? 443 : 80;
+  }
+
+  /// Returns non-secret credential hints matching [rawUrl], prioritizing exact
+  /// normalized origin (`scheme://asciiHost[:port]`) matches first, followed by
+  /// same-scheme, same-port registrable/base-domain matches (so `www.example.com`
+  /// and `login.example.com` find `example.com` logins cleanly).
   ///
-  /// Never returns `https://` hints for `http://` pages, subdomains, different
-  /// ports, or homograph-flagged domains.
+  /// Never returns `https://` hints for `http://` pages, different ports, or
+  /// homograph-flagged domains.
   List<BrowserCredentialHint> getHintsForUrl(
     String rawUrl, {
     bool isHttpAuth = false,
     String? realm,
+    bool includeSubdomains = true,
   }) {
     final safety = SafariUrlSafetyAnalyzer.analyzeUrl(rawUrl);
     if (safety.isSuspiciousHomograph) return const <BrowserCredentialHint>[];
     final origin = normalizeOrigin(rawUrl);
     if (origin == null) return const <BrowserCredentialHint>[];
+    final targetUri = Uri.tryParse(origin);
+    if (targetUri == null) return const <BrowserCredentialHint>[];
+    final targetScheme = targetUri.scheme.toLowerCase();
+    final targetHost = targetUri.host.toLowerCase();
+    final targetPort = _effectivePortFor(targetUri);
     final cleanRealm = realm?.trim() ?? '';
 
-    final matches = _hints.where((h) {
-      if (h.origin != origin || h.isHttpAuth != isHttpAuth) return false;
+    bool matchesRealm(BrowserCredentialHint h) {
+      if (h.isHttpAuth != isHttpAuth) return false;
       if (isHttpAuth && cleanRealm.isNotEmpty && h.realm.isNotEmpty) {
         return h.realm == cleanRealm;
       }
       return true;
-    }).toList();
+    }
 
-    matches.sort((a, b) {
+    int compareRecency(BrowserCredentialHint a, BrowserCredentialHint b) {
       final aTs = a.lastUsedAt ?? a.updatedAt;
       final bTs = b.lastUsedAt ?? b.updatedAt;
       return bTs.compareTo(aTs);
-    });
-    return List<BrowserCredentialHint>.unmodifiable(matches);
+    }
+
+    final exactMatches = <BrowserCredentialHint>[];
+    final relatedMatches = <BrowserCredentialHint>[];
+
+    for (final h in _hints) {
+      if (!matchesRealm(h)) continue;
+      if (h.origin == origin) {
+        exactMatches.add(h);
+        continue;
+      }
+      if (!includeSubdomains) continue;
+      final credUri = Uri.tryParse(h.origin);
+      if (credUri == null) continue;
+      if (credUri.scheme.toLowerCase() != targetScheme) continue;
+      if (_effectivePortFor(credUri) != targetPort) continue;
+      if (SafariUrlSafetyAnalyzer.analyzeUrl(h.origin).isSuspiciousHomograph) {
+        continue;
+      }
+      final credHost = credUri.host.toLowerCase();
+      if (_hostsShareRegistrableDomain(targetHost, credHost)) {
+        relatedMatches.add(h);
+      }
+    }
+
+    exactMatches.sort(compareRecency);
+    relatedMatches.sort(compareRecency);
+    return List<BrowserCredentialHint>.unmodifiable(
+      <BrowserCredentialHint>[...exactMatches, ...relatedMatches],
+    );
   }
 
   bool isNeverSaveUrl(String rawUrl) {

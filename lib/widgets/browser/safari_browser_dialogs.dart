@@ -1276,6 +1276,7 @@ Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
   BuildContext context, {
   required String host,
   String? realm,
+  bool originIsSecure = true,
   List<BrowserCredentialHint> savedHints = const [],
   Future<BrowserSavedCredential?> Function(BrowserCredentialHint hint)?
       onUnlockSavedHint,
@@ -1294,7 +1295,7 @@ Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
         dialogKey: const ValueKey('safari_http_auth_dialog'),
         tone: SafariAlertTone.auth,
         originLabel: cleanHost.isNotEmpty ? cleanHost : null,
-        originIsSecure: true,
+        originIsSecure: originIsSecure,
         title: 'Требуется вход',
         message: 'Введите имя пользователя и пароль для входа.$realmSuffix',
         customBody: _SafariHttpAuthBody(
@@ -1706,4 +1707,84 @@ class _SafariPopoverPillButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shows a Safari-style confirmation dialog when a website requests device
+/// geolocation access.
+Future<bool> showSafariGeolocationPermissionDialog(
+  BuildContext context, {
+  required String host,
+  bool isSecure = true,
+}) async {
+  final cleanHost = host.trim().isNotEmpty
+      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
+      : 'этот сайт';
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_geolocation_dialog'),
+    tone: SafariAlertTone.permission,
+    iconOverride: Icons.location_on_rounded,
+    originLabel: cleanHost,
+    originIsSecure: isSecure,
+    title: 'Доступ к геопозиции',
+    message: 'Разрешить сайту «$cleanHost» определять ваше текущее местоположение?',
+    actions: const [
+      SafariAlertAction<bool>(
+        label: 'Не разрешать',
+        result: false,
+        buttonKey: ValueKey('safari_geolocation_deny_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: 'Разрешить',
+        result: true,
+        isPrimary: true,
+        buttonKey: ValueKey('safari_geolocation_allow_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
+}
+
+/// Shows a Safari-style confirmation dialog before downloading or opening an
+/// external file from a web page.
+Future<bool> showSafariDownloadConfirmDialog(
+  BuildContext context, {
+  required String host,
+  required String filenameOrUrl,
+  bool isSecure = true,
+}) async {
+  final cleanHost = host.trim().isNotEmpty
+      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
+      : '';
+  final trimmedTarget = filenameOrUrl.trim();
+  final String displayTarget = trimmedTarget.length > 140
+      ? '${trimmedTarget.substring(0, 140)}…'
+      : trimmedTarget;
+  final String message = displayTarget.isNotEmpty
+      ? 'Загрузить «$displayTarget»?'
+      : 'Загрузить выбранный файл с этого сайта?';
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_download_confirm_dialog'),
+    tone: SafariAlertTone.info,
+    iconOverride: Icons.download_rounded,
+    originLabel: cleanHost.isNotEmpty ? cleanHost : null,
+    originIsSecure: isSecure,
+    title: 'Загрузить файл?',
+    message: message,
+    actions: const [
+      SafariAlertAction<bool>(
+        label: 'Отмена',
+        result: false,
+        buttonKey: ValueKey('safari_download_cancel_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: 'Скачать',
+        result: true,
+        isPrimary: true,
+        buttonKey: ValueKey('safari_download_confirm_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
 }

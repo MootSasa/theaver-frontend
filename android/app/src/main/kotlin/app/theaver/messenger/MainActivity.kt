@@ -27,6 +27,7 @@ import android.webkit.WebView
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugins.webviewflutter.WebViewFlutterAndroidExternalApi
 import app.theaver.messenger.notifications.NativeNotificationsChannel
 import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
@@ -128,8 +129,8 @@ class MainActivity : FlutterFragmentActivity() {
         PushDetectorHandler.register(flutterEngine, applicationContext)
         NativeNotificationsChannel.register(flutterEngine, applicationContext)
         ApkInstallerHandler.register(flutterEngine, applicationContext)
-        BrowserStorageChannel.register(flutterEngine, applicationContext) { targetUrl ->
-            findTargetWebView(window?.decorView, targetUrl)
+        BrowserStorageChannel.register(flutterEngine, applicationContext) { targetUrl, webViewId ->
+            resolveTargetWebView(flutterEngine, targetUrl, webViewId)
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -161,13 +162,14 @@ class MainActivity : FlutterFragmentActivity() {
             when (call.method) {
                 "captureWebView" -> {
                     val urlArg = call.argument<String>("url")
+                    val webViewId = call.argument<Number>("webViewId")?.toLong()
                     val maxWidth = (call.argument<Int>("maxWidth") ?: 960).coerceIn(120, 1080)
                     val quality = (call.argument<Int>("quality") ?: 86).coerceIn(20, 95)
                     val topCropDp = (call.argument<Number>("topCropDp")?.toDouble() ?: 0.0).coerceAtLeast(0.0)
                     runOnUiThread {
                         var bitmap: Bitmap? = null
                         try {
-                            val webView = findTargetWebView(window?.decorView, urlArg)
+                            val webView = resolveTargetWebView(flutterEngine, urlArg, webViewId)
                             if (webView == null || webView.width <= 0 || webView.height <= 0) {
                                 result.success(null)
                                 return@runOnUiThread
@@ -210,15 +212,16 @@ class MainActivity : FlutterFragmentActivity() {
                 }
                 "setWebViewInteractionLocked" -> {
                     val urlArg = call.argument<String>("url")
+                    val webViewId = call.argument<Number>("webViewId")?.toLong()
                     val locked = call.argument<Boolean>("locked") ?: false
                     runOnUiThread {
                         try {
+                            val targetWv = resolveTargetWebView(flutterEngine, urlArg, webViewId)
                             if (locked) {
-                                val webView = findTargetWebView(window?.decorView, urlArg)
-                                if (webView != null) {
+                                if (targetWv != null) {
                                     // Halts active kinetic fling scrolling and cancels in-flight touches.
-                                    webView.flingScroll(0, 0)
-                                    webView.scrollTo(webView.scrollX, webView.scrollY)
+                                    targetWv.flingScroll(0, 0)
+                                    targetWv.scrollTo(targetWv.scrollX, targetWv.scrollY)
                                     val now = SystemClock.uptimeMillis()
                                     val cancelEvt = MotionEvent.obtain(
                                         now,
@@ -228,18 +231,16 @@ class MainActivity : FlutterFragmentActivity() {
                                         0f,
                                         0
                                     )
-                                    webView.dispatchTouchEvent(cancelEvt)
+                                    targetWv.dispatchTouchEvent(cancelEvt)
                                     cancelEvt.recycle()
-                                    lockedWebViews.add(webView)
-                                    webView.setOnTouchListener { _, _ -> true }
+                                    lockedWebViews.add(targetWv)
+                                    targetWv.setOnTouchListener { _, _ -> true }
                                 }
                             } else {
-                                findTargetWebView(window?.decorView, urlArg)
-                                    ?.setOnTouchListener(null)
-                                for (wv in lockedWebViews) {
+                                targetWv?.let { wv ->
                                     wv.setOnTouchListener(null)
+                                    lockedWebViews.remove(wv)
                                 }
-                                lockedWebViews.clear()
                             }
                             result.success(true)
                         } catch (_: Throwable) {
@@ -250,6 +251,23 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun resolveTargetWebView(
+        flutterEngine: FlutterEngine,
+        targetUrl: String?,
+        webViewId: Long?,
+    ): WebView? {
+        if (webViewId != null) {
+            val byId = try {
+                @Suppress("DEPRECATION")
+                WebViewFlutterAndroidExternalApi.getWebView(flutterEngine, webViewId)
+            } catch (_: Throwable) {
+                null
+            }
+            if (byId != null) return byId
+        }
+        return findTargetWebView(window?.decorView, targetUrl)
     }
 
     private fun findTargetWebView(root: View?, targetUrl: String?): WebView? {

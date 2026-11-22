@@ -165,19 +165,34 @@ abstract final class BrowserAutofillScript {
     function extractCredentialsFrom(root) {
       if (!root || !root.querySelectorAll) return null;
       var inputs = root.querySelectorAll('input');
-      var pwdEl = null;
+      var nonEmptyPwds = [];
+      var firstNewPwd = null;
       var userEl = null;
       for (var i = 0; i < inputs.length; i++) {
         var inp = inputs[i];
+        if (!inp || inp.disabled) continue;
         var t = (inp.getAttribute('type') || 'text').toLowerCase();
-        if (t === 'password' && !inp.disabled) {
+        var ac = (inp.getAttribute('autocomplete') || '').toLowerCase();
+        if (t === 'password' ||
+            ac.indexOf('current-password') !== -1 ||
+            ac.indexOf('new-password') !== -1) {
+          var stInline = inp.style || {};
+          if (stInline.display === 'none' || stInline.visibility === 'hidden') continue;
+          if (typeof window.getComputedStyle === 'function') {
+            var cs = window.getComputedStyle(inp);
+            if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) continue;
+          }
           if ((inp.value || '').length > 0) {
-            pwdEl = inp;
-            break;
+            nonEmptyPwds.push(inp);
+            if (!firstNewPwd && ac.indexOf('new-password') !== -1) {
+              firstNewPwd = inp;
+            }
           }
         }
       }
-      if (!pwdEl) return null;
+      if (nonEmptyPwds.length === 0) return null;
+      var pwdEl = firstNewPwd ||
+          (nonEmptyPwds.length >= 2 ? nonEmptyPwds[1] : nonEmptyPwds[0]);
 
       for (var j = 0; j < inputs.length; j++) {
         var cand = inputs[j];

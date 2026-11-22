@@ -18,6 +18,7 @@ import 'package:theaver/services/browser_vault_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/utils/browser_autofill_script.dart';
+import 'package:theaver/utils/safari_url_safety.dart';
 import 'package:theaver/widgets/bot/mini_app_webview_sheet.dart';
 import 'package:theaver/widgets/browser/in_app_browser_sheet.dart';
 import 'package:theaver/widgets/browser/safari_autofill_overlays.dart';
@@ -177,7 +178,7 @@ void main() {
       expect(prefs.getString('browser_vault_secret_v1_u_alice_${hint1.id}'), isNull);
     });
 
-    test('enforces strict scheme, port, subdomain, and homograph isolation', () async {
+    test('enforces strict scheme, port, registrable domain, and homograph isolation', () async {
       final secureStore = <String, String>{};
       final vault = BrowserVaultService.instance
         ..debugSecureStoreOverride = secureStore
@@ -189,14 +190,23 @@ void main() {
         username: 'depositor',
         password: 'VaultOnlyPassword',
       );
+      await vault.saveOrUpdateCredential(
+        url: 'https://alice.co.uk/signin',
+        username: 'uk_user',
+        password: 'UkOnlyPassword!9',
+      );
 
       expect(vault.getHintsForUrl('https://bank.example/transfer').length, 1);
+      // Subdomain shares registrable domain over identical scheme & port
+      expect(vault.getHintsForUrl('https://sub.bank.example/login').length, 1);
       // Never leak https credentials onto insecure http
       expect(vault.getHintsForUrl('http://bank.example/login'), isEmpty);
       // Non-default port must not match :443 credential
       expect(vault.getHintsForUrl('https://bank.example:8443/login'), isEmpty);
-      // Different subdomain must not match
-      expect(vault.getHintsForUrl('https://sub.bank.example/login'), isEmpty);
+      // Unrelated lookalike / suffix domain must not match
+      expect(vault.getHintsForUrl('https://evilbank.example/login'), isEmpty);
+      // Multi-label public suffix siblings stay strictly isolated
+      expect(vault.getHintsForUrl('https://bob.co.uk/signin'), isEmpty);
       // Homograph-suspicious IDN host is blocked
       final homoEval = await vault.inspectCandidate(
         url: 'https://xn--80ak6aa92e.com/login', // apple Cyrillic spoof pattern
@@ -924,6 +934,73 @@ void main() {
       await tester.tap(sheetClose);
       await tester.pumpAndSettle();
       expect(sheetClose, findsNothing);
+    });
+  });
+
+  group('Wave 1 & 2 Vault, Cold-Start Cookie & URL Safety Fixes', () {
+    test('BrowserCookieJarVault cold-start snapshotAndClear loads knownOrigins for outgoing uid', () async {
+      BrowserDataService.instance.resetForTesting();
+      BrowserDataService.instance.debugUserIdOverride = 'carol';
+      await BrowserDataService.instance.ensureLoaded(forceReload: true);
+      await BrowserDataService.instance.recordVisit(
+        'https://portal.theaver.app/login',
+        'Portal',
+      );
+
+      // Simulate cold start before BrowserDataService is warmed in memory
+      BrowserDataService.instance.resetForTesting();
+
+      final backend = InMemoryBrowserStorageBackend();
+      BrowserStorageBridge.instance.debugBackendOverride = backend;
+      final vault = BrowserVaultService.instance
+        ..debugSecureStoreOverride = <String, String>{}
+        ..debugUserIdOverride = 'carol';
+      await vault.ensureLoaded(forceReload: true);
+
+      final cookieVault = BrowserCookieJarVault.forTesting(
+        bridge: BrowserStorageBridge.instance,
+        vaultService: vault,
+      );
+
+      // Should not throw or wipe jar metadata prematurely when empty cookies are returned
+      await cookieVault.snapshotAndClearForOutgoingAccount('carol');
+      expect(
+        BrowserDataService.instance.knownOriginsForAccount('carol'),
+        contains('https://portal.theaver.app'),
+      );
+    });
+
+    test('SafariUrlSafetyAnalyzer classifies about:, blob:, data: downloads and blocked schemes safely', () {
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('about:blank')).kind,
+        ExternalSchemeKind.none,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('about:srcdoc')).kind,
+        ExternalSchemeKind.none,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('blob:https://example.com/123')).kind,
+        ExternalSchemeKind.blobDownload,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('data:application/pdf;base64,JVBERi0=')).kind,
+        ExternalSchemeKind.blobDownload,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('data:text/html,<script>1</script>')).kind,
+        ExternalSchemeKind.blocked,
+      );
+      expect(
+        SafariUrlSafetyAnalyzer.classifyExternalUri(Uri.parse('javascript:alert(1)')).kind,
+        ExternalSchemeKind.blocked,
+      );
+    });
+
+    test('BrowserAutofillScript includes new-password / 2-password change extraction logic', () {
+      final script = BrowserAutofillScript.buildObserverScript();
+      expect(script, contains('new-password'));
+      expect(script, contains('credentialsSubmitted'));
     });
   });
 }

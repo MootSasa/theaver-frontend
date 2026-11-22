@@ -65,6 +65,7 @@ abstract interface class BrowserStorageBackend {
 
   Future<void> configureWebViewPolicies({
     String? url,
+    int? webViewIdentifier,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
@@ -104,6 +105,7 @@ class MethodChannelBrowserStorageBackend implements BrowserStorageBackend {
   @override
   Future<void> configureWebViewPolicies({
     String? url,
+    int? webViewIdentifier,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
@@ -114,6 +116,7 @@ class MethodChannelBrowserStorageBackend implements BrowserStorageBackend {
         'configureWebViewPolicies',
         <String, dynamic>{
           if (url != null) 'url': url,
+          if (webViewIdentifier != null) 'webViewId': webViewIdentifier,
           'acceptThirdPartyCookies': acceptThirdPartyCookies,
           'enableOsAutofill': enableOsAutofill,
           'blockAllCookies': blockAllCookies,
@@ -223,12 +226,14 @@ class InMemoryBrowserStorageBackend implements BrowserStorageBackend {
   @override
   Future<void> configureWebViewPolicies({
     String? url,
+    int? webViewIdentifier,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
   }) async {
     lastConfiguredPolicy = <String, dynamic>{
       'url': url,
+      if (webViewIdentifier != null) 'webViewId': webViewIdentifier,
       'acceptThirdPartyCookies': acceptThirdPartyCookies,
       'enableOsAutofill': enableOsAutofill,
       'blockAllCookies': blockAllCookies,
@@ -294,12 +299,14 @@ class BrowserStorageBridge {
 
   Future<void> configureWebViewPolicies({
     String? url,
+    int? webViewIdentifier,
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
   }) =>
       _backend.configureWebViewPolicies(
         url: url,
+        webViewIdentifier: webViewIdentifier,
         acceptThirdPartyCookies: acceptThirdPartyCookies,
         enableOsAutofill: enableOsAutofill,
         blockAllCookies: blockAllCookies,

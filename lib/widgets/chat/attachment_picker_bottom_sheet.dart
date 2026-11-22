@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
@@ -10,7 +11,9 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/bot_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/image_utils.dart';
 import '../design_system/theav_design_system.dart';
 
 enum AttachmentPickerAction {
@@ -21,6 +24,7 @@ enum AttachmentPickerAction {
   poll,
   contact,
   music,
+  miniApp,
 }
 
 class AttachmentPickerResult {
@@ -28,30 +32,45 @@ class AttachmentPickerResult {
   final List<File>? files;
   final bool asDocument;
   final bool sendImmediately;
+  final Map<String, dynamic>? miniAppShortcut;
 
   const AttachmentPickerResult.action(this.action)
       : files = null,
         asDocument = false,
-        sendImmediately = false;
+        sendImmediately = false,
+        miniAppShortcut = null;
 
   const AttachmentPickerResult.files(
     this.files, {
     this.asDocument = false,
     this.sendImmediately = false,
-  }) : action = null;
+  })  : action = null,
+        miniAppShortcut = null;
+
+  const AttachmentPickerResult.miniApp(this.miniAppShortcut)
+      : action = AttachmentPickerAction.miniApp,
+        files = null,
+        asDocument = false,
+        sendImmediately = false;
 }
 
 class AttachmentPickerBottomSheet extends StatefulWidget {
   final bool allowPoll;
+  final List<Map<String, dynamic>>? miniAppShortcuts;
+  final ValueChanged<Map<String, dynamic>>? onMiniAppSelected;
 
   const AttachmentPickerBottomSheet({
     Key? key,
     this.allowPoll = true,
+    this.miniAppShortcuts,
+    this.onMiniAppSelected,
   }) : super(key: key);
 
   static Future<AttachmentPickerResult?> show(
     BuildContext context, {
     bool allowPoll = true,
+    List<Map<String, dynamic>>? miniAppShortcuts,
+    ValueChanged<Map<String, dynamic>>? onMiniAppSelected,
   }) {
     return showTheavModalSheet<AttachmentPickerResult>(
       context: context,
@@ -59,6 +78,8 @@ class AttachmentPickerBottomSheet extends StatefulWidget {
       builder: (_) => const SizedBox.shrink(),
       customSheetBuilder: (ctx) => AttachmentPickerBottomSheet(
         allowPoll: allowPoll,
+        miniAppShortcuts: miniAppShortcuts,
+        onMiniAppSelected: onMiniAppSelected,
       ),
     );
   }
@@ -104,6 +125,9 @@ class _AttachmentPickerBottomSheetState
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
 
+  // Mini App / attach-menu shortcuts
+  List<Map<String, dynamic>> _miniAppShortcuts = const [];
+
   @override
   void initState() {
     super.initState();
@@ -118,8 +142,89 @@ class _AttachmentPickerBottomSheetState
           _overscrollStretch = _stretchFrom * (1.0 - t);
         });
       });
+    _initMiniAppShortcuts();
     _loadAlbumsAndAssets();
     _initLiveCamera();
+  }
+
+  Map<String, dynamic> _botInfoToShortcut(BotInfo bot) {
+    final title = bot.menuButton.text.isNotEmpty
+        ? bot.menuButton.text
+        : (bot.displayName.isNotEmpty
+            ? bot.displayName
+            : (bot.username ?? 'Mini App'));
+    return {
+      'bot_id': bot.userId,
+      'bot_username': bot.username ?? '',
+      'bot_name': bot.displayName.isNotEmpty
+          ? bot.displayName
+          : (bot.username ?? title),
+      'title': title,
+      'avatar_url': bot.avatarUrl ?? '',
+      'url': bot.effectiveWebAppUrl ??
+          (bot.webApps.isNotEmpty ? bot.webApps.first.url : ''),
+      if (bot.webApps.isNotEmpty)
+        'app_short_name': bot.webApps.first.shortName
+      else if (bot.shortName.isNotEmpty)
+        'app_short_name': bot.shortName,
+      'is_verified': bot.isVerified,
+      'mode': 'attach',
+    };
+  }
+
+  List<Map<String, dynamic>> _mergeShortcuts(
+    List<Map<String, dynamic>>? explicit,
+    List<BotInfo> bots,
+  ) {
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    void addItem(Map<String, dynamic> raw) {
+      final bid = (raw['bot_id'] ?? '').toString().trim();
+      final uname = (raw['bot_username'] ?? '').toString().trim().toLowerCase();
+      final shortName = (raw['app_short_name'] ?? '').toString().trim().toLowerCase();
+      final key = '${bid.isNotEmpty ? bid : uname}|$shortName';
+      if (key == '|' || !seen.add(key)) return;
+      merged.add(Map<String, dynamic>.from(raw));
+    }
+
+    if (explicit != null) {
+      for (final s in explicit) {
+        addItem(s);
+      }
+    }
+    for (final b in bots) {
+      addItem(_botInfoToShortcut(b));
+    }
+    return merged;
+  }
+
+  void _initMiniAppShortcuts() {
+    _miniAppShortcuts = _mergeShortcuts(
+      widget.miniAppShortcuts,
+      BotService.getCachedAttachMenuBots(),
+    );
+    unawaited(_loadAttachMenuBots());
+  }
+
+  Future<void> _loadAttachMenuBots() async {
+    try {
+      final bots = await BotService.getAttachMenuBots(limit: 12);
+      if (!mounted || bots.isEmpty) return;
+      final merged = _mergeShortcuts(widget.miniAppShortcuts, bots);
+      if (merged.length != _miniAppShortcuts.length) {
+        setState(() => _miniAppShortcuts = merged);
+      }
+    } catch (_) {}
+  }
+
+  void _selectMiniAppShortcut(Map<String, dynamic> shortcut) {
+    HapticFeedback.selectionClick();
+    if (widget.onMiniAppSelected != null) {
+      Navigator.pop(context);
+      widget.onMiniAppSelected!(shortcut);
+    } else {
+      Navigator.pop(context, AttachmentPickerResult.miniApp(shortcut));
+    }
   }
 
   @override
@@ -680,6 +785,11 @@ class _AttachmentPickerBottomSheetState
                 ),
                 const SizedBox(height: 8),
 
+                if (_miniAppShortcuts.isNotEmpty) ...[
+                  _buildMiniAppShortcutsStrip(isDark, theme),
+                  const SizedBox(height: 6),
+                ],
+
                 // Media Grid Section with DraggableScrollbar
                 Expanded(
                   child: _buildMediaGrid(_gridScrollController, isDark, theme),
@@ -1077,10 +1187,111 @@ class _AttachmentPickerBottomSheetState
     );
   }
 
+  Widget _buildMiniAppShortcutsStrip(bool isDark, ThemeData theme) {
+    final textColor = theme.textTheme.bodyMedium?.color ??
+        (isDark ? Colors.white : Colors.black87);
+    return SizedBox(
+      height: 38,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        itemCount: _miniAppShortcuts.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final shortcut = _miniAppShortcuts[index];
+          final label = (shortcut['title'] ??
+                  shortcut['bot_name'] ??
+                  shortcut['bot_username'] ??
+                  'Mini App')
+              .toString()
+              .trim();
+          final avatarUrl = shortcut['avatar_url']?.toString();
+          final avatarImg = (avatarUrl != null && avatarUrl.isNotEmpty)
+              ? avatarImageProvider(avatarUrl)
+              : null;
+
+          return Material(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => _selectMiniAppShortcut(shortcut),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (avatarImg != null)
+                      CircleAvatar(
+                        radius: 10,
+                        backgroundImage: avatarImg,
+                      )
+                    else
+                      const iconoir.AppWindow(
+                        width: 15,
+                        height: 15,
+                        color: Color(0xFF2AABEE),
+                      ),
+                    const SizedBox(width: 6),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 140),
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildActionsRowContent(bool isDark, ThemeData theme) {
     final iconColor = isDark ? Colors.white : Colors.black87;
 
-    final items = [
+    final items = <_PickerItem>[
+      for (final shortcut in _miniAppShortcuts)
+        () {
+          final avatarUrl = shortcut['avatar_url']?.toString();
+          final avatarImg = (avatarUrl != null && avatarUrl.isNotEmpty)
+              ? avatarImageProvider(avatarUrl)
+              : null;
+          final label = (shortcut['title'] ??
+                  shortcut['bot_name'] ??
+                  shortcut['bot_username'] ??
+                  'Mini App')
+              .toString()
+              .trim();
+          return _PickerItem(
+            action: AttachmentPickerAction.miniApp,
+            label: label,
+            fallbackLabel: 'Mini App',
+            icon: avatarImg != null
+                ? CircleAvatar(
+                    radius: 14,
+                    backgroundImage: avatarImg,
+                  )
+                : const iconoir.AppWindow(
+                    color: Color(0xFF2AABEE),
+                    width: 22,
+                    height: 22,
+                  ),
+            onTap: () => _selectMiniAppShortcut(shortcut),
+          );
+        }(),
       _PickerItem(
         action: AttachmentPickerAction.gallery,
         label: context.l10n.translate('chat_gallery'),
@@ -1131,10 +1342,11 @@ class _AttachmentPickerBottomSheetState
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: _AnimatedPickerButton(
               item: item,
-              onTap: () => Navigator.pop(
-                context,
-                AttachmentPickerResult.action(item.action),
-              ),
+              onTap: item.onTap ??
+                  () => Navigator.pop(
+                        context,
+                        AttachmentPickerResult.action(item.action),
+                      ),
             ),
           );
         }).toList(),
@@ -1392,11 +1604,13 @@ class _PickerItem {
   final String label;
   final String fallbackLabel;
   final Widget icon;
+  final VoidCallback? onTap;
 
   const _PickerItem({
     required this.action,
     required this.label,
     required this.fallbackLabel,
     required this.icon,
+    this.onTap,
   });
 }

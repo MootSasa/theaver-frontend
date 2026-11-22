@@ -86,6 +86,7 @@ import '../../widgets/chat/live_chat_call_banner.dart';
 import '../../widgets/message/telegram_service_message_widget.dart';
 import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import '../../services/bot_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_instant_cache.dart';
@@ -660,6 +661,24 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
     }
     _messageController.addListener(_onInputTextChanged);
+    DeepLinkService.pendingInlinePrefill.addListener(
+      _onPendingInlinePrefillChanged,
+    );
+    final pendingPrefill =
+        DeepLinkService.consumeInlinePrefill(widget.channelId);
+    final initialInlineText =
+        (pendingPrefill != null && pendingPrefill.isNotEmpty)
+            ? pendingPrefill
+            : (draft != null &&
+                    BotService.parseInlineBotInput(draft.text) != null
+                ? draft.text
+                : null);
+    if (initialInlineText != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _insertInlineQueryText(initialInlineText);
+      });
+    }
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.registerChat(
@@ -3602,6 +3621,29 @@ class _ChannelScreenState extends State<ChannelScreen>
       case AttachmentPickerAction.contact:
         await _sendContact();
         break;
+      case AttachmentPickerAction.miniApp:
+        final shortcut = result.miniAppShortcut;
+        if (shortcut != null) {
+          final bid = (shortcut['bot_id'] ?? '').toString().trim();
+          final buser = (shortcut['bot_username'] ?? '').toString().trim();
+          final targetBotId = bid.isNotEmpty ? bid : buser;
+          if (targetBotId.isNotEmpty) {
+            await openMiniAppSheet(
+              context,
+              botId: targetBotId,
+              botName: shortcut['bot_name']?.toString(),
+              botUsername: buser.isNotEmpty ? buser : null,
+              isVerified: shortcut['is_verified'] == true,
+              url: shortcut['url']?.toString(),
+              appShortName: shortcut['app_short_name']?.toString(),
+              chatId: widget.channelId,
+              mode: (shortcut['mode'] ?? 'attach').toString(),
+              buttonText: (shortcut['title'] ?? '').toString(),
+              onSwitchInlineQuery: _insertInlineQueryText,
+            );
+          }
+        }
+        break;
       case null:
         break;
     }
@@ -3936,12 +3978,134 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
+  void _onPendingInlinePrefillChanged() {
+    if (!mounted) return;
+    final prefill = DeepLinkService.consumeInlinePrefill(widget.channelId);
+    if (prefill != null && prefill.isNotEmpty) {
+      _insertInlineQueryText(prefill);
+    }
+  }
+
   void _insertInlineQueryText(String text) {
     _messageController.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
     );
     _inputFocusNode.requestFocus();
+    _inlineQueryController.onTextChanged(
+      text,
+      chatId: widget.channelId,
+      chatType: 'channel',
+    );
+  }
+
+  Future<void> _handleInlinePopupHeaderButtonTap(
+    BuildContext ctx,
+    BotInlineResultsButton btn,
+  ) async {
+    final inlineUsername =
+        (_inlineQueryController.activeBotUsername ?? '').trim();
+    final respBotId = (_inlineQueryController.response?.botId ?? '').trim();
+    BotInfo? botMeta;
+    for (final b in _inlineDirectoryBots) {
+      if ((respBotId.isNotEmpty && b.userId == respBotId) ||
+          (inlineUsername.isNotEmpty &&
+              (b.username ?? '').toLowerCase() ==
+                  inlineUsername.toLowerCase())) {
+        botMeta = b;
+        break;
+      }
+    }
+    if (botMeta == null && respBotId.isNotEmpty) {
+      botMeta = BotService.getCachedBotInfo(respBotId);
+    }
+    if (botMeta == null && inlineUsername.isNotEmpty) {
+      botMeta = await BotService.resolveBotByUsername(inlineUsername);
+    }
+    if (!ctx.mounted) return;
+
+    final effectiveBotId = respBotId.isNotEmpty
+        ? respBotId
+        : (botMeta?.userId.isNotEmpty == true ? botMeta!.userId : inlineUsername);
+    final effectiveUsername = (botMeta?.username?.isNotEmpty == true)
+        ? botMeta!.username!
+        : inlineUsername;
+
+    if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+      if (effectiveBotId.isEmpty) return;
+      await openMiniAppSheet(
+        ctx,
+        botId: effectiveBotId,
+        botName: botMeta?.displayName,
+        botUsername: effectiveUsername.isNotEmpty ? effectiveUsername : null,
+        isVerified: botMeta?.isVerified,
+        url: btn.webAppUrl,
+        chatId: widget.channelId,
+        mode: 'inline',
+        buttonText: btn.text,
+        onSwitchInlineQuery: _insertInlineQueryText,
+      );
+      return;
+    }
+
+    if (btn.startParameter != null) {
+      final startCmd = btn.startParameter!.isNotEmpty
+          ? '/start ${btn.startParameter}'
+          : '/start';
+      final targetBotUserId = (botMeta != null && botMeta.userId.isNotEmpty)
+          ? botMeta.userId
+          : (int.tryParse(respBotId) != null ? respBotId : '');
+      if (targetBotUserId.isEmpty) return;
+
+      final res = await ChatService.createChat(
+        chatType: 'private',
+        participantIds: [targetBotUserId],
+      );
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final chat = res['chat'];
+        final targetChatId = chat is Chat
+            ? chat.id
+            : (res['chat_id']?.toString() ?? '');
+        if (targetChatId.isNotEmpty) {
+          await ChatService.sendMessage(
+            chatId: targetChatId,
+            content: startCmd,
+          );
+          _inlineQueryController.clear();
+          _messageController.clear();
+          if (!mounted) return;
+          final botTitle = (botMeta?.displayName.isNotEmpty == true)
+              ? botMeta!.displayName
+              : (effectiveUsername.isNotEmpty ? '@$effectiveUsername' : 'Бот');
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: targetChatId,
+              chatType: 'private',
+              chatName: botTitle,
+              avatarUrl: botMeta?.avatarUrl,
+              otherUserId: targetBotUserId,
+            );
+          } else {
+            await Navigator.of(context).push(
+              SwipeBackPageRoute(
+                builder: (_) => PrivateChatScreen(
+                  chatId: targetChatId,
+                  otherUserId: targetBotUserId,
+                  otherUserName: botTitle,
+                  otherUserAvatar: botMeta?.avatarUrl,
+                ),
+              ),
+            );
+          }
+        }
+      } else {
+        GlassToastService().showError(
+          context,
+          res['message']?.toString() ?? 'Не удалось открыть чат с ботом',
+        );
+      }
+    }
   }
 
   void _applyMentionSelection(String username) {
@@ -4096,6 +4260,9 @@ class _ChannelScreenState extends State<ChannelScreen>
     _chatSubscription?.cancel();
 
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    DeepLinkService.pendingInlinePrefill.removeListener(
+      _onPendingInlinePrefillChanged,
+    );
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     }
@@ -5943,20 +6110,8 @@ class _ChannelScreenState extends State<ChannelScreen>
                 chatId: widget.channelId,
                 chatType: 'channel',
               ),
-              onTapHeaderButton: (btn) async {
-                final botId = _inlineQueryController.activeBotUsername ?? '';
-                if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
-                  await openMiniAppSheet(
-                    ctx,
-                    botId: botId,
-                    botUsername: botId,
-                    url: btn.webAppUrl,
-                    chatId: widget.channelId,
-                    mode: 'inline',
-                    onSwitchInlineQuery: _insertInlineQueryText,
-                  );
-                }
-              },
+              onTapHeaderButton: (btn) =>
+                  _handleInlinePopupHeaderButtonTap(ctx, btn),
               onSelectResult: (item) async {
                 final ok = await _inlineQueryController.sendSelectedResult(
                   chatId: widget.channelId,

@@ -17,6 +17,7 @@ import '../../services/browser_data_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/settings_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 import '../../theme/theme_provider.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
@@ -673,222 +674,272 @@ class ChatSettingsScreen extends StatelessWidget {
 
             if (!kIsWeb) ...[
               const SizedBox(height: 6),
-              ValueListenableBuilder<bool>(
-                valueListenable: SettingsService().inAppBrowserNotifier,
-                builder: (context, inAppBrowser, _) {
-                  return ListTile(
-                    key: const ValueKey('settings_in_app_browser_tile'),
-                    leading: iconoir.Internet(
-                      color: inAppBrowser ? activePrimary : Colors.grey,
-                      width: 22,
-                      height: 22,
-                    ),
-                    title: Text(
-                      l10n.translate('settings_in_app_browser_title'),
-                    ),
-                    subtitle: Text(
-                      l10n.translate(
-                        inAppBrowser
-                            ? 'settings_in_app_browser_on'
-                            : 'settings_in_app_browser_off',
+              if (LinkOpener.isInAppBrowserSupported) ...[
+                ValueListenableBuilder<bool>(
+                  valueListenable: SettingsService().inAppBrowserNotifier,
+                  builder: (context, inAppBrowser, _) {
+                    return ListTile(
+                      key: const ValueKey('settings_in_app_browser_tile'),
+                      leading: iconoir.Internet(
+                        color: inAppBrowser ? activePrimary : Colors.grey,
+                        width: 22,
+                        height: 22,
                       ),
-                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                    ),
-                    trailing: AdaptiveSwitch(
-                      value: inAppBrowser,
-                      onChanged: (val) =>
-                          SettingsService().setInAppBrowser(val),
-                    ),
-                    onTap: () async {
-                      HapticUtils.tap();
-                      await showTheavModalSheet<void>(
-                        context: context,
-                        title: l10n.translate(
-                          'settings_in_app_browser_sheet_title',
+                      title: Text(
+                        l10n.translate('settings_in_app_browser_title'),
+                      ),
+                      subtitle: Text(
+                        l10n.translate(
+                          inAppBrowser
+                              ? 'settings_in_app_browser_on'
+                              : 'settings_in_app_browser_off',
                         ),
-                        showCloseButton: true,
-                        builder: (sheetCtx) {
-                          final palette = sheetCtx.theav;
-                          return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              ListTile(
-                                leading: iconoir.Internet(
-                                  width: 22,
-                                  height: 22,
-                                  color: inAppBrowser
-                                      ? palette.primary
-                                      : palette.subtext,
-                                ),
-                                title: Text(
-                                  l10n.translate(
-                                    'settings_in_app_browser_option_internal',
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  l10n.translate(
-                                    'settings_in_app_browser_on',
-                                  ),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: palette.subtext,
-                                  ),
-                                ),
-                                trailing: inAppBrowser
-                                    ? Icon(
-                                        Icons.check_rounded,
-                                        color: palette.primary,
-                                      )
-                                    : null,
-                                onTap: () async {
-                                  await SettingsService()
-                                      .setInAppBrowser(true);
-                                  if (sheetCtx.mounted) {
-                                    Navigator.of(sheetCtx).pop();
-                                  }
-                                },
-                              ),
-                              ListTile(
-                                leading: iconoir.OpenNewWindow(
-                                  width: 22,
-                                  height: 22,
-                                  color: !inAppBrowser
-                                      ? palette.primary
-                                      : palette.subtext,
-                                ),
-                                title: Text(
-                                  l10n.translate(
-                                    'settings_in_app_browser_option_external',
-                                  ),
-                                ),
-                                subtitle: Text(
-                                  l10n.translate(
-                                    'settings_in_app_browser_off',
-                                  ),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: palette.subtext,
-                                  ),
-                                ),
-                                trailing: !inAppBrowser
-                                    ? Icon(
-                                        Icons.check_rounded,
-                                        color: palette.primary,
-                                      )
-                                    : null,
-                                onTap: () async {
-                                  await SettingsService()
-                                      .setInAppBrowser(false);
-                                  if (sheetCtx.mounted) {
-                                    Navigator.of(sheetCtx).pop();
-                                  }
-                                },
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  );
-                },
-              ),
-              const SizedBox(height: 6),
-              ListTile(
-                key: const ValueKey('settings_browser_vault_tile'),
-                leading: const Icon(
-                  Icons.key_rounded,
-                  color: Colors.grey,
-                  size: 22,
-                ),
-                title: Text(l10n.translate('settings_browser_vault_title')),
-                subtitle: Text(
-                  l10n.translate('settings_browser_vault_subtitle'),
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () {
-                  HapticUtils.tap();
-                  Navigator.of(context).push(
-                    SwipeBackPageRoute<void>(
-                      builder: (_) =>
-                          const BrowserVaultAndDataScreen(initialSection: 0),
-                    ),
-                  );
-                },
-              ),
-              ListTile(
-                key: const ValueKey('settings_browser_cookies_tile'),
-                leading: const Icon(
-                  Icons.cookie_outlined,
-                  color: Colors.grey,
-                  size: 22,
-                ),
-                title: Text(
-                  l10n.translate('settings_browser_cookies_sites_title'),
-                ),
-                subtitle: Text(
-                  l10n.translate('settings_browser_cookies_sites_subtitle'),
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                onTap: () {
-                  HapticUtils.tap();
-                  Navigator.of(context).push(
-                    SwipeBackPageRoute<void>(
-                      builder: (_) =>
-                          const BrowserVaultAndDataScreen(initialSection: 2),
-                    ),
-                  );
-                },
-              ),
-              ListTile(
-                key: const ValueKey('settings_clear_browser_data_tile'),
-                leading: const iconoir.Trash(
-                  color: Colors.grey,
-                  width: 22,
-                  height: 22,
-                ),
-                title: Text(
-                  l10n.translate('settings_clear_browser_data_title'),
-                ),
-                subtitle: Text(
-                  l10n.translate('settings_clear_browser_data_subtitle'),
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                onTap: () async {
-                  HapticUtils.tap();
-                  final confirm = await showTheavDialog<bool>(
-                        context: context,
-                        title: l10n.translate(
-                          'settings_clear_browser_data_title',
-                        ),
-                        message: l10n.translate(
-                          'settings_clear_browser_data_confirm',
-                        ),
-                        actions: [
-                          TheavDialogAction<bool>(
-                            label: l10n.translate('storage_cancel'),
-                            result: false,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      trailing: AdaptiveSwitch(
+                        value: inAppBrowser,
+                        onChanged: (val) =>
+                            SettingsService().setInAppBrowser(val),
+                      ),
+                      onTap: () async {
+                        HapticUtils.tap();
+                        await showTheavModalSheet<void>(
+                          context: context,
+                          title: l10n.translate(
+                            'settings_in_app_browser_sheet_title',
                           ),
-                          TheavDialogAction<bool>(
-                            label: l10n.translate('storage_clear'),
-                            result: true,
-                            isDestructive: true,
-                          ),
-                        ],
-                      ) ??
-                      false;
-                  if (!confirm) return;
-                  await BrowserDataService.instance.clearHistoryAndCookies();
-                  if (context.mounted) {
-                    GlassToastService().show(
-                      context,
-                      l10n.translate('settings_clear_browser_data_done'),
-                      icon: Icons.check,
+                          showCloseButton: true,
+                          builder: (sheetCtx) {
+                            final palette = sheetCtx.theav;
+                            return Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ListTile(
+                                  leading: iconoir.Internet(
+                                    width: 22,
+                                    height: 22,
+                                    color: inAppBrowser
+                                        ? palette.primary
+                                        : palette.subtext,
+                                  ),
+                                  title: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_option_internal',
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_on',
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: palette.subtext,
+                                    ),
+                                  ),
+                                  trailing: inAppBrowser
+                                      ? Icon(
+                                          Icons.check_rounded,
+                                          color: palette.primary,
+                                        )
+                                      : null,
+                                  onTap: () async {
+                                    await SettingsService()
+                                        .setInAppBrowser(true);
+                                    if (sheetCtx.mounted) {
+                                      Navigator.of(sheetCtx).pop();
+                                    }
+                                  },
+                                ),
+                                ListTile(
+                                  leading: iconoir.OpenNewWindow(
+                                    width: 22,
+                                    height: 22,
+                                    color: !inAppBrowser
+                                        ? palette.primary
+                                        : palette.subtext,
+                                  ),
+                                  title: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_option_external',
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_off',
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: palette.subtext,
+                                    ),
+                                  ),
+                                  trailing: !inAppBrowser
+                                      ? Icon(
+                                          Icons.check_rounded,
+                                          color: palette.primary,
+                                        )
+                                      : null,
+                                  onTap: () async {
+                                    await SettingsService()
+                                        .setInAppBrowser(false);
+                                    if (sheetCtx.mounted) {
+                                      Navigator.of(sheetCtx).pop();
+                                    }
+                                  },
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
                     );
-                  }
-                },
-              ),
+                  },
+                ),
+                const SizedBox(height: 6),
+                ListTile(
+                  key: const ValueKey('settings_browser_vault_tile'),
+                  leading: const Icon(
+                    Icons.key_rounded,
+                    color: Colors.grey,
+                    size: 22,
+                  ),
+                  title: Text(l10n.translate('settings_browser_vault_title')),
+                  subtitle: Text(
+                    l10n.translate('settings_browser_vault_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).push(
+                      SwipeBackPageRoute<void>(
+                        builder: (_) =>
+                            const BrowserVaultAndDataScreen(initialSection: 0),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  key: const ValueKey('settings_browser_cookies_tile'),
+                  leading: const Icon(
+                    Icons.cookie_outlined,
+                    color: Colors.grey,
+                    size: 22,
+                  ),
+                  title: Text(
+                    l10n.translate('settings_browser_cookies_sites_title'),
+                  ),
+                  subtitle: Text(
+                    l10n.translate('settings_browser_cookies_sites_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).push(
+                      SwipeBackPageRoute<void>(
+                        builder: (_) =>
+                            const BrowserVaultAndDataScreen(initialSection: 2),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  key: const ValueKey('settings_clear_browser_data_tile'),
+                  leading: const iconoir.Trash(
+                    color: Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(
+                    l10n.translate('settings_clear_browser_data_title'),
+                  ),
+                  subtitle: Text(
+                    l10n.translate('settings_clear_browser_data_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  onTap: () async {
+                    HapticUtils.tap();
+                    final confirm = await showTheavDialog<bool>(
+                          context: context,
+                          title: l10n.translate(
+                            'settings_clear_browser_data_title',
+                          ),
+                          message: l10n.translate(
+                            'settings_clear_browser_data_confirm',
+                          ),
+                          actions: [
+                            TheavDialogAction<bool>(
+                              label: l10n.translate('storage_cancel'),
+                              result: false,
+                            ),
+                            TheavDialogAction<bool>(
+                              label: l10n.translate('storage_clear'),
+                              result: true,
+                              isDestructive: true,
+                            ),
+                          ],
+                        ) ??
+                        false;
+                    if (!confirm) return;
+                    await BrowserDataService.instance.clearHistoryAndCookies();
+                    if (context.mounted) {
+                      GlassToastService().show(
+                        context,
+                        l10n.translate('settings_clear_browser_data_done'),
+                        icon: Icons.check,
+                      );
+                    }
+                  },
+                ),
+              ] else ...[
+                ListTile(
+                  key: const ValueKey('settings_in_app_browser_tile'),
+                  enabled: false,
+                  leading: const iconoir.Internet(
+                    color: Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(
+                    l10n.translate('settings_in_app_browser_title'),
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                  subtitle: Text(
+                    l10n.locale.languageCode == 'en'
+                        ? 'In-app WebView browser is unavailable on this platform — links open in your system browser'
+                        : 'Встроенный браузер недоступен на этой платформе — ссылки открываются в системном браузере',
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  trailing: const AdaptiveSwitch(
+                    value: false,
+                    onChanged: null,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                ListTile(
+                  key: const ValueKey('settings_browser_vault_tile'),
+                  leading: const Icon(
+                    Icons.key_rounded,
+                    color: Colors.grey,
+                    size: 22,
+                  ),
+                  title: Text(l10n.translate('settings_browser_vault_title')),
+                  subtitle: Text(
+                    l10n.translate('settings_browser_vault_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).push(
+                      SwipeBackPageRoute<void>(
+                        builder: (_) =>
+                            const BrowserVaultAndDataScreen(initialSection: 0),
+                      ),
+                    );
+                  },
+                ),
+              ],
             ],
 
             const SizedBox(height: 12),

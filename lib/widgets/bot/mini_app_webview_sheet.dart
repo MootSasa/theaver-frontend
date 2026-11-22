@@ -1,20 +1,35 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:image_picker/image_picker.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:open_file/open_file.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
+import '../../services/account_manager.dart';
 import '../../services/bot_service.dart';
 import '../../services/browser_data_service.dart';
 import '../../services/browser_site_settings_service.dart';
@@ -33,6 +48,8 @@ import '../../utils/safari_url_safety.dart';
 import '../browser/in_app_browser_sheet.dart';
 import '../browser/safari_browser_dialogs.dart';
 import '../design_system/theav_design_system.dart';
+import 'mini_app_chat_picker_sheet.dart';
+import 'mini_app_qr_scanner_sheet.dart';
 import 'thv_invoice_sheet.dart';
 
 /// Launches a bot Mini App (or restores a matching minimized [MiniAppSession])
@@ -52,15 +69,21 @@ Future<void> openMiniAppSheet(
   ValueChanged<String>? onSwitchInlineQuery,
 }) async {
   final sessionCtrl = MiniAppSessionController.instance;
+  await sessionCtrl.minimizeActiveSheet();
+  if (!context.mounted) return;
   final normalizedId = botId.replaceFirst(RegExp(r'^@+'), '').toLowerCase();
+  final cleanShortName = (appShortName ?? '').trim();
+  final cleanStartParam = (startParam ?? '').trim();
   for (final existing in sessionCtrl.minimizedSessions.reversed) {
     if (existing.isBrowser) continue;
     final sameBot = existing.launchData.botId == botId ||
         (normalizedId.isNotEmpty &&
             existing.botUsername.toLowerCase() == normalizedId);
+    final sameShortName = (existing.appShortName ?? '').trim() == cleanShortName;
+    final sameStartParam = (existing.startParam ?? '').trim() == cleanStartParam;
     final sameUrl =
         url == null || url.isEmpty || url == existing.launchData.url;
-    if (sameBot && appShortName == null && sameUrl) {
+    if (sameBot && sameShortName && sameStartParam && sameUrl) {
       await sessionCtrl.restoreSession(existing);
       return;
     }
@@ -113,6 +136,9 @@ Future<void> openMiniAppSheet(
     isVerified: isVerified ?? initialLaunch.botIsVerified,
     chatId: chatId,
     mode: mode,
+    appShortName: cleanShortName.isNotEmpty ? cleanShortName : null,
+    startParam: cleanStartParam.isNotEmpty ? cleanStartParam : null,
+    initialThemeParams: themeParams,
     buttonText: buttonText,
     onSwitchInlineQuery: onSwitchInlineQuery,
     pendingLaunchFuture: pendingLaunchFuture,
@@ -142,6 +168,9 @@ class MiniAppActionButtonState {
   bool isVisible = false;
   bool isActive = true;
   bool isProgressVisible = false;
+  bool leaveActive = false;
+  bool hasShineEffect = false;
+  String position = 'left';
   String text = 'Продолжить';
   Color? color;
   Color? textColor;
@@ -239,6 +268,18 @@ abstract interface class BrowserUiDialogDelegate {
     required String host,
     String? realm,
     String? url,
+    bool originIsSecure = true,
+  });
+
+  Future<bool> onGeolocationPermissionRequest({
+    required String host,
+    required bool isSecure,
+  });
+
+  Future<bool> onDownloadRequest({
+    required String host,
+    required String filenameOrUrl,
+    required bool isSecure,
   });
 }
 
@@ -389,12 +430,17 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
     required String host,
     String? realm,
     String? url,
+    bool originIsSecure = true,
   }) async {
     if (!isDialogHostMounted) return null;
     final cleanHost = host.trim();
     final effectiveUrl = (url != null && url.trim().isNotEmpty)
         ? url.trim()
         : (cleanHost.isNotEmpty ? 'https://$cleanHost/' : '');
+    final bool resolvedIsSecure = (url != null && url.trim().isNotEmpty)
+        ? SafariUrlSafetyAnalyzer.analyzeUrl(url.trim()).securityLevel ==
+            SafariConnectionSecurityLevel.secureHttps
+        : originIsSecure;
     final vault = BrowserVaultService.instance;
     await vault.ensureLoaded();
     await BrowserSiteSettingsService.instance.ensureLoaded();
@@ -408,6 +454,7 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
       contextResolver(),
       host: cleanHost,
       realm: realm,
+      originIsSecure: resolvedIsSecure,
       savedHints: hints,
       onUnlockSavedHint: hints.isEmpty
           ? null
@@ -440,6 +487,34 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
     }
     return WebViewCredential(user: res.user, password: res.password);
   }
+
+  @override
+  Future<bool> onGeolocationPermissionRequest({
+    required String host,
+    required bool isSecure,
+  }) {
+    if (!isDialogHostMounted) return Future<bool>.value(false);
+    return showSafariGeolocationPermissionDialog(
+      contextResolver(),
+      host: host,
+      isSecure: isSecure,
+    );
+  }
+
+  @override
+  Future<bool> onDownloadRequest({
+    required String host,
+    required String filenameOrUrl,
+    required bool isSecure,
+  }) {
+    if (!isDialogHostMounted) return Future<bool>.value(false);
+    return showSafariDownloadConfirmDialog(
+      contextResolver(),
+      host: host,
+      filenameOrUrl: filenameOrUrl,
+      isSecure: isSecure,
+    );
+  }
 }
 
 /// Persistent live Mini App state retained across full-screen <-> minimized dock
@@ -456,14 +531,48 @@ class MiniAppSession {
   bool isVerified;
   final String? chatId;
   final String mode;
+  final String? appShortName;
+  final String? startParam;
+  String? launchOrigin;
+  Map<String, String> initialThemeParams;
   final String buttonText;
   final ValueChanged<String>? onSwitchInlineQuery;
 
   WebViewController? controller;
+  int? webViewIdentifier;
   final ValueNotifier<double> loadProgressNotifier = ValueNotifier<double>(0.0);
   bool isLaunchPending = false;
   String? launchError;
+  String? webResourceErrorDescription;
+  String? webResourceErrorUrl;
   bool isWebContentReady = false;
+  bool isFullscreen = false;
+  bool isOrientationLocked = false;
+  OverlayState? Function()? overlayResolver;
+  OverlayEntry? _customWidgetOverlayEntry;
+  VoidCallback? _customWidgetOnHidden;
+  bool _modifiedSystemUiMode = false;
+  bool _modifiedOrientations = false;
+  bool clipboardAccessGrantedInSession = false;
+  final Map<String, bool> sessionGeolocationGrants = <String, bool>{};
+  String? pendingStep1Username;
+  String? pendingStep1Origin;
+  DateTime? pendingStep1At;
+  String? _pendingMainFrameUrl;
+  DateTime? _pendingMainFrameAt;
+  Timer? _mainFramePendingResetTimer;
+  bool _isDownloadPromptOpen = false;
+  bool _closePreconfirmed = false;
+  bool _sensorsPaused = false;
+  int? _activeAccelRefreshMs;
+  int? _activeGyroRefreshMs;
+  ({int refreshMs, bool needAbsolute})? _activeOrientationConfig;
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  StreamSubscription<GyroscopeEvent>? _gyroSub;
+  StreamSubscription<AccelerometerEvent>? _orientationAccelSub;
+  StreamSubscription<MagnetometerEvent>? _orientationMagSub;
+  double _lastMagAzimuth = 0.0;
+  bool _hasMagReading = false;
   Uint8List? previewImageBytes;
   MiniAppDomPreview? domPreview;
   Future<void>? _activeSnapshotFuture;
@@ -606,6 +715,7 @@ class MiniAppSession {
           <String, dynamic>{
             'url': targetUrl,
             'locked': locked,
+            'webViewId': webViewIdentifier,
           },
         );
       } on MissingPluginException {
@@ -707,6 +817,82 @@ class MiniAppSession {
     return _recentJsDialogAt.length >= 3;
   }
 
+  static String resolveRuntimePlatformName() {
+    if (kIsWeb) return 'web';
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return 'ios';
+      case TargetPlatform.macOS:
+        return 'macos';
+      case TargetPlatform.windows:
+      case TargetPlatform.linux:
+        return 'tdesktop';
+      default:
+        return 'android';
+    }
+  }
+
+  /// Ensures a Mini App JS bridge call/injection originates from the registered
+  /// Mini App launch origin rather than a third-party navigated document.
+  bool get isOnTrustedMiniAppOrigin {
+    if (isBrowser) return false;
+    final expectedOrigin =
+        launchOrigin ?? BrowserVaultService.normalizeOrigin(launchData.url);
+    if (expectedOrigin == null) {
+      return launchData.url.trim().isEmpty;
+    }
+    final activeUrl = currentUrl.trim().isNotEmpty ? currentUrl : launchData.url;
+    final activeOrigin = BrowserVaultService.normalizeOrigin(activeUrl);
+    return activeOrigin != null && activeOrigin == expectedOrigin;
+  }
+
+  bool get hasFullscreenVideoOverlay => _customWidgetOverlayEntry != null;
+
+  bool consumePreconfirmedClose() {
+    final res = _closePreconfirmed;
+    _closePreconfirmed = false;
+    return res;
+  }
+
+  void recordPendingStep1Username(String username, String? urlOrOrigin) {
+    final clean = username.trim();
+    final origin = BrowserVaultService.normalizeOrigin(urlOrOrigin ?? currentUrl);
+    if (clean.isEmpty || origin == null) return;
+    pendingStep1Username = clean;
+    pendingStep1Origin = origin;
+    pendingStep1At = DateTime.now();
+  }
+
+  String? consumePendingStep1Username(String? pageOrigin) {
+    final stored = pendingStep1Username;
+    final storedOrigin = pendingStep1Origin;
+    final at = pendingStep1At;
+    pendingStep1Username = null;
+    pendingStep1Origin = null;
+    pendingStep1At = null;
+    if (stored == null || stored.isEmpty || at == null) return null;
+    if (DateTime.now().difference(at) > const Duration(minutes: 2)) {
+      return null;
+    }
+    if (pageOrigin != null && storedOrigin != null && pageOrigin != storedOrigin) {
+      return null;
+    }
+    return stored;
+  }
+
+  void _clearPendingStep1Username() {
+    pendingStep1Username = null;
+    pendingStep1Origin = null;
+    pendingStep1At = null;
+  }
+
+  void _clearPendingMainFrameTracking() {
+    _mainFramePendingResetTimer?.cancel();
+    _mainFramePendingResetTimer = null;
+    _pendingMainFrameUrl = null;
+    _pendingMainFrameAt = null;
+  }
+
   void clearAutofillOverlays({bool notify = true}) {
     final bool changed =
         focusedAutofillField != null || pendingCredentialPrompt != null;
@@ -729,6 +915,14 @@ class MiniAppSession {
       final pageOrigin = BrowserVaultService.normalizeOrigin(currentUrl);
       if (pageOrigin == null || msgOrigin != pageOrigin) return;
 
+      if (type == 'step1Username') {
+        final stepUser = decoded['username']?.toString().trim() ?? '';
+        if (stepUser.isNotEmpty) {
+          recordPendingStep1Username(stepUser, pageOrigin);
+        }
+        return;
+      }
+
       if (type == 'fieldFocused') {
         final kind = decoded['kind']?.toString() ?? '';
         final subtype = decoded['subtype']?.toString() ?? '';
@@ -747,7 +941,12 @@ class MiniAppSession {
       } else if (type == 'credentialsSubmitted') {
         await BrowserSiteSettingsService.instance.ensureLoaded();
         if (!BrowserSiteSettingsService.instance.savePasswordsEnabled) return;
-        final username = decoded['username']?.toString() ?? '';
+        String username = (decoded['username']?.toString() ?? '').trim();
+        if (username.isEmpty) {
+          username = consumePendingStep1Username(pageOrigin) ?? '';
+        } else {
+          _clearPendingStep1Username();
+        }
         final password = decoded['password']?.toString() ?? '';
         final evaluation = await BrowserVaultService.instance.inspectCandidate(
           url: currentUrl,
@@ -761,7 +960,7 @@ class MiniAppSession {
             url: currentUrl,
             origin: evaluation.normalizedOrigin ?? pageOrigin,
             displayHost: evaluation.displayHost ?? displayTitle,
-            username: username.trim(),
+            username: username,
             password: password,
             isUpdate:
                 evaluation.status == BrowserVaultSaveStatus.updatePassword,
@@ -824,31 +1023,59 @@ class MiniAppSession {
       uiDialogDelegate!.isDialogHostMounted;
 
   Future<void> handleSslAuthError(SslAuthError error) async {
-    final origin = _resolveDialogOrigin(null);
+    final plat = error.platform;
+    String failUrl = '';
+    String failHost = '';
+    if (plat is AndroidSslAuthError) {
+      failUrl = plat.url.trim();
+    } else if (plat is WebKitSslAuthError) {
+      failHost = plat.host.trim();
+    }
+    final pageUrl = isBrowser ? currentUrl : launchData.url;
+    final String effectiveUrl = failUrl.isNotEmpty
+        ? failUrl
+        : (failHost.isNotEmpty ? 'https://$failHost/' : pageUrl);
+    final failingOrigin = _resolveDialogOrigin(effectiveUrl);
+    final mainHostKey = _hostKeyForUrl(pageUrl);
+    final String actualHostKey = failHost.isNotEmpty
+        ? failHost.toLowerCase()
+        : (failingOrigin.hostKey.isNotEmpty
+            ? failingOrigin.hostKey
+            : mainHostKey);
+    final String actualLabel = failHost.isNotEmpty
+        ? SafariUrlSafetyAnalyzer.decodePunycodeHost(failHost)
+        : failingOrigin.label;
+    final bool isMainPageHost =
+        mainHostKey.isEmpty || actualHostKey == mainHostKey;
+
     if (!_hasActiveDialogHost) {
       try {
         await error.cancel();
       } catch (_) {}
       return;
     }
-    if (origin.hostKey.isNotEmpty &&
-        acceptedSslWarningHosts.contains(origin.hostKey)) {
-      currentPageHasSslWarning = true;
-      onSheetStateChanged?.call();
+    if (actualHostKey.isNotEmpty &&
+        acceptedSslWarningHosts.contains(actualHostKey)) {
+      if (isMainPageHost) {
+        currentPageHasSslWarning = true;
+        onSheetStateChanged?.call();
+      }
       try {
         await error.proceed();
       } catch (_) {}
       return;
     }
     final bool proceed = await uiDialogDelegate!.onSslAuthWarning(
-      host: origin.label,
+      host: actualLabel,
     );
     if (proceed) {
-      if (origin.hostKey.isNotEmpty) {
-        acceptedSslWarningHosts.add(origin.hostKey);
+      if (actualHostKey.isNotEmpty) {
+        acceptedSslWarningHosts.add(actualHostKey);
       }
-      currentPageHasSslWarning = true;
-      onSheetStateChanged?.call();
+      if (isMainPageHost) {
+        currentPageHasSslWarning = true;
+        onSheetStateChanged?.call();
+      }
       try {
         await error.proceed();
       } catch (_) {}
@@ -974,9 +1201,6 @@ class MiniAppSession {
             }
           }
           if (!allOk) {
-            for (final t in request.types) {
-              hostPerms[t.name] = false;
-            }
             onSheetStateChanged?.call();
             if (anyPermanentlyDenied && _hasActiveDialogHost) {
               final label = neededOs.length > 1
@@ -1112,13 +1336,23 @@ class MiniAppSession {
       request.onCancel();
       return;
     }
+    final String pageUrl = isBrowser ? currentUrl : launchData.url;
+    final pageOrigin = _resolveDialogOrigin(pageUrl);
     final String cleanHost = request.host.trim().isNotEmpty
         ? request.host.trim()
-        : _resolveDialogOrigin(null).label;
+        : pageOrigin.label;
+    final pageUri = Uri.tryParse(pageUrl);
+    final String authUrl = (cleanHost.isNotEmpty &&
+            cleanHost.toLowerCase() != pageOrigin.hostKey &&
+            pageUri != null &&
+            pageUri.scheme.isNotEmpty)
+        ? '${pageUri.scheme}://$cleanHost/'
+        : pageUrl;
     final WebViewCredential? cred = await uiDialogDelegate!.onHttpAuthRequest(
       host: cleanHost,
       realm: request.realm,
-      url: isBrowser ? currentUrl : launchData.url,
+      url: authUrl,
+      originIsSecure: pageOrigin.isSecure,
     );
     if (cred != null) {
       request.onProceed(cred);
@@ -1162,12 +1396,17 @@ class MiniAppSession {
     this.isVerified = false,
     this.chatId,
     this.mode = 'menu',
+    this.appShortName,
+    this.startParam,
+    Map<String, String>? initialThemeParams,
     this.buttonText = '',
     this.onSwitchInlineQuery,
     this.isBrowser = false,
     String? initialUrl,
     Future<MiniAppLaunchData?>? pendingLaunchFuture,
   })  : id = id ?? '${isBrowser ? 'browser_tab' : 'mini_app'}_${++_nextSessionSeq}',
+        initialThemeParams = initialThemeParams ?? const <String, String>{},
+        launchOrigin = BrowserVaultService.normalizeOrigin(launchData.url),
         currentUrl = (initialUrl != null && initialUrl.trim().isNotEmpty)
             ? initialUrl.trim()
             : launchData.url {
@@ -1182,7 +1421,10 @@ class MiniAppSession {
           return;
         }
         launchData = resolved;
+        launchOrigin = BrowserVaultService.normalizeOrigin(resolved.url);
         launchError = null;
+        webResourceErrorDescription = null;
+        webResourceErrorUrl = null;
         if (currentUrl.trim().isEmpty) {
           currentUrl = resolved.url;
         }
@@ -2899,11 +3141,74 @@ class MiniAppSession {
     return false;
   }
 
+  static const Set<String> _nonRenderableDownloadExts = <String>{
+    '.zip',
+    '.rar',
+    '.7z',
+    '.apk',
+    '.dmg',
+    '.exe',
+    '.msi',
+    '.docx',
+    '.xlsx',
+    '.pptx',
+    '.csv',
+    '.tar',
+    '.gz',
+    '.bz2',
+    '.iso',
+    '.bin',
+  };
+
+  bool _isNonRenderableDownloadExtension(Uri uri) {
+    final ext = p.extension(uri.path).toLowerCase();
+    if (ext.isEmpty) return false;
+    if (_nonRenderableDownloadExts.contains(ext)) return true;
+    if (ext == '.pdf' && !kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _promptAndHandleDownload(Uri targetUri) async {
+    if (!_hasActiveDialogHost || _isDownloadPromptOpen) return;
+    _isDownloadPromptOpen = true;
+    try {
+      final urlStr = targetUri.toString();
+      final fallbackHost = isBrowser ? currentUrl : launchData.url;
+      final origin = _resolveDialogOrigin(
+        targetUri.host.isNotEmpty ? urlStr : fallbackHost,
+      );
+      final String filenameOrUrl = (targetUri.pathSegments.isNotEmpty &&
+              targetUri.pathSegments.last.trim().isNotEmpty)
+          ? Uri.decodeComponent(targetUri.pathSegments.last.trim())
+          : urlStr;
+      final ok = await uiDialogDelegate!.onDownloadRequest(
+        host: origin.label,
+        filenameOrUrl: filenameOrUrl,
+        isSecure: origin.isSecure,
+      );
+      if (ok) {
+        try {
+          await launchUrl(targetUri, mode: LaunchMode.externalApplication);
+        } catch (_) {}
+      }
+    } finally {
+      _isDownloadPromptOpen = false;
+    }
+  }
+
   NavigationDecision _evaluateNavigationDecision(
     NavigationRequest req, {
     required bool handleDeepLinks,
   }) {
-    final targetUri = Uri.tryParse(req.url);
+    final trimmedUrl = req.url.trim();
+    final lowerUrl = trimmedUrl.toLowerCase();
+    if (lowerUrl == 'about:blank' || lowerUrl == 'about:srcdoc') {
+      return NavigationDecision.navigate;
+    }
+
+    final targetUri = Uri.tryParse(trimmedUrl);
     if (targetUri == null) return NavigationDecision.prevent;
 
     final schemeInfo = SafariUrlSafetyAnalyzer.classifyExternalUri(targetUri);
@@ -2911,14 +3216,30 @@ class MiniAppSession {
       return NavigationDecision.prevent;
     }
 
+    final sch = targetUri.scheme.toLowerCase();
+    // Never let subframes/tracking iframes trigger top-level deep links,
+    // full-page host warnings, or external app prompts.
+    if (!req.isMainFrame) {
+      return (sch == 'http' || sch == 'https')
+          ? NavigationDecision.navigate
+          : NavigationDecision.prevent;
+    }
+
     if (handleDeepLinks && DeepLinkService.parseUri(targetUri) != null) {
       DeepLinkService().handleLink(targetUri);
       return NavigationDecision.prevent;
     }
 
-    final sch = targetUri.scheme.toLowerCase();
+    if (schemeInfo.kind == ExternalSchemeKind.blobDownload) {
+      _clearPendingMainFrameTracking();
+      loadProgress = 1.0;
+      onSheetStateChanged?.call();
+      unawaited(_promptAndHandleDownload(targetUri));
+      return NavigationDecision.prevent;
+    }
+
     if (sch == 'http' || sch == 'https') {
-      final safety = SafariUrlSafetyAnalyzer.analyzeUrl(req.url);
+      final safety = SafariUrlSafetyAnalyzer.analyzeUrl(trimmedUrl);
       final hostKey = safety.asciiHost.toLowerCase();
       if (safety.isSuspiciousHomograph &&
           !acceptedSuspiciousHosts.contains(hostKey)) {
@@ -2934,6 +3255,36 @@ class MiniAppSession {
         });
         return NavigationDecision.prevent;
       }
+
+      if (_isNonRenderableDownloadExtension(targetUri)) {
+        _clearPendingMainFrameTracking();
+        loadProgress = 1.0;
+        onSheetStateChanged?.call();
+        unawaited(_promptAndHandleDownload(targetUri));
+        return NavigationDecision.prevent;
+      }
+
+      final DateTime now = DateTime.now();
+      if (_pendingMainFrameUrl == trimmedUrl &&
+          _pendingMainFrameAt != null &&
+          now.difference(_pendingMainFrameAt!) < const Duration(seconds: 4)) {
+        // Android's DownloadListener re-routes Content-Disposition downloads
+        // back through shouldOverrideUrlLoading on the main frame.
+        _clearPendingMainFrameTracking();
+        loadProgress = 1.0;
+        onSheetStateChanged?.call();
+        unawaited(_promptAndHandleDownload(targetUri));
+        return NavigationDecision.prevent;
+      }
+
+      _pendingMainFrameUrl = trimmedUrl;
+      _pendingMainFrameAt = now;
+      _mainFramePendingResetTimer?.cancel();
+      _mainFramePendingResetTimer = Timer(const Duration(seconds: 4), () {
+        if (_pendingMainFrameUrl == trimmedUrl) {
+          _clearPendingMainFrameTracking();
+        }
+      });
       return NavigationDecision.navigate;
     }
 
@@ -2960,11 +3311,12 @@ class MiniAppSession {
       ..setOnJavaScriptTextInputDialog(handleJavaScriptPrompt);
   }
 
-  Future<void> _syncNativeBrowserPolicies(String rawUrl) async {
+  Future<void> syncNativeBrowserPolicies(String rawUrl) async {
     await BrowserSiteSettingsService.instance.ensureLoaded();
     final settings = BrowserSiteSettingsService.instance;
     await BrowserStorageBridge.instance.configureWebViewPolicies(
       url: rawUrl,
+      webViewIdentifier: webViewIdentifier,
       acceptThirdPartyCookies:
           settings.cookiePolicy == BrowserCookiePolicy.allowAll,
       blockAllCookies: settings.cookiePolicy == BrowserCookiePolicy.blockAll,
@@ -2974,12 +3326,360 @@ class MiniAppSession {
 
   void _handleBrowserOriginTransition(String nextUrl) {
     final nextOrigin = BrowserVaultService.normalizeOrigin(nextUrl);
+    if (pendingStep1Origin != null && nextOrigin != pendingStep1Origin) {
+      _clearPendingStep1Username();
+    }
     if (nextOrigin != _lastAutofillOrigin) {
       _lastAutofillOrigin = nextOrigin;
       if (focusedAutofillField != null) {
         focusedAutofillField = null;
       }
       BrowserVaultAuthGate.instance.onOriginChanged(nextUrl);
+    }
+  }
+
+  static const String _step1ObserverJs = r'''
+(function() {
+  try {
+    if (window !== window.top) return;
+    if (window.__theaverStep1Installed) return;
+    window.__theaverStep1Installed = true;
+    function isUserField(el) {
+      if (!el || el.tagName !== 'INPUT') return false;
+      var t = (el.type || 'text').toLowerCase();
+      if (t === 'password' || t === 'hidden' || t === 'checkbox' || t === 'radio' || t === 'submit' || t === 'button') return false;
+      var ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      var nm = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.placeholder || '')).toLowerCase();
+      if (t === 'email' || ac.indexOf('username') !== -1 || ac.indexOf('email') !== -1) return true;
+      return /(user|login|email|mail|phone|account|identifier|signin)/.test(nm);
+    }
+    function report(el) {
+      if (!isUserField(el)) return;
+      var v = (el.value || '').trim();
+      if (!v || !window.TheaverBrowserAutofill) return;
+      try {
+        window.TheaverBrowserAutofill.postMessage(JSON.stringify({
+          type: 'step1Username',
+          origin: window.location.origin,
+          username: v
+        }));
+      } catch (_) {}
+    }
+    document.addEventListener('change', function(e) { report(e.target); }, true);
+    document.addEventListener('blur', function(e) { report(e.target); }, true);
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      if (!form || !form.querySelectorAll) return;
+      var inputs = form.querySelectorAll('input');
+      for (var i = 0; i < inputs.length; i++) {
+        if (isUserField(inputs[i]) && (inputs[i].value || '').trim()) {
+          report(inputs[i]);
+          break;
+        }
+      }
+    }, true);
+  } catch (_) {}
+})();
+''';
+
+  Future<List<String>> _handleAndroidFileSelector(
+    FileSelectorParams params,
+  ) async {
+    try {
+      final List<String> accepts = params.acceptTypes
+          .map((e) => e.trim().toLowerCase())
+          .where((e) => e.isNotEmpty)
+          .toList();
+      if (params.isCaptureEnabled) {
+        final bool isVideoCapture = accepts.isNotEmpty &&
+            accepts.every((a) => a.startsWith('video/'));
+        final XFile? picked = isVideoCapture
+            ? await ImagePicker().pickVideo(source: ImageSource.camera)
+            : await ImagePicker().pickImage(source: ImageSource.camera);
+        if (picked != null && picked.path.isNotEmpty) {
+          return <String>[Uri.file(picked.path).toString()];
+        }
+        return const <String>[];
+      }
+
+      final FileType fileType;
+      if (accepts.isNotEmpty && accepts.every((a) => a.startsWith('image/'))) {
+        fileType = FileType.image;
+      } else if (accepts.isNotEmpty &&
+          accepts.every((a) => a.startsWith('video/'))) {
+        fileType = FileType.video;
+      } else if (accepts.isNotEmpty &&
+          accepts.every(
+            (a) => a.startsWith('image/') || a.startsWith('video/'),
+          )) {
+        fileType = FileType.media;
+      } else {
+        fileType = FileType.any;
+      }
+      final FilePickerResult? res = await FilePicker.platform.pickFiles(
+        type: fileType,
+        allowMultiple: params.mode == FileSelectorMode.openMultiple,
+      );
+      if (res == null || res.paths.isEmpty) return const <String>[];
+      return res.paths
+          .whereType<String>()
+          .where((path) => path.isNotEmpty)
+          .map((path) => Uri.file(path).toString())
+          .toList();
+    } catch (_) {
+      return const <String>[];
+    }
+  }
+
+  Future<GeolocationPermissionsResponse> _handleAndroidGeolocationPrompt(
+    GeolocationPermissionsRequestParams params,
+  ) async {
+    try {
+      final originInfo = _resolveDialogOrigin(params.origin);
+      final String hostKey = originInfo.hostKey.isNotEmpty
+          ? originInfo.hostKey
+          : _hostKeyForUrl(params.origin);
+      bool? siteGranted =
+          hostKey.isNotEmpty ? sessionGeolocationGrants[hostKey] : null;
+      if (siteGranted == false) {
+        return const GeolocationPermissionsResponse(allow: false, retain: false);
+      }
+      if (siteGranted == null) {
+        if (!_hasActiveDialogHost) {
+          return const GeolocationPermissionsResponse(
+            allow: false,
+            retain: false,
+          );
+        }
+        final String displayHost = originInfo.label.isNotEmpty
+            ? originInfo.label
+            : params.origin;
+        siteGranted = await uiDialogDelegate!.onGeolocationPermissionRequest(
+          host: displayHost,
+          isSecure: originInfo.isSecure,
+        );
+        if (hostKey.isNotEmpty) {
+          sessionGeolocationGrants[hostKey] = siteGranted;
+        }
+        if (!siteGranted) {
+          return const GeolocationPermissionsResponse(
+            allow: false,
+            retain: false,
+          );
+        }
+      }
+
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.deniedForever) {
+        if (_hasActiveDialogHost) {
+          await uiDialogDelegate!.onSystemPermissionBlocked(
+            resourceLabel: 'геопозиции',
+          );
+        }
+        return const GeolocationPermissionsResponse(allow: false, retain: false);
+      }
+      final bool granted = perm == LocationPermission.whileInUse ||
+          perm == LocationPermission.always;
+      return GeolocationPermissionsResponse(allow: granted, retain: false);
+    } catch (_) {
+      return const GeolocationPermissionsResponse(allow: false, retain: false);
+    }
+  }
+
+  void _applySystemChromeFullscreen(bool enabled, {bool allowLandscape = false}) {
+    try {
+      if (enabled) {
+        _modifiedSystemUiMode = true;
+        unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky));
+        if (allowLandscape) {
+          _modifiedOrientations = true;
+          unawaited(
+            SystemChrome.setPreferredOrientations(const [
+              DeviceOrientation.portraitUp,
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]),
+          );
+        }
+      } else {
+        if (_modifiedSystemUiMode) {
+          _modifiedSystemUiMode = false;
+          unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+        }
+        if (_modifiedOrientations && !isOrientationLocked) {
+          _modifiedOrientations = false;
+          unawaited(SystemChrome.setPreferredOrientations(const []));
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _handleAndroidShowCustomWidget(
+    Widget widget,
+    void Function() onCustomWidgetHidden,
+  ) {
+    unawaited(_hideCustomWidgetOverlay(invokeControllerHide: false));
+    final OverlayState? overlay =
+        overlayResolver?.call() ?? lastNavigator?.overlay;
+    if (overlay == null || !overlay.mounted) {
+      onCustomWidgetHidden();
+      return;
+    }
+    _customWidgetOnHidden = onCustomWidgetHidden;
+    _applySystemChromeFullscreen(true, allowLandscape: true);
+    final entry = OverlayEntry(
+      builder: (_) => Positioned.fill(
+        child: ColoredBox(
+          color: Colors.black,
+          child: widget,
+        ),
+      ),
+    );
+    _customWidgetOverlayEntry = entry;
+    overlay.insert(entry);
+    onSheetStateChanged?.call();
+  }
+
+  void _handleAndroidHideCustomWidget() {
+    unawaited(_hideCustomWidgetOverlay(invokeControllerHide: false));
+  }
+
+  Future<bool> _hideCustomWidgetOverlay({
+    required bool invokeControllerHide,
+    bool notify = true,
+  }) async {
+    final entry = _customWidgetOverlayEntry;
+    final hiddenCb = _customWidgetOnHidden;
+    _customWidgetOverlayEntry = null;
+    _customWidgetOnHidden = null;
+    final bool hadOverlay = entry != null || hiddenCb != null;
+    if (entry != null) {
+      try {
+        entry.remove();
+      } catch (_) {}
+    }
+    if (!isFullscreen) {
+      _applySystemChromeFullscreen(false);
+    }
+    if (invokeControllerHide && hiddenCb != null) {
+      try {
+        hiddenCb();
+      } catch (_) {}
+    }
+    if (notify && hadOverlay) {
+      onSheetStateChanged?.call();
+    }
+    return entry != null;
+  }
+
+  Future<bool> dismissFullscreenVideoOverlay() =>
+      _hideCustomWidgetOverlay(invokeControllerHide: true);
+
+  void applyFullscreenSystemUi(bool enabled) {
+    isFullscreen = enabled;
+    _applySystemChromeFullscreen(enabled || hasFullscreenVideoOverlay);
+    onSheetStateChanged?.call();
+  }
+
+  void applyOrientationLock(bool locked) {
+    isOrientationLocked = locked;
+    try {
+      if (locked) {
+        _modifiedOrientations = true;
+        unawaited(
+          SystemChrome.setPreferredOrientations(const [
+            DeviceOrientation.portraitUp,
+          ]),
+        );
+      } else if (_modifiedOrientations) {
+        _modifiedOrientations = false;
+        unawaited(SystemChrome.setPreferredOrientations(const []));
+      }
+    } catch (_) {}
+  }
+
+  WebViewController _createPlatformWebViewController() {
+    final PlatformWebViewControllerCreationParams params =
+        WebViewPlatform.instance is WebKitWebViewPlatform
+            ? WebKitWebViewControllerCreationParams(
+                allowsInlineMediaPlayback: true,
+                mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
+                javaScriptCanOpenWindowsAutomatically: true,
+              )
+            : const PlatformWebViewControllerCreationParams();
+    return WebViewController.fromPlatformCreationParams(
+      params,
+      onPermissionRequest: (req) => unawaited(handleWebPermissionRequest(req)),
+    );
+  }
+
+  void _configurePlatformWebViewController(WebViewController ctrl) {
+    final platformCtrl = ctrl.platform;
+    if (platformCtrl is AndroidWebViewController) {
+      webViewIdentifier = platformCtrl.webViewIdentifier;
+      unawaited(platformCtrl.setGeolocationEnabled(true));
+      unawaited(platformCtrl.setUseWideViewPort(isDesktopMode));
+      unawaited(
+        platformCtrl.setOnShowFileSelector(_handleAndroidFileSelector),
+      );
+      unawaited(
+        platformCtrl.setGeolocationPermissionsPromptCallbacks(
+          onShowPrompt: _handleAndroidGeolocationPrompt,
+        ),
+      );
+      unawaited(
+        platformCtrl.setCustomWidgetCallbacks(
+          onShowCustomWidget: _handleAndroidShowCustomWidget,
+          onHideCustomWidget: _handleAndroidHideCustomWidget,
+        ),
+      );
+    } else if (platformCtrl is WebKitWebViewController) {
+      webViewIdentifier = platformCtrl.webViewIdentifier;
+      if (isBrowser) {
+        unawaited(platformCtrl.setAllowsBackForwardNavigationGestures(true));
+      }
+    }
+  }
+
+  void _handleWebResourceError(WebResourceError error) {
+    if (error.isForMainFrame == false) return;
+    if (error.isForMainFrame == null && isWebContentReady) return;
+    final descLower = error.description.toLowerCase();
+    if (error.errorCode == -999 ||
+        descLower.contains('err_aborted') ||
+        descLower.contains('nsurlerrorcancelled') ||
+        descLower.contains('cancelled')) {
+      return;
+    }
+    _clearPendingMainFrameTracking();
+    webResourceErrorDescription = error.description.trim().isNotEmpty
+        ? error.description.trim()
+        : 'Не удалось загрузить страницу';
+    webResourceErrorUrl =
+        error.url ?? (isBrowser ? currentUrl : launchData.url);
+    loadProgress = 1.0;
+    onSheetStateChanged?.call();
+  }
+
+  Future<void> retryMainFrameLoad() async {
+    final retryUrl = webResourceErrorUrl;
+    webResourceErrorDescription = null;
+    webResourceErrorUrl = null;
+    _clearPendingMainFrameTracking();
+    loadProgress = 0.08;
+    onSheetStateChanged?.call();
+    final ctrl = controller;
+    if (ctrl != null && WebViewPlatform.instance != null) {
+      final parsed = retryUrl != null ? Uri.tryParse(retryUrl) : null;
+      if (parsed != null &&
+          (parsed.scheme == 'http' || parsed.scheme == 'https')) {
+        await ctrl.loadRequest(parsed);
+      } else {
+        await ctrl.reload();
+      }
     }
   }
 
@@ -3002,9 +3702,7 @@ class MiniAppSession {
       }
       _lastAutofillOrigin = BrowserVaultService.normalizeOrigin(targetUrl);
 
-      final ctrl = WebViewController(
-        onPermissionRequest: (req) => unawaited(handleWebPermissionRequest(req)),
-      )
+      final ctrl = _createPlatformWebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..addJavaScriptChannel(
           'TheaverBrowserTheme',
@@ -3033,6 +3731,8 @@ class MiniAppSession {
             onPageStarted: (urlStr) {
               _earlyBrowserInsetsStage = 0;
               browserChromeCollapsed = false;
+              webResourceErrorDescription = null;
+              webResourceErrorUrl = null;
               final nextUrl = urlStr.trim();
               if (nextUrl.isNotEmpty) {
                 final prevHost = BrowserDataService.extractHost(currentUrl);
@@ -3045,14 +3745,19 @@ class MiniAppSession {
                   final siteDesktop = BrowserSiteSettingsService.instance
                       .preferenceForUrl(nextUrl)
                       ?.desktopMode;
-                  if (siteDesktop != null && siteDesktop != isDesktopMode) {
-                    isDesktopMode = siteDesktop;
+                  final bool nextDesktop = siteDesktop ?? false;
+                  if (nextDesktop != isDesktopMode) {
+                    isDesktopMode = nextDesktop;
                     unawaited(
                       controller?.setUserAgent(
-                        siteDesktop ? desktopUserAgent : null,
+                        nextDesktop ? desktopUserAgent : null,
                       ) ??
                           Future<void>.value(),
                     );
+                    final plat = controller?.platform;
+                    if (plat is AndroidWebViewController) {
+                      unawaited(plat.setUseWideViewPort(nextDesktop));
+                    }
                   }
                 }
                 currentUrl = nextUrl;
@@ -3062,7 +3767,7 @@ class MiniAppSession {
                   acceptedSslWarningHosts.contains(_hostKeyForUrl(currentUrl));
               loadProgress = 0.08;
               onSheetStateChanged?.call();
-              unawaited(_syncNativeBrowserPolicies(currentUrl));
+              unawaited(syncNativeBrowserPolicies(currentUrl));
               unawaited(refreshBrowserNavState());
             },
             onUrlChange: (change) {
@@ -3084,18 +3789,22 @@ class MiniAppSession {
               }
             },
             onPageFinished: (urlStr) async {
+              _clearPendingMainFrameTracking();
+              webResourceErrorDescription = null;
+              webResourceErrorUrl = null;
               if (urlStr.trim().isNotEmpty) {
                 currentUrl = urlStr.trim();
                 _handleBrowserOriginTransition(currentUrl);
               }
               loadProgress = 1.0;
               isWebContentReady = true;
-              await _syncNativeBrowserPolicies(currentUrl);
+              await syncNativeBrowserPolicies(currentUrl);
               await injectBrowserSafeInsets();
               try {
                 await controller?.runJavaScript(
                   BrowserAutofillScript.buildObserverScript(),
                 );
+                await controller?.runJavaScript(_step1ObserverJs);
               } catch (_) {}
               await refreshBrowserNavState();
               onBrowserPageFinished?.call();
@@ -3116,6 +3825,7 @@ class MiniAppSession {
                 unawaited(setWebPageInteractionLocked(true, force: true));
               }
             },
+            onWebResourceError: _handleWebResourceError,
             onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
             onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
             onNavigationRequest: (req) => _evaluateNavigationDecision(
@@ -3125,18 +3835,17 @@ class MiniAppSession {
           ),
         );
       _attachSharedDialogCallbacks(ctrl);
+      _configurePlatformWebViewController(ctrl);
       if (isDesktopMode) {
         unawaited(ctrl.setUserAgent(desktopUserAgent));
       }
-      unawaited(_syncNativeBrowserPolicies(targetUrl));
+      unawaited(syncNativeBrowserPolicies(targetUrl));
       ctrl.loadRequest(uri);
       controller = ctrl;
       return;
     }
 
-    final ctrl = WebViewController(
-      onPermissionRequest: (req) => unawaited(handleWebPermissionRequest(req)),
-    )
+    final ctrl = _createPlatformWebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel(
         'TheaverWebAppBridge',
@@ -3165,6 +3874,8 @@ class MiniAppSession {
           onPageStarted: (urlStr) {
             _earlyBrowserInsetsStage = 0;
             browserChromeCollapsed = false;
+            webResourceErrorDescription = null;
+            webResourceErrorUrl = null;
             final nextUrl = urlStr.trim();
             if (nextUrl.isNotEmpty) {
               final prevHost = BrowserDataService.extractHost(currentUrl);
@@ -3199,6 +3910,9 @@ class MiniAppSession {
             }
           },
           onPageFinished: (urlStr) async {
+            _clearPendingMainFrameTracking();
+            webResourceErrorDescription = null;
+            webResourceErrorUrl = null;
             if (urlStr.trim().isNotEmpty) {
               currentUrl = urlStr.trim();
             }
@@ -3221,6 +3935,7 @@ class MiniAppSession {
               unawaited(setWebPageInteractionLocked(true, force: true));
             }
           },
+          onWebResourceError: _handleWebResourceError,
           onSslAuthError: (err) => unawaited(handleSslAuthError(err)),
           onHttpAuthRequest: (req) => unawaited(handleHttpAuth(req)),
           onNavigationRequest: (req) => _evaluateNavigationDecision(
@@ -3230,8 +3945,275 @@ class MiniAppSession {
         ),
       );
     _attachSharedDialogCallbacks(ctrl);
-    ctrl.loadRequest(uri);
+    _configurePlatformWebViewController(ctrl);
+    final Uri effectiveLaunchUri =
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+                (launchData.initData.isNotEmpty || initialThemeParams.isNotEmpty)
+            ? MiniAppJsBridge.buildLaunchUriWithHashParams(
+                targetUrl,
+                initData: launchData.initData,
+                themeParams: initialThemeParams,
+                platform: resolveRuntimePlatformName(),
+              )
+            : uri;
+    ctrl.loadRequest(effectiveLaunchUri);
     controller = ctrl;
+  }
+
+  Future<void> startAccelerometer(int refreshRateMs, [String? reqId]) async {
+    final int clampedMs = refreshRateMs.clamp(20, 1000);
+    await _accelSub?.cancel();
+    _accelSub = null;
+    _activeAccelRefreshMs = clampedMs;
+    _sensorsPaused = false;
+    DateTime lastSent = DateTime.fromMillisecondsSinceEpoch(0);
+    try {
+      _accelSub = accelerometerEventStream(
+        samplingPeriod: Duration(milliseconds: clampedMs),
+      ).listen(
+        (AccelerometerEvent event) {
+          final now = DateTime.now();
+          if (now.difference(lastSent).inMilliseconds < clampedMs) return;
+          lastSent = now;
+          unawaited(
+            dispatchEvent('accelerometer_changed', <String, dynamic>{
+              'x': event.x,
+              'y': event.y,
+              'z': event.z,
+            }),
+          );
+        },
+        onError: (_) {
+          _activeAccelRefreshMs = null;
+          unawaited(_accelSub?.cancel() ?? Future<void>.value());
+          _accelSub = null;
+          unawaited(
+            dispatchEvent('accelerometer_failed', const {'error': 'UNSUPPORTED'}),
+          );
+        },
+      );
+      await dispatchEvent('accelerometer_started', const {}, reqId);
+    } catch (_) {
+      _activeAccelRefreshMs = null;
+      _accelSub = null;
+      await dispatchEvent(
+        'accelerometer_failed',
+        const {'error': 'UNSUPPORTED'},
+        reqId,
+      );
+    }
+  }
+
+  Future<void> stopAccelerometer([String? reqId]) async {
+    _activeAccelRefreshMs = null;
+    await _accelSub?.cancel();
+    _accelSub = null;
+    await dispatchEvent('accelerometer_stopped', const {}, reqId);
+  }
+
+  Future<void> startGyroscope(int refreshRateMs, [String? reqId]) async {
+    final int clampedMs = refreshRateMs.clamp(20, 1000);
+    await _gyroSub?.cancel();
+    _gyroSub = null;
+    _activeGyroRefreshMs = clampedMs;
+    _sensorsPaused = false;
+    DateTime lastSent = DateTime.fromMillisecondsSinceEpoch(0);
+    try {
+      _gyroSub = gyroscopeEventStream(
+        samplingPeriod: Duration(milliseconds: clampedMs),
+      ).listen(
+        (GyroscopeEvent event) {
+          final now = DateTime.now();
+          if (now.difference(lastSent).inMilliseconds < clampedMs) return;
+          lastSent = now;
+          unawaited(
+            dispatchEvent('gyroscope_changed', <String, dynamic>{
+              'x': event.x,
+              'y': event.y,
+              'z': event.z,
+            }),
+          );
+        },
+        onError: (_) {
+          _activeGyroRefreshMs = null;
+          unawaited(_gyroSub?.cancel() ?? Future<void>.value());
+          _gyroSub = null;
+          unawaited(
+            dispatchEvent('gyroscope_failed', const {'error': 'UNSUPPORTED'}),
+          );
+        },
+      );
+      await dispatchEvent('gyroscope_started', const {}, reqId);
+    } catch (_) {
+      _activeGyroRefreshMs = null;
+      _gyroSub = null;
+      await dispatchEvent(
+        'gyroscope_failed',
+        const {'error': 'UNSUPPORTED'},
+        reqId,
+      );
+    }
+  }
+
+  Future<void> stopGyroscope([String? reqId]) async {
+    _activeGyroRefreshMs = null;
+    await _gyroSub?.cancel();
+    _gyroSub = null;
+    await dispatchEvent('gyroscope_stopped', const {}, reqId);
+  }
+
+  Future<void> startDeviceOrientation(
+    int refreshRateMs, {
+    bool needAbsolute = false,
+    String? reqId,
+  }) async {
+    final int clampedMs = refreshRateMs.clamp(20, 1000);
+    await _orientationAccelSub?.cancel();
+    await _orientationMagSub?.cancel();
+    _orientationAccelSub = null;
+    _orientationMagSub = null;
+    _hasMagReading = false;
+    _activeOrientationConfig = (
+      refreshMs: clampedMs,
+      needAbsolute: needAbsolute,
+    );
+    _sensorsPaused = false;
+    DateTime lastSent = DateTime.fromMillisecondsSinceEpoch(0);
+
+    if (needAbsolute) {
+      try {
+        _orientationMagSub = magnetometerEventStream(
+          samplingPeriod: Duration(milliseconds: clampedMs),
+        ).listen(
+          (MagnetometerEvent mag) {
+            _lastMagAzimuth = math.atan2(mag.y, mag.x);
+            _hasMagReading = true;
+          },
+          onError: (_) {
+            _hasMagReading = false;
+          },
+        );
+      } catch (_) {
+        _hasMagReading = false;
+      }
+    }
+
+    try {
+      _orientationAccelSub = accelerometerEventStream(
+        samplingPeriod: Duration(milliseconds: clampedMs),
+      ).listen(
+        (AccelerometerEvent event) {
+          final now = DateTime.now();
+          if (now.difference(lastSent).inMilliseconds < clampedMs) return;
+          lastSent = now;
+          final double beta = math.atan2(event.y, event.z);
+          final double gamma = math.atan2(
+            -event.x,
+            math.sqrt(event.y * event.y + event.z * event.z),
+          );
+          final bool isAbs = needAbsolute && _hasMagReading;
+          final double alpha = isAbs ? _lastMagAzimuth : 0.0;
+          unawaited(
+            dispatchEvent('device_orientation_changed', <String, dynamic>{
+              'alpha': alpha,
+              'beta': beta,
+              'gamma': gamma,
+              'absolute': isAbs,
+            }),
+          );
+        },
+        onError: (_) {
+          _activeOrientationConfig = null;
+          unawaited(_orientationAccelSub?.cancel() ?? Future<void>.value());
+          unawaited(_orientationMagSub?.cancel() ?? Future<void>.value());
+          _orientationAccelSub = null;
+          _orientationMagSub = null;
+          unawaited(
+            dispatchEvent(
+              'device_orientation_failed',
+              const {'error': 'UNSUPPORTED'},
+            ),
+          );
+        },
+      );
+      await dispatchEvent('device_orientation_started', const {}, reqId);
+    } catch (_) {
+      _activeOrientationConfig = null;
+      await _orientationMagSub?.cancel();
+      _orientationAccelSub = null;
+      _orientationMagSub = null;
+      await dispatchEvent(
+        'device_orientation_failed',
+        const {'error': 'UNSUPPORTED'},
+        reqId,
+      );
+    }
+  }
+
+  Future<void> stopDeviceOrientation([String? reqId]) async {
+    _activeOrientationConfig = null;
+    await _orientationAccelSub?.cancel();
+    await _orientationMagSub?.cancel();
+    _orientationAccelSub = null;
+    _orientationMagSub = null;
+    _hasMagReading = false;
+    await dispatchEvent('device_orientation_stopped', const {}, reqId);
+  }
+
+  void pauseActiveSensors() {
+    _sensorsPaused = true;
+    unawaited(_accelSub?.cancel() ?? Future<void>.value());
+    unawaited(_gyroSub?.cancel() ?? Future<void>.value());
+    unawaited(_orientationAccelSub?.cancel() ?? Future<void>.value());
+    unawaited(_orientationMagSub?.cancel() ?? Future<void>.value());
+    _accelSub = null;
+    _gyroSub = null;
+    _orientationAccelSub = null;
+    _orientationMagSub = null;
+  }
+
+  void resumeActiveSensors() {
+    if (!_sensorsPaused) return;
+    _sensorsPaused = false;
+    final accelMs = _activeAccelRefreshMs;
+    if (accelMs != null) {
+      unawaited(startAccelerometer(accelMs));
+    }
+    final gyroMs = _activeGyroRefreshMs;
+    if (gyroMs != null) {
+      unawaited(startGyroscope(gyroMs));
+    }
+    final orient = _activeOrientationConfig;
+    if (orient != null) {
+      unawaited(
+        startDeviceOrientation(
+          orient.refreshMs,
+          needAbsolute: orient.needAbsolute,
+        ),
+      );
+    }
+  }
+
+  void disposeResources() {
+    _activeAccelRefreshMs = null;
+    _activeGyroRefreshMs = null;
+    _activeOrientationConfig = null;
+    pauseActiveSensors();
+    _sensorsPaused = false;
+    _clearPendingMainFrameTracking();
+    _clearPendingStep1Username();
+    unawaited(_hideCustomWidgetOverlay(invokeControllerHide: false, notify: false));
+    if (isFullscreen || _modifiedSystemUiMode || _modifiedOrientations) {
+      isFullscreen = false;
+      isOrientationLocked = false;
+      _applySystemChromeFullscreen(false);
+    }
+    final ctrl = controller;
+    if (ctrl != null && WebViewPlatform.instance != null) {
+      try {
+        unawaited(ctrl.loadRequest(Uri.parse('about:blank')));
+      } catch (_) {}
+    }
   }
 
   void handleBridgeMessageFromJs(String raw) {
@@ -3240,6 +4222,7 @@ class MiniAppSession {
       handler(raw);
       return;
     }
+    if (!isOnTrustedMiniAppOrigin) return;
     final evt = MiniAppJsBridge.parseBridgeMessage(raw);
     if (evt == null) return;
     if (evt.eventType == 'web_app_set_header_color') {
@@ -3320,6 +4303,7 @@ class MiniAppSession {
           'captureWebView',
           <String, dynamic>{
             'url': targetUrl,
+            'webViewId': webViewIdentifier,
             'maxWidth': 960,
             'quality': 86,
             'topCropDp': 0.0,
@@ -3559,6 +4543,24 @@ class MiniAppSessionController extends ChangeNotifier {
   bool _backObserverRegistered = false;
   late final _MiniAppSwitcherBackObserver _backObserver =
       _MiniAppSwitcherBackObserver(this);
+  Future<void> Function()? _activeSheetMinimizeHandler;
+
+  void registerActiveSheetMinimize(Future<void> Function() handler) {
+    _activeSheetMinimizeHandler = handler;
+  }
+
+  void unregisterActiveSheetMinimize(Future<void> Function() handler) {
+    if (identical(_activeSheetMinimizeHandler, handler)) {
+      _activeSheetMinimizeHandler = null;
+    }
+  }
+
+  Future<void> minimizeActiveSheet() async {
+    final handler = _activeSheetMinimizeHandler;
+    if (handler != null) {
+      await handler();
+    }
+  }
 
   MiniAppSwitcherOpenSource get lastSwitcherOpenSource =>
       _lastSwitcherOpenSource;
@@ -3708,6 +4710,8 @@ class MiniAppSessionController extends ChangeNotifier {
     if (navigator != null) {
       _pendingSheetMinimizeFastLayout = true;
     }
+    session.pauseActiveSensors();
+    unawaited(session.dismissFullscreenVideoOverlay());
     if (!session.isBrowser) {
       session.dispatchEvent('deactivated');
       session.dispatchEvent('viewport_changed', const {
@@ -3740,6 +4744,8 @@ class MiniAppSessionController extends ChangeNotifier {
     NavigatorState? navigator,
   }) {
     session.isMinimized = true;
+    session.pauseActiveSensors();
+    unawaited(session.dismissFullscreenVideoOverlay());
     if (navigator != null) {
       session.lastNavigator = navigator;
     }
@@ -3834,6 +4840,7 @@ class MiniAppSessionController extends ChangeNotifier {
     _isSwitcherOpen = false;
     _pendingRestoreTransition = true;
     notifyListeners();
+    session.resumeActiveSensors();
     if (!session.isBrowser) {
       session.dispatchEvent('activated');
     }
@@ -3869,6 +4876,7 @@ class MiniAppSessionController extends ChangeNotifier {
 
   void closeSession(MiniAppSession session) {
     session.clearAutofillOverlays(notify: false);
+    session.disposeResources();
     final idx = _minimizedSessions.indexWhere((s) => identical(s, session));
     if (idx == -1) return;
     final bool wasSwitcherOpen = _isSwitcherOpen;
@@ -3904,6 +4912,7 @@ class MiniAppSessionController extends ChangeNotifier {
     _lastMinimizedToSwitcherSession = null;
     for (final s in _minimizedSessions) {
       s.clearAutofillOverlays(notify: false);
+      s.disposeResources();
       s.isMinimized = false;
     }
     _minimizedSessions.clear();
@@ -3914,9 +4923,11 @@ class MiniAppSessionController extends ChangeNotifier {
   @visibleForTesting
   void resetForTesting() {
     for (final s in _minimizedSessions) {
+      s.disposeResources();
       s.isMinimized = false;
     }
     _minimizedSessions.clear();
+    _activeSheetMinimizeHandler = null;
     _isSwitcherOpen = false;
     _activeFullScreenCount = 0;
     _settledFullScreenCount = 0;
@@ -4276,7 +5287,8 @@ class _MinimizedMiniAppHostState extends State<MinimizedMiniAppHost>
   }
 
   Future<void> _handleCloseSession(MiniAppSession session) async {
-    if (session.closingConfirmation) {
+    final bool alreadyConfirmed = session.consumePreconfirmedClose();
+    if (session.closingConfirmation && !alreadyConfirmed) {
       final BuildContext? dialogCtx = _resolveNavigatorFor(session)?.overlay?.context;
       if (dialogCtx != null && dialogCtx.mounted) {
         final String origin = session.botUsername.trim().isNotEmpty
@@ -5548,6 +6560,28 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
           child: Dismissible(
             key: ValueKey('mini_app_tab_dismiss_${session.id}'),
             direction: DismissDirection.horizontal,
+            confirmDismiss: session.closingConfirmation
+                ? (_) async {
+                    final BuildContext? navCtx = (session.lastNavigator != null &&
+                            session.lastNavigator!.mounted)
+                        ? session.lastNavigator!.overlay?.context
+                        : Navigator.maybeOf(context, rootNavigator: true)
+                            ?.overlay
+                            ?.context;
+                    if (navCtx == null || !navCtx.mounted) return true;
+                    final String origin = session.botUsername.trim().isNotEmpty
+                        ? '@${session.botUsername.trim()}'
+                        : session.displayTitle;
+                    final confirmed = await _confirmMiniAppCloseDialog(
+                      navCtx,
+                      originLabel: origin,
+                    );
+                    if (confirmed) {
+                      session._closePreconfirmed = true;
+                    }
+                    return confirmed;
+                  }
+                : null,
             onDismissed: (_) => widget.onCloseSession(session),
             child: ValueListenableBuilder<Offset>(
               valueListenable: _gyroTiltNotifier,
@@ -7833,16 +8867,22 @@ class MiniAppWebViewSheet extends StatefulWidget {
 }
 
 class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+
   late final MiniAppSession _session;
   late final BrowserUiDialogDelegate _dialogDelegate;
   bool _isMenuOpen = false;
   bool _isMinimizing = false;
+  bool _isDisposing = false;
   bool _allowRoutePop = false;
   bool _hasFullScreenRegistration = false;
   bool _hasSettledRegistration = false;
   bool _isTransitionReady = false;
   bool _isWebViewSurfacePainted = false;
+  bool? _lastScheduledInteractionLock;
+  bool _isQrScannerOpen = false;
+  NavigatorState? _qrScannerNavigator;
   Timer? _earlyWebViewWarmupTimer;
 
   final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier<double>(0.0);
@@ -7854,29 +8894,23 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   bool? _lastRequestedRestingOpaque;
   double _computedTopClearance = 64.0;
   double _computedBottomClearance = 0.0;
+  double _lastReportedMetricsInsetBottom = -1.0;
+  double _lastReportedMetricsHeight = -1.0;
 
   Color? _lastSyncedWebViewBg;
   Map<String, String>? _lastThemeParams;
 
   bool get _hasPlatformWebView => WebViewPlatform.instance != null;
 
-  String get _runtimePlatformName {
-    if (kIsWeb) return 'web';
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.iOS:
-        return 'ios';
-      case TargetPlatform.macOS:
-        return 'macos';
-      case TargetPlatform.windows:
-      case TargetPlatform.linux:
-        return 'tdesktop';
-      default:
-        return 'android';
-    }
-  }
+  String get _runtimePlatformName => MiniAppSession.resolveRuntimePlatformName();
+
+  OverlayState? _resolveRootOverlay() =>
+      mounted ? Overlay.maybeOf(context, rootOverlay: true) : null;
+
+  Future<void> _minimizeFromController() => _minimizeMiniApp();
 
   void _onSessionStateChanged() {
-    if (mounted) {
+    if (mounted && !_isDisposing) {
       setState(() {});
     }
   }
@@ -8018,14 +9052,57 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       mountedResolver: () => mounted && context.mounted,
     );
     _session.uiDialogDelegate = _dialogDelegate;
+    _session.overlayResolver = _resolveRootOverlay;
     _session.onSheetStateChanged = _onSessionStateChanged;
     _session.onPendingLaunchResolved = _onPendingLaunchResolved;
     _session.onRequestBridgeInjection = _injectBridge;
     _session.onInboundBridgeMessage = _handleBridgeMessage;
+    WidgetsBinding.instance.addObserver(this);
     activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
     _hasFullScreenRegistration = true;
+    MiniAppSessionController.instance.registerActiveSheetMinimize(
+      _minimizeFromController,
+    );
     MiniAppSessionController.instance.registerFullScreenOpen();
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !context.mounted) return;
+      final media = MediaQuery.of(context);
+      final double h = media.size.height;
+      final double kb = media.viewInsets.bottom;
+      if ((h - _lastReportedMetricsHeight).abs() > 0.5 ||
+          (kb - _lastReportedMetricsInsetBottom).abs() > 0.5) {
+        _lastReportedMetricsHeight = h;
+        _lastReportedMetricsInsetBottom = kb;
+        _updateMiniAppSafeClearances(media);
+        _notifyViewportChanged(isStateStable: kb <= 1.0);
+        if (_session.controller != null) {
+          unawaited(_session.injectBrowserSafeInsets());
+        }
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!mounted) return;
+    if (state == AppLifecycleState.resumed) {
+      _session.resumeActiveSensors();
+      unawaited(_dispatchEventToWebView('activated'));
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _session.pauseActiveSensors();
+      unawaited(_dispatchEventToWebView('deactivated'));
+    }
   }
 
   bool _handleHardwareKey(KeyEvent event) {
@@ -8059,10 +9136,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final media = mediaOverride ?? MediaQuery.of(context);
     final bool hasActionButtons =
         _session.mainButton.isVisible || _session.secondaryButton.isVisible;
+    final bool hasBothButtons =
+        _session.mainButton.isVisible && _session.secondaryButton.isVisible;
+    final bool verticalStack = hasBothButtons &&
+        (_session.secondaryButton.position == 'top' ||
+            _session.secondaryButton.position == 'bottom');
+    final double buttonsHeight =
+        verticalStack ? 120.0 : (hasActionButtons ? 66.0 : 0.0);
     final double nextTop = media.padding.top + 58.0;
     final double nextCompactTop = media.padding.top + 38.0;
-    final double nextBottom =
-        media.padding.bottom + (hasActionButtons ? 66.0 : 0.0);
+    final double nextBottom = media.padding.bottom + buttonsHeight;
     final double nextCompactBottom = nextBottom;
     final double nextVh = media.size.height;
     final bool nextForceExpanded = _isMenuOpen;
@@ -8139,6 +9222,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   @override
   void dispose() {
+    _isDisposing = true;
+    WidgetsBinding.instance.removeObserver(this);
+    MiniAppSessionController.instance.unregisterActiveSheetMinimize(
+      _minimizeFromController,
+    );
     HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     activeSafariWebAlertCount.removeListener(_onActiveSafariAlertChanged);
     unawaited(_session.setWebPageInteractionLocked(false));
@@ -8149,6 +9237,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     _releaseFullScreenRegistration();
     if (identical(_session.uiDialogDelegate, _dialogDelegate)) {
       _session.uiDialogDelegate = null;
+    }
+    if (identical(_session.overlayResolver, _resolveRootOverlay)) {
+      _session.overlayResolver = null;
     }
     if (identical(_session.onSheetStateChanged, _onSessionStateChanged)) {
       _session.onSheetStateChanged = null;
@@ -8163,6 +9254,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       _session.onInboundBridgeMessage = null;
     }
     if (!_isMinimizing) {
+      _session.disposeResources();
       MiniAppSessionController.instance.closeMinimized(_session);
     }
     _dragOffsetNotifier.dispose();
@@ -8201,7 +9293,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
   Future<void> _injectBridge() async {
     final ctrl = _session.controller;
-    if (ctrl == null || !mounted) return;
+    if (ctrl == null || !mounted || !_session.isOnTrustedMiniAppOrigin) return;
     final theme = Theme.of(context);
     final themeParams = MiniAppJsBridge.buildThemeParams(theme);
     final media = MediaQuery.of(context);
@@ -8233,7 +9325,165 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   ]) =>
       _session.dispatchEvent(eventType, eventData, reqId);
 
+  String _scopedUserId() {
+    final uid = (AccountManager().currentAccount?.userId ?? '').trim();
+    return uid.isNotEmpty ? uid : 'default';
+  }
+
+  String _botDisplayHandle() {
+    final handle = _session.botUsername.isNotEmpty
+        ? _session.botUsername
+        : _session.launchData.botUsername;
+    return handle.trim();
+  }
+
+  Future<Map<String, dynamic>> _buildBiometryInfo() async {
+    final botId = _session.launchData.botId.trim();
+    final uid = _scopedUserId();
+    bool available = false;
+    String bioType = 'unknown';
+    try {
+      final auth = LocalAuthentication();
+      final supported = await auth.isDeviceSupported();
+      final canCheck = await auth.canCheckBiometrics;
+      final types = (supported || canCheck)
+          ? await auth.getAvailableBiometrics()
+          : const <BiometricType>[];
+      available = supported && canCheck && types.isNotEmpty;
+      if (types.contains(BiometricType.face)) {
+        bioType = 'face';
+      } else if (types.contains(BiometricType.fingerprint) ||
+          types.contains(BiometricType.strong)) {
+        bioType = 'finger';
+      }
+    } catch (_) {}
+
+    bool accessRequested = false;
+    bool accessGranted = false;
+    String deviceId = '';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      accessRequested =
+          prefs.getBool('miniapp_bio_${uid}_${botId}_req') ?? false;
+      accessGranted =
+          prefs.getBool('miniapp_bio_${uid}_${botId}_grant') ?? false;
+      final devKey = 'miniapp_bio_dev_$uid';
+      deviceId = prefs.getString(devKey) ?? '';
+      if (deviceId.isEmpty) {
+        final rand = math.Random.secure();
+        deviceId = List<String>.generate(
+          16,
+          (_) => rand.nextInt(16).toRadixString(16),
+        ).join();
+        await prefs.setString(devKey, deviceId);
+      }
+    } catch (_) {}
+
+    bool tokenSaved = false;
+    try {
+      final token = await _secureStorage.read(
+        key: 'miniapp_bio_tok_${uid}_$botId',
+      );
+      tokenSaved = token != null && token.isNotEmpty;
+    } catch (_) {}
+
+    return <String, dynamic>{
+      'available': available,
+      'type': bioType,
+      'access_requested': accessRequested,
+      'access_granted': accessGranted,
+      'token_saved': tokenSaved,
+      'device_id': deviceId,
+    };
+  }
+
+  Future<void> _handleDownloadRequestEvent(
+    Map<String, dynamic> data,
+    String? reqId,
+  ) async {
+    final rawUrl = (data['url'] ?? '').toString().trim();
+    final rawName = (data['file_name'] ?? '').toString().trim();
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null ||
+        (uri.scheme.toLowerCase() != 'http' &&
+            uri.scheme.toLowerCase() != 'https')) {
+      await _dispatchEventToWebView(
+        'file_download_requested',
+        const {'status': 'cancelled'},
+        reqId,
+      );
+      return;
+    }
+
+    final origin = _session._resolveDialogOrigin(rawUrl);
+    final sanitizedName = rawName.isNotEmpty
+        ? p.basename(rawName).replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        : (uri.pathSegments.isNotEmpty && uri.pathSegments.last.trim().isNotEmpty
+            ? p
+                .basename(Uri.decodeComponent(uri.pathSegments.last.trim()))
+                .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+            : 'download_${DateTime.now().millisecondsSinceEpoch}.bin');
+
+    final bool confirmed = await _dialogDelegate.onDownloadRequest(
+      host: origin.label,
+      filenameOrUrl: sanitizedName.isNotEmpty ? sanitizedName : rawUrl,
+      isSecure: origin.isSecure,
+    );
+    if (!confirmed) {
+      await _dispatchEventToWebView(
+        'file_download_requested',
+        const {'status': 'cancelled'},
+        reqId,
+      );
+      return;
+    }
+
+    await _dispatchEventToWebView(
+      'file_download_requested',
+      const {'status': 'downloading'},
+      reqId,
+    );
+
+    try {
+      final resp = await http.get(uri).timeout(const Duration(seconds: 30));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        if (mounted) {
+          GlassToastService().show(context, 'Не удалось скачать файл');
+        }
+        return;
+      }
+      if (resp.bodyBytes.length > 64 * 1024 * 1024) {
+        if (mounted) {
+          GlassToastService().show(context, 'Файл слишком большой');
+        }
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final outPath = p.join(
+        dir.path,
+        sanitizedName.isNotEmpty ? sanitizedName : 'download.bin',
+      );
+      final file = File(outPath);
+      await file.writeAsBytes(resp.bodyBytes, flush: true);
+      bool opened = false;
+      try {
+        final openRes = await OpenFile.open(file.path);
+        opened = openRes.type == ResultType.done;
+      } catch (_) {}
+      if (!opened) {
+        await SharePlus.instance.share(
+          ShareParams(files: <XFile>[XFile(file.path)]),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        GlassToastService().show(context, 'Ошибка загрузки файла');
+      }
+    }
+  }
+
   Future<void> _handleBridgeMessage(String raw) async {
+    if (!_session.isOnTrustedMiniAppOrigin) return;
     final evt = MiniAppJsBridge.parseBridgeMessage(raw);
     if (evt == null || !mounted) return;
     final data = evt.eventData;
@@ -8282,19 +9532,57 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
 
       case 'web_app_switch_inline_query':
         final query = (data['query'] ?? '').toString();
-        final uname = _session.botUsername.isNotEmpty
-            ? _session.botUsername
-            : _session.launchData.botUsername;
+        final uname = _botDisplayHandle();
         final text = uname.isNotEmpty ? '@$uname $query' : query;
-        if (mounted) {
+        final rawChatTypes = data['chat_types'];
+        final hasChatTypes =
+            (rawChatTypes is List && rawChatTypes.isNotEmpty) ||
+                (rawChatTypes is Map && rawChatTypes.isNotEmpty);
+        if (!mounted) break;
+        if (hasChatTypes || _session.onSwitchInlineQuery == null) {
+          final allowed = DeepLinkService.resolveAllowedChatTypes(rawChatTypes);
+          final rootCtx = Navigator.of(context, rootNavigator: true).context;
+          final pickedChatId = await showMiniAppChatPickerSheet(
+            context,
+            allowUserChats: allowed.allowUsers,
+            allowBotChats: allowed.allowBots,
+            allowGroupChats: allowed.allowGroups,
+            allowChannelChats: allowed.allowChannels,
+          );
+          if (!mounted ||
+              pickedChatId == null ||
+              pickedChatId.trim().isEmpty) {
+            break;
+          }
+          if (pickedChatId == _session.chatId &&
+              _session.onSwitchInlineQuery != null) {
+            _popSheetRoute();
+            _session.onSwitchInlineQuery!(text);
+          } else {
+            _popSheetRoute();
+            if (rootCtx.mounted) {
+              unawaited(
+                DeepLinkService.navigateToChatWithInlinePrefill(
+                  rootCtx,
+                  targetChatId: pickedChatId,
+                  prefillText: text,
+                ),
+              );
+            }
+          }
+        } else {
           _popSheetRoute();
-          _session.onSwitchInlineQuery?.call(text);
+          _session.onSwitchInlineQuery!(text);
         }
         break;
 
       case 'web_app_open_link':
         final linkUrl = (data['url'] ?? '').toString().trim();
-        if (linkUrl.isNotEmpty && mounted) {
+        final parsed = Uri.tryParse(linkUrl);
+        final scheme = parsed?.scheme.toLowerCase() ?? '';
+        if (parsed != null &&
+            (scheme == 'http' || scheme == 'https') &&
+            mounted) {
           await LinkOpener.openUrl(
             context,
             linkUrl,
@@ -8307,11 +9595,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       case 'web_app_open_tg_link':
         final tgUrl = (data['url'] ?? '').toString().trim();
         if (tgUrl.isNotEmpty && mounted) {
-          await LinkOpener.openUrl(
-            context,
-            tgUrl,
-            confirmExternalApp: true,
-          );
+          final hostNav = Navigator.of(context, rootNavigator: true);
+          final hostCtx = hostNav.overlay?.context ?? context;
+          await _minimizeMiniApp();
+          if (hostCtx.mounted) {
+            await LinkOpener.openUrl(
+              hostCtx,
+              tgUrl,
+              confirmExternalApp: true,
+            );
+          }
         }
         break;
 
@@ -8406,6 +9699,24 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         final type = (data['type'] ?? '').toString();
         if (type == 'selection_change') {
           HapticUtils.selection();
+        } else if (type == 'impact') {
+          final style = (data['impact_style'] ?? 'medium').toString();
+          if (style == 'heavy' || style == 'rigid') {
+            HapticUtils.heavy();
+          } else if (style == 'light' || style == 'soft') {
+            HapticUtils.tap();
+          } else {
+            HapticUtils.impact();
+          }
+        } else if (type == 'notification') {
+          final nType = (data['notification_type'] ?? 'success').toString();
+          if (nType == 'error') {
+            HapticUtils.heavy();
+          } else if (nType == 'warning') {
+            HapticUtils.impact();
+          } else {
+            HapticUtils.tap();
+          }
         } else {
           HapticUtils.tap();
         }
@@ -8421,6 +9732,36 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_read_text_from_clipboard':
+        if (!_session.clipboardAccessGrantedInSession) {
+          final botHandle = _botDisplayHandle();
+          final allowed = await showSafariWebAlert<bool>(
+                context: context,
+                tone: SafariAlertTone.permission,
+                iconOverride: Icons.content_paste_rounded,
+                originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
+                title: 'Доступ к буферу обмена?',
+                message:
+                    'Mini App запрашивает доступ к тексту из вашего буфера обмена.',
+                actions: const [
+                  SafariAlertAction<bool>(label: 'Запретить', result: false),
+                  SafariAlertAction<bool>(
+                    label: 'Разрешить',
+                    result: true,
+                    isPrimary: true,
+                  ),
+                ],
+              ) ??
+              false;
+          if (!allowed) {
+            await _dispatchEventToWebView(
+              'clipboard_text_received',
+              const {'data': ''},
+              evt.reqId,
+            );
+            break;
+          }
+          _session.clipboardAccessGrantedInSession = true;
+        }
         final clip = await Clipboard.getData(Clipboard.kTextPlain);
         await _dispatchEventToWebView(
           'clipboard_text_received',
@@ -8430,9 +9771,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_request_write_access':
-        final botHandle = _session.botUsername.isNotEmpty
-            ? _session.botUsername
-            : _session.launchData.botUsername;
+        final botHandle = _botDisplayHandle();
         final allowed = await showSafariWebAlert<bool>(
               context: context,
               tone: SafariAlertTone.permission,
@@ -8451,30 +9790,32 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               ],
             ) ??
             false;
-        if (allowed) {
-          await BotService.setWriteAccess(
-            botId: _session.launchData.botId,
-            allowed: true,
-          );
-        }
+        final bool persisted = allowed
+            ? await BotService.setWriteAccess(
+                botId: _session.launchData.botId,
+                allowed: true,
+              )
+            : false;
         await _dispatchEventToWebView(
           'write_access_requested',
-          {'status': allowed ? 'allowed' : 'cancelled'},
+          {'status': persisted ? 'allowed' : 'cancelled'},
           evt.reqId,
         );
         break;
 
       case 'web_app_request_phone':
-        final botHandle = _session.botUsername.isNotEmpty
-            ? _session.botUsername
-            : _session.launchData.botUsername;
-        final sent = await showSafariWebAlert<bool>(
+        final botHandle = _botDisplayHandle();
+        final userPhone = (AccountManager().currentAccount?.phone ?? '').trim();
+        final confirmMsg = userPhone.isNotEmpty
+            ? 'Mini App запрашивает ваш номер телефона ($userPhone).'
+            : 'Mini App запрашивает ваш номер телефона.';
+        final confirmed = await showSafariWebAlert<bool>(
               context: context,
               tone: SafariAlertTone.permission,
               iconOverride: Icons.phone_rounded,
               originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
               title: 'Поделиться контактом?',
-              message: 'Mini App запрашивает ваш номер телефона.',
+              message: confirmMsg,
               actions: const [
                 SafariAlertAction<bool>(label: 'Отмена', result: false),
                 SafariAlertAction<bool>(
@@ -8485,11 +9826,605 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               ],
             ) ??
             false;
+        bool sent = false;
+        if (confirmed) {
+          sent = await BotService.sharePhoneToMiniApp(
+            botId: _session.launchData.botId,
+          );
+        }
         await _dispatchEventToWebView(
           'contact_requested',
           {'status': sent ? 'sent' : 'cancelled'},
           evt.reqId,
         );
+        break;
+
+      case 'web_app_open_scan_qr_popup':
+        final hint = (data['text'] ?? '').toString().trim();
+        _isQrScannerOpen = true;
+        _qrScannerNavigator = Navigator.of(context, rootNavigator: true);
+        final scanned = await showMiniAppQrScannerSheet(
+          context,
+          hintText: hint.isNotEmpty ? hint : null,
+        );
+        _isQrScannerOpen = false;
+        _qrScannerNavigator = null;
+        if (!mounted) break;
+        if (scanned != null && scanned.isNotEmpty) {
+          await _dispatchEventToWebView(
+            'qr_text_received',
+            {'data': scanned},
+            evt.reqId,
+          );
+        } else {
+          await _dispatchEventToWebView(
+            'scan_qr_popup_closed',
+            const {},
+            evt.reqId,
+          );
+        }
+        break;
+
+      case 'web_app_close_scan_qr_popup':
+        if (_isQrScannerOpen && _qrScannerNavigator != null) {
+          final nav = _qrScannerNavigator!;
+          _isQrScannerOpen = false;
+          _qrScannerNavigator = null;
+          if (nav.mounted && nav.canPop()) {
+            nav.pop();
+          }
+        }
+        break;
+
+      case 'web_app_biometry_get_info':
+        final bioInfo = await _buildBiometryInfo();
+        await _dispatchEventToWebView(
+          'biometry_info_received',
+          bioInfo,
+          evt.reqId,
+        );
+        break;
+
+      case 'web_app_biometry_request_access':
+        final botHandle = _botDisplayHandle();
+        final reason = (data['reason'] ?? '').toString().trim();
+        final allowed = await showSafariWebAlert<bool>(
+              context: context,
+              tone: SafariAlertTone.permission,
+              iconOverride: Icons.fingerprint_rounded,
+              originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
+              title: 'Доступ к биометрии?',
+              message: reason.isNotEmpty
+                  ? reason
+                  : 'Mini App запрашивает доступ к биометрической аутентификации.',
+              actions: const [
+                SafariAlertAction<bool>(label: 'Не разрешать', result: false),
+                SafariAlertAction<bool>(
+                  label: 'Разрешить',
+                  result: true,
+                  isPrimary: true,
+                ),
+              ],
+            ) ??
+            false;
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final uid = _scopedUserId();
+          final botId = _session.launchData.botId.trim();
+          await prefs.setBool('miniapp_bio_${uid}_${botId}_req', true);
+          await prefs.setBool('miniapp_bio_${uid}_${botId}_grant', allowed);
+        } catch (_) {}
+        final updatedBio = await _buildBiometryInfo();
+        await _dispatchEventToWebView(
+          'biometry_info_received',
+          updatedBio,
+          evt.reqId,
+        );
+        break;
+
+      case 'web_app_biometry_request_auth':
+        final uid = _scopedUserId();
+        final botId = _session.launchData.botId.trim();
+        bool granted = false;
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          granted = prefs.getBool('miniapp_bio_${uid}_${botId}_grant') ?? false;
+        } catch (_) {}
+        if (!granted) {
+          await _dispatchEventToWebView(
+            'biometry_auth_requested',
+            const {'status': 'failed', 'token': ''},
+            evt.reqId,
+          );
+          break;
+        }
+        final reason = (data['reason'] ?? '').toString().trim();
+        bool ok = false;
+        try {
+          ok = await LocalAuthentication().authenticate(
+            localizedReason:
+                reason.isNotEmpty ? reason : 'Подтвердите личность',
+            options: const AuthenticationOptions(stickyAuth: true),
+          );
+        } catch (_) {}
+        String token = '';
+        if (ok) {
+          try {
+            token = (await _secureStorage.read(
+                  key: 'miniapp_bio_tok_${uid}_$botId',
+                )) ??
+                '';
+          } catch (_) {}
+        }
+        await _dispatchEventToWebView(
+          'biometry_auth_requested',
+          {'status': ok ? 'authorized' : 'failed', 'token': token},
+          evt.reqId,
+        );
+        break;
+
+      case 'web_app_biometry_update_token':
+        final uid = _scopedUserId();
+        final botId = _session.launchData.botId.trim();
+        bool granted = false;
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          granted = prefs.getBool('miniapp_bio_${uid}_${botId}_grant') ?? false;
+        } catch (_) {}
+        if (!granted) {
+          await _dispatchEventToWebView(
+            'biometry_token_updated',
+            const {'status': 'failed'},
+            evt.reqId,
+          );
+          break;
+        }
+        final newTok = (data['token'] ?? '').toString();
+        try {
+          final key = 'miniapp_bio_tok_${uid}_$botId';
+          if (newTok.isEmpty) {
+            await _secureStorage.delete(key: key);
+            await _dispatchEventToWebView(
+              'biometry_token_updated',
+              const {'status': 'removed'},
+              evt.reqId,
+            );
+          } else {
+            await _secureStorage.write(key: key, value: newTok);
+            await _dispatchEventToWebView(
+              'biometry_token_updated',
+              const {'status': 'updated'},
+              evt.reqId,
+            );
+          }
+        } catch (_) {
+          await _dispatchEventToWebView(
+            'biometry_token_updated',
+            const {'status': 'failed'},
+            evt.reqId,
+          );
+        }
+        break;
+
+      case 'web_app_biometry_open_settings':
+        try {
+          await openAppSettings();
+        } catch (_) {}
+        break;
+
+      case 'web_app_check_location':
+        bool serviceEnabled = false;
+        bool granted = false;
+        bool requested = false;
+        try {
+          serviceEnabled = await Geolocator.isLocationServiceEnabled();
+          final perm = await Geolocator.checkPermission();
+          granted = perm == LocationPermission.whileInUse ||
+              perm == LocationPermission.always;
+          final prefs = await SharedPreferences.getInstance();
+          final uid = _scopedUserId();
+          final botId = _session.launchData.botId.trim();
+          requested =
+              prefs.getBool('miniapp_loc_${uid}_${botId}_req') ?? granted;
+        } catch (_) {}
+        await _dispatchEventToWebView(
+          'location_checked',
+          {
+            'available': serviceEnabled,
+            'access_requested': requested,
+            'access_granted': granted,
+          },
+          evt.reqId,
+        );
+        break;
+
+      case 'web_app_request_location':
+        final botHandle = _botDisplayHandle();
+        final hostKey = _session._hostKeyForUrl(_session.launchData.url);
+        bool? siteAllowed = _session.sessionGeolocationGrants[hostKey];
+        if (siteAllowed == null) {
+          siteAllowed = await _dialogDelegate.onGeolocationPermissionRequest(
+            host: botHandle.isNotEmpty ? '@$botHandle' : _session.displayTitle,
+            isSecure: true,
+          );
+          if (hostKey.isNotEmpty) {
+            _session.sessionGeolocationGrants[hostKey] = siteAllowed;
+          }
+        }
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final uid = _scopedUserId();
+          final botId = _session.launchData.botId.trim();
+          await prefs.setBool('miniapp_loc_${uid}_${botId}_req', true);
+        } catch (_) {}
+        if (!siteAllowed) {
+          await _dispatchEventToWebView(
+            'location_requested',
+            const {'available': false},
+            evt.reqId,
+          );
+          break;
+        }
+        try {
+          final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+          if (!serviceEnabled) {
+            await _dispatchEventToWebView(
+              'location_requested',
+              const {'available': false},
+              evt.reqId,
+            );
+            break;
+          }
+          LocationPermission perm = await Geolocator.checkPermission();
+          if (perm == LocationPermission.denied) {
+            perm = await Geolocator.requestPermission();
+          }
+          if (perm == LocationPermission.deniedForever) {
+            await _dialogDelegate.onSystemPermissionBlocked(
+              resourceLabel: 'геопозиции',
+            );
+            await _dispatchEventToWebView(
+              'location_requested',
+              const {'available': false},
+              evt.reqId,
+            );
+            break;
+          }
+          if (perm != LocationPermission.whileInUse &&
+              perm != LocationPermission.always) {
+            await _dispatchEventToWebView(
+              'location_requested',
+              const {'available': false},
+              evt.reqId,
+            );
+            break;
+          }
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              timeLimit: Duration(seconds: 12),
+            ),
+          );
+          await _dispatchEventToWebView(
+            'location_requested',
+            {
+              'available': true,
+              'latitude': pos.latitude,
+              'longitude': pos.longitude,
+              'altitude': pos.altitude,
+              'course': pos.heading,
+              'speed': pos.speed,
+              'horizontal_accuracy': pos.accuracy,
+              'vertical_accuracy': pos.altitudeAccuracy,
+              'course_accuracy': pos.headingAccuracy,
+              'speed_accuracy': pos.speedAccuracy,
+            },
+            evt.reqId,
+          );
+        } catch (_) {
+          await _dispatchEventToWebView(
+            'location_requested',
+            const {'available': false},
+            evt.reqId,
+          );
+        }
+        break;
+
+      case 'web_app_open_location_settings':
+        try {
+          await Geolocator.openLocationSettings();
+        } catch (_) {}
+        break;
+
+      case 'web_app_start_accelerometer':
+        final rate = (data['refresh_rate'] is num)
+            ? (data['refresh_rate'] as num).round()
+            : 1000;
+        await _session.startAccelerometer(rate, evt.reqId);
+        break;
+
+      case 'web_app_stop_accelerometer':
+        await _session.stopAccelerometer(evt.reqId);
+        break;
+
+      case 'web_app_start_gyroscope':
+        final rate = (data['refresh_rate'] is num)
+            ? (data['refresh_rate'] as num).round()
+            : 1000;
+        await _session.startGyroscope(rate, evt.reqId);
+        break;
+
+      case 'web_app_stop_gyroscope':
+        await _session.stopGyroscope(evt.reqId);
+        break;
+
+      case 'web_app_start_device_orientation':
+        final rate = (data['refresh_rate'] is num)
+            ? (data['refresh_rate'] as num).round()
+            : 1000;
+        final needAbs = data['need_absolute'] == true;
+        await _session.startDeviceOrientation(
+          rate,
+          needAbsolute: needAbs,
+          reqId: evt.reqId,
+        );
+        break;
+
+      case 'web_app_stop_device_orientation':
+        await _session.stopDeviceOrientation(evt.reqId);
+        break;
+
+      case 'web_app_request_fullscreen':
+        _session.applyFullscreenSystemUi(true);
+        _updateMiniAppSafeClearances();
+        await _dispatchEventToWebView(
+          'fullscreen_changed',
+          const {'is_fullscreen': true},
+        );
+        _notifyViewportChanged();
+        break;
+
+      case 'web_app_exit_fullscreen':
+        _session.applyFullscreenSystemUi(false);
+        _updateMiniAppSafeClearances();
+        await _dispatchEventToWebView(
+          'fullscreen_changed',
+          const {'is_fullscreen': false},
+        );
+        _notifyViewportChanged();
+        break;
+
+      case 'web_app_toggle_orientation_lock':
+        _session.applyOrientationLock(data['locked'] == true);
+        break;
+
+      case 'web_app_request_file_download':
+        await _handleDownloadRequestEvent(data, evt.reqId);
+        break;
+
+      case 'web_app_send_prepared_message':
+        final msgId = (data['id'] ?? '').toString().trim();
+        if (msgId.isEmpty) {
+          await _dispatchEventToWebView(
+            'prepared_message_failed',
+            const {'error': 'MESSAGE_EXPIRED'},
+            evt.reqId,
+          );
+          break;
+        }
+        final prepared = await BotService.getPreparedInlineMessage(msgId);
+        if (prepared == null) {
+          await _dispatchEventToWebView(
+            'prepared_message_failed',
+            const {'error': 'MESSAGE_EXPIRED'},
+            evt.reqId,
+          );
+          break;
+        }
+        final allowed = DeepLinkService.resolveAllowedChatTypes(prepared);
+        if (!mounted) break;
+        final selectedChat = await showMiniAppChatPickerSheet(
+          context,
+          allowUserChats: allowed.allowUsers,
+          allowBotChats: allowed.allowBots,
+          allowGroupChats: allowed.allowGroups,
+          allowChannelChats: allowed.allowChannels,
+        );
+        if (selectedChat == null || selectedChat.trim().isEmpty) {
+          await _dispatchEventToWebView(
+            'prepared_message_failed',
+            const {'error': 'USER_DECLINED'},
+            evt.reqId,
+          );
+          break;
+        }
+        final sendRes = await BotService.sendPreparedInlineMessage(
+          id: msgId,
+          chatId: selectedChat,
+        );
+        if (sendRes['success'] == true) {
+          await _dispatchEventToWebView(
+            'prepared_message_sent',
+            const {'sent': true},
+            evt.reqId,
+          );
+        } else {
+          await _dispatchEventToWebView(
+            'prepared_message_failed',
+            {'error': sendRes['message']?.toString() ?? 'SEND_FAILED'},
+            evt.reqId,
+          );
+        }
+        break;
+
+      case 'web_app_share_to_story':
+        final mediaUrl = (data['media_url'] ?? '').toString().trim();
+        final storyText = (data['text'] ?? '').toString().trim();
+        if (mediaUrl.isNotEmpty || storyText.isNotEmpty) {
+          final combined = [storyText, mediaUrl]
+              .where((s) => s.isNotEmpty)
+              .join('\n');
+          try {
+            await SharePlus.instance.share(ShareParams(text: combined));
+          } catch (_) {}
+        }
+        break;
+
+      case 'web_app_check_home_screen':
+        String status = 'missed';
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final uid = _scopedUserId();
+          final botId = _session.launchData.botId.trim();
+          if (prefs.getBool('miniapp_hs_${uid}_$botId') == true) {
+            status = 'added';
+          }
+        } catch (_) {}
+        await _dispatchEventToWebView(
+          'home_screen_checked',
+          {'status': status},
+          evt.reqId,
+        );
+        break;
+
+      case 'web_app_add_to_home_screen':
+        final botHandle = _botDisplayHandle();
+        final ok = await showSafariWebAlert<bool>(
+              context: context,
+              tone: SafariAlertTone.info,
+              iconOverride: Icons.add_to_home_screen_rounded,
+              originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
+              title: 'Добавить на главный экран?',
+              message:
+                  'Быстрый ярлык для «${_session.displayTitle}» будет сохранён.',
+              actions: const [
+                SafariAlertAction<bool>(label: 'Отмена', result: false),
+                SafariAlertAction<bool>(
+                  label: 'Добавить',
+                  result: true,
+                  isPrimary: true,
+                ),
+              ],
+            ) ??
+            false;
+        if (ok) {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            final uid = _scopedUserId();
+            final botId = _session.launchData.botId.trim();
+            await prefs.setBool('miniapp_hs_${uid}_$botId', true);
+          } catch (_) {}
+          await _dispatchEventToWebView('home_screen_added', const {});
+          if (mounted) {
+            GlassToastService().show(context, 'Добавлено на главный экран');
+          }
+        }
+        break;
+
+      case 'web_app_request_emoji_status_access':
+        final botHandle = _botDisplayHandle();
+        final ok = await showSafariWebAlert<bool>(
+              context: context,
+              tone: SafariAlertTone.permission,
+              iconOverride: Icons.emoji_emotions_rounded,
+              originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
+              title: 'Изменение эмодзи-статуса?',
+              message:
+                  'Mini App запрашивает разрешение устанавливать ваш эмодзи-статус.',
+              actions: const [
+                SafariAlertAction<bool>(label: 'Запретить', result: false),
+                SafariAlertAction<bool>(
+                  label: 'Разрешить',
+                  result: true,
+                  isPrimary: true,
+                ),
+              ],
+            ) ??
+            false;
+        if (ok) {
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            final uid = _scopedUserId();
+            final botId = _session.launchData.botId.trim();
+            await prefs.setBool('miniapp_emoji_${uid}_$botId', true);
+          } catch (_) {}
+        }
+        await _dispatchEventToWebView(
+          'emoji_status_access_requested',
+          {'status': ok ? 'allowed' : 'cancelled'},
+          evt.reqId,
+        );
+        break;
+
+      case 'web_app_set_emoji_status':
+        final customEmojiId = (data['custom_emoji_id'] ?? '').toString().trim();
+        final durationSec = (data['duration'] as num?)?.toInt() ?? 0;
+        if (customEmojiId.isEmpty) {
+          await _dispatchEventToWebView(
+            'emoji_status_failed',
+            const {'error': 'SUGGESTED_EMOJI_INVALID'},
+            evt.reqId,
+          );
+          break;
+        }
+        bool hasAccess = false;
+        SharedPreferences? prefs;
+        final uid = _scopedUserId();
+        final botId = _session.launchData.botId.trim();
+        try {
+          prefs = await SharedPreferences.getInstance();
+          hasAccess = prefs.getBool('miniapp_emoji_${uid}_$botId') == true;
+        } catch (_) {}
+        if (!hasAccess && mounted) {
+          final botHandle = _botDisplayHandle();
+          hasAccess = await showSafariWebAlert<bool>(
+                context: context,
+                tone: SafariAlertTone.permission,
+                iconOverride: Icons.emoji_emotions_rounded,
+                originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
+                title: 'Установить эмодзи-статус?',
+                message: 'Mini App предлагает обновить ваш эмодзи-статус.',
+                actions: const [
+                  SafariAlertAction<bool>(label: 'Отмена', result: false),
+                  SafariAlertAction<bool>(
+                    label: 'Установить',
+                    result: true,
+                    isPrimary: true,
+                  ),
+                ],
+              ) ??
+              false;
+          if (hasAccess) {
+            try {
+              await prefs?.setBool('miniapp_emoji_${uid}_$botId', true);
+            } catch (_) {}
+          }
+        }
+        if (!hasAccess) {
+          await _dispatchEventToWebView(
+            'emoji_status_failed',
+            const {'error': 'USER_DECLINED'},
+            evt.reqId,
+          );
+          break;
+        }
+        final emojiRes = await BotService.setUserEmojiStatus(
+          customEmojiId: customEmojiId,
+          durationSeconds: durationSec,
+        );
+        if (emojiRes['success'] == true) {
+          await _dispatchEventToWebView(
+            'emoji_status_set',
+            const {'ok': true},
+            evt.reqId,
+          );
+        } else {
+          await _dispatchEventToWebView(
+            'emoji_status_failed',
+            const {'error': 'SERVER_ERROR'},
+            evt.reqId,
+          );
+        }
         break;
 
       case 'cloud_storage_keys':
@@ -8561,26 +10496,60 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     if (data.containsKey('is_progress_visible')) {
       state.isProgressVisible = data['is_progress_visible'] == true;
     }
+    if (data.containsKey('leave_active')) {
+      state.leaveActive = data['leave_active'] == true;
+    }
+    if (data.containsKey('has_shine_effect')) {
+      state.hasShineEffect = data['has_shine_effect'] == true;
+    }
+    if (data['position'] != null) {
+      final pos = data['position'].toString().trim();
+      if (pos == 'left' || pos == 'right' || pos == 'top' || pos == 'bottom') {
+        state.position = pos;
+      }
+    }
     final t = data['text']?.toString();
     if (t != null && t.isNotEmpty) {
       state.text = t;
     }
-    final c = MiniAppJsBridge.parseHexColor(data['color']?.toString());
-    if (c != null) state.color = c;
-    final tc = MiniAppJsBridge.parseHexColor(data['text_color']?.toString());
-    if (tc != null) state.textColor = tc;
+    if (data['is_default_color'] == true) {
+      state.color = null;
+    } else if (data.containsKey('color')) {
+      final rawColor = data['color']?.toString().trim() ?? '';
+      if (rawColor.isEmpty) {
+        state.color = null;
+      } else {
+        final c = MiniAppJsBridge.parseHexColor(rawColor);
+        if (c != null) state.color = c;
+      }
+    }
+    if (data.containsKey('text_color')) {
+      final rawTc = data['text_color']?.toString().trim() ?? '';
+      if (rawTc.isEmpty) {
+        state.textColor = null;
+      } else {
+        final tc = MiniAppJsBridge.parseHexColor(rawTc);
+        if (tc != null) state.textColor = tc;
+      }
+    }
   }
 
   Color? _resolveSpecialColor(Map<String, dynamic> data) {
-    final key = (data['color_key'] ?? '').toString();
+    String key = (data['color_key'] ?? '').toString().trim();
+    final rawVal = (data['color'] ?? data['value'] ?? '').toString().trim();
+    if (key.isEmpty &&
+        (rawVal == 'bg_color' ||
+            rawVal == 'secondary_bg_color' ||
+            rawVal == 'header_bg_color' ||
+            rawVal == 'bottom_bar_bg_color')) {
+      key = rawVal;
+    }
     if (key.isNotEmpty && mounted) {
       final tp = MiniAppJsBridge.buildThemeParams(Theme.of(context));
       final hex = tp[key];
       if (hex != null) return MiniAppJsBridge.parseHexColor(hex);
     }
-    return MiniAppJsBridge.parseHexColor(
-      (data['color'] ?? data['value'])?.toString(),
-    );
+    return MiniAppJsBridge.parseHexColor(rawVal);
   }
 
   Future<String?> _showNativePopup(Map<String, dynamic> data) async {
@@ -8630,14 +10599,66 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     );
   }
 
-  void _notifyViewportChanged() {
+  void _notifyViewportChanged({bool isStateStable = true}) {
     if (!mounted) return;
-    final h = MediaQuery.sizeOf(context).height;
+    final mq = MediaQuery.of(context);
+    final double usableH = math.max(0.0, mq.size.height - mq.viewInsets.bottom);
     _dispatchEventToWebView('viewport_changed', {
-      'height': h.round(),
+      'height': usableH.round(),
       'is_expanded': true,
-      'is_state_stable': true,
+      'is_state_stable': isStateStable,
     });
+  }
+
+  Future<void> _retryLaunch() async {
+    if (!mounted || _session.isLaunchPending) return;
+    setState(() {
+      _session.launchError = null;
+      _session.webResourceErrorDescription = null;
+      _session.webResourceErrorUrl = null;
+      _session.isLaunchPending = true;
+    });
+    final themeParams = MiniAppJsBridge.buildThemeParams(Theme.of(context));
+    try {
+      final resolved = await BotService.launchWebApp(
+        botId: _session.launchData.botId,
+        url: widget.launchData.url.isNotEmpty ? widget.launchData.url : null,
+        appShortName: _session.appShortName,
+        chatId: _session.chatId,
+        mode: _session.mode,
+        startParam: _session.startParam,
+        themeParams: themeParams,
+      );
+      if (!mounted) return;
+      _session.isLaunchPending = false;
+      if (resolved == null || resolved.url.trim().isEmpty) {
+        setState(() => _session.launchError = 'Не удалось открыть Mini App');
+        return;
+      }
+      _session.launchData = resolved;
+      _session.launchOrigin = BrowserVaultService.normalizeOrigin(resolved.url);
+      _session.currentUrl = resolved.url;
+      _session.initialThemeParams =
+          themeParams.map((k, v) => MapEntry(k, v.toString()));
+      if (resolved.botDisplayName.isNotEmpty) {
+        _session.botName = resolved.botDisplayName;
+      }
+      if (resolved.botUsername.isNotEmpty) {
+        _session.botUsername = resolved.botUsername;
+      }
+      if (resolved.botIsVerified) {
+        _session.isVerified = true;
+      }
+      setState(() {});
+      _maybeInitWebView();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _session.isLaunchPending = false;
+          _session.launchError = 'Не удалось открыть Mini App';
+        });
+      }
+    }
   }
 
   void _popSheetRoute([NavigatorState? targetNavigator]) {
@@ -8654,6 +10675,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   Future<void> _handleSystemBack() async {
+    if (await _session.dismissFullscreenVideoOverlay()) {
+      HapticUtils.tap();
+      return;
+    }
     if (_isMenuOpen) {
       _closeMenu();
       return;
@@ -8683,6 +10708,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       );
       if (!confirm || !mounted) return;
     }
+    await _session.dismissFullscreenVideoOverlay();
+    _session.disposeResources();
     _isMinimizing = false;
     _markRouteSettled(false);
     _setRouteRestingOpaque(false);
@@ -8699,6 +10726,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     if (_isMinimizing) return;
     HapticUtils.selection();
     _closeMenu();
+    await _session.dismissFullscreenVideoOverlay();
+    if (_session.isFullscreen) {
+      _session.applyFullscreenSystemUi(false);
+      unawaited(
+        _dispatchEventToWebView(
+          'fullscreen_changed',
+          const {'is_fullscreen': false},
+        ),
+      );
+    }
     if (!mounted) return;
     unawaited(_session.setWebPageInteractionLocked(false));
     _markRouteSettled(false);
@@ -8728,6 +10765,17 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   Future<void> _openTabsSwitcherFromHeader() async {
     HapticUtils.selection();
     _closeMenu();
+    await _session.dismissFullscreenVideoOverlay();
+    if (_session.isFullscreen) {
+      _session.applyFullscreenSystemUi(false);
+      unawaited(
+        _dispatchEventToWebView(
+          'fullscreen_changed',
+          const {'is_fullscreen': false},
+        ),
+      );
+    }
+    if (!mounted) return;
     if (_session.previewImageBytes == null) {
       await _session.capturePreviewSnapshot().timeout(
             const Duration(milliseconds: 45),
@@ -8781,18 +10829,44 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             }
           },
           onCloseSession: (target) {
-            MiniAppSessionController.instance.closeSession(target);
-            Navigator.of(routeCtx).maybePop();
-            if (identical(target, _session) && mounted) {
-              _attemptClose(force: true);
-            }
+            unawaited(() async {
+              final alreadyConfirmed = target.consumePreconfirmedClose();
+              if (target.closingConfirmation && !alreadyConfirmed) {
+                final origin = target.botUsername.trim().isNotEmpty
+                    ? '@${target.botUsername.trim()}'
+                    : target.displayTitle;
+                final ok = await _confirmMiniAppCloseDialog(
+                  routeCtx,
+                  originLabel: origin,
+                );
+                if (!ok) return;
+              }
+              MiniAppSessionController.instance.closeSession(target);
+              if (routeCtx.mounted) {
+                await Navigator.of(routeCtx).maybePop();
+              }
+              if (identical(target, _session) && mounted) {
+                await _attemptClose(force: true);
+              }
+            }());
           },
           onCloseAll: () {
-            MiniAppSessionController.instance.closeAllMinimized();
-            Navigator.of(routeCtx).maybePop();
-            if (mounted) {
-              _attemptClose(force: true);
-            }
+            unawaited(() async {
+              if (sessions.any((s) => s.closingConfirmation)) {
+                final ok = await _confirmMiniAppCloseDialog(
+                  routeCtx,
+                  closeAll: true,
+                );
+                if (!ok) return;
+              }
+              MiniAppSessionController.instance.closeAllMinimized();
+              if (routeCtx.mounted) {
+                await Navigator.of(routeCtx).maybePop();
+              }
+              if (mounted) {
+                await _attemptClose(force: true);
+              }
+            }());
           },
         ),
       ),
@@ -8889,7 +10963,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
     final bool isPageInteractionBlocked =
         isRouteCovered || _isMenuOpen || activeSafariWebAlertCount.value > 0;
-    unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
+    if (_lastScheduledInteractionLock != isPageInteractionBlocked) {
+      _lastScheduledInteractionLock = isPageInteractionBlocked;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
+      });
+    }
 
     final Color bodyBg = _session.customBackgroundColor ?? resolved.bodyBg;
     final Color bodyFg = _session.customBackgroundColor != null
@@ -9212,9 +11292,19 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                   ),
                 ),
                 const SizedBox(height: 14),
-                FilledButton(
-                  onPressed: () => _attemptClose(force: true),
-                  child: const Text('Закрыть'),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => _attemptClose(force: true),
+                      child: const Text('Закрыть'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: _retryLaunch,
+                      child: const Text('Повторить'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -9252,7 +11342,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                     ),
             ),
           if (standInSnapshot == null &&
-              (!mountWebView || !_session.isWebContentReady))
+              (!mountWebView || !_session.isWebContentReady) &&
+              _session.webResourceErrorDescription == null)
             Positioned.fill(
               child: ColoredBox(
                 color: bodyBg,
@@ -9262,6 +11353,71 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                     bodyColor: bodyBg,
                     foregroundColor: bodyFg,
                     animate: true,
+                  ),
+                ),
+              ),
+            ),
+          if (_session.webResourceErrorDescription != null)
+            Positioned.fill(
+              key: const ValueKey('mini_app_web_error_overlay'),
+              child: ColoredBox(
+                color: bodyBg,
+                child: Center(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      24,
+                      topHudClearance + 16,
+                      24,
+                      bottomClearance + 24,
+                    ),
+                    child: Container(
+                      constraints: const BoxConstraints(maxWidth: 340),
+                      padding: const EdgeInsets.all(22),
+                      decoration: BoxDecoration(
+                        color: resolved.surfaceBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: resolved.divider),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.wifi_off_rounded,
+                            size: 36,
+                            color: palette.subtext,
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Не удалось загрузить страницу',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: bodyFg,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _session.webResourceErrorDescription!,
+                            textAlign: TextAlign.center,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              color: palette.subtext,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            key: const ValueKey('mini_app_web_retry_button'),
+                            onPressed: () =>
+                                unawaited(_session.retryMainFrameLoad()),
+                            icon: const Icon(Icons.refresh_rounded, size: 18),
+                            label: const Text('Повторить'),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -9287,51 +11443,93 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       ),
     );
 
+    final Widget? secondaryBtnWidget = _session.secondaryButton.isVisible
+        ? _buildActionButton(
+            _session.secondaryButton,
+            defaultBg: palette.primary.withValues(alpha: 0.14),
+            defaultFg: palette.primary,
+            onPressed: () => _dispatchEventToWebView(
+              'secondary_button_pressed',
+            ),
+            style: style,
+            isSecondaryGlassCandidate: true,
+          )
+        : null;
+    final Widget? mainBtnWidget = _session.mainButton.isVisible
+        ? _buildActionButton(
+            _session.mainButton,
+            defaultBg: palette.primary,
+            defaultFg: theme.colorScheme.onPrimary,
+            onPressed: () => _dispatchEventToWebView(
+              'main_button_pressed',
+            ),
+            style: style,
+            isSecondaryGlassCandidate: false,
+          )
+        : null;
+
+    Widget? actionButtonsLayout;
+    if (mainBtnWidget != null && secondaryBtnWidget != null) {
+      switch (_session.secondaryButton.position) {
+        case 'top':
+          actionButtonsLayout = Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              secondaryBtnWidget,
+              const SizedBox(height: 8),
+              mainBtnWidget,
+            ],
+          );
+          break;
+        case 'bottom':
+          actionButtonsLayout = Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              mainBtnWidget,
+              const SizedBox(height: 8),
+              secondaryBtnWidget,
+            ],
+          );
+          break;
+        case 'right':
+          actionButtonsLayout = Row(
+            children: [
+              Expanded(child: mainBtnWidget),
+              const SizedBox(width: 10),
+              Expanded(child: secondaryBtnWidget),
+            ],
+          );
+          break;
+        default:
+          actionButtonsLayout = Row(
+            children: [
+              Expanded(child: secondaryBtnWidget),
+              const SizedBox(width: 10),
+              Expanded(child: mainBtnWidget),
+            ],
+          );
+          break;
+      }
+    } else if (secondaryBtnWidget != null) {
+      actionButtonsLayout = secondaryBtnWidget;
+    } else if (mainBtnWidget != null) {
+      actionButtonsLayout = mainBtnWidget;
+    }
+
     final Widget hudOverlayStack = Stack(
       fit: StackFit.expand,
       clipBehavior: Clip.none,
       children: [
-        if (_session.mainButton.isVisible ||
-            _session.secondaryButton.isVisible)
+        if (actionButtonsLayout != null)
           Positioned(
             left: 12,
             right: 12,
             bottom: media.padding.bottom + 10,
             child: IgnorePointer(
               ignoring: isPageInteractionBlocked,
-              child: Row(
-                children: [
-                  if (_session.secondaryButton.isVisible)
-                    Expanded(
-                      child: _buildActionButton(
-                        _session.secondaryButton,
-                        defaultBg: palette.primary.withValues(alpha: 0.14),
-                        defaultFg: palette.primary,
-                        onPressed: () => _dispatchEventToWebView(
-                          'secondary_button_pressed',
-                        ),
-                        style: style,
-                        isSecondaryGlassCandidate: true,
-                      ),
-                    ),
-                  if (_session.secondaryButton.isVisible &&
-                      _session.mainButton.isVisible)
-                    const SizedBox(width: 10),
-                  if (_session.mainButton.isVisible)
-                    Expanded(
-                      child: _buildActionButton(
-                        _session.mainButton,
-                        defaultBg: palette.primary,
-                        defaultFg: theme.colorScheme.onPrimary,
-                        onPressed: () => _dispatchEventToWebView(
-                          'main_button_pressed',
-                        ),
-                        style: style,
-                        isSecondaryGlassCandidate: false,
-                      ),
-                    ),
-                ],
-              ),
+              child: actionButtonsLayout,
             ),
           ),
         Positioned(
@@ -9481,12 +11679,27 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     final bg = state.color ?? defaultBg;
     final fg = state.textColor ?? defaultFg;
     final VoidCallback? tapHandler =
-        (state.isActive && !state.isProgressVisible)
+        (state.isActive && (!state.isProgressVisible || state.leaveActive))
             ? () {
                 HapticUtils.tap();
                 onPressed();
               }
             : null;
+    final Widget progressOrLabel = state.isProgressVisible
+        ? SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+          )
+        : Text(
+            state.text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: tapHandler != null ? fg : fg.withValues(alpha: 0.45),
+            ),
+          );
 
     if (isSecondaryGlassCandidate &&
         state.color == null &&
@@ -9501,7 +11714,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             isLiteOverride: true,
             refractionIndex: 1.06,
             refractionWidth: 14.0,
-            borderWidth: 1.0,
+            borderWidth: state.hasShineEffect ? 1.6 : 1.0,
             color: defaultBg,
           ),
           child: Material(
@@ -9509,27 +11722,22 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             child: InkWell(
               borderRadius: BorderRadius.circular(13),
               onTap: tapHandler,
-              child: Center(
-                child: state.isProgressVisible
-                    ? SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: fg,
+              child: DecoratedBox(
+                decoration: state.hasShineEffect
+                    ? BoxDecoration(
+                        borderRadius: BorderRadius.circular(13),
+                        gradient: LinearGradient(
+                          colors: [
+                            fg.withValues(alpha: 0.14),
+                            Colors.transparent,
+                            fg.withValues(alpha: 0.12),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
                       )
-                    : Text(
-                        state.text,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: tapHandler != null
-                              ? fg
-                              : fg.withValues(alpha: 0.45),
-                        ),
-                      ),
+                    : const BoxDecoration(),
+                child: Center(child: progressOrLabel),
               ),
             ),
           ),
@@ -9544,6 +11752,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         style: FilledButton.styleFrom(
           backgroundColor: bg,
           foregroundColor: fg,
+          side: state.hasShineEffect
+              ? BorderSide(color: fg.withValues(alpha: 0.42), width: 1.2)
+              : null,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(13),
           ),
@@ -9573,6 +11784,16 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     required double bottomClearance,
   }) {
     final uri = Uri.tryParse(_session.launchData.url);
+    final Uri? effectiveLaunchUri = (uri != null &&
+            (uri.scheme == 'http' || uri.scheme == 'https') &&
+            _session.launchData.initData.isNotEmpty)
+        ? MiniAppJsBridge.buildLaunchUriWithHashParams(
+            _session.launchData.url,
+            initData: _session.launchData.initData,
+            themeParams: MiniAppJsBridge.buildThemeParams(Theme.of(context)),
+            platform: _runtimePlatformName,
+          )
+        : uri;
     final host = uri?.host ?? _session.launchData.url;
     final palette = resolved.palette;
     final Color cardBg = resolved.surfaceBg;
@@ -9626,46 +11847,68 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                         ),
                   ),
                 ],
-                const SizedBox(height: 6),
-                Text(
-                  host,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: subtitleColor,
-                      ),
-                ),
+                if (host.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    host,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: subtitleColor,
+                        ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Text(
-                  'Подпись Telegram.WebApp initData сформирована. Встроенный WebView недоступен на текущей платформе — откройте Mini App во внешнем браузере.',
+                  _session.launchError != null
+                      ? _session.launchError!
+                      : 'Подпись Telegram.WebApp initData сформирована. Встроенный WebView недоступен на текущей платформе — откройте Mini App во внешнем браузере.',
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: subtitleColor,
+                        color: _session.launchError != null
+                            ? palette.error
+                            : subtitleColor,
                         height: 1.35,
                       ),
                 ),
                 const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: FilledButton.icon(
-                    onPressed: uri == null
-                        ? null
-                        : () => launchUrl(
-                              uri,
-                              mode: LaunchMode.externalApplication,
-                            ),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: palette.primary,
-                      foregroundColor: palette.onPrimary,
+                if (_session.launchError != null)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: FilledButton.icon(
+                      key: const ValueKey('mini_app_fallback_retry_button'),
+                      onPressed: _retryLaunch,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: palette.primary,
+                        foregroundColor: palette.onPrimary,
+                      ),
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text('Повторить'),
                     ),
-                    icon: iconoir.OpenNewWindow(
-                      width: 17,
-                      height: 17,
-                      color: palette.onPrimary,
+                  )
+                else
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: FilledButton.icon(
+                      onPressed: effectiveLaunchUri == null
+                          ? null
+                          : () => launchUrl(
+                                effectiveLaunchUri,
+                                mode: LaunchMode.externalApplication,
+                              ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: palette.primary,
+                        foregroundColor: palette.onPrimary,
+                      ),
+                      icon: iconoir.OpenNewWindow(
+                        width: 17,
+                        height: 17,
+                        color: palette.onPrimary,
+                      ),
+                      label: const Text('Открыть в браузере'),
                     ),
-                    label: const Text('Открыть в браузере'),
                   ),
-                ),
               ],
             ),
           ),

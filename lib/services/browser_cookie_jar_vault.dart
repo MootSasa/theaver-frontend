@@ -41,12 +41,15 @@ class BrowserCookieJarVault {
   Future<void> snapshotAndClearForOutgoingAccount(String? fromUserId) async {
     final uid = fromUserId?.trim() ?? '';
     if (uid.isNotEmpty) {
+      await BrowserDataService.instance.ensureLoaded(scopeOverride: uid);
       final knownOrigins = BrowserDataService.instance.knownOriginsForAccount(uid);
       final cookies = await _bridge.exportAllCookies(knownOrigins: knownOrigins);
       try {
         final prefs = await SharedPreferences.getInstance();
         if (cookies.isEmpty) {
-          await prefs.remove('$_jarPrefsPrefix$uid');
+          if (knownOrigins.isNotEmpty) {
+            await prefs.remove('$_jarPrefsPrefix$uid');
+          }
         } else {
           final keyBytes = await _vaultService.getOrCreateAccountMasterKey(uid);
           final plain = jsonEncode(cookies.map((c) => c.toJson()).toList());
@@ -89,19 +92,23 @@ class BrowserCookieJarVault {
     } catch (_) {}
   }
 
+  /// Explicitly deletes the stored encrypted cookie jar snapshot for [userId].
+  Future<void> clearAccountJar(String userId) async {
+    final uid = userId.trim();
+    if (uid.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('$_jarPrefsPrefix$uid');
+    } catch (_) {}
+  }
+
   /// Permanently deletes the stored cookie jar snapshot for [userId], and wipes
   /// live WebView storage when [isCurrentAccount] is true.
   Future<void> wipeAccountCookies(
     String userId, {
     bool isCurrentAccount = false,
   }) async {
-    final uid = userId.trim();
-    if (uid.isNotEmpty) {
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('$_jarPrefsPrefix$uid');
-      } catch (_) {}
-    }
+    await clearAccountJar(userId);
     if (isCurrentAccount) {
       await _bridge.clearAllWebData();
     }

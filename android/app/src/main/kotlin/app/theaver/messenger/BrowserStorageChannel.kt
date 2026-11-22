@@ -36,7 +36,7 @@ object BrowserStorageChannel {
     fun register(
         flutterEngine: FlutterEngine,
         context: Context,
-        webViewFinder: (String?) -> WebView?,
+        webViewFinder: (String?, Long?) -> WebView?,
     ) {
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -56,6 +56,7 @@ object BrowserStorageChannel {
 
                 "configureWebViewPolicies" -> {
                     val url = call.argument<String>("url")
+                    val webViewId = call.argument<Number>("webViewId")?.toLong()
                     val acceptThirdParty = call.argument<Boolean>("acceptThirdPartyCookies") ?: true
                     val enableOsAutofill = call.argument<Boolean>("enableOsAutofill") ?: true
                     val blockAllCookies = call.argument<Boolean>("blockAllCookies") ?: false
@@ -63,7 +64,7 @@ object BrowserStorageChannel {
                         try {
                             val cm = CookieManager.getInstance()
                             cm.setAcceptCookie(!blockAllCookies)
-                            val wv = webViewFinder(url)
+                            val wv = webViewFinder(url, webViewId)
                             if (wv != null) {
                                 cm.setAcceptThirdPartyCookies(wv, acceptThirdParty && !blockAllCookies)
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -123,7 +124,7 @@ object BrowserStorageChannel {
                 "clearAllWebData" -> {
                     mainHandler.post {
                         try {
-                            webViewFinder(null)?.clearCache(true)
+                            webViewFinder(null, null)?.clearCache(true)
                         } catch (_: Throwable) {}
                         try {
                             WebStorage.getInstance().deleteAllData()
@@ -131,16 +132,21 @@ object BrowserStorageChannel {
                         try {
                             WebViewDatabase.getInstance(context).clearHttpAuthUsernamePassword()
                         } catch (_: Throwable) {}
-                        try {
-                            val cm = CookieManager.getInstance()
-                            cm.removeAllCookies {
+                        ioExecutor.execute {
+                            clearWebViewCacheDirectory(context)
+                            mainHandler.post {
                                 try {
-                                    cm.flush()
-                                } catch (_: Throwable) {}
-                                result.success(true)
+                                    val cm = CookieManager.getInstance()
+                                    cm.removeAllCookies {
+                                        try {
+                                            cm.flush()
+                                        } catch (_: Throwable) {}
+                                        result.success(true)
+                                    }
+                                } catch (_: Throwable) {
+                                    result.success(false)
+                                }
                             }
-                        } catch (_: Throwable) {
-                            result.success(false)
                         }
                     }
                 }
@@ -150,9 +156,36 @@ object BrowserStorageChannel {
         }
     }
 
+    private fun clearWebViewCacheDirectory(context: Context) {
+        try {
+            val webViewCacheDir = File(context.cacheDir, "WebView")
+            if (!webViewCacheDir.exists()) return
+            if (webViewCacheDir.isDirectory) {
+                webViewCacheDir.listFiles()?.forEach { child ->
+                    deleteRecursivelySafely(child)
+                }
+            } else {
+                webViewCacheDir.delete()
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun deleteRecursivelySafely(file: File) {
+        try {
+            if (file.isDirectory) {
+                file.listFiles()?.forEach { child ->
+                    deleteRecursivelySafely(child)
+                }
+            }
+            file.delete()
+        } catch (_: Throwable) {}
+    }
+
     private fun resolveCookieDbFile(context: Context): File? {
         val dataDir = File(context.applicationInfo.dataDir)
         val candidates = listOf(
+            File(dataDir, "app_webview/Default/Network/Cookies"),
+            File(dataDir, "app_webview/Network/Cookies"),
             File(dataDir, "app_webview/Default/Cookies"),
             File(dataDir, "app_webview/Cookies"),
         )
@@ -167,7 +200,7 @@ object BrowserStorageChannel {
             if (idx <= 0) continue
             val name = part.substring(0, idx).trim()
             val value = part.substring(idx + 1).trim()
-            if (name.isNotEmpty()) {
+            if (name.isNotEmpty() && !out.containsKey(name)) {
                 out[name] = value
             }
         }
@@ -202,7 +235,8 @@ object BrowserStorageChannel {
                         val hostKey = c.getString(0)?.trim().orEmpty()
                         val name = c.getString(1)?.trim().orEmpty()
                         val value = c.getString(2).orEmpty()
-                        val path = c.getString(3)?.trim().orEmpty().ifEmpty { "/" }
+                        val rawPath = c.getString(3)?.trim().orEmpty().ifEmpty { "/" }
+                        val path = if (rawPath.startsWith("/")) rawPath else "/$rawPath"
                         val expiresUtc = c.getLong(4)
                         val isSecure = c.getInt(5) != 0
                         val isHttpOnly = c.getInt(6) != 0
@@ -244,13 +278,17 @@ object BrowserStorageChannel {
                         } ?: continue
                         val h = uri.host?.lowercase(Locale.ROOT).orEmpty()
                         if (h.isEmpty()) continue
+                        val p = uri.path?.trim().orEmpty().ifEmpty { "/" }
                         val header = try {
                             cm.getCookie(probe)
                         } catch (_: Throwable) {
                             null
                         }
                         for ((n, v) in parseCookieHeaderPairs(header)) {
-                            valueLookup["$h|$n"] = v
+                            valueLookup["$h|$p|$n"] = v
+                            if (p == "/" || !valueLookup.containsKey("$h|$n")) {
+                                valueLookup["$h|$n"] = v
+                            }
                         }
                     }
 
@@ -261,7 +299,8 @@ object BrowserStorageChannel {
                         val cleanHost = hostKey.trimStart('.').lowercase(Locale.ROOT)
                         val existingVal = row["value"] as String
                         val resolvedVal = existingVal.ifEmpty {
-                            valueLookup["$cleanHost|$name"].orEmpty()
+                            valueLookup["$cleanHost|$path|$name"]
+                                ?: valueLookup["$cleanHost|$name"].orEmpty()
                         }
                         if (resolvedVal.isEmpty()) continue
                         val key = "${hostKey.lowercase(Locale.ROOT)}|$path|$name"

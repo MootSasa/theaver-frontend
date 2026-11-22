@@ -11,6 +11,7 @@ enum SafariConnectionSecurityLevel {
 enum ExternalSchemeKind {
   none,
   blocked,
+  blobDownload,
   tel,
   mailto,
   sms,
@@ -328,10 +329,34 @@ abstract final class SafariUrlSafetyAnalyzer {
     final scheme = uri.scheme.toLowerCase().trim();
     final rawLower = uri.toString().trim().toLowerCase();
 
+    if (scheme == 'about') {
+      final target = uri.path.trim().toLowerCase();
+      if (target == 'blank' || target == 'srcdoc') {
+        return SafariExternalSchemeInfo(
+          kind: ExternalSchemeKind.none,
+          scheme: scheme,
+          title: '',
+          message: '',
+          confirmLabel: '',
+        );
+      }
+    }
+
+    bool isBlockedDataUri = false;
+    if (scheme == 'data') {
+      final afterColon = rawLower.startsWith('data:')
+          ? rawLower.substring('data:'.length).trimLeft()
+          : '';
+      isBlockedDataUri = afterColon.startsWith('text/html') ||
+          afterColon.startsWith('image/svg+xml') ||
+          afterColon.startsWith('application/xhtml+xml');
+    }
+
     if (scheme == 'javascript' ||
         scheme == 'vbscript' ||
         scheme == 'file' ||
-        (scheme == 'data' && rawLower.startsWith('data:text/html'))) {
+        scheme == 'content' ||
+        isBlockedDataUri) {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.blocked,
         scheme: scheme,
@@ -349,6 +374,17 @@ abstract final class SafariUrlSafetyAnalyzer {
         title: '',
         message: '',
         confirmLabel: '',
+      );
+    }
+
+    if (scheme == 'blob' || scheme == 'data') {
+      return SafariExternalSchemeInfo(
+        kind: ExternalSchemeKind.blobDownload,
+        scheme: scheme,
+        title: 'Открыть или скачать файл?',
+        message:
+            'Страница сформировала локальный ресурс ($scheme:) для просмотра или загрузки.',
+        confirmLabel: 'Открыть',
       );
     }
 

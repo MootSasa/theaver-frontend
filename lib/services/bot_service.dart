@@ -136,7 +136,7 @@ class MiniAppLaunchData {
     required this.initData,
     this.initDataUnsafe = const {},
     this.queryId = '',
-    this.version = '7.10',
+    this.version = '8.0',
     this.botId = '',
     this.botUsername = '',
     this.botDisplayName = '',
@@ -151,12 +151,13 @@ class MiniAppLaunchData {
     final unsafe = json['init_data_unsafe'] is Map
         ? Map<String, dynamic>.from(json['init_data_unsafe'] as Map)
         : const <String, dynamic>{};
+    final rawVersion = (json['version'] ?? '').toString().trim();
     return MiniAppLaunchData(
       url: (json['url'] ?? '').toString().trim(),
       initData: (json['init_data'] ?? '').toString(),
       initDataUnsafe: unsafe,
       queryId: (json['query_id'] ?? '').toString(),
-      version: (json['version'] ?? '7.10').toString(),
+      version: rawVersion.isNotEmpty ? rawVersion : '8.0',
       botId: (bot['id'] ?? '').toString(),
       botUsername: (bot['username'] ?? '').toString(),
       botDisplayName: (bot['display_name'] ?? '').toString(),
@@ -634,6 +635,11 @@ class BotService {
     _directoryCache.clear();
   }
 
+  /// Clears cached bot metadata and Mini App launch entries for [botId].
+  static void invalidateBotCache(String botId) {
+    invalidateBotInfo(botId);
+  }
+
   /// Synchronously seeds the in-memory bot metadata cache (used on app startup).
   static void seedBotInfoCache(BotInfo info, {String? chatId}) {
     if (info.userId.isEmpty) return;
@@ -905,6 +911,108 @@ class BotService {
       debugPrint('BotService.setWriteAccess error: $e');
     }
     return false;
+  }
+
+  /// Shares the authenticated user's phone number with a Mini App bot
+  /// (`POST /api/bots/:botId/webapp/share-phone`).
+  static Future<bool> sharePhoneToMiniApp({required String botId}) async {
+    final cleanId = Uri.encodeComponent(botId.trim());
+    if (cleanId.isEmpty) return false;
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) return false;
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/bots/$cleanId/webapp/share-phone'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: '{}',
+      );
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (response.body.trim().isEmpty) return true;
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return decoded['success'] == true ||
+              decoded['ok'] == true ||
+              !decoded.containsKey('success');
+        }
+        return true;
+      }
+    } catch (e) {
+      debugPrint('BotService.sharePhoneToMiniApp error: $e');
+    }
+    return false;
+  }
+
+  /// Fetches a prepared inline message preview (`GET /api/bots/prepared-messages/:id`).
+  static Future<Map<String, dynamic>?> getPreparedInlineMessage(
+    String id,
+  ) async {
+    final cleanId = Uri.encodeComponent(id.trim());
+    if (cleanId.isEmpty) return null;
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) return null;
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/bots/prepared-messages/$cleanId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        if (decoded is Map) {
+          return Map<String, dynamic>.from(decoded);
+        }
+      }
+    } catch (e) {
+      debugPrint('BotService.getPreparedInlineMessage error: $e');
+    }
+    return null;
+  }
+
+  /// Sends a prepared inline message to [chatId]
+  /// (`POST /api/bots/prepared-messages/:id/send`).
+  static Future<Map<String, dynamic>> sendPreparedInlineMessage({
+    required String id,
+    required String chatId,
+  }) async {
+    final cleanId = Uri.encodeComponent(id.trim());
+    final trimmedChatId = chatId.trim();
+    if (cleanId.isEmpty || trimmedChatId.isEmpty) {
+      return {'success': false, 'message': 'Invalid prepared message request'};
+    }
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final response = await http.post(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/bots/prepared-messages/$cleanId/send',
+        ),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'chat_id': trimmedChatId}),
+      );
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (e) {
+      debugPrint('BotService.sendPreparedInlineMessage error: $e');
+    }
+    return {'success': false, 'message': 'Не удалось отправить сообщение'};
   }
 
   /// Lists CloudStorage keys for a Mini App (`GET /api/bots/:botId/webapp/storage/keys`).
@@ -1466,6 +1574,81 @@ class BotService {
     return {'success': false, 'message': 'Не удалось удалить Mini App'};
   }
 
+  /// Returns cached bots that expose a Mini App / menu shortcut (`attach_menu` / quick launch).
+  static List<BotInfo> getCachedAttachMenuBots() {
+    final seenIds = <String>{};
+    final out = <BotInfo>[];
+    void consider(BotInfo bot) {
+      if (bot.userId.isEmpty) return;
+      if (!(bot.hasAnyWebApp || bot.hasMainWebApp || bot.menuButton.isWebApp)) {
+        return;
+      }
+      if (seenIds.add(bot.userId)) {
+        out.add(bot);
+      }
+    }
+
+    for (final entry in _directoryCache.values) {
+      if (DateTime.now().difference(entry.fetchedAt) <= _directoryCacheTtl) {
+        for (final b in entry.items) {
+          consider(b);
+        }
+      }
+    }
+    for (final b in _botInfoCache.values) {
+      consider(b);
+    }
+    return out;
+  }
+
+  /// Fetches user-available bots with Mini Apps (`menu_button` / `has_main_web_app`)
+  /// for attachment picker / quick-launch shortcuts.
+  static Future<List<BotInfo>> getAttachMenuBots({
+    int limit = 16,
+    bool forceRefresh = false,
+  }) async {
+    final bots = await getBotsDirectory(
+      appsOnly: true,
+      limit: limit,
+      forceRefresh: forceRefresh,
+    );
+    final out = <BotInfo>[];
+    for (final b in bots) {
+      if (b.hasAnyWebApp || b.hasMainWebApp || b.menuButton.isWebApp) {
+        seedBotInfoCache(b);
+        out.add(b);
+      }
+    }
+    return out;
+  }
+
+  /// Resolves a bot by `@username` using in-memory caches first, then directory search.
+  static Future<BotInfo?> resolveBotByUsername(String username) async {
+    final clean =
+        username.trim().replaceFirst(RegExp(r'^@+'), '').toLowerCase();
+    if (clean.isEmpty) return null;
+    for (final b in _botInfoCache.values) {
+      if ((b.username ?? '').toLowerCase() == clean) {
+        return b;
+      }
+    }
+    for (final entry in _directoryCache.values) {
+      for (final b in entry.items) {
+        if ((b.username ?? '').toLowerCase() == clean) {
+          return b;
+        }
+      }
+    }
+    final dir = await getBotsDirectory(query: clean, limit: 10);
+    for (final b in dir) {
+      if ((b.username ?? '').toLowerCase() == clean) {
+        seedBotInfoCache(b);
+        return b;
+      }
+    }
+    return null;
+  }
+
   /// Fetches THV invoice details and caller's current THV balance (`GET /api/invoices/:slug`).
   static Future<Map<String, dynamic>> getInvoice(String slug) async {
     try {
@@ -1478,10 +1661,20 @@ class BotService {
         Uri.parse('${AppConfig.baseUrl}/api/invoices/$cleanSlug'),
         headers: {'Authorization': 'Bearer $token'},
       );
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic>) {
-        return decoded;
+      if (response.body.trim().isNotEmpty) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {
+            ...Map<String, dynamic>.from(decoded),
+            'http_status': response.statusCode,
+          };
+        }
       }
+      return {
+        'success': false,
+        'http_status': response.statusCode,
+        'message': 'Не удалось загрузить счёт',
+      };
     } catch (e) {
       debugPrint('BotService.getInvoice error: $e');
     }
@@ -1489,28 +1682,101 @@ class BotService {
   }
 
   /// Pays a THV invoice atomically (`POST /api/invoices/:slug/pay`).
-  static Future<Map<String, dynamic>> payInvoice(String slug) async {
+  static Future<Map<String, dynamic>> payInvoice(
+    String slug, {
+    String? pin,
+  }) async {
     try {
       final token = await AuthService.getToken();
       if (token == null) {
         return {'success': false, 'message': 'Not authenticated'};
       }
       final cleanSlug = Uri.encodeComponent(slug.trim());
+      final payload = (pin != null && pin.isNotEmpty)
+          ? {'pin': pin}
+          : const <String, dynamic>{};
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/invoices/$cleanSlug/pay'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: '{}',
+        body: jsonEncode(payload),
       );
-      final decoded = jsonDecode(response.body);
-      if (decoded is Map<String, dynamic>) {
-        return decoded;
+      if (response.body.trim().isNotEmpty) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {
+            ...Map<String, dynamic>.from(decoded),
+            'http_status': response.statusCode,
+          };
+        }
       }
+      return {
+        'success': false,
+        'http_status': response.statusCode,
+        'message': 'Не удалось оплатить счёт',
+      };
     } catch (e) {
       debugPrint('BotService.payInvoice error: $e');
     }
     return {'success': false, 'message': 'Не удалось оплатить счёт'};
+  }
+
+  /// Updates the current user's emoji status via `PUT /api/user/appearance`
+  /// for Mini App v8.0 (`Telegram.WebApp.setEmojiStatus`).
+  static Future<Map<String, dynamic>> setUserEmojiStatus({
+    required String customEmojiId,
+    int durationSeconds = 0,
+  }) async {
+    final trimmed = customEmojiId.trim();
+    if (trimmed.isEmpty) {
+      return {'success': false, 'message': 'Invalid custom_emoji_id'};
+    }
+    try {
+      final token = await AuthService.getToken();
+      if (token == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+      final body = <String, dynamic>{};
+      final parsedStickerId = int.tryParse(trimmed);
+      if (parsedStickerId != null && parsedStickerId > 0) {
+        body['emoji_status_sticker_id'] = parsedStickerId;
+      } else {
+        body['emoji_status_unicode'] = trimmed;
+      }
+      if (durationSeconds > 0) {
+        body['emoji_status_until'] = DateTime.now()
+            .toUtc()
+            .add(Duration(seconds: durationSeconds))
+            .toIso8601String();
+      } else {
+        body['clear_emoji_status_until'] = true;
+      }
+      final response = await http.put(
+        Uri.parse('${AppConfig.baseUrl}/api/user/appearance'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(body),
+      );
+      if (response.body.trim().isNotEmpty) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map) {
+          return {
+            ...Map<String, dynamic>.from(decoded),
+            'http_status': response.statusCode,
+          };
+        }
+      }
+      return {
+        'success': response.statusCode >= 200 && response.statusCode < 300,
+        'http_status': response.statusCode,
+      };
+    } catch (e) {
+      debugPrint('BotService.setUserEmojiStatus error: $e');
+    }
+    return {'success': false, 'message': 'Не удалось обновить статус'};
   }
 }
