@@ -735,10 +735,65 @@ void main() {
 
           final nameInput = find.byKey(const ValueKey('browser_contact_name_input'));
           await tester.ensureVisible(nameInput);
-          await tester.enterText(nameInput, 'Alexey Ivanov');
+          await tester.pumpAndSettle();
+          await tester.tap(nameInput);
+          await tester.pump();
+          expect(tester.testTextInput.hasAnyClients, isTrue);
+          final EditableTextState initialNameEditableState = tester.state(
+            find.descendant(of: nameInput, matching: find.byType(EditableText)),
+          );
+
+          // Simulate opening soft keyboard so the ListView viewport shrinks.
+          tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+          addTearDown(tester.view.resetViewInsets);
           await tester.pumpAndSettle();
 
+          // Type character-by-character / IME composing without dismissing keyboard.
+          tester.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'A',
+              selection: TextSelection.collapsed(offset: 1),
+              composing: TextRange(start: 0, end: 1),
+            ),
+          );
+          await tester.pump();
+          expect(tester.testTextInput.hasAnyClients, isTrue);
+          expect(
+            identical(
+              tester.state(
+                find.descendant(
+                  of: nameInput,
+                  matching: find.byType(EditableText),
+                ),
+              ),
+              initialNameEditableState,
+            ),
+            isTrue,
+          );
+
+          tester.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'Alexey Ivanov',
+              selection: TextSelection.collapsed(offset: 13),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.testTextInput.hasAnyClients, isTrue);
+          expect(
+            identical(
+              tester.state(
+                find.descendant(
+                  of: nameInput,
+                  matching: find.byType(EditableText),
+                ),
+              ),
+              initialNameEditableState,
+            ),
+            isTrue,
+          );
+
           await tester.ensureVisible(saveBtnFinder);
+          await tester.pumpAndSettle();
           await tester.tap(saveBtnFinder);
           await tester.pumpAndSettle();
           _expectNoTranslucentOpacityAboveGlass(tester);
@@ -753,8 +808,27 @@ void main() {
 
           final emailInput = find.byKey(const ValueKey('browser_contact_email_input'));
           await tester.ensureVisible(emailInput);
-          await tester.enterText(emailInput, 'alexey@example.org');
           await tester.pumpAndSettle();
+          await tester.tap(emailInput);
+          await tester.pump();
+          expect(tester.testTextInput.hasAnyClients, isTrue);
+          tester.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'a',
+              selection: TextSelection.collapsed(offset: 1),
+              composing: TextRange(start: 0, end: 1),
+            ),
+          );
+          await tester.pump();
+          expect(tester.testTextInput.hasAnyClients, isTrue);
+          tester.testTextInput.updateEditingValue(
+            const TextEditingValue(
+              text: 'alexey@example.org',
+              selection: TextSelection.collapsed(offset: 18),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.testTextInput.hasAnyClients, isTrue);
           expect(
             find.descendant(of: saveBtnFinder, matching: find.text('Сохранить')),
             findsOneWidget,
@@ -763,6 +837,9 @@ void main() {
             find.descendant(of: saveBtnFinder, matching: find.text('Сохранено')),
             findsNothing,
           );
+
+          tester.view.resetViewInsets();
+          await tester.pumpAndSettle();
 
           // Advance past the 3s GlassToastService timer before tearing down.
           await tester.pump(const Duration(seconds: 4));
@@ -823,6 +900,45 @@ void main() {
         findsNothing,
       );
       expect(find.byKey(const ValueKey('browser_vault_add_password_btn')), findsOneWidget);
+
+      // Verify editing Contact Card inside modal sheet keeps soft keyboard open.
+      await tester.tap(find.text('Автозаполнение'), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      final modalNameInput = find.byKey(const ValueKey('browser_contact_name_input'));
+      await tester.ensureVisible(modalNameInput);
+      await tester.pumpAndSettle();
+      await tester.tap(modalNameInput);
+      await tester.pump();
+      expect(tester.testTextInput.hasAnyClients, isTrue);
+      final EditableTextState modalNameEditable = tester.state(
+        find.descendant(of: modalNameInput, matching: find.byType(EditableText)),
+      );
+      tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pumpAndSettle();
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: 'M',
+          selection: TextSelection.collapsed(offset: 1),
+          composing: TextRange(start: 0, end: 1),
+        ),
+      );
+      await tester.pump();
+      expect(tester.testTextInput.hasAnyClients, isTrue);
+      expect(
+        identical(
+          tester.state(
+            find.descendant(
+              of: modalNameInput,
+              matching: find.byType(EditableText),
+            ),
+          ),
+          modalNameEditable,
+        ),
+        isTrue,
+      );
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
 
       await tester.tap(sheetClose);
       await tester.pumpAndSettle();

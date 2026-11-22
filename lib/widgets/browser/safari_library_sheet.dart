@@ -895,6 +895,7 @@ class SafariFeatherScrollView extends StatefulWidget {
 }
 
 class _SafariFeatherScrollViewState extends State<SafariFeatherScrollView> {
+  final GlobalKey _scrollChildKey = GlobalKey();
   double _topStrength = 0.0;
   double _bottomStrength = 0.0;
   bool _postFrameScheduled = false;
@@ -955,18 +956,20 @@ class _SafariFeatherScrollViewState extends State<SafariFeatherScrollView> {
     final style = TheavSurfaceStyle.of(context);
     final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
     final Color sheetTint = style.overlayFill;
-    final bool needsMask =
-        widget.enableShaderMask && (_topStrength > 0.01 || _bottomStrength > 0.01);
+    final bool hasFade = _topStrength > 0.01 || _bottomStrength > 0.01;
 
-    final Widget scrollChild = NotificationListener<ScrollMetricsNotification>(
-      onNotification: (_) {
-        _scheduleEdgeSync();
-        return false;
-      },
-      child: widget.child,
+    final Widget scrollChild = KeyedSubtree(
+      key: _scrollChildKey,
+      child: NotificationListener<ScrollMetricsNotification>(
+        onNotification: (_) {
+          _scheduleEdgeSync();
+          return false;
+        },
+        child: widget.child,
+      ),
     );
 
-    final Widget maskedContent = needsMask
+    final Widget maskedContent = widget.enableShaderMask
         ? LayoutBuilder(
             builder: (context, constraints) {
               final double h = constraints.maxHeight.isFinite &&
@@ -977,22 +980,30 @@ class _SafariFeatherScrollViewState extends State<SafariFeatherScrollView> {
               final double bottomFrac = (26.0 / h).clamp(0.02, 0.22);
               return ShaderMask(
                 blendMode: BlendMode.dstIn,
-                shaderCallback: (bounds) => LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  stops: <double>[
-                    0.0,
-                    topFrac,
-                    1.0 - bottomFrac,
-                    1.0,
-                  ],
-                  colors: <Color>[
-                    Colors.white.withValues(alpha: 1.0 - _topStrength * 0.85),
-                    Colors.white,
-                    Colors.white,
-                    Colors.white.withValues(alpha: 1.0 - _bottomStrength * 0.85),
-                  ],
-                ).createShader(bounds),
+                shaderCallback: (bounds) => (hasFade
+                        ? LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            stops: <double>[
+                              0.0,
+                              topFrac,
+                              1.0 - bottomFrac,
+                              1.0,
+                            ],
+                            colors: <Color>[
+                              Colors.white
+                                  .withValues(alpha: 1.0 - _topStrength * 0.85),
+                              Colors.white,
+                              Colors.white,
+                              Colors.white.withValues(
+                                alpha: 1.0 - _bottomStrength * 0.85,
+                              ),
+                            ],
+                          )
+                        : const LinearGradient(
+                            colors: <Color>[Colors.white, Colors.white],
+                          ))
+                    .createShader(bounds),
                 child: scrollChild,
               );
             },

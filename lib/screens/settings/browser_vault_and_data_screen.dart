@@ -171,6 +171,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   bool _contactEnabled = true;
   BrowserContactProfile _savedContactProfile = const BrowserContactProfile();
   bool _hasSavedContactSnapshot = false;
+  final ValueNotifier<bool> _contactDirtyNotifier = ValueNotifier<bool>(false);
+  final FocusNode _nameFocusNode = FocusNode();
+  final FocusNode _emailFocusNode = FocusNode();
+  final FocusNode _phoneFocusNode = FocusNode();
 
   @override
   void initState() {
@@ -179,9 +183,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     _pageCtrl = PageController(initialPage: _activeSection);
     _searchQuery = widget.initialSearchQuery?.trim() ?? '';
     _searchCtrl = TextEditingController(text: _searchQuery);
-    _nameCtrl = TextEditingController()..addListener(_onContactInputChanged);
-    _emailCtrl = TextEditingController()..addListener(_onContactInputChanged);
-    _phoneCtrl = TextEditingController()..addListener(_onContactInputChanged);
+    _nameCtrl = TextEditingController()..addListener(_syncContactDirtyFlag);
+    _emailCtrl = TextEditingController()..addListener(_syncContactDirtyFlag);
+    _phoneCtrl = TextEditingController()..addListener(_syncContactDirtyFlag);
 
     BrowserVaultService.instance.addListener(_onServiceChanged);
     BrowserSiteSettingsService.instance.addListener(_onServiceChanged);
@@ -205,6 +209,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     _nameCtrl.text = profile.fullName;
     _emailCtrl.text = profile.email;
     _phoneCtrl.text = profile.phone;
+    _syncContactDirtyFlag();
     setState(() {
       _contactEnabled = profile.enabled;
       _contactAutofillCardLoaded = true;
@@ -219,9 +224,13 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     BrowserVaultService.instance.removeListener(_onServiceChanged);
     BrowserSiteSettingsService.instance.removeListener(_onServiceChanged);
     BrowserDataService.instance.removeListener(_onServiceChanged);
-    _nameCtrl.removeListener(_onContactInputChanged);
-    _emailCtrl.removeListener(_onContactInputChanged);
-    _phoneCtrl.removeListener(_onContactInputChanged);
+    _nameCtrl.removeListener(_syncContactDirtyFlag);
+    _emailCtrl.removeListener(_syncContactDirtyFlag);
+    _phoneCtrl.removeListener(_syncContactDirtyFlag);
+    _contactDirtyNotifier.dispose();
+    _nameFocusNode.dispose();
+    _emailFocusNode.dispose();
+    _phoneFocusNode.dispose();
     _pageCtrl.dispose();
     _searchCtrl.dispose();
     _nameCtrl.dispose();
@@ -237,19 +246,17 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     if (mounted) setState(() {});
   }
 
-  void _onContactInputChanged() {
-    if (mounted) setState(() {});
-  }
-
-  bool get _hasUnsavedContactChanges =>
+  bool _computeHasUnsavedContactChanges() =>
       _nameCtrl.text.trim() != _savedContactProfile.fullName.trim() ||
       _emailCtrl.text.trim() != _savedContactProfile.email.trim() ||
       _phoneCtrl.text.trim() != _savedContactProfile.phone.trim();
 
-  bool get _isContactCardSaved =>
-      _contactAutofillCardLoaded &&
-      !_hasUnsavedContactChanges &&
-      _hasSavedContactSnapshot;
+  void _syncContactDirtyFlag() {
+    final bool dirty = _computeHasUnsavedContactChanges();
+    if (_contactDirtyNotifier.value != dirty) {
+      _contactDirtyNotifier.value = dirty;
+    }
+  }
 
   void _selectSection(int idx) {
     if (_activeSection == idx) return;
@@ -444,6 +451,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     required TheavPalette palette,
     required IconData icon,
     required TextEditingController controller,
+    FocusNode? focusNode,
     required String hintText,
     TextInputType? keyboardType,
     bool obscureText = false,
@@ -459,6 +467,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             child: TextField(
               key: fieldKey,
               controller: controller,
+              focusNode: focusNode,
               keyboardType: keyboardType,
               obscureText: obscureText,
               cursorColor: palette.primary,
@@ -843,10 +852,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     );
     await BrowserVaultService.instance.saveContactProfile(profile);
     if (!mounted) return;
-    setState(() {
-      _savedContactProfile = profile;
-      _hasSavedContactSnapshot = true;
-    });
+    _savedContactProfile = profile;
+    _hasSavedContactSnapshot = true;
+    _syncContactDirtyFlag();
+    setState(() {});
     if (showToast) {
       GlassToastService().show(
         context,
@@ -989,11 +998,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final mq = MediaQuery.of(context);
-    final double modalContentHeight = math.min(
-      450.0,
-      math.max(180.0, mq.size.height * 0.56 - mq.viewInsets.bottom * 0.45),
-    );
+    final double modalContentHeight = widget.isModalSheet
+        ? () {
+            final mq = MediaQuery.of(context);
+            final double availAfterKeyboard =
+                mq.size.height * 0.86 - mq.viewInsets.bottom - 190.0;
+            return math.min(
+              450.0,
+              math.max(
+                140.0,
+                math.min(mq.size.height * 0.56, availAfterKeyboard),
+              ),
+            );
+          }()
+        : 0.0;
     final double hPad = widget.isModalSheet ? 0.0 : 16.0;
     final bool showSearchBar =
         (_activeSection == 0 && _unlocked) || _activeSection == 2;
@@ -1149,7 +1167,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: modalContentHeight,
-                minHeight: math.min(200.0, modalContentHeight),
+                minHeight: math.min(140.0, modalContentHeight),
               ),
               child: SizedBox(
                 height: modalContentHeight,
@@ -1421,29 +1439,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final double hPad = widget.isModalSheet ? 0.0 : 16.0;
     final Color cardFill = _cardFill(style);
     final Color dividerTint = _dividerTint(style);
-    final bool contactSaved = _isContactCardSaved;
-    final bool canSaveContact = _hasUnsavedContactChanges;
-    final Color savePillBg = contactSaved
-        ? pal.primary.withValues(alpha: style.isDark ? 0.22 : 0.13)
-        : (canSaveContact
-            ? pal.primary
-            : pal.primary.withValues(alpha: style.isDark ? 0.38 : 0.42));
-    final Color savePillFg = contactSaved
-        ? pal.primary
-        : (canSaveContact
-            ? pal.onPrimary
-            : pal.onPrimary.withValues(alpha: 0.85));
 
     return SafariFeatherScrollView(
       controller: _autofillScrollCtrl,
       edgeKeyPrefix: 'browser_vault_autofill',
-      // ShaderMask introduces an offscreen layer that blocks LiquidGlassSwitch
-      // backdrop sampling in GlassMode; sibling LiquidGlassScrollEdge stays on.
-      enableShaderMask: !style.isGlass,
-      child: ListView(
+      // Keep interactive TextFields and LiquidGlassSwitch out of ShaderMask so
+      // IME focus, TextInputConnection, and backdrop sampling remain intact.
+      enableShaderMask: false,
+      child: SingleChildScrollView(
         controller: _autofillScrollCtrl,
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.fromLTRB(hPad, 6, hPad, 22),
-        children: [
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
           TheavInsetGroup(
             margin: EdgeInsets.zero,
             borderRadius: 20.0,
@@ -1526,6 +1535,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 palette: pal,
                 icon: Icons.badge_outlined,
                 controller: _nameCtrl,
+                focusNode: _nameFocusNode,
                 hintText: 'Имя и фамилия',
               ),
               _buildSheetFieldRow(
@@ -1533,6 +1543,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 palette: pal,
                 icon: Icons.alternate_email_rounded,
                 controller: _emailCtrl,
+                focusNode: _emailFocusNode,
                 hintText: 'Email',
                 keyboardType: TextInputType.emailAddress,
               ),
@@ -1541,6 +1552,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 palette: pal,
                 icon: Icons.phone_outlined,
                 controller: _phoneCtrl,
+                focusNode: _phoneFocusNode,
                 hintText: 'Телефон',
                 keyboardType: TextInputType.phone,
               ),
@@ -1566,69 +1578,97 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  height: 38.0,
-                  decoration: BoxDecoration(
-                    color: savePillBg,
-                    borderRadius: BorderRadius.circular(19.0),
-                  ),
-                  child: Material(
-                    key: const ValueKey('browser_contact_save_btn'),
-                    type: MaterialType.transparency,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(19.0),
-                      onTap: canSaveContact
-                          ? () {
-                              HapticUtils.tap();
-                              unawaited(_saveContactProfile());
-                            }
-                          : null,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10.0),
-                        child: Center(
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 160),
-                            switchInCurve: Curves.easeOutCubic,
-                            switchOutCurve: Curves.easeInCubic,
-                            child: Row(
-                              key: ValueKey<bool>(contactSaved),
-                              mainAxisSize: MainAxisSize.min,
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  contactSaved
-                                      ? Icons.check_circle_rounded
-                                      : Icons.check_rounded,
-                                  size: 16.0,
-                                  color: savePillFg,
-                                ),
-                                const SizedBox(width: 5),
-                                Flexible(
-                                  child: Text(
-                                    contactSaved ? 'Сохранено' : 'Сохранить',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: _contactDirtyNotifier,
+                  builder: (context, canSaveContact, _) {
+                    final bool contactSaved = _contactAutofillCardLoaded &&
+                        !canSaveContact &&
+                        _hasSavedContactSnapshot;
+                    final Color savePillBg = contactSaved
+                        ? pal.primary.withValues(
+                            alpha: style.isDark ? 0.22 : 0.13,
+                          )
+                        : (canSaveContact
+                            ? pal.primary
+                            : pal.primary.withValues(
+                                alpha: style.isDark ? 0.38 : 0.42,
+                              ));
+                    final Color savePillFg = contactSaved
+                        ? pal.primary
+                        : (canSaveContact
+                            ? pal.onPrimary
+                            : pal.onPrimary.withValues(alpha: 0.85));
+
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      height: 38.0,
+                      decoration: BoxDecoration(
+                        color: savePillBg,
+                        borderRadius: BorderRadius.circular(19.0),
+                      ),
+                      child: Material(
+                        key: const ValueKey('browser_contact_save_btn'),
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(19.0),
+                          onTap: canSaveContact
+                              ? () {
+                                  HapticUtils.tap();
+                                  unawaited(_saveContactProfile());
+                                }
+                              : null,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10.0,
+                            ),
+                            child: Center(
+                              child: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 160),
+                                switchInCurve: Curves.easeOutCubic,
+                                switchOutCurve: Curves.easeInCubic,
+                                child: Row(
+                                  key: ValueKey<bool>(contactSaved),
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      contactSaved
+                                          ? Icons.check_circle_rounded
+                                          : Icons.check_rounded,
+                                      size: 16.0,
                                       color: savePillFg,
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w600,
                                     ),
-                                  ),
+                                    const SizedBox(width: 5),
+                                    Flexible(
+                                      child: Text(
+                                        contactSaved
+                                            ? 'Сохранено'
+                                            : 'Сохранить',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: savePillFg,
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ],
           ),
         ],
+        ),
       ),
     );
   }
