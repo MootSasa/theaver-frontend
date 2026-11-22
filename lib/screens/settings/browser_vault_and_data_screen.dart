@@ -169,6 +169,8 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       <BrowserSavedCredential>[];
   bool _contactAutofillCardLoaded = false;
   bool _contactEnabled = true;
+  BrowserContactProfile _savedContactProfile = const BrowserContactProfile();
+  bool _hasSavedContactSnapshot = false;
 
   @override
   void initState() {
@@ -177,9 +179,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     _pageCtrl = PageController(initialPage: _activeSection);
     _searchQuery = widget.initialSearchQuery?.trim() ?? '';
     _searchCtrl = TextEditingController(text: _searchQuery);
-    _nameCtrl = TextEditingController();
-    _emailCtrl = TextEditingController();
-    _phoneCtrl = TextEditingController();
+    _nameCtrl = TextEditingController()..addListener(_onContactInputChanged);
+    _emailCtrl = TextEditingController()..addListener(_onContactInputChanged);
+    _phoneCtrl = TextEditingController()..addListener(_onContactInputChanged);
 
     BrowserVaultService.instance.addListener(_onServiceChanged);
     BrowserSiteSettingsService.instance.addListener(_onServiceChanged);
@@ -196,6 +198,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     ]);
     final profile = await BrowserVaultService.instance.getContactProfile();
     if (!mounted) return;
+    _savedContactProfile = profile;
+    _hasSavedContactSnapshot = profile.fullName.trim().isNotEmpty ||
+        profile.email.trim().isNotEmpty ||
+        profile.phone.trim().isNotEmpty;
     _nameCtrl.text = profile.fullName;
     _emailCtrl.text = profile.email;
     _phoneCtrl.text = profile.phone;
@@ -213,6 +219,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     BrowserVaultService.instance.removeListener(_onServiceChanged);
     BrowserSiteSettingsService.instance.removeListener(_onServiceChanged);
     BrowserDataService.instance.removeListener(_onServiceChanged);
+    _nameCtrl.removeListener(_onContactInputChanged);
+    _emailCtrl.removeListener(_onContactInputChanged);
+    _phoneCtrl.removeListener(_onContactInputChanged);
     _pageCtrl.dispose();
     _searchCtrl.dispose();
     _nameCtrl.dispose();
@@ -227,6 +236,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   void _onServiceChanged() {
     if (mounted) setState(() {});
   }
+
+  void _onContactInputChanged() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _hasUnsavedContactChanges =>
+      _nameCtrl.text.trim() != _savedContactProfile.fullName.trim() ||
+      _emailCtrl.text.trim() != _savedContactProfile.email.trim() ||
+      _phoneCtrl.text.trim() != _savedContactProfile.phone.trim();
+
+  bool get _isContactCardSaved =>
+      _contactAutofillCardLoaded &&
+      !_hasUnsavedContactChanges &&
+      _hasSavedContactSnapshot;
 
   void _selectSection(int idx) {
     if (_activeSection == idx) return;
@@ -811,7 +834,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     );
   }
 
-  Future<void> _saveContactProfile() async {
+  Future<void> _saveContactProfile({bool showToast = true}) async {
     final profile = BrowserContactProfile(
       fullName: _nameCtrl.text.trim(),
       email: _emailCtrl.text.trim(),
@@ -819,7 +842,12 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       enabled: _contactEnabled,
     );
     await BrowserVaultService.instance.saveContactProfile(profile);
-    if (mounted) {
+    if (!mounted) return;
+    setState(() {
+      _savedContactProfile = profile;
+      _hasSavedContactSnapshot = true;
+    });
+    if (showToast) {
       GlassToastService().show(
         context,
         'Контактные данные сохранены',
@@ -1393,6 +1421,18 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final double hPad = widget.isModalSheet ? 0.0 : 16.0;
     final Color cardFill = _cardFill(style);
     final Color dividerTint = _dividerTint(style);
+    final bool contactSaved = _isContactCardSaved;
+    final bool canSaveContact = _hasUnsavedContactChanges;
+    final Color savePillBg = contactSaved
+        ? pal.primary.withValues(alpha: style.isDark ? 0.22 : 0.13)
+        : (canSaveContact
+            ? pal.primary
+            : pal.primary.withValues(alpha: style.isDark ? 0.38 : 0.42));
+    final Color savePillFg = contactSaved
+        ? pal.primary
+        : (canSaveContact
+            ? pal.onPrimary
+            : pal.onPrimary.withValues(alpha: 0.85));
 
     return SafariFeatherScrollView(
       controller: _autofillScrollCtrl,
@@ -1448,10 +1488,22 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   key: const ValueKey('browser_setting_contact_autofill_switch'),
                   value: _contactEnabled,
                   onChanged: (v) {
-                    setState(() => _contactEnabled = v);
+                    final nextSaved = BrowserContactProfile(
+                      fullName: _savedContactProfile.fullName,
+                      email: _savedContactProfile.email,
+                      phone: _savedContactProfile.phone,
+                      enabled: v,
+                    );
+                    setState(() {
+                      _contactEnabled = v;
+                      _savedContactProfile = nextSaved;
+                    });
                     unawaited(settings.setContactAutofillEnabled(v));
                     if (_contactAutofillCardLoaded) {
-                      unawaited(_saveContactProfile());
+                      unawaited(
+                        BrowserVaultService.instance
+                            .saveContactProfile(nextSaved),
+                      );
                     }
                   },
                 ),
@@ -1514,16 +1566,64 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: _buildSafariPillButton(
-                  buttonKey: const ValueKey('browser_contact_save_btn'),
-                  backgroundColor: pal.primary,
-                  foregroundColor: pal.onPrimary,
-                  icon: Icons.check_rounded,
-                  label: 'Сохранить',
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOutCubic,
                   height: 38.0,
-                  horizontalPadding: 10.0,
-                  fontSize: 13.5,
-                  onTap: () => unawaited(_saveContactProfile()),
+                  decoration: BoxDecoration(
+                    color: savePillBg,
+                    borderRadius: BorderRadius.circular(19.0),
+                  ),
+                  child: Material(
+                    key: const ValueKey('browser_contact_save_btn'),
+                    type: MaterialType.transparency,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(19.0),
+                      onTap: canSaveContact
+                          ? () {
+                              HapticUtils.tap();
+                              unawaited(_saveContactProfile());
+                            }
+                          : null,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10.0),
+                        child: Center(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 160),
+                            switchInCurve: Curves.easeOutCubic,
+                            switchOutCurve: Curves.easeInCubic,
+                            child: Row(
+                              key: ValueKey<bool>(contactSaved),
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  contactSaved
+                                      ? Icons.check_circle_rounded
+                                      : Icons.check_rounded,
+                                  size: 16.0,
+                                  color: savePillFg,
+                                ),
+                                const SizedBox(width: 5),
+                                Flexible(
+                                  child: Text(
+                                    contactSaved ? 'Сохранено' : 'Сохранить',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: savePillFg,
+                                      fontSize: 13.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],

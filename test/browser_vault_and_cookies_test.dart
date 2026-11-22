@@ -722,6 +722,52 @@ void main() {
             );
           }
 
+          // Contact card Save button adapts dynamically: Сохранить -> Сохранено -> Сохранить
+          final saveBtnFinder = find.byKey(const ValueKey('browser_contact_save_btn'));
+          expect(
+            find.descendant(of: saveBtnFinder, matching: find.text('Сохранить')),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: saveBtnFinder, matching: find.text('Сохранено')),
+            findsNothing,
+          );
+
+          final nameInput = find.byKey(const ValueKey('browser_contact_name_input'));
+          await tester.ensureVisible(nameInput);
+          await tester.enterText(nameInput, 'Alexey Ivanov');
+          await tester.pumpAndSettle();
+
+          await tester.ensureVisible(saveBtnFinder);
+          await tester.tap(saveBtnFinder);
+          await tester.pumpAndSettle();
+          _expectNoTranslucentOpacityAboveGlass(tester);
+          expect(
+            find.descendant(of: saveBtnFinder, matching: find.text('Сохранено')),
+            findsOneWidget,
+          );
+          expect(
+            (await BrowserVaultService.instance.getContactProfile()).fullName,
+            'Alexey Ivanov',
+          );
+
+          final emailInput = find.byKey(const ValueKey('browser_contact_email_input'));
+          await tester.ensureVisible(emailInput);
+          await tester.enterText(emailInput, 'alexey@example.org');
+          await tester.pumpAndSettle();
+          expect(
+            find.descendant(of: saveBtnFinder, matching: find.text('Сохранить')),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: saveBtnFinder, matching: find.text('Сохранено')),
+            findsNothing,
+          );
+
+          // Advance past the 3s GlassToastService timer before tearing down.
+          await tester.pump(const Duration(seconds: 4));
+          await tester.pumpAndSettle();
+
           // Switch to Cookie & Sites tab
           await tester.tap(find.text('Cookie и сайты'), warnIfMissed: false);
           await tester.pumpAndSettle();
