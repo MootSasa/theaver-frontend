@@ -8,6 +8,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/profile_customization.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../tiling/tile_viewport_scope.dart';
 import '../user/avatar_decoration_frame.dart';
 
 /// Аватарка с Telegram-подобной анимацией плавного раскрытия.
@@ -31,8 +32,14 @@ class ExpandableAvatar extends StatefulWidget {
   /// Коллбэк при нажатии на аватарку
   final VoidCallback? onTap;
 
-  /// Фактор расширения: 0.0 = маленькая круглая, 1.0 = большая квадратная
+  /// Непрерывный фактор морфинга в стиле Telegram: 0.0 = круглая аватарка, 1.0 = полноширинный квадрат 1:1
   final double expandFactor;
+
+  /// Эластичное преднатяжение круглой аватарки при потягивании вниз до порога раскрытия (0.0 .. 1.0 -> 110..136dp круг)
+  final double pullPreviewProgress;
+
+  /// Опциональный диаметр свёрнутого состояния (используется для бесшовного стыка со скролл-метаболом)
+  final double? collapsedDiameterOverride;
 
   /// Прогресс перетягивания вниз поверх уже раскрытой аватарки (0.0 .. 1.0) для Telegram-зума
   final double overExpandProgress;
@@ -90,6 +97,8 @@ class ExpandableAvatar extends StatefulWidget {
     this.avatarFile,
     this.onTap,
     this.expandFactor = 0.0,
+    this.pullPreviewProgress = 0.0,
+    this.collapsedDiameterOverride,
     this.overExpandProgress = 0.0,
     this.bottomCollapseOverlap = 0.0,
     this.isCollapsing = false,
@@ -108,43 +117,45 @@ class ExpandableAvatar extends StatefulWidget {
     this.onVerticalDragEnd,
   }) : super(key: key);
 
-  /// Вычисляет нелинейный размер аватарки с эффектом заевшего механизма.
-  /// До порога 0.38 размер медленно растягивается с замедлением скорости к порогу.
-  /// После порога 0.38 размер резко раскрывается в большой квадрат.
-  static double calculateAvatarSize(double screenWidth, double expandFactor) {
-    final p = expandFactor.clamp(0.0, 1.0);
-    const threshold = 0.38;
-    const smallSize = 110.0;
-    const thresholdSize = 138.0;
+  static const double baseCollapsedSize = 110.0;
+  static const double maxPullPreviewExtraSize = 26.0;
 
-    if (p < threshold) {
-      final u = p / threshold; // 0.0 .. 1.0
-      // Замедление по мере приближения к порогу (эффект заевшего механизма)
-      final progress = math.sin(u * math.pi / 2);
-      return smallSize + (thresholdSize - smallSize) * progress;
-    } else {
-      final v = (p - threshold) / (1.0 - threshold); // 0.0 .. 1.0
-      // Резкий переход в большой квадрат
-      final progress = Curves.easeOutQuart.transform(v);
-      return thresholdSize + (screenWidth - thresholdSize) * progress;
-    }
+  /// Вычисляет размер круглой аватарки с учётом эластичного потягивания вниз до порога раскрытия (`110 -> 136dp`),
+  /// как в Telegram (`ProfileActivity`: `avatarScale` `96 -> 138` до срабатывания `isPulledDown`).
+  static double calculateCollapsedPreviewSize({
+    double baseSize = baseCollapsedSize,
+    double pullPreviewProgress = 0.0,
+    double expandFactor = 0.0,
+  }) {
+    final preview = Curves.easeOutQuad.transform(
+      pullPreviewProgress.clamp(0.0, 1.0),
+    );
+    final fadeOut = (1.0 - expandFactor.clamp(0.0, 1.0));
+    return baseSize + maxPullPreviewExtraSize * preview * fadeOut;
   }
 
-  /// Вычисляет скругление углов аватарки.
-  /// До порога 0.38 аватарка строго круглая (size / 2).
-  /// После порога 0.38 скругление быстро исчезает, переходя в квадрат.
+  /// Гладкая линейная интерполяция размера между кругом и полноширинным квадратом (`1:1`) без излома на `0.38`
+  /// (вся динамика разгона/торможения задаётся кривой/пружиной самого `expandFactor`, как в Telegram).
+  static double calculateAvatarSize(
+    double screenWidth,
+    double expandFactor, {
+    double pullPreviewProgress = 0.0,
+    double? collapsedSizeOverride,
+  }) {
+    final p = expandFactor.clamp(0.0, 1.0);
+    final startSize = calculateCollapsedPreviewSize(
+      baseSize: collapsedSizeOverride ?? baseCollapsedSize,
+      pullPreviewProgress: pullPreviewProgress,
+      expandFactor: p,
+    );
+    return startSize + (screenWidth - startSize) * p;
+  }
+
+  /// Непрерывное скругление углов от полного круга (`size / 2` при `0.0`) до квадрата (`0.0` при `1.0`),
+  /// начинающее скруглять квадрат с первой же миллисекунды сворачивания (`ProfileActivity.setRoundRadiusForExpand`).
   static double calculateBorderRadius(double size, double expandFactor) {
     final p = expandFactor.clamp(0.0, 1.0);
-    const threshold = 0.38;
-
-    if (p < threshold) {
-      return size / 2;
-    } else {
-      final v = (p - threshold) / (1.0 - threshold);
-      // Быстрый переход из круга в квадрат на первой трети пути после порога
-      final cornerProgress = Curves.easeOutCubic.transform((v / 0.30).clamp(0.0, 1.0));
-      return (size / 2) * (1.0 - cornerProgress);
-    }
+    return (size * 0.5) * (1.0 - p);
   }
 
   @override
@@ -329,22 +340,25 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = TileViewportScope.widthOf(context);
     final largeSize = screenWidth;
     final progress = widget.expandFactor.clamp(0.0, 1.0);
     final extraOverPullSize = 36.0 *
         Curves.easeOutCubic
             .transform(widget.overExpandProgress.clamp(0.0, 1.0));
 
-    // Нелинейный расчет размера аватарки ("эффект заевшего механизма") + небольшое увеличение при вытягивании вниз
-    final size = ExpandableAvatar.calculateAvatarSize(largeSize, progress) +
+    final size = ExpandableAvatar.calculateAvatarSize(
+          largeSize,
+          progress,
+          pullPreviewProgress: widget.pullPreviewProgress,
+          collapsedSizeOverride: widget.collapsedDiameterOverride,
+        ) +
         extraOverPullSize;
 
-    // Расчет скругления (до порога 0.38 строго круг)
     final borderRadius = ExpandableAvatar.calculateBorderRadius(size, progress);
 
     // Размер иконки/буквы плейсхолдера
-    final iconProgress = progress < 0.38 ? 0.0 : Curves.easeOutQuart.transform(((progress - 0.38) / 0.62).clamp(0.0, 1.0));
+    final iconProgress = Curves.easeInOutCubic.transform(progress);
     final iconSize = lerpDouble(50.0, 120.0, iconProgress);
 
     // Цвет фона плейсхолдера
@@ -400,7 +414,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     }
 
     final dissolveProgress = Curves.easeInOutCubic
-        .transform(((progress - 0.38) / 0.62).clamp(0.0, 1.0));
+        .transform(((progress - 0.15) / 0.85).clamp(0.0, 1.0));
 
     Widget innerStack = Stack(
       clipBehavior: Clip.hardEdge,
@@ -512,9 +526,9 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
 
     Widget finalChild = avatarContentBox;
     final dec = widget.decoration;
-    if (widget.showDecoration && dec != null && progress < 0.32) {
+    if (widget.showDecoration && dec != null && progress < 0.28) {
       final frameOpacity =
-          (1.0 - ((progress - 0.05) / 0.25).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+          (1.0 - (progress / 0.26).clamp(0.0, 1.0)).clamp(0.0, 1.0);
       if (frameOpacity > 0.001) {
         finalChild = Stack(
           alignment: Alignment.center,

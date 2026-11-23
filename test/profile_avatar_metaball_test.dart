@@ -753,5 +753,72 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     });
+
+    test('ExpandableAvatar morphs size and borderRadius continuously without 0.38 kink', () {
+      const w = 393.0;
+      // Pull-down preview swells circle smoothly 110 -> 136dp while remaining 100% round.
+      final swollen = ExpandableAvatar.calculateAvatarSize(
+        w,
+        0.0,
+        pullPreviewProgress: 1.0,
+      );
+      expect(swollen, closeTo(136.0, 0.01));
+      expect(
+        ExpandableAvatar.calculateBorderRadius(swollen, 0.0),
+        closeTo(swollen * 0.5, 0.01),
+      );
+
+      // Collapsing from square (1.0) immediately rounds corners & shrinks proportionally at 0.75 (no sharp-square freeze).
+      final sizeAt75 = ExpandableAvatar.calculateAvatarSize(w, 0.75);
+      final radiusAt75 = ExpandableAvatar.calculateBorderRadius(sizeAt75, 0.75);
+      expect(sizeAt75, closeTo(110.0 + (w - 110.0) * 0.75, 0.05));
+      expect(radiusAt75, greaterThan(30.0));
+    });
+
+    testWidgets('Telegram-style pull-down expands to 1:1 square and single upward swipe collapses to circle without stopping at 0.38', (tester) async {
+      final glassProvider = LiquidGlassProvider();
+      await glassProvider.setMode(GlassMode.disabled);
+
+      await tester.pumpWidget(
+        _buildProfileTestApp(
+          glassProvider: glassProvider,
+          child: const ProfileScreen(
+            userId: 'tg_morph_peer',
+            initialName: 'Telegram Morph',
+            initialIsOnline: true,
+            heroTag: 'tg_morph_peer',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Pull down past threshold (20px touch slop + 75px drag > 58dp) while keeping finger down, then settle.
+      final gestureDown = await tester.startGesture(const Offset(196.0, 220.0));
+      await gestureDown.moveBy(const Offset(0.0, 95.0));
+      await tester.pump();
+      await gestureDown.up();
+      await tester.pumpAndSettle();
+
+      final expandedAvatar =
+          tester.widget<ExpandableAvatar>(find.byType(ExpandableAvatar));
+      expect(expandedAvatar.expandFactor, closeTo(1.0, 0.005));
+      expect(tester.getSize(find.byType(ExpandableAvatar)).width, closeTo(393.0, 0.5));
+
+      // Single upward swipe WHILE holding finger down: must NOT freeze at 0.38 — collapses all the way to 0.0!
+      final gestureUp = await tester.startGesture(const Offset(196.0, 300.0));
+      for (int i = 0; i < 6; i++) {
+        await gestureUp.moveBy(const Offset(0.0, -22.0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      // Keep holding finger stationary across frames: spring completes all the way to 0.0 even with finger held!
+      for (int i = 0; i < 12; i++) {
+        await tester.pump(const Duration(milliseconds: 32));
+      }
+      expect(find.byType(ProfileAvatarMetaballLayer), findsOneWidget);
+
+      await gestureUp.up();
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 }
