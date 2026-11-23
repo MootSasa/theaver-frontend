@@ -1,7 +1,10 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 
+import '../../lens/liquid_glass_batch.dart';
 import '../../lens/liquid_glass_lens.dart';
 import '../../lens/liquid_glass_lens_scope.dart';
 import '../../liquid_glass_style.dart';
@@ -9,6 +12,7 @@ import '../../utils/liquid_glass_light.dart';
 import '../../utils/liquid_glass_position.dart';
 import '../../utils/liquid_glass_adaptivity.dart';
 import '../../utils/liquid_glass_shape.dart';
+import '../liquid_glass_shadow.dart';
 import '../liquid_glass_adaptive_area.dart';
 import '../liquid_glass_tab_item.dart' show LiquidGlassTabBarItem;
 import 'liquid_glass_animated_nav_bar.dart';
@@ -32,10 +36,9 @@ export 'liquid_glass_nav_bar_style.dart';
 /// Most commonly it goes in the `bottomNavigationBar:` slot of a
 /// `LiquidGlassScaffold`, which places it and feeds its glass.
 ///
-/// It also works **on its own**. Where it finds no host above it (no
-/// `LiquidGlassScaffold` or `LiquidGlassView`), a bar whose
-/// [pillStyle] `mode` is a glass mode fills its parent and places itself
-/// from [alignment] and [margin] — so drop it as the LAST child of a
+/// It also works **on its own**, or inside any `LiquidGlassView`. A bar
+/// whose [pillStyle] `mode` is a glass mode fills its parent and places
+/// itself from [alignment] and [margin] — so drop it as the LAST child of a
 /// `Stack` over your page:
 ///
 /// ```dart
@@ -50,8 +53,9 @@ export 'liquid_glass_nav_bar_style.dart';
 /// On Impeller the bar and its morph pill sample the **live backdrop**,
 /// so the page is never handed in. On Skia / Web there is no live-backdrop
 /// shader and no captured page, so it falls back to the plain frosted
-/// single-lens bar, placed the same way. For the refracting morph pill on
-/// Skia, use a `LiquidGlassScaffold` with a real `body`.
+/// single-lens bar: placed the same way on its own, or as a plain capsule
+/// inside a `LiquidGlassView`. For the refracting morph pill on Skia, use
+/// a `LiquidGlassScaffold` with a real `body`.
 ///
 /// With `mode: LiquidGlassPillMode.none` the bar is a plain [width] x
 /// [height] capsule instead — a single [LiquidGlassLens] with the icons,
@@ -73,15 +77,18 @@ class LiquidGlassTabBar extends StatelessWidget {
     required this.items,
     required this.selectedIndex,
     required this.onChanged,
+    this.onReselected,
     this.itemStyle = const LiquidGlassTabItemStyle(),
     this.pillStyle = const LiquidGlassTabPillStyle(),
     this.style,
     this.visibility = true,
-    this.width = 300,
-    this.height = 64,
+    this.width = 328,
+    this.height = 62,
     this.margin = const EdgeInsets.only(bottom: 24),
-    this.itemPadding = 6,
+    this.itemPadding = 4,
     this.alignment = Alignment.bottomCenter,
+    this.swell = const LiquidGlassTabBarSwell(),
+    this.joinBatch = false,
   })  : assert(items.length > 0, 'Provide at least one item'),
         assert(selectedIndex >= 0 && selectedIndex < items.length,
             'selectedIndex out of range');
@@ -95,15 +102,18 @@ class LiquidGlassTabBar extends StatelessWidget {
     required this.items,
     required this.selectedIndex,
     required this.onChanged,
+    this.onReselected,
     this.itemStyle = const LiquidGlassTabItemStyle(),
     this.pillStyle = const LiquidGlassTabPillStyle(),
     this.style,
     this.visibility = true,
-    this.width = 300,
-    this.height = 64,
+    this.width = 328,
+    this.height = 62,
     this.margin = const EdgeInsets.only(bottom: 24),
-    this.itemPadding = 6,
+    this.itemPadding = 4,
     this.alignment = Alignment.bottomCenter,
+    this.swell = const LiquidGlassTabBarSwell(),
+    this.joinBatch = false,
   })  : assert(items.length > 0, 'Provide at least one item'),
         assert(selectedIndex >= 0 && selectedIndex < items.length,
             'selectedIndex out of range');
@@ -114,8 +124,24 @@ class LiquidGlassTabBar extends StatelessWidget {
   /// The selected tab index.
   final int selectedIndex;
 
-  /// Selection callback.
+  /// Selection callback. A change of tab gives the same light haptic tap
+  /// the switch gives when it flips.
   final ValueChanged<int> onChanged;
+
+  /// A tap on the tab that is already selected, with its index: the
+  /// re-tap that sends a tab back to its root and then to its top.
+  /// `null` (the default) ignores it.
+  final ValueChanged<int>? onReselected;
+
+  /// [onChanged], with the switch's light haptic tap when the tab changes;
+  /// nothing for a disabled tab, [onReselected] as well for the selected
+  /// one.
+  void _select(int index) {
+    if (!items[index].enabled) return;
+    if (index != selectedIndex) HapticFeedback.lightImpact();
+    onChanged(index);
+    if (index == selectedIndex) onReselected?.call(index);
+  }
 
   /// Icon + label styling of the tabs (colors, icon size, label font).
   final LiquidGlassTabItemStyle itemStyle;
@@ -162,18 +188,50 @@ class LiquidGlassTabBar extends StatelessWidget {
   /// `LiquidGlassScaffold` on both the plain and glass-pill paths.
   final Alignment alignment;
 
-  /// The tuned default capsule look — a faint white frost over the
-  /// default refraction. Its `shape` is `null`: the bar derives a
-  /// height-tracking full-pill optical-border shape when [style] supplies
-  /// no shape. Compose with `copyWith` to tweak one facet while keeping
-  /// the rest of the tuned look, e.g.
+  /// How the whole bar — capsule, pills and items — grows while the glass
+  /// pill is lifted, as one scale (see [LiquidGlassTabBarSwell]). Glass
+  /// pill modes only. `null` keeps the bar its size.
+  final LiquidGlassTabBarSwell? swell;
+
+  /// Whether the bar capsule joins an enclosing `LiquidGlassBatch`, such as
+  /// a `LiquidGlassScaffold`'s chrome batch, and reads its shared copy of
+  /// the backdrop. `false` (the default) keeps it on a read of its own. The
+  /// moving glass pill and its magnifier never join one.
+  final bool joinBatch;
+
+  /// The tuned capsule look on a light theme: a white frost, a
+  /// continuous capsule and a soft contact shadow.
+  /// Compose with `copyWith` to tweak one facet while keeping the rest of
+  /// the tuned look, e.g.
   /// `style: LiquidGlassTabBar.defaultStyle.copyWith(shape: …)`.
   static const LiquidGlassStyle defaultStyle = LiquidGlassStyle(
+    shape: LiquidGlassShape(
+      cornerStyle: LiquidGlassCornerStyle.continuousRoundedRectangle,
+      cornerRadius: 100,
+    ),
     specular: LiquidGlassLight.specular(),
-    color: Color(0x16FFFFFF),
-    blur: 2,
-    refractionIndex: 1.1,
-    refractionWidth: 12,
+    color: Color(0xADFFFFFF),
+    saturation: 2,
+    blur: 2.5,
+    refractionIndex: 1.2,
+    refractionWidth: 16,
+    shadow: LiquidGlassShadow(blur: 24, opacity: 0.12),
+  );
+
+  /// [defaultStyle] on a dark theme: the same capsule over a dark grey
+  /// frost.
+  static const LiquidGlassStyle defaultDarkStyle = LiquidGlassStyle(
+    shape: LiquidGlassShape(
+      cornerStyle: LiquidGlassCornerStyle.continuousRoundedRectangle,
+      cornerRadius: 100,
+    ),
+    specular: LiquidGlassLight.specular(),
+    color: Color(0x8C1C1C1F),
+    saturation: 1.2,
+    blur: 2.5,
+    refractionIndex: 1.2,
+    refractionWidth: 16,
+    shadow: LiquidGlassShadow(blur: 24, opacity: 0.12),
   );
 
   /// Which renderer(s) use the glass-refracting morphing pill.
@@ -187,7 +245,20 @@ class LiquidGlassTabBar extends StatelessWidget {
         height: height,
         bottomMargin: margin.bottom,
         padding: itemPadding,
+        restPillWidth: restPillWidth,
       );
+
+  /// The resting pill's width: [LiquidGlassTabPillStyle.width], or its
+  /// `targetWidth` kept between one equal share of the bar and
+  /// `widthFactor` shares.
+  double get restPillWidth {
+    final double? fixed = pillStyle.width;
+    if (fixed != null) return fixed;
+    final double share = (width - 2 * itemPadding) / items.length;
+    final double widest = share * pillStyle.widthFactor;
+    return pillStyle.targetWidth
+        .clamp(math.min(share, widest), math.max(share, widest));
+  }
 
   /// Whether [glassPill] resolves to the glass-refracting morphing pill
   /// on the active renderer.
@@ -229,6 +300,7 @@ class LiquidGlassTabBar extends StatelessWidget {
     bool useSync = true,
     bool? useImpellerBackdrop,
     bool batch = false,
+    LiquidGlassBatchMode? batchMode,
     int? foregroundBatchId,
     bool realTimeCapture = true,
     bool outerNeedsRealtime = false,
@@ -248,6 +320,7 @@ class LiquidGlassTabBar extends StatelessWidget {
       useSync: useSync,
       useImpellerBackdrop: useImpellerBackdrop,
       batch: batch,
+      batchMode: batchMode,
       foregroundBatchId: foregroundBatchId,
       realTimeCapture: realTimeCapture,
       outerNeedsRealtime: outerNeedsRealtime,
@@ -272,6 +345,7 @@ class LiquidGlassTabBar extends StatelessWidget {
     bool useSync = true,
     bool? useImpellerBackdrop,
     bool batch = false,
+    LiquidGlassBatchMode? batchMode,
     int? foregroundBatchId,
     bool realTimeCapture = true,
     bool outerNeedsRealtime = false,
@@ -290,66 +364,77 @@ class LiquidGlassTabBar extends StatelessWidget {
       bottomMargin: base.bottomMargin + bottomInset,
       padding: base.padding,
       pillExtraHeight: base.pillExtraHeight,
+      restPillWidth: base.restPillWidth,
     );
 
     final glassStyle = pillStyle.effectiveGlass;
     final restStyle = pillStyle.effectiveRest;
-    final barStyle = effectiveBarStyle;
+    // The capsule's default look follows the theme's brightness.
+    return Builder(builder: (context) {
+      final barStyle = effectiveBarStyleFor(Theme.of(context).brightness);
 
-    return LiquidGlassAnimatedNavBar(
-      body: body,
-      items: items,
-      selectedIndex: selectedIndex,
-      onChanged: onChanged,
-      layout: layout,
-      barPosition: resolveBarPosition(bottomInset: bottomInset),
-      itemStyle: itemStyle,
-      showSelectionPill: pillStyle.show,
-      outerNeedsRealtime: outerNeedsRealtime,
-      chromeChild: chromeChild,
-      outerChild: outerChild,
-      backgroundColor: backgroundColor,
-      barShape: barStyle.shape,
-      barSpecular: barStyle.specular,
-      barGlow: barStyle.glow,
-      barSecondSpecular: barStyle.secondSpecular,
-      barRefraction: barStyle.refraction,
-      barAppearance: barStyle.appearance,
-      // The bar capsule's contact shadow rides its style's appearance —
-      // the same place every lens carries one.
-      barShadow: barStyle.appearance.shadow,
-      pillBlur: glassStyle.appearance.blur,
-      pillColor: glassStyle.appearance.color,
-      pillGrowHeight: pillStyle.growHeight,
-      pillRefraction: glassStyle.refraction,
-      pillShape: glassStyle.shape,
-      pillSpecular: glassStyle.specular,
-      pillGlow: glassStyle.glow,
-      pillSecondSpecular: glassStyle.secondSpecular,
-      pillShadow: glassStyle.appearance.shadow,
-      restStyle: restStyle,
-      travelStiffness: pillStyle.travelStiffness,
-      travelDamping: pillStyle.travelDamping,
-      motion: pillStyle.motion,
-      magnifierPill: pillStyle.magnifierPill,
-      pixelRatio: pixelRatio,
-      useSync: useSync,
-      useImpellerBackdrop: useImpellerBackdrop,
-      batch: batch,
-      foregroundBatchId: foregroundBatchId,
-      realTimeCapture: realTimeCapture,
-      adaptivity: barStyle.adaptivity,
-      adaptiveSampling: adaptiveSampling,
-      outerAdaptiveSampling: outerAdaptiveSampling,
-      areaAdaptivity: areaAdaptivity,
-      areaLink: areaLink,
-      systemChrome: systemChrome,
-      // The bodyless standalone bar has nothing behind its inner view to
-      // sample (the real page is painted below the overlay, out of
-      // reach), so adaptivity falls back to a manual `permanentBrightness`,
-      // a followed link, or the platform brightness — like a standalone lens.
-      sampleBackground: sampleBackground,
-    );
+      return LiquidGlassAnimatedNavBar(
+        body: body,
+        items: items,
+        selectedIndex: selectedIndex,
+        onChanged: _select,
+        onReselected: onReselected,
+        layout: layout,
+        barPosition: resolveBarPosition(bottomInset: bottomInset),
+        itemStyle: itemStyle,
+        showSelectionPill: pillStyle.show,
+        outerNeedsRealtime: outerNeedsRealtime,
+        chromeChild: chromeChild,
+        outerChild: outerChild,
+        backgroundColor: backgroundColor,
+        barShape: barStyle.shape,
+        barSpecular: barStyle.specular,
+        barGlow: barStyle.glow,
+        barSecondSpecular: barStyle.secondSpecular,
+        barRefraction: barStyle.refraction,
+        barAppearance: barStyle.appearance,
+        barLiteGlass: barStyle.liteGlass,
+        barSwell: swell,
+        capsuleJoinsBatch: joinBatch,
+        // The bar capsule's contact shadow rides its style's appearance —
+        // the same place every lens carries one.
+        barShadow: barStyle.appearance.shadow,
+        pillBlur: glassStyle.appearance.blur,
+        pillColor: glassStyle.appearance.color,
+        pillGrowHeight: pillStyle.growHeight,
+        pillGrowWidth: pillStyle.growWidth,
+        confineToBar: pillStyle.confineToBar,
+        pillRefraction: glassStyle.refraction,
+        pillShape: glassStyle.shape,
+        pillSpecular: glassStyle.specular,
+        pillGlow: glassStyle.glow,
+        pillSecondSpecular: glassStyle.secondSpecular,
+        pillShadow: glassStyle.appearance.shadow,
+        pillLiteGlass: glassStyle.liteGlass,
+        restStyle: restStyle,
+        motion: pillStyle.motion,
+        behavior: pillStyle.behavior,
+        magnifierPill: pillStyle.magnifierPill,
+        pixelRatio: pixelRatio,
+        useSync: useSync,
+        useImpellerBackdrop: useImpellerBackdrop,
+        batch: batch,
+        batchMode: batchMode,
+        foregroundBatchId: foregroundBatchId,
+        realTimeCapture: realTimeCapture,
+        adaptivity: barStyle.adaptivity,
+        adaptiveSampling: adaptiveSampling,
+        outerAdaptiveSampling: outerAdaptiveSampling,
+        areaAdaptivity: areaAdaptivity,
+        areaLink: areaLink,
+        systemChrome: systemChrome,
+        // The bodyless standalone bar has nothing behind its inner view to
+        // sample (the real page is painted below the overlay, out of
+        // reach), so adaptivity falls back to a manual `permanentBrightness`,
+        // a followed link, or the platform brightness — like a standalone lens.
+        sampleBackground: sampleBackground,
+      );
+    });
   }
 
   /// The bar's placement derived from [alignment] and [margin], or `null`
@@ -380,19 +465,29 @@ class LiquidGlassTabBar extends StatelessWidget {
   /// `style: LiquidGlassTabBar.defaultStyle.copyWith(shape: …)`.
   LiquidGlassStyle get effectiveBarStyle => defaultStyle.merge(style);
 
+  /// [effectiveBarStyle] for [brightness]: a dark theme starts from
+  /// [defaultDarkStyle].
+  LiquidGlassStyle effectiveBarStyleFor(Brightness brightness) =>
+      (brightness == Brightness.dark ? defaultDarkStyle : defaultStyle)
+          .merge(style);
+
   @override
   Widget build(BuildContext context) {
-    // A host (a `LiquidGlassScaffold`, or any `LiquidGlassView`) places
-    // the bar and feeds its glass; `mode: none` is placed by the caller.
-    // Either way: the plain capsule.
-    if (glassPill == LiquidGlassPillMode.none ||
-        LiquidGlassLensScope.maybeOf(context) != null) {
-      return _buildPlainBar(context);
-    }
+    // `mode: none` is placed by the caller: the plain capsule.
+    if (glassPill == LiquidGlassPillMode.none) return _buildPlainBar(context);
 
-    // On its own, a glass-mode bar is a full-screen overlay that places
-    // itself.
-    if (resolveGlassPill() && ui.ImageFilter.isShaderFilterSupported) {
+    // Inside a host (a `LiquidGlassScaffold`, or any `LiquidGlassView`) the
+    // host's backdrop setting decides the tier. Skia has no live backdrop
+    // for the pill there, so it keeps the plain capsule the host feeds.
+    final LiquidGlassLensScope? host = LiquidGlassLensScope.maybeOf(context);
+    final bool live = ui.ImageFilter.isShaderFilterSupported &&
+        (host == null || host.useImpellerBackdrop);
+    if (host != null && !live) return _buildPlainBar(context);
+
+    // A glass-mode bar is a full-screen overlay that places itself, inside
+    // a host on Impeller or on its own.
+    if (live &&
+        resolveGlassPill(useImpellerBackdrop: host?.useImpellerBackdrop)) {
       // Impeller: the self-contained morph-pill bar over an empty,
       // transparent body. The pill samples the LIVE backdrop (the page
       // painted behind this overlay), so no `body` is handed in.
@@ -444,7 +539,7 @@ class LiquidGlassTabBar extends StatelessWidget {
   /// one [LiquidGlassLens]). Used under a host, with `mode: none`, and as
   /// the Skia/Web fallback of the standalone bar.
   Widget _buildPlainBar(BuildContext context) {
-    final barStyle = effectiveBarStyle;
+    final barStyle = effectiveBarStyleFor(Theme.of(context).brightness);
     final LiquidGlassShape effectiveShape = barStyle.shape ??
         LiquidGlassShape.roundedRectangle(
           cornerRadius: height / 2,
@@ -474,7 +569,7 @@ class LiquidGlassTabBar extends StatelessWidget {
         ? AnimatedBottomNavBarContent(
             items: items,
             selectedIndex: selectedIndex,
-            onChanged: onChanged,
+            onChanged: _select,
             itemPadding: itemPadding,
             showSelectionPill: pillStyle.show,
             selectionColor: restStyle.appearance.color,
@@ -483,46 +578,50 @@ class LiquidGlassTabBar extends StatelessWidget {
             duration: pillStyle.animationDuration,
             curve: pillStyle.animationCurve,
             pillShape: restStyle.shape,
+            pillWidth: restPillWidth,
             adaptive: adaptive,
           )
         : BottomNavBarContent(
             items: items,
             selectedIndex: selectedIndex,
-            onChanged: onChanged,
+            onChanged: _select,
             itemPadding: itemPadding,
             showSelectionPill: pillStyle.show,
             selectionColor: restStyle.appearance.color,
             selectionAdaptivity: pillAdaptivity,
             itemStyle: itemStyle,
             pillShape: restStyle.shape,
+            pillWidth: restPillWidth,
             adaptive: adaptive,
           );
 
     // The bar's contact shadow rides the lens's appearance
     // (`appearance.shadow`): the lens wraps itself in the ring, painting
     // it behind the glass and composing its visibility with the bar's.
+    final Widget capsule = LiquidGlassLens(
+      style: LiquidGlassStyle(
+        shape: effectiveShape,
+        specular: barStyle.specular,
+        glow: barStyle.glow,
+        saturation: barStyle.saturation,
+        blur: barStyle.blur,
+        color: barStyle.color,
+        shadow: barStyle.shadow,
+        refractionIndex: barStyle.refractionIndex,
+        refractionWidth: barStyle.refractionWidth,
+        magnification: barStyle.magnification,
+        dispersion: barStyle.dispersion,
+        adaptivity: barStyle.adaptivity,
+        liteGlass: barStyle.liteGlass,
+      ),
+      visibility: visibility,
+      child: content,
+    );
     return SizedBox(
       width: width,
       height: height,
-      child: LiquidGlassLens(
-        style: LiquidGlassStyle(
-          shape: effectiveShape,
-          specular: barStyle.specular,
-          glow: barStyle.glow,
-          saturation: barStyle.saturation,
-          blur: barStyle.blur,
-          color: barStyle.color,
-          shadow: barStyle.shadow,
-          refractionIndex: barStyle.refractionIndex,
-          refractionWidth: barStyle.refractionWidth,
-          magnification: barStyle.magnification,
-          dispersion: barStyle.dispersion,
-          adaptivity: barStyle.adaptivity,
-          liteGlass: barStyle.liteGlass,
-        ),
-        visibility: visibility,
-        child: content,
-      ),
+      // On a read of its own unless it joins the enclosing batch.
+      child: joinBatch ? capsule : LiquidGlassBatch.exclude(child: capsule),
     );
   }
 }

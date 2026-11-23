@@ -542,6 +542,14 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                           motion: _kChatMenuMotion,
                           smoothness: 28,
                           style: morphStyle,
+                          touch: !_isMenuOpen
+                              ? const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                                  stretch: 5,
+                                  squeeze: 0.70,
+                                  lean: 0.25,
+                                  grip: 0.45,
+                                ))
+                              : null,
                           child: _isMenuOpen
                               ? _ChatActionsMorphMenu(
                                   key: const ValueKey<String>('chat_actions_menu'),
@@ -668,9 +676,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
         width: double.infinity,
         height: _isMenuOpen ? tileHeight : normalHeight,
         child: pillStyle != null
-            ? LiquidGlassBlender(
-                smoothness: 0,
-                style: pillStyle,
+            ? LiquidGlassBatch(
                 child: stackWidget,
               )
             : (BackdropGroup.of(context) == null

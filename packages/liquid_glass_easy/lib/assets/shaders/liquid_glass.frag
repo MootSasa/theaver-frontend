@@ -25,7 +25,7 @@ uniform vec2  u_touch;
 uniform sampler2D u_texture_input;
 
 // --- Packed scalar uniforms (Metal [[buffer(N)]] limit fix) ----------------
-// iOS 26 Impeller binds each runtime-effect uniform to its own Metal buffer
+// Impeller on iOS binds each runtime-effect uniform to its own Metal buffer
 // and caps at ~30. To stay under the limit, several scalars are merged into
 // vec4s below; the #define block right after restores the original scalar
 // names. The float-offset order is IDENTICAL to the old per-scalar layout, so
@@ -35,7 +35,7 @@ uniform sampler2D u_texture_input;
 // x=lensWidth  y=lensHeight  z=cornerRadius  w=cornerStyle
 //   cornerStyle selects the corner SDF (see the shape branch in main):
 //   0 = circular rounded rect, 1 = squircle (Ln-norm, full smoothing),
-//   2 = continuous (Apple capsule-style) corners.
+//   2 = continuous (capsule-style) corners.
 uniform vec4 u_lensGeom;
 // x=magnification  y=refractionIndex  z=refractionWidthPx
 // w=dispersion
@@ -54,14 +54,16 @@ uniform vec4 u_lensColor;
 uniform vec4 u_packA;
 // x=specularAngle  y=specularSpread  z=borderSharpness  w=glowAngle
 uniform vec4 u_packB;
-// x=glowSpread  y=specular2Intensity  zw unused
+// x=glowSpread  y=specular2Intensity  z=shaderBlur (sigma, fragment px)
+// w=shaderBlurDispersion (1 = blur taps are dispersed)
 uniform vec4 u_packC;
 // The second specular: x=thicknessPx  y=sharpness  z=angle  w=spread.
 // A zero thickness turns it off.
 uniform vec4 u_specular2;
 // The second specular's own colour, as u_specularColor.
 uniform vec4 u_specular2Color;
-// Far-arc strength per light: x=specular  y=glow  z=second specular.
+// Far-arc strength per light: x=specular  y=glow  z=second specular;
+// w=the glass's opacity, which every output is multiplied by.
 uniform vec4 u_lightOpposite;
 
 // Restore the original scalar names. These are plain float aliases (a single
@@ -85,6 +87,10 @@ uniform vec4 u_lightOpposite;
 #define u_glowAngle                    u_packB.w
 #define u_glowSpread                   u_packC.x
 #define u_specular2Intensity           u_packC.y
+// The glass's opacity: 1 draws it whole, 0 leaves the backdrop as it was.
+#define u_glassOpacity                 u_lightOpposite.w
+#define u_shaderBlurPx                 u_packC.z
+#define u_shaderBlurDispersion         u_packC.w
 // Each light as the border reads it: (angle in degrees, spread, intensity).
 #define u_specular vec3(u_specularAngle, u_specularSpread, u_specularIntensity)
 #define u_glow     vec3(u_glowAngle, u_glowSpread, u_glowIntensity)
@@ -105,7 +111,12 @@ uniform vec2 u_imageSize;
 // treat the backdrop as opaque (Impeller live backdrop: its alpha is not
 // a transparency signal and reads 0 over dark regions, which would
 // otherwise zero the body coverage and drop the optical rim).
-uniform float u_honorBackdropAlpha;
+// Plus 2.0 when the glow fades over dark backdrops (see rimLift):
+// LiquidGlassConfiguration.rimLiftOnDark off. Both flags in one float,
+// so the rim switch costs no uniform of its own.
+uniform float u_backdropFlags;
+#define u_honorBackdropAlpha (mod(u_backdropFlags, 2.0))
+#define u_rimDarkFade        (step(1.5, u_backdropFlags))
 
 // Edge-AA band width in FRAGMENT pixels (one logical pixel): 1.0 on the Skia
 // (logical-px) shader space, devicePixelRatio on the Impeller (physical-px)
@@ -123,6 +134,11 @@ uniform vec2 u_shapeScale;
 uniform vec4 u_xformRow;
 uniform vec2 u_xformOff;
 
+// The baked shape (liquid_glass_geometry.frag): x = range px, 0 = no bake,
+// y = pad px, zw = texture size px. Bound to a 1x1 image when unused.
+uniform vec4 u_geom;
+uniform sampler2D u_geomTex;
+
 
 out vec4 frag_color;
 
@@ -132,11 +148,70 @@ out vec4 frag_color;
 #define PIXEL_TO_NORM(px) ((px) / u_resolution.y)
 
 vec3 applyDispersion(vec2 uv, float shift, vec2 texSizePx) {
-    return texture(u_texture_input, uv).rgb;
+    // Compute offsets based on luma
+    vec3 color = texture(u_texture_input, uv).rgb;
+    if(shift < DISPERSION_MIN_LOGICAL_PX) return color;
+    // Luma calculation (Rec. 709)
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+
+    // Offset depends on brightness
+    vec2 offset = dispersionOffsetUv(shift, luma, texSizePx, max(u_shapeAaPx, 1.0));
+
+    float r = texture(u_texture_input, uv + offset).r;
+    float g = texture(u_texture_input, uv).g;
+    float b = texture(u_texture_input, uv - offset).b;
+
+    return vec3(r, g, b);
+}
+
+// In-shader frost: a Gaussian sampled by its own distribution, so every tap
+// weighs the same and none is wasted on the faint tail. The taps sit on a
+// golden-angle spiral that each pixel turns and shifts by its own noise: one
+// fixed pattern for all pixels shows as ghost copies of the backdrop, a
+// per-pixel one as a fine grain that reads as frost. With
+// u_shaderBlurDispersion, the channels of every tap split by the centre's luma.
+#define SHADER_BLUR_MAX_TAPS 40
+// Interleaved gradient noise in [0, 1).
+float blurNoise(vec2 p) {
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
+vec3 blurDispersed(vec2 uv, float shift, vec2 texSizePx) {
+    float sigma = u_shaderBlurPx;
+    vec2 pxToUv = 1.0 / max(texSizePx, vec2(1.0));
+    // A small blur needs few taps; the full 40 from sigma ~9.5 px up.
+    float n = clamp(floor(8.0 + 0.35 * sigma * sigma),
+                    8.0, float(SHADER_BLUR_MAX_TAPS));
+    vec2 p = FlutterFragCoord().xy;
+    float spin = 6.2831853 * blurNoise(p);
+    float jitter = blurNoise(p + vec2(23.0, 61.0));
+    bool split = u_shaderBlurDispersion > 0.5 &&
+                 shift >= DISPERSION_MIN_LOGICAL_PX;
+    vec2 off = vec2(0.0);
+    if (split) {
+        float luma = dot(texture(u_texture_input, uv).rgb,
+                         vec3(0.2126, 0.7152, 0.0722));
+        off = dispersionOffsetUv(shift, luma, texSizePx, max(u_shapeAaPx, 1.0));
+    }
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < SHADER_BLUR_MAX_TAPS; k++) {
+        if (float(k) >= n) break;
+        // Radius by the 2D Gaussian's inverse CDF, cut at 3 sigma (98.9%).
+        float u = (float(k) + jitter) / n * 0.98889;
+        float r = sigma * sqrt(-2.0 * log(1.0 - u));
+        float a = float(k) * 2.39996323 + spin;
+        vec2 t = clamp(uv + vec2(cos(a), sin(a)) * r * pxToUv,
+                       vec2(0.001), vec2(0.999));
+        sum += split
+            ? vec3(texture(u_texture_input, t + off).r,
+                   texture(u_texture_input, t).g,
+                   texture(u_texture_input, t - off).b)
+            : texture(u_texture_input, t).rgb;
+    }
+    return sum / n;
 }
 
 vec3 applySaturation(vec3 color, float saturation) {
-    if (abs(saturation - 1.0) < 0.001) return color;
+
     float luminance = dot(color, vec3(0.299, 0.587, 0.114));
     return mix(vec3(luminance), color, saturation);
 }
@@ -166,6 +241,8 @@ vec4 finalSample(
     bool xformed,
     out vec3 preTintColor
 ){
+    vec3 refrColor;
+
     // Geometry ran in LENS space; the backdrop lives in shader space —
     // map the refracted position back through the forward transform.
     if (xformed) {
@@ -188,12 +265,26 @@ vec4 finalSample(
     sampleUV.y = 1.0 - sampleUV.y;
     #endif
     #endif
-    // Single texture lookup (no chromatic dispersion, Telegram style).
-    vec4 texSample = texture(u_texture_input, sampleUV);
-    vec3 refrColor = applySaturation(texSample.rgb, u_saturation);
+    // Dispersion is confined to the distortion band (dispersionShift),
+    // not applied across the whole lens body. The caller passes 0 outside
+    // the band and a zoneT-ramped shift inside it, so the colour fringing
+    // appears only where the glass actually bends light — at the edge.
+    refrColor = u_shaderBlurPx >= 0.5
+        ? blurDispersed(sampleUV, dispersionShift, imageSize)
+        : applyDispersion(sampleUV, dispersionShift, imageSize);
+    // Apply saturation BEFORE tinting
+    refrColor = applySaturation(refrColor,u_saturation);
     preTintColor = refrColor; // capture before tint for optical border
 
-    float texA = (u_honorBackdropAlpha > 0.5) ? texSample.a : 1.0;
+    // Coverage = shape mask, optionally modulated by the sampled
+    // backdrop's alpha (see u_honorBackdropAlpha). Skia capture honors it
+    // so an authored-transparent snapshot (slider/toggle track) shows the
+    // real screen through; Impeller ignores it (its live-backdrop alpha
+    // reads 0 over dark regions and would otherwise drop the lens/rim —
+    // the "border missing on a black background" bug).
+    float texA = (u_honorBackdropAlpha > 0.5)
+        ? texture(u_texture_input, sampleUV).a
+        : 1.0;
     float coverage = shapeMask * texA;
 
     vec4 base = vec4(refrColor * shapeMask, coverage);
@@ -227,6 +318,50 @@ float computeShapeMask(float shapeDistPx) {
     return 1.0 - smoothstep(-0.667 * aa, 0.333 * aa, shapeDistPx);
 }
 
+
+// The bend's direction: away from the box's spine, as a capsule along the
+// long side bends, whatever the corners. Band pixels only.
+vec2 capsuleNormal(vec2 fragRestPx, vec2 centerPx, vec2 restHalfPx,
+                   vec2 shapeScale, vec2 fallback) {
+#if LIQUID_GLASS_CAPSULE_BEND
+    vec2 rel = fragRestPx - centerPx;
+    vec2 spine = max(restHalfPx - min(restHalfPx.x, restHalfPx.y), vec2(0.0));
+    vec2 away = (rel - clamp(rel, -spine, spine)) / shapeScale;
+    float awayLen = length(away);
+    return awayLen > EPS ? away / awayLen : fallback;
+#else
+    return fallback;
+#endif
+}
+
+// One baked texel: (raw SDF px, gradient).
+vec3 geomTexel(vec2 texel) {
+    vec4 t = texture(u_geomTex,
+                     glassRenderTextureUv((texel + 0.5) / u_geom.zw));
+    float v = (t.r * 255.0 * 256.0 + t.g * 255.0) / 65535.0;
+    return vec3((2.0 * v - 1.0) * u_geom.x, 4.0 * t.ba - 2.0);
+}
+
+// The shape from the bake at [boxPx], rest px from the box's top-left.
+// Filtered here: the 16-bit distance cannot be blended in its two bytes.
+ShapeData shapeFromBake(vec2 boxPx, vec2 shapeScale) {
+    vec2 tp = boxPx + u_geom.y - 0.5;
+    vec2 i0 = clamp(floor(tp), vec2(0.0), u_geom.zw - 2.0);
+    vec2 f = clamp(tp - i0, 0.0, 1.0);
+    vec3 v = mix(mix(geomTexel(i0), geomTexel(i0 + vec2(1.0, 0.0)), f.x),
+                 mix(geomTexel(i0 + vec2(0.0, 1.0)),
+                     geomTexel(i0 + vec2(1.0, 1.0)), f.x),
+                 f.y);
+    // Rest to screen: the gradient divides by the flex, as shapeToScreen.
+    vec2 g = v.yz / shapeScale;
+    float gl = max(length(g), EPS);
+    ShapeData d;
+    d.sdf       = v.x;
+    d.grad      = g;
+    d.normal    = g / gl;
+    d.orthoDist = v.x / gl;
+    return d;
+}
 
 // =====================================================
 // Main entry
@@ -286,31 +421,36 @@ void main() {
         deformed ? lensCenterPx + (fragPx - lensCenterPx) / shapeScale : fragPx;
 
     // Rounded rectangle. u_cornerStyle selects the corner SDF:
-    //   2 = continuous (Apple capsule-style), 1 = squircle, 0 = circular.
+    //   2 = continuous (capsule-style), 1 = squircle, 0 = circular.
     float maxCorner      = min(restHalfPx.x, restHalfPx.y);
     float cornerRadiusPx = min(u_cornerRadius, maxCorner);
 
-    if (u_cornerStyle > 1.5 && cornerRadiusPx > 0.5) {
-        // Continuous (capsule-style) corners.
-        vec2 reach = continuousRoundedRectReach(cornerRadiusPx, restHalfPx);
-        shapeData = evaluateContinuousRoundedRect(
-            fragRestPx, lensCenterPx, restHalfPx, cornerRadiusPx, reach);
-    } else if (u_cornerStyle > 0.5 && cornerRadiusPx > 0.5) {
-        // Squircle (Ln-norm) corners — smoothing fixed at full (1.0).
-        vec2 zn = squircleCornerParams(cornerRadiusPx, 1.0, maxCorner);
-        shapeData = evaluateSquircleRRect(
-            fragRestPx, lensCenterPx, restHalfPx, zn.x, zn.y);
+    if (u_geom.x > 0.0) {
+        // Baked: one filtered read replaces the SDF, already in screen px.
+        shapeData = shapeFromBake(fragRestPx - (lensCenterPx - restHalfPx),
+                                  shapeScale);
     } else {
-        shapeData = evaluateShape(
-            fragRestPx,
-            lensCenterPx,
-            restHalfPx,
-            cornerRadiusPx
-        );
+        if (u_cornerStyle > 1.5 && cornerRadiusPx > 0.5) {
+            // Continuous (capsule-style) corners.
+            vec2 reach = continuousRoundedRectReach(cornerRadiusPx, restHalfPx);
+            shapeData = evaluateContinuousRoundedRect(
+                fragRestPx, lensCenterPx, restHalfPx, cornerRadiusPx, reach);
+        } else if (u_cornerStyle > 0.5 && cornerRadiusPx > 0.5) {
+            // Squircle (Ln-norm) corners — smoothing fixed at full (1.0).
+            vec2 zn = squircleCornerParams(cornerRadiusPx, 1.0, maxCorner);
+            shapeData = evaluateSquircleRRect(
+                fragRestPx, lensCenterPx, restHalfPx, zn.x, zn.y);
+        } else {
+            shapeData = evaluateShape(
+                fragRestPx,
+                lensCenterPx,
+                restHalfPx,
+                cornerRadiusPx
+            );
+        }
+        // Back to screen px — the AA ramp, the band and the rim measure there.
+        shapeData = shapeToScreen(shapeData, shapeScale);
     }
-
-    // Back to screen px — the AA ramp, the band and the rim all measure there.
-    shapeData   = shapeToScreen(shapeData, shapeScale);
     shapeDistPx = shapeData.orthoDist;
 
     // Refraction's depth, in the same px as the thickness it divides by. Raw
@@ -321,7 +461,10 @@ void main() {
 
     // --- Shared antialiasing + mask ---
     shapeMask = computeShapeMask(shapeDistPx);
-    if (shapeMask <= 1e-4) {
+
+    // Past the AA ramp the lens and its rim are exactly transparent: a clip
+    // wider than the outline skips the sample and the rim there.
+    if (shapeMask <= 0.0) {
         frag_color = vec4(0.0);
         return;
     }
@@ -367,7 +510,10 @@ void main() {
         vec2 refrPx = magPx;
 
         refrPx = computeRefractedPosition(
-            magPx, shapeData.normal, refrDistPx,
+            magPx,
+            capsuleNormal(fragRestPx, lensCenterPx, restHalfPx, shapeScale,
+                          shapeData.normal),
+            refrDistPx,
             u_refractionWidthPx, u_refractionIndex,
             REFRACTION_DEPTH_LOGICAL_PX * max(u_shapeAaPx, 1.0), zoneT
         );
@@ -394,13 +540,13 @@ void main() {
         u_glowThickness, u_glow, u_glowColor,
         u_specular2, u_specular2Intensity, u_specular2Color,
         u_lightOpposite.xyz,
-        u_shapeAaPx
+        u_shapeAaPx, u_rimDarkFade
     );
 
     // ===============================
     // Output composite
     // ===============================
-    frag_color = overlayPremul(base, borderPremul);
+    frag_color = overlayPremul(base, borderPremul) * u_glassOpacity;
 #else
     if (zoneMask < 0.5) {
         // Outside distortion zone
@@ -417,10 +563,10 @@ void main() {
             u_glowThickness, u_glow, u_glowColor,
             u_specular2, u_specular2Intensity, u_specular2Color,
             u_lightOpposite.xyz,
-            u_shapeAaPx
+            u_shapeAaPx, u_rimDarkFade
         );
 
-        frag_color = overlayPremul(base, borderPremul);
+        frag_color = overlayPremul(base, borderPremul) * u_glassOpacity;
         return;
     }
 
@@ -436,7 +582,10 @@ void main() {
     vec2 refrPx;
 
     refrPx = computeRefractedPosition(
-        magPx, shapeData.normal, refrDistPx,
+        magPx,
+        capsuleNormal(fragRestPx, lensCenterPx, restHalfPx, shapeScale,
+                      shapeData.normal),
+        refrDistPx,
         u_refractionWidthPx, u_refractionIndex,
             REFRACTION_DEPTH_LOGICAL_PX * max(u_shapeAaPx, 1.0), zoneT
     );
@@ -459,12 +608,12 @@ void main() {
         u_glowThickness, u_glow, u_glowColor,
         u_specular2, u_specular2Intensity, u_specular2Color,
         u_lightOpposite.xyz,
-        u_shapeAaPx
+        u_shapeAaPx, u_rimDarkFade
     );
 
     // ===============================
     // Output composite
     // ===============================
-    frag_color = overlayPremul(base, borderPremul);
+    frag_color = overlayPremul(base, borderPremul) * u_glassOpacity;
 #endif
 }

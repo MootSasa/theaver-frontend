@@ -177,9 +177,7 @@ class _ControlledAnimatedNetworkImageState
     if (!mounted) {
       return;
     }
-    if (_imageInfo == null) {
-      widget.onFirstFrameLoaded?.call();
-    }
+    final bool isFirstFrame = _imageInfo == null;
     if (!_isAllowedToAnimate && _imageInfo != null) {
       _stopListening();
       return;
@@ -199,6 +197,21 @@ class _ControlledAnimatedNetworkImageState
       setState(() {
         _hasError = false;
       });
+    }
+    if (isFirstFrame && widget.onFirstFrameLoaded != null) {
+      final phase = SchedulerBinding.instance.schedulerPhase;
+      final bool inBuildOrMicrotask = synchronousCall ||
+          phase == SchedulerPhase.persistentCallbacks ||
+          phase == SchedulerPhase.midFrameMicrotasks;
+      if (inBuildOrMicrotask) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            widget.onFirstFrameLoaded?.call();
+          }
+        });
+      } else {
+        widget.onFirstFrameLoaded?.call();
+      }
     }
   }
 

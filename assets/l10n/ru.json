@@ -1037,6 +1037,8 @@
   "settings_glass_full": "Полный",
   "settings_glass_lite": "Облегчённый",
   "settings_glass_off": "Выкл",
+  "settings_glass_shader_blur": "Шейдерное размытие (5.2)",
+  "settings_glass_shader_blur_desc": "Однопроходный оптический иней внутри шейдера вместо классического Гаусса",
   "settings_haptic_uniform_subtitle": "Использовать мягкий tap одинаковой силы для всех анимаций эмодзи и кубиков",
   "settings_haptic_uniform_title": "Вибрация одной силы",
   "settings_language": "Язык",

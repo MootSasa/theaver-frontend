@@ -266,15 +266,18 @@ class LiquidGlassScaffold extends StatefulWidget {
 
   /// See [LiquidGlassView.batch]. `true` (the default) puts the glass in
   /// [body] on one shared read of the backdrop and the chrome — app bar,
-  /// action, FAB, [lenses] — on another. It is the one chrome
-  /// batch on both tab bar paths, and the tab bar is never in it: on
-  /// either path the bar's glass takes a read of its own. A
+  /// action, FAB, [lenses] — on another, which a tab bar joins only with
+  /// its `joinBatch`. It is the one chrome batch on both tab bar paths. A
   /// `showLiquidGlassSheet` or a `showLiquidGlassDialog` opened from a
   /// context inside this scaffold can join that batch too, with
   /// `batch: true` on the call, so the sheet or the dialog costs no read
-  /// of its own — the same read the tab bar takes. Off by default: each
+  /// of its own — the same read the tab bar shares. Off by default: each
   /// takes a read of its own.
   final bool batch;
+
+  /// See [LiquidGlassView.batchMode]. The sheets and dialogs that join the
+  /// chrome batch share it the same way.
+  final LiquidGlassBatchMode? batchMode;
 
   /// The palettes this scaffold's glass chrome wears, the OS bars it
   /// drives, and the strips that judge them — see
@@ -305,6 +308,7 @@ class LiquidGlassScaffold extends StatefulWidget {
     this.refreshRate = LiquidGlassRefreshRate.deviceRefreshRate,
     this.useImpellerBackdrop,
     this.batch = true,
+    this.batchMode,
     this.adaptivity,
   });
 
@@ -317,6 +321,12 @@ class LiquidGlassScaffold extends StatefulWidget {
   static int? chromeBatchIdOf(BuildContext context) =>
       context.getInheritedWidgetOfExactType<_ChromeBatchScope>()?.backdropId;
 
+  /// The [batchMode] of the nearest enclosing scaffold, `null` when it
+  /// leaves the mode to the engine or there is none. Read with
+  /// [chromeBatchIdOf]. Library-internal.
+  static LiquidGlassBatchMode? chromeBatchModeOf(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<_ChromeBatchScope>()?.mode;
+
   @override
   State<LiquidGlassScaffold> createState() => _LiquidGlassScaffoldState();
 }
@@ -324,13 +334,18 @@ class LiquidGlassScaffold extends StatefulWidget {
 /// Publishes the scaffold's chrome batch key over the whole scaffold — the
 /// body included, which is where a sheet or a dialog is presented from.
 class _ChromeBatchScope extends InheritedWidget {
-  const _ChromeBatchScope({required this.backdropId, required super.child});
+  const _ChromeBatchScope({
+    required this.backdropId,
+    required this.mode,
+    required super.child,
+  });
 
   final int? backdropId;
+  final LiquidGlassBatchMode? mode;
 
   @override
   bool updateShouldNotify(_ChromeBatchScope oldWidget) =>
-      backdropId != oldWidget.backdropId;
+      backdropId != oldWidget.backdropId || mode != oldWidget.mode;
 }
 
 class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
@@ -394,6 +409,7 @@ class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
   Widget build(BuildContext context) {
     return _ChromeBatchScope(
       backdropId: _chromeBatch,
+      mode: widget.batchMode,
       child: _buildPipeline(context),
     );
   }
@@ -440,6 +456,7 @@ class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
         // The bar keeps its own glass out of this batch; only the chrome
         // slots share it.
         batch: widget.batch,
+        batchMode: widget.batchMode,
         foregroundBatchId: _chromeBatch,
         realTimeCapture: widget.realTimeCapture,
         adaptiveSampling: sampling,
@@ -474,6 +491,7 @@ class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
       refreshRate: widget.refreshRate,
       useImpellerBackdrop: widget.useImpellerBackdrop,
       batch: widget.batch,
+      batchMode: widget.batchMode,
       foregroundBatchId: _chromeBatch,
       adaptiveSampling: sampling,
       backgroundWidget: background,
@@ -663,7 +681,8 @@ class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
               child: Align(
                 alignment: Alignment(navAlignment.x, 0),
                 child: () {
-                  final double padLeft = navMargin.left > 0 ? navMargin.left : 0.0;
+                  final double padLeft =
+                      navMargin.left > 0 ? navMargin.left : 0.0;
                   final double padRight =
                       navMargin.right > 0 ? navMargin.right : 0.0;
                   final double dx =
@@ -671,10 +690,8 @@ class _LiquidGlassScaffoldState extends State<LiquidGlassScaffold> {
                           (navMargin.right < 0 ? navMargin.right : 0.0);
                   Widget child = Padding(
                     padding: EdgeInsets.only(left: padLeft, right: padRight),
-                    // Its own read, never the chrome batch's.
-                    child: LiquidGlassBatch.exclude(
-                      child: widget.bottomNavigationBar!,
-                    ),
+                    // The bar decides whether it joins the chrome batch.
+                    child: widget.bottomNavigationBar!,
                   );
                   if (dx != 0.0) {
                     child = Transform.translate(

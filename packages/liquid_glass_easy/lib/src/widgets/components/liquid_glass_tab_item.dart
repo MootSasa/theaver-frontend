@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../lens/liquid_glass_lens.dart';
 import '../liquid_glass_style.dart';
 import '../utils/liquid_glass_adaptivity.dart';
+import '../utils/liquid_glass_flex.dart' show LiquidGlassFlex;
 import '../utils/liquid_glass_touch.dart';
 import '../utils/liquid_glass_glyph.dart';
 import '../utils/liquid_glass_light.dart';
@@ -60,12 +61,19 @@ class LiquidGlassTabBarItem {
   /// the text to render, or left `null` for builder-only content.
   final LiquidGlassLabelBuilder? labelBuilder;
 
+  /// Whether the tab can be selected. A disabled tab ignores a press, and
+  /// a scrub never lands on it: the pill goes to the nearest enabled tab.
+  /// It is drawn as given; dim its art with [iconBuilder] and
+  /// [labelBuilder]. Default `true`.
+  final bool enabled;
+
   const LiquidGlassTabBarItem({
     this.icon,
     this.selectedIcon,
     this.label,
     this.iconBuilder,
     this.labelBuilder,
+    this.enabled = true,
   }) : assert(icon != null || iconBuilder != null,
             'Give the tab a glyph: an icon or an iconBuilder.');
 
@@ -142,7 +150,7 @@ class LiquidGlassTabBarAction extends StatelessWidget {
     this.style,
     this.visibility = true,
     this.child,
-    this.touch,
+    this.touch = const LiquidGlassTouch.flexing(LiquidGlassFlex()),
   }) : assert(icon != null || child != null,
             'Give the action something to show: an icon or a child.');
 
@@ -188,7 +196,8 @@ class LiquidGlassTabBarAction extends StatelessWidget {
 
   /// Makes the button deform under touch without moving it — press and it
   /// swells, drag and it elongates along the pull, then springs back. See
-  /// [LiquidGlassTouch]; `null` (the default) disables it entirely.
+  /// [LiquidGlassTouch]. The default is the default [LiquidGlassFlex];
+  /// `null` disables it entirely.
   final LiquidGlassTouch? touch;
 
   /// The tuned default look — a transparent body over a soft optical
@@ -243,6 +252,7 @@ class LiquidGlassTabBarAction extends StatelessWidget {
           liteGlass: resolved.liteGlass,
         ),
         visibility: visibility,
+        touch: touch,
         child: Material(
           color: Colors.transparent,
           shape: const CircleBorder(),

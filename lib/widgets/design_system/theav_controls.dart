@@ -241,7 +241,6 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                   if (idx >= 0 &&
                       idx < options.length &&
                       options[idx].value != selected) {
-                    HapticUtils.selection();
                     onChanged(options[idx].value);
                   }
                 },
@@ -250,6 +249,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                 alignment: Alignment.center,
                 margin: EdgeInsets.zero,
                 itemPadding: 3,
+                swell: null,
                 style: barStyle,
                 itemStyle: LiquidGlassTabItemStyle(
                   selectedColor: selectedLabelColor,

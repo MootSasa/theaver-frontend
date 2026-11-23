@@ -23,7 +23,7 @@ export 'package:liquid_glass_easy/src/widgets/lens/liquid_glass_group.dart'
 // read of the backdrop — the same glass, any number of them, at the cost of
 // a single lens. Members must not overlap each other.
 export 'package:liquid_glass_easy/src/widgets/lens/liquid_glass_batch.dart'
-    show LiquidGlassBatch;
+    show LiquidGlassBatch, LiquidGlassBatchMode;
 // Blender: wrap a subtree and merge 2–6 descendant LiquidGlassLens
 // widgets into one smooth metaball glass surface.
 export 'package:liquid_glass_easy/src/widgets/lens/liquid_glass_blender.dart'
@@ -39,6 +39,10 @@ export 'package:liquid_glass_easy/src/widgets/lens/liquid_glass_transform_tracki
 // `liteGlassOnImpeller` put every lens on the shader-free lite glass.
 export 'package:liquid_glass_easy/src/widgets/liquid_glass_engine.dart'
     show LiquidGlassEngine;
+// Configuration: how glass blurs, in a batch and out of one, and how a batch
+// shares its read.
+export 'package:liquid_glass_easy/src/widgets/liquid_glass_configuration.dart'
+    show LiquidGlassConfiguration, LiquidGlassBlurMethod;
 // Lite: the shader-free glass — frost, tint and a painted rim
 // — for surfaces that are not lenses, and what every lens wears under the
 // engine switches above and `LiquidGlassStyle.liteGlass`.
@@ -68,8 +72,8 @@ export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_adaptive_a
 export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_adaptive_content.dart'
     show LiquidGlassAdaptiveContent;
 // Scroll edge treatment: an adaptive fading dim band pinned over a
-// scrollable's edge, keeping floating glass elements legible (the
-// dimming variant of iOS 26's scroll edge effect).
+// scrollable's edge, keeping floating glass elements legible (a
+// dimming scroll edge effect).
 export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_scroll_edge.dart'
     show LiquidGlassScrollEdge, LiquidGlassEdge, LiquidGlassScrollEdgeStyle;
 // The two clip helpers are shared between the widget-level clip and the
@@ -157,7 +161,9 @@ export 'package:liquid_glass_easy/src/widgets/components/bottom_nav_bar/liquid_g
         LiquidGlassPillMode,
         LiquidGlassTabItemStyle,
         LiquidGlassTabPillStyle,
-        LiquidGlassTabMagnifierPillStyle;
+        LiquidGlassTabMagnifierPillStyle,
+        LiquidGlassTabPillBehavior,
+        LiquidGlassTabBarSwell;
 // Morph: glass that measures its child and flows to the new size —
 // two blender blobs drawn as one surface, so mid-morph it has a waist.
 export 'package:liquid_glass_easy/src/widgets/components/morph/liquid_glass_morph.dart';

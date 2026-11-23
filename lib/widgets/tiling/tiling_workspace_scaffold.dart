@@ -556,9 +556,12 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           children: [
             Offstage(
               offstage: hideMain,
-              child: FractionalTranslation(
-                translation: Offset(-0.3 * t, 0.0),
-                child: leftMainTile,
+              child: TickerMode(
+                enabled: !hideMain,
+                child: FractionalTranslation(
+                  translation: Offset(-0.3 * t, 0.0),
+                  child: leftMainTile,
+                ),
               ),
             ),
             if (t > 0.0 && !hideMain)
@@ -570,44 +573,47 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
             if (activeChat != null && chatTileWidget != null)
               Offstage(
                 offstage: hideChat,
-                child: FractionalTranslation(
-                  translation: Offset(1.0 - t, 0.0),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      boxShadow: t > 0.0 && t < 1.0
-                          ? [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.15 * t),
-                                blurRadius: 20,
-                                spreadRadius: 2,
-                                offset: const Offset(-5, 0),
-                              ),
-                            ]
-                          : const [],
-                    ),
-                    child: InteractiveSwipeBackGestureDetector(
-                      animationController: _singlePaneChatController,
-                      viewportSizeOverride: viewportSize,
-                      canSwipeBack: () => _canSinglePaneSwipeBack(activeChat),
-                      isPopBlocked: () =>
-                          activeChat.rootRoute?.popDisposition ==
-                          RoutePopDisposition.doNotPop,
-                      onDragStart: () {
-                        if (!_isSinglePaneInteractiveDrag) {
-                          setState(() => _isSinglePaneInteractiveDrag = true);
-                        }
-                      },
-                      onRestored: () {
-                        if (_isSinglePaneInteractiveDrag) {
-                          setState(() => _isSinglePaneInteractiveDrag = false);
-                        }
-                      },
-                      onDismissed: () {
-                        _isSinglePaneInteractiveDrag = false;
-                        _controller.recordBackTransition();
-                        _controller.closeChatTile(activeChat.tileId);
-                      },
-                      child: chatTileWidget,
+                child: TickerMode(
+                  enabled: !hideChat,
+                  child: FractionalTranslation(
+                    translation: Offset(1.0 - t, 0.0),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        boxShadow: t > 0.0 && t < 1.0
+                            ? [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.15 * t),
+                                  blurRadius: 20,
+                                  spreadRadius: 2,
+                                  offset: const Offset(-5, 0),
+                                ),
+                              ]
+                            : const [],
+                      ),
+                      child: InteractiveSwipeBackGestureDetector(
+                        animationController: _singlePaneChatController,
+                        viewportSizeOverride: viewportSize,
+                        canSwipeBack: () => _canSinglePaneSwipeBack(activeChat),
+                        isPopBlocked: () =>
+                            activeChat.rootRoute?.popDisposition ==
+                            RoutePopDisposition.doNotPop,
+                        onDragStart: () {
+                          if (!_isSinglePaneInteractiveDrag) {
+                            setState(() => _isSinglePaneInteractiveDrag = true);
+                          }
+                        },
+                        onRestored: () {
+                          if (_isSinglePaneInteractiveDrag) {
+                            setState(() => _isSinglePaneInteractiveDrag = false);
+                          }
+                        },
+                        onDismissed: () {
+                          _isSinglePaneInteractiveDrag = false;
+                          _controller.recordBackTransition();
+                          _controller.closeChatTile(activeChat.tileId);
+                        },
+                        child: chatTileWidget,
+                      ),
                     ),
                   ),
                 ),

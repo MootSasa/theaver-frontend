@@ -976,14 +976,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
 
     if (glassEnabled && !isLite && glassProvider != null) {
-      return LiquidGlassBlender(
-        smoothness: 0,
-        style: glassProvider.createStyle(
-          context: context,
-          cornerRadius: 24,
-          refractionIndex: 1.1,
-          refractionWidth: 24,
-        ),
+      return LiquidGlassBatch(
         child: column,
       );
     }

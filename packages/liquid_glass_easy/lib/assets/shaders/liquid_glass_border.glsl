@@ -31,9 +31,15 @@ const float RIM_CHROMA_SCALE = 0.00724;
 const vec3 RIM_NEUTRAL_WARM = vec3(0.0026, -0.0002, -0.006);
 
 // Adds `addL` lightness (0..100 scale, capped at `ceilL`) and `addC` chroma;
-// the colour offset only grows in length, so hue holds.
-vec3 rimLift(vec3 rgb, float addL, float addC, float ceilL) {
+// the colour offset only grows in length, so hue holds. `darkFade` 0 adds
+// them whatever the backdrop, so the rim shows even over black; 1 fades
+// them out over dark backdrops: whole from luma 0.35 up, a tenth on black.
+vec3 rimLift(vec3 rgb, float addL, float addC, float ceilL, float darkFade) {
     float luma = dot(rgb, BORDER_LUMA);
+    float fade = mix(0.1, 1.0, smoothstep(0.0, 0.35, luma));
+    float lift = mix(1.0, fade, darkFade);
+    addL *= lift;
+    addC *= lift;
     vec3 offset = rgb - luma;
     float offsetLen = length(offset);
     offset = offsetLen > 1e-3
@@ -68,9 +74,8 @@ const float RIM_OUTLINE_INSET   = 0.167;
 // Fixed shaping values with no uniform of their own.
 const float RIM_WEIGHT_GAIN        = 6.0;       // weight scale of both layers
 const float RIM_GLOW_SHIFT         = 0.0;       // shift on the glow's ramp
-// Share of the tint's alpha the rim colours take; the body mixes the tint
-// at full alpha, so the rim stays lighter than the body.
-const float RIM_TINT_SHARE = 0.625;
+// Share of the tint's alpha the rim colours take: all of it, as the body.
+const float RIM_TINT_SHARE = 1.0;
 
 // A light's arc power: spread 0 focuses the arcs on the light's axis; 1
 // flattens the power so they wrap the perimeter.
@@ -109,7 +114,7 @@ vec4 rimSpecular(float sd, vec2 normal, vec3 base, float depthPx,
     // The light's own colour replaces the lifted backdrop by its alpha.
     if (own < 1.0) {
         color = rimLift(base, 150.0 * strength,
-                        30.0 * strength, 120.0);
+                        30.0 * strength, 120.0, 0.0);
     }
     color = mix(color, lightColor.rgb, own);
     return vec4(color, clamp(strength * RIM_WEIGHT_GAIN, 0.0, 1.0));
@@ -131,7 +136,8 @@ vec4 getBorder(
     vec4 specular2Shape, // (thicknessPx, sharpness, angleDeg, spread)
     float specular2Intensity, vec4 specular2Light,
     vec3 opposite,    // far-arc strength: (specular, glow, second specular)
-    float aaPx        // the silhouette's AA band width, in fragment px
+    float aaPx,       // the silhouette's AA band width, in fragment px
+    float darkFade    // 1: the glow fades over dark backdrops (see rimLift)
 #ifdef LIQUID_GLASS_RIM_WRAP
     , float wrap   // half-Lambert blend amount; only compiled for the metaball
 #endif
@@ -199,7 +205,7 @@ vec4 getBorder(
         float glowOwn = clamp(glowLight.a, 0.0, 1.0);
         if (glowOwn < 1.0) {
             glowColor = rimLift(base, 150.0 * glowStrength,
-                                30.0 * glowStrength, 120.0);
+                                30.0 * glowStrength, 120.0, darkFade);
         }
         glowColor = mix(glowColor, glowLight.rgb, glowOwn);
         glowWeight = clamp(glowStrength * 0.7 * RIM_WEIGHT_GAIN, 0.0, 1.0);

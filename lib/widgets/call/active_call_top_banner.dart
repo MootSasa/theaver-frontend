@@ -60,7 +60,12 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
     _pulseCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1100),
-    )..repeat(reverse: true);
+    );
+    _visibilityCtrl.addStatusListener((status) {
+      if (status == AnimationStatus.dismissed && _pulseCtrl.isAnimating) {
+        _pulseCtrl.stop();
+      }
+    });
   }
 
   @override
@@ -78,14 +83,21 @@ class _ActiveCallTopBannerState extends State<ActiveCallTopBanner>
     // for a minimized active call.
     final shouldShow = callProvider.hasActiveCall && callProvider.isMinimized;
 
-    if (shouldShow &&
-        _visibilityCtrl.status != AnimationStatus.forward &&
-        _visibilityCtrl.status != AnimationStatus.completed) {
-      _visibilityCtrl.forward();
-    } else if (!shouldShow &&
-        _visibilityCtrl.status != AnimationStatus.reverse &&
-        _visibilityCtrl.status != AnimationStatus.dismissed) {
-      _visibilityCtrl.reverse();
+    if (shouldShow) {
+      if (!_pulseCtrl.isAnimating && !MediaQuery.disableAnimationsOf(context)) {
+        _pulseCtrl.repeat(reverse: true);
+      }
+      if (_visibilityCtrl.status != AnimationStatus.forward &&
+          _visibilityCtrl.status != AnimationStatus.completed) {
+        _visibilityCtrl.forward();
+      }
+    } else {
+      if (_visibilityCtrl.status != AnimationStatus.reverse &&
+          _visibilityCtrl.status != AnimationStatus.dismissed) {
+        _visibilityCtrl.reverse();
+      } else if (_visibilityCtrl.isDismissed && _pulseCtrl.isAnimating) {
+        _pulseCtrl.stop();
+      }
     }
 
     return AnimatedBuilder(

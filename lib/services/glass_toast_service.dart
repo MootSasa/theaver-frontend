@@ -111,8 +111,11 @@ class _GlassToastWidget extends StatefulWidget {
 class _GlassToastWidgetState extends State<_GlassToastWidget>
     with TickerProviderStateMixin {
   static const double _offscreenOffsetY = 140.0;
+  static const double _glassTravelY = 22.0;
   static const double _dropletSize = 38.0;
   static const double _morphFieldMaxHeight = 160.0;
+
+  double get _dragExtent => _useGlassMorph ? _glassTravelY : _offscreenOffsetY;
 
   late final AnimationController _flightController;
   Timer? _autoHideTimer;
@@ -235,18 +238,17 @@ class _GlassToastWidgetState extends State<_GlassToastWidget>
 
   void _handleVerticalDragUpdate(DragUpdateDetails details) {
     if (_closing) return;
-    final double currentDy =
-        (1.0 - _flightController.value) * _offscreenOffsetY;
+    final double extent = _dragExtent;
+    final double currentDy = (1.0 - _flightController.value) * extent;
     final double delta =
         details.delta.dy >= 0 ? details.delta.dy : details.delta.dy * 0.22;
     final double nextDy = (currentDy + delta).clamp(-18.0, 220.0);
-    _flightController.value = 1.0 - (nextDy / _offscreenOffsetY);
+    _flightController.value = 1.0 - (nextDy / extent);
   }
 
   void _handleVerticalDragEnd(DragEndDetails details) {
     if (_closing) return;
-    final double currentDy =
-        (1.0 - _flightController.value) * _offscreenOffsetY;
+    final double currentDy = (1.0 - _flightController.value) * _dragExtent;
     final double velocityY = details.primaryVelocity ?? 0.0;
     if (currentDy > 28.0 || velocityY > 260.0) {
       _beginDismiss();
@@ -319,44 +321,46 @@ class _GlassToastWidgetState extends State<_GlassToastWidget>
               : 360.0;
           return AnimatedBuilder(
             animation: _flightController,
-            builder: (context, child) {
-              final double dy =
-                  (1.0 - _flightController.value) * _offscreenOffsetY;
+            child: _expanded ? expandedContent : seedDroplet,
+            builder: (context, morphChild) {
+              final double clampedFlight =
+                  _flightController.value.clamp(0.0, 1.0);
+              final double dy = (1.0 - _flightController.value) * _glassTravelY;
               return Transform.translate(
                 offset: Offset(0.0, dy),
-                child: child,
-              );
-            },
-            child: LiquidGlassBatch.exclude(
-              child: SizedBox(
-                width: fieldWidth,
-                height: _morphFieldMaxHeight,
-                child: LiquidGlassMorph(
-                  alignment: Alignment.bottomCenter,
-                  smoothness: 22,
-                  style: glassStyle,
-                  motion: const LiquidGlassMorphMotion(
-                    stiffness: 260,
-                    damping: 24.0,
-                    stretch: 0.45,
-                    anchor: Alignment.bottomCenter,
-                    advanced: LiquidGlassMorphAdvanced(
-                      sourceFollows: true,
-                      newScaleFrom: 0.86,
-                      oldScaleTo: 0.85,
-                      contentBlur: 7.0,
-                      contentInStart: 0.24,
-                      contentInEnd: 0.78,
-                      contentOutEnd: 0.34,
-                      thickenBlur: 0.35,
-                      thickenRefraction: 0.30,
+                child: LiquidGlassBatch.exclude(
+                  child: SizedBox(
+                    width: fieldWidth,
+                    height: _morphFieldMaxHeight,
+                    child: LiquidGlassMorph(
+                      alignment: Alignment.bottomCenter,
+                      opacity: clampedFlight,
+                      smoothness: 22,
+                      style: glassStyle,
+                      motion: const LiquidGlassMorphMotion(
+                        stiffness: 260,
+                        damping: 24.0,
+                        stretch: 0.45,
+                        anchor: Alignment.bottomCenter,
+                        advanced: LiquidGlassMorphAdvanced(
+                          sourceFollows: true,
+                          newScaleFrom: 0.86,
+                          oldScaleTo: 0.85,
+                          contentBlur: 7.0,
+                          contentInStart: 0.24,
+                          contentInEnd: 0.78,
+                          contentOutEnd: 0.34,
+                          thickenBlur: 0.35,
+                          thickenRefraction: 0.30,
+                        ),
+                      ),
+                      onEnd: _handleMorphEnd,
+                      child: morphChild,
                     ),
                   ),
-                  onEnd: _handleMorphEnd,
-                  child: _expanded ? expandedContent : seedDroplet,
                 ),
-              ),
-            ),
+              );
+            },
           );
         },
       );

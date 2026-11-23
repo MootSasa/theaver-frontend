@@ -22,18 +22,28 @@ class LiquidGlassProvider extends ChangeNotifier {
   GlassMode _mode = GlassMode.disabled;
   double _lightAngle = 62.0;
   double _blur = 8.0;
+  bool _shaderBlur = true;
 
   /// Текущий режим Liquid Glass дизайна.
   GlassMode get mode => _mode;
 
+  /// Включено ли однопроходное размытие внутри шейдера (5.2.0) вместо Гаусса движка.
+  bool get shaderBlur => _shaderBlur;
+
+  /// Активен ли сейчас шейдерный блюр (учитывает режим full и энергосбережение).
+  bool get isShaderBlurActive =>
+      mode == GlassMode.full &&
+      _shaderBlur &&
+      PowerSavingProvider.instance.allowBlur;
+
   /// Включён ли какой-либо стеклянный дизайн (lite или full).
-  bool get enabled => _mode != GlassMode.disabled;
+  bool get enabled => mode != GlassMode.disabled;
 
   /// Включён ли облегчённый режим (FakeGlass).
-  bool get isLite => _mode == GlassMode.lite;
+  bool get isLite => mode == GlassMode.lite;
 
   /// Включён ли полный режим (LiquidGlass).
-  bool get isFull => _mode == GlassMode.full;
+  bool get isFull => mode == GlassMode.full;
 
   /// Доступность Liquid Glass на текущей платформе
   bool get isSupported => SettingsService.isLiquidGlassSupported;
@@ -92,6 +102,10 @@ class LiquidGlassProvider extends ChangeNotifier {
         (context != null ? MediaQuery.disableAnimationsOf(context) : false);
     final angle = getEffectiveLightAngle(reduceMotion: reduceMotion);
     final lite = powerSavingBlurDisabled ? true : (isLiteOverride ?? isLite);
+    final bool isUltraDark = isDark &&
+        context != null &&
+        Theme.of(context).scaffoldBackgroundColor.computeLuminance() < 0.015;
+    syncEngineConfiguration(isUltraDarkBackdrop: isUltraDark);
 
     final defaultColor = isDark
         ? const Color(0x33202025)
@@ -150,19 +164,81 @@ class LiquidGlassProvider extends ChangeNotifier {
     );
   }
 
+  /// Синхронизирует глобальную конфигурацию пакета `liquid_glass_easy` (5.2.0).
+  void syncEngineConfiguration({bool? isUltraDarkBackdrop}) {
+    LiquidGlassConfiguration.shapeCache = true;
+    final LiquidGlassBlurMethod method = isShaderBlurActive
+        ? LiquidGlassBlurMethod.shader
+        : LiquidGlassBlurMethod.engine;
+    LiquidGlassConfiguration.blurMethod = method;
+    LiquidGlassConfiguration.batchBlurMethod = method;
+    if (isUltraDarkBackdrop != null) {
+      LiquidGlassConfiguration.rimLiftOnDark = !isUltraDarkBackdrop;
+    }
+  }
+
+  /// Масштабирует [base] при использовании [LiquidGlassLens.opacity] (< 1.0):
+  /// при активном [LiquidGlassBlurMethod.engine] пропорционально ослабляет
+  /// движковый Gaussian `blur` и прозрачность контактной тени [LiquidGlassShadow].
+  LiquidGlassStyle scaleStyleForLensOpacity(
+    LiquidGlassStyle base,
+    double opacity,
+  ) {
+    final double op = opacity.clamp(0.0, 1.0);
+    if (op >= 0.999) return base;
+    final bool isEngineBlur = !isShaderBlurActive;
+    final LiquidGlassShadow? scaledShadow = base.shadow == null
+        ? null
+        : LiquidGlassShadow(
+            key: base.shadow!.key,
+            blur: base.shadow!.blur,
+            opacity: base.shadow!.opacity * op,
+            color: base.shadow!.color,
+            offset: base.shadow!.offset,
+            cornerRadius: base.shadow!.cornerRadius,
+            scale: base.shadow!.scale,
+            inset: base.shadow!.inset,
+            visible: base.shadow!.visible,
+            insideGlass: base.shadow!.insideGlass,
+            child: base.shadow!.child,
+          );
+    return base.copyWith(
+      blur: isEngineBlur ? base.blur * op : base.blur,
+      shadow: scaledShadow,
+    );
+  }
+
   /// Инициализация из SettingsService
   void init() {
     _mode = _settingsService.glassMode;
     _lightAngle = _settingsService.manualLightAngle;
     _blur = _settingsService.glassBlur;
+    _shaderBlur = _settingsService.glassShaderBlur;
+    syncEngineConfiguration();
     notifyListeners();
   }
 
   /// Установить режим Liquid Glass дизайна
   Future<void> setMode(GlassMode value) async {
-    if (_mode == value) return;
+    if (_mode == value) {
+      syncEngineConfiguration();
+      return;
+    }
     _mode = value;
+    syncEngineConfiguration();
     await _settingsService.saveGlassMode(value);
+    notifyListeners();
+  }
+
+  /// Переключить метод размытия (шейдерное зерно vs классический Гаусс)
+  Future<void> setShaderBlur(bool value) async {
+    if (_shaderBlur == value) {
+      syncEngineConfiguration();
+      return;
+    }
+    _shaderBlur = value;
+    syncEngineConfiguration();
+    await _settingsService.saveGlassShaderBlur(value);
     notifyListeners();
   }
 
@@ -189,6 +265,7 @@ class LiquidGlassProvider extends ChangeNotifier {
     final clamped = blur.clamp(0.0, 30.0);
     if (_blur == clamped) return;
     _blur = clamped;
+    syncEngineConfiguration();
     await _settingsService.saveGlassBlur(clamped);
     notifyListeners();
   }

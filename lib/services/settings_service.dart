@@ -29,6 +29,7 @@ class SettingsService {
   static const String _glassModeKey = 'glass_mode';
   static const String _manualLightAngleKey = 'manual_light_angle';
   static const String _glassBlurKey = 'glass_blur';
+  static const String _glassShaderBlurKey = 'glass_shader_blur';
   static const String _notificationSettingsKey = 'notification_settings';
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
   static const String _sendByEnterKey = 'chat_send_by_enter';
@@ -44,6 +45,7 @@ class SettingsService {
   GlassMode? _cachedGlassMode;
   double? _cachedManualLightAngle;
   double? _cachedGlassBlur;
+  bool? _cachedGlassShaderBlur;
   GlobalNotificationSettings? _cachedNotificationSettings;
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
   final ValueNotifier<bool> sendByEnterNotifier = ValueNotifier<bool>(true);
@@ -68,6 +70,8 @@ class SettingsService {
     _cachedGlassMode = null;
     _cachedManualLightAngle = null;
     _cachedGlassBlur = null;
+    _cachedGlassShaderBlur = null;
+    _cachedGlassShaderBlur = null;
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
     await _loadSettings();
@@ -178,6 +182,7 @@ class SettingsService {
 
     _cachedManualLightAngle = _prefs.getDouble(_k(_manualLightAngleKey)) ?? 62.0;
     _cachedGlassBlur = _prefs.getDouble(_k(_glassBlurKey)) ?? 8.0;
+    _cachedGlassShaderBlur = _prefs.getBool(_k(_glassShaderBlurKey)) ?? true;
 
     // Загрузка глобальных настроек уведомлений
     final notifJson = _prefs.getString(_k(_notificationSettingsKey));
@@ -388,6 +393,15 @@ class SettingsService {
     await _prefs.setDouble(_k(_glassBlurKey), blur);
   }
 
+  /// Использовать ли однопроходное шейдерное размытие (5.2.0) вместо Гаусса движка
+  bool get glassShaderBlur => _cachedGlassShaderBlur ?? true;
+
+  /// Сохранить выбор метода размытия стекла (шейдер / классический Гаусс)
+  Future<void> saveGlassShaderBlur(bool enabled) async {
+    _cachedGlassShaderBlur = enabled;
+    await _prefs.setBool(_k(_glassShaderBlurKey), enabled);
+  }
+
   // ============ Глобальные настройки уведомлений ============
 
   /// Получить глобальные настройки уведомлений
@@ -568,6 +582,8 @@ class SettingsService {
     _cachedGlassMode = null;
     _cachedManualLightAngle = null;
     _cachedGlassBlur = null;
+    _cachedGlassShaderBlur = null;
+    _cachedGlassShaderBlur = null;
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
     sendByEnterNotifier.value = true;
@@ -581,6 +597,7 @@ class SettingsService {
     await _prefs.remove(_k(_glassModeKey));
     await _prefs.remove(_k(_manualLightAngleKey));
     await _prefs.remove(_k(_glassBlurKey));
+    await _prefs.remove(_k(_glassShaderBlurKey));
     await _prefs.remove(_k(_notificationSettingsKey));
     await _prefs.remove(_k(_chatNotificationSettingsKey));
     await _prefs.remove(_k(_sendByEnterKey));

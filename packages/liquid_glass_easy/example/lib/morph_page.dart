@@ -47,15 +47,15 @@ class _LiquidGlassMorphExamplePageState
   /// The motion presets, by name — the whole choice a caller makes.
   static const Map<String, LiquidGlassMorphMotion> _motions =
       <String, LiquidGlassMorphMotion>{
+    // One lens on one spring, no second blob and no blender: a plain
+    // resize, with the content still cross-fading on the morph's clock.
+    'plain': LiquidGlassMorphMotion.plain,
     'fluid': LiquidGlassMorphMotion.fluid,
     'anchored pop': LiquidGlassMorphMotion.anchoredPop,
     'droplet': LiquidGlassMorphMotion.droplet,
     'calm': LiquidGlassMorphMotion.calm,
-    // One lens on one spring, no second blob and no blender: a plain
-    // resize, with the content still cross-fading on the morph's clock.
-    'plain': LiquidGlassMorphMotion.plain,
   };
-  String _motion = 'fluid';
+  String _motion = 'plain';
 
   /// Whether the options panel is showing its controls.
   bool _controlsOpen = true;

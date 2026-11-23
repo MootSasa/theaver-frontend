@@ -1,4 +1,8 @@
+import 'dart:io' show File;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:visibility_detector/visibility_detector.dart';
@@ -245,6 +249,39 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
   bool _isFullLoaded = false;
 
   @override
+  void initState() {
+    super.initState();
+    _isFullLoaded = _isFullImageWarmInMemory(_resolveFullUrl());
+  }
+
+  @override
+  void didUpdateWidget(covariant GifMessageWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.gifUrl != widget.gifUrl ||
+        oldWidget.previewUrl != widget.previewUrl) {
+      _isFullLoaded = _isFullImageWarmInMemory(_resolveFullUrl());
+    }
+  }
+
+  String _resolveFullUrl() {
+    return StickerService.resolveUrl(
+      widget.gifUrl.trim().isNotEmpty
+          ? widget.gifUrl.trim()
+          : (widget.previewUrl ?? '').trim(),
+    );
+  }
+
+  bool _isFullImageWarmInMemory(String fullUrl) {
+    if (kIsWeb || fullUrl.isEmpty) return false;
+    final File? syncFile =
+        StickerService.instance.getCachedRasterFileSync(fullUrl);
+    if (syncFile == null) return false;
+    final status =
+        PaintingBinding.instance.imageCache.statusForKey(FileImage(syncFile));
+    return status.keepAlive || status.live;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final bool isWide = MediaQuery.sizeOf(context).width >= 640;
     final double maxW = isWide ? 280.0 : 240.0;
@@ -263,11 +300,7 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
       displayH = 110.0;
     }
 
-    final String fullUrl = StickerService.resolveUrl(
-      widget.gifUrl.trim().isNotEmpty
-          ? widget.gifUrl.trim()
-          : (widget.previewUrl ?? '').trim(),
-    );
+    final String fullUrl = _resolveFullUrl();
     final String previewUrl =
         (widget.previewUrl != null && widget.previewUrl!.trim().isNotEmpty)
             ? StickerService.resolveUrl(widget.previewUrl!.trim())
@@ -312,7 +345,15 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
                     filterQuality: FilterQuality.low,
                     animate: _isVisible,
                     onFirstFrameLoaded: () {
-                      if (mounted && !_isFullLoaded) {
+                      if (!mounted || _isFullLoaded) return;
+                      if (SchedulerBinding.instance.schedulerPhase ==
+                          SchedulerPhase.persistentCallbacks) {
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          if (mounted && !_isFullLoaded) {
+                            setState(() => _isFullLoaded = true);
+                          }
+                        });
+                      } else {
                         setState(() => _isFullLoaded = true);
                       }
                     },

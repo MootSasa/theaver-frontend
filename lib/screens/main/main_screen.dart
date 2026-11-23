@@ -109,6 +109,7 @@ class _MainScreenState extends State<MainScreen>
 
   // PageController для свайпа между Настройками и Чатами
   final PageController _pageController = PageController(initialPage: 1);
+  final ScrollController _chatsScrollController = ScrollController();
   static const ValueKey<String> _pageViewKey = ValueKey<String>('main_page_view');
   bool? _lastGlassEnabled;
 
@@ -1356,6 +1357,7 @@ class _MainScreenState extends State<MainScreen>
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
+    _chatsScrollController.dispose();
     _wsSubscription?.cancel();
     _connectionCheckTimer?.cancel();
     _updateCheckTimer?.cancel();
@@ -1542,6 +1544,45 @@ class _MainScreenState extends State<MainScreen>
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  void _onTabReselected(int index) {
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+    }
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+    }
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
+    }
+    if (index == 1) {
+      if (_chatsScrollController.hasClients &&
+          _chatsScrollController.offset > 0) {
+        _chatsScrollController.animateTo(
+          0.0,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      return;
+    }
+    if (index == 2) {
+      _searchFocusNode.requestFocus();
+      return;
+    }
+    if (index == 0) {
+      final primaryScroll = PrimaryScrollController.maybeOf(context);
+      if (primaryScroll != null &&
+          primaryScroll.hasClients &&
+          primaryScroll.offset > 0) {
+        primaryScroll.animateTo(
+          0.0,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    }
   }
 
   void _openCreateMenu() {
@@ -2394,6 +2435,7 @@ class _MainScreenState extends State<MainScreen>
     }
 
     final Widget scrollList = ListView.builder(
+      controller: _chatsScrollController,
       cacheExtent: 600.0,
       physics: const AlwaysScrollableScrollPhysics(
         parent: BouncingScrollPhysics(),
@@ -3947,8 +3989,12 @@ class _MainScreenState extends State<MainScreen>
                       selectedIndex: _currentIndex,
                       onChanged: (index) {
                         if (_isSelectMode) return;
-                        HapticUtils.selection();
                         _onTabTapped(index);
+                      },
+                      onReselected: (index) {
+                        if (_isSelectMode) return;
+                        HapticUtils.tap();
+                        _onTabReselected(index);
                       },
                       width: barWidth,
                       height: barHeight,
@@ -3958,6 +4004,7 @@ class _MainScreenState extends State<MainScreen>
                         bottom: effectiveBottomMargin - hideOffset,
                       ),
                       itemPadding: 3,
+                      swell: const LiquidGlassTabBarSwell(scale: 0.024),
                       style: barStyle,
                       itemStyle: LiquidGlassTabItemStyle(
                         selectedColor: primaryColor,
@@ -3977,6 +4024,7 @@ class _MainScreenState extends State<MainScreen>
                         show: true,
                         animated: true,
                         growHeight: 7,
+                        behavior: const LiquidGlassTabPillBehavior(),
                         rest: LiquidGlassStyle(
                           shape: _glassShape(28),
                           color: isDark
@@ -3986,30 +4034,36 @@ class _MainScreenState extends State<MainScreen>
                       ),
                     ),
                     bottomNavigationBarAction: IgnorePointer(
-                      ignoring: _isSelectMode,
-                      child: Opacity(
-                        opacity: actionOpacity,
-                        child: SizedBox(
-                          width: CreateChatSelectorPanel.kPanelWidth,
-                          height: CreateChatSelectorPanel.kPanelHeight,
-                          child: LiquidGlassMorph(
-                            key: const ValueKey<String>('main_create_menu_morph'),
-                            alignment: Alignment.bottomRight,
-                            motion: LiquidGlassMorphMotion.fluid,
-                            smoothness: 28,
-                            style: actionStyle,
-                            child: _isCreateMenuOpen
-                                ? CreateChatSelectorPanel(
-                                    key: const ValueKey<String>('create_chat_panel'),
-                                    onClose: _closeCreateMenu,
-                                    onSelectOption: _handleCreateOptionSelected,
-                                  )
-                                : _PlusActionGlyph(
-                                    key: const ValueKey<String>('plus_action_glyph'),
-                                    size: actionSize,
-                                    onTap: _toggleCreateMenu,
-                                  ),
-                          ),
+                      ignoring: _isSelectMode || actionOpacity <= 0.01,
+                      child: SizedBox(
+                        width: CreateChatSelectorPanel.kPanelWidth,
+                        height: CreateChatSelectorPanel.kPanelHeight,
+                        child: LiquidGlassMorph(
+                          key: const ValueKey<String>('main_create_menu_morph'),
+                          alignment: Alignment.bottomRight,
+                          opacity: actionOpacity.clamp(0.0, 1.0),
+                          motion: LiquidGlassMorphMotion.fluid,
+                          smoothness: 28,
+                          style: actionStyle,
+                          touch: !_isCreateMenuOpen
+                              ? const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                                  stretch: 6,
+                                  squeeze: 0.68,
+                                  lean: 0.30,
+                                  grip: 0.50,
+                                ))
+                              : null,
+                          child: _isCreateMenuOpen
+                              ? CreateChatSelectorPanel(
+                                  key: const ValueKey<String>('create_chat_panel'),
+                                  onClose: _closeCreateMenu,
+                                  onSelectOption: _handleCreateOptionSelected,
+                                )
+                              : _PlusActionGlyph(
+                                  key: const ValueKey<String>('plus_action_glyph'),
+                                  size: actionSize,
+                                  onTap: _toggleCreateMenu,
+                                ),
                         ),
                       ),
                     ),

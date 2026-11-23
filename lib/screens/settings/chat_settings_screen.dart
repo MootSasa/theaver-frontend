@@ -1089,6 +1089,29 @@ class ChatSettingsScreen extends StatelessWidget {
                           );
                         },
                       ),
+                      if (mode == GlassMode.full) ...[
+                        const SizedBox(height: 8),
+                        ListTile(
+                          title: Text(
+                            context.trOr(
+                              'settings_glass_shader_blur',
+                              'Шейдерное размытие (5.2)',
+                            ),
+                          ),
+                          subtitle: Text(
+                            context.trOr(
+                              'settings_glass_shader_blur_desc',
+                              'Однопроходный оптический иней внутри шейдера вместо классического Гаусса',
+                            ),
+                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          ),
+                          trailing: AdaptiveSwitch(
+                            key: const ValueKey('settings_glass_shader_blur_switch'),
+                            value: provider.shaderBlur,
+                            onChanged: (val) => provider.setShaderBlur(val),
+                          ),
+                        ),
+                      ],
                     ],
                   ],
                 );

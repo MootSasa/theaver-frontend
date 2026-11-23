@@ -666,9 +666,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
                 )
               : null;
 
-          final int glassCount =
-              1 + (showLeftControl ? 1 : 0) + (showRightControl ? 1 : 0);
-
           final stack = Stack(
             clipBehavior: Clip.none,
             children: [
@@ -697,13 +694,9 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           return SizedBox(
             width: double.infinity,
             height: barHeight,
-            child: glassCount >= 2
-                ? LiquidGlassBlender(
-                    smoothness: 0,
-                    style: morphStyle,
-                    child: stack,
-                  )
-                : stack,
+            child: LiquidGlassBatch(
+              child: stack,
+            ),
           );
         }
 

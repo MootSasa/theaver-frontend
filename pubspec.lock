@@ -1147,7 +1147,7 @@ packages:
       path: "packages/liquid_glass_easy"
       relative: true
     source: path
-    version: "5.0.0"
+    version: "5.2.0"
   lists:
     dependency: transitive
     description:

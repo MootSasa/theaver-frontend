@@ -377,6 +377,7 @@ class ProfileFloatingSwitcherScaffold extends StatelessWidget {
             alignment: barAlignment,
             margin: barMargin,
             itemPadding: 3,
+            swell: null,
             style: barStyle,
             itemStyle: LiquidGlassTabItemStyle(
               selectedColor:

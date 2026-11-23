@@ -1037,6 +1037,8 @@
   "settings_glass_full": "Full",
   "settings_glass_lite": "Lite",
   "settings_glass_off": "Off",
+  "settings_glass_shader_blur": "Shader Frost Blur (5.2)",
+  "settings_glass_shader_blur_desc": "Single-pass optical frost grain in shader instead of classic Gaussian",
   "settings_haptic_uniform_subtitle": "Use a gentle tap of uniform strength for all emoji and dice animations",
   "settings_haptic_uniform_title": "Uniform Haptic Feedback",
   "settings_language": "Language",

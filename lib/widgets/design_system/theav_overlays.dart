@@ -945,6 +945,7 @@ Future<T?> showTheavDialog<T>({
   List<Widget>? customActions,
   bool barrierDismissible = true,
 }) {
+  final bool isGlass = TheavSurfaceStyle.of(context, listen: false).isGlass;
   return showGeneralDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
@@ -955,14 +956,34 @@ Future<T?> showTheavDialog<T>({
         'Dismiss',
     barrierColor: Colors.black54,
     transitionDuration: const Duration(milliseconds: 220),
-    pageBuilder: (ctx, animation, secondaryAnimation) => TheavDialog<T>(
-      title: title,
-      message: message,
-      content: content,
-      icon: icon,
-      actions: actions,
-      customActions: customActions,
-    ),
+    pageBuilder: (ctx, animation, secondaryAnimation) {
+      final bool disableAnim = MediaQuery.maybeDisableAnimationsOf(ctx) ?? false;
+      Widget buildDialog(double op) => TheavDialog<T>(
+            title: title,
+            message: message,
+            content: content,
+            icon: icon,
+            actions: actions,
+            customActions: customActions,
+            opacity: op,
+          );
+      if (!isGlass || disableAnim) {
+        return buildDialog(1.0);
+      }
+      return AnimatedBuilder(
+        animation: animation,
+        builder: (animCtx, _) {
+          final bool isReversing =
+              animation.status == AnimationStatus.reverse;
+          final double op = (isReversing
+                  ? Curves.easeInCubic
+                  : Curves.easeOutCubic)
+              .transform(animation.value)
+              .clamp(0.0, 1.0);
+          return buildDialog(op);
+        },
+      );
+    },
     transitionBuilder: (ctx, animation, secondaryAnimation, child) {
       final disableAnim = MediaQuery.maybeDisableAnimationsOf(ctx) ?? false;
       if (disableAnim) return child;
@@ -971,15 +992,17 @@ Future<T?> showTheavDialog<T>({
         parent: animation,
         curve: isReversing ? Curves.easeInCubic : Curves.easeOutCubic,
       );
+      final Widget scaled = ScaleTransition(
+        scale: Tween<double>(begin: 0.93, end: 1.0).animate(curved),
+        child: child,
+      );
+      if (isGlass) return scaled;
       return FadeTransition(
         opacity: CurvedAnimation(
           parent: animation,
           curve: isReversing ? Curves.easeInCubic : Curves.easeOutCubic,
         ),
-        child: ScaleTransition(
-          scale: Tween<double>(begin: 0.93, end: 1.0).animate(curved),
-          child: child,
-        ),
+        child: scaled,
       );
     },
   );
@@ -994,6 +1017,7 @@ class TheavDialog<T> extends StatelessWidget {
   final Widget? icon;
   final List<TheavDialogAction<T>>? actions;
   final List<Widget>? customActions;
+  final double opacity;
 
   const TheavDialog({
     super.key,
@@ -1003,121 +1027,154 @@ class TheavDialog<T> extends StatelessWidget {
     this.icon,
     this.actions,
     this.customActions,
+    this.opacity = 1.0,
   });
 
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
     final palette = style.palette;
-    final blurFilter = style.isGlass
-        ? style.getBlurFilter(sigma: 26.0)
-        : style.getMaterialHudBlurFilter(sigma: 12.0);
-    final Color dialogBg = (!style.isGlass && blurFilter != null)
-        ? BlurUtils.resolveMaterialHudColor(
-            style.overlayFill,
-            isDark: style.isDark,
-            blurEnabled: true,
-            darkAlpha: 0.84,
-            lightAlpha: 0.88,
-          )
-        : style.overlayFill;
+    final double op = opacity.clamp(0.0, 1.0);
     final resolvedActions = actions ?? const [];
-    final Color borderColor = (style.isGlass || blurFilter != null)
-        ? (style.isDark
-            ? Colors.white.withValues(alpha: style.isGlass ? 0.16 : 0.12)
-            : Colors.black.withValues(alpha: style.isGlass ? 0.08 : 0.07))
-        : style.hairlineBorder;
 
-    Widget card = Container(
-      constraints: const BoxConstraints(maxWidth: 344),
-      decoration: BoxDecoration(
-        color: dialogBg,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: borderColor,
-          width: (style.isGlass || blurFilter != null) ? 0.6 : 0.5,
-        ),
-        boxShadow: style.floatingShadow,
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (icon != null) ...[
-                Center(
-                  child: IconTheme(
-                    data: IconThemeData(color: palette.primary, size: 28),
-                    child: icon!,
-                  ),
+    final Widget innerContent = Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (icon != null) ...[
+              Center(
+                child: IconTheme(
+                  data: IconThemeData(color: palette.primary, size: 28),
+                  child: icon!,
                 ),
-                const SizedBox(height: 12),
-              ],
-              if (title != null && title!.isNotEmpty)
-                Text(
-                  title!,
-                  style: TextStyle(
-                    color: palette.onSurface,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              if (message != null && message!.isNotEmpty) ...[
-                if (title != null && title!.isNotEmpty) const SizedBox(height: 8),
-                Text(
-                  message!,
-                  style: TextStyle(
-                    color: palette.subtext,
-                    fontSize: 14.5,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-              if (content != null) ...[
-                if ((title != null && title!.isNotEmpty) ||
-                    (message != null && message!.isNotEmpty))
-                  const SizedBox(height: 14),
-                content!,
-              ],
-              if (resolvedActions.isNotEmpty ||
-                  (customActions != null && customActions!.isNotEmpty)) ...[
-                const SizedBox(height: 18),
-                if (customActions != null && customActions!.isNotEmpty)
-                  Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: customActions!,
-                  )
-                else
-                  Wrap(
-                    alignment: WrapAlignment.end,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final action in resolvedActions)
-                        _DialogActionButton<T>(action: action),
-                    ],
-                  ),
-              ],
+              ),
+              const SizedBox(height: 12),
             ],
-          ),
+            if (title != null && title!.isNotEmpty)
+              Text(
+                title!,
+                style: TextStyle(
+                  color: palette.onSurface,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            if (message != null && message!.isNotEmpty) ...[
+              if (title != null && title!.isNotEmpty) const SizedBox(height: 8),
+              Text(
+                message!,
+                style: TextStyle(
+                  color: palette.subtext,
+                  fontSize: 14.5,
+                  height: 1.4,
+                ),
+              ),
+            ],
+            if (content != null) ...[
+              if ((title != null && title!.isNotEmpty) ||
+                  (message != null && message!.isNotEmpty))
+                const SizedBox(height: 14),
+              content!,
+            ],
+            if (resolvedActions.isNotEmpty ||
+                (customActions != null && customActions!.isNotEmpty)) ...[
+              const SizedBox(height: 18),
+              if (customActions != null && customActions!.isNotEmpty)
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: customActions!,
+                )
+              else
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final action in resolvedActions)
+                      _DialogActionButton<T>(action: action),
+                  ],
+                ),
+            ],
+          ],
         ),
       ),
     );
 
-    if (blurFilter != null) {
-      card = ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter.grouped(
-          filter: blurFilter,
-          child: card,
+    Widget card;
+    if (style.isGlass && style.glassProvider != null) {
+      final baseGlassStyle = style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: 22.0,
+        refractionIndex: 1.09,
+        refractionWidth: 20.0,
+        borderWidth: 1.1,
+        color: style.hudFill.withValues(alpha: style.isDark ? 0.80 : 0.86),
+      );
+      card = ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 344),
+        child: LiquidGlassLens(
+          opacity: op,
+          style: style.glassProvider!.scaleStyleForLensOpacity(
+            baseGlassStyle,
+            op,
+          ),
+          child: op < 0.999
+              ? Opacity(opacity: op, child: innerContent)
+              : innerContent,
         ),
       );
+    } else {
+      final blurFilter = style.isGlass
+          ? style.getBlurFilter(sigma: 26.0)
+          : style.getMaterialHudBlurFilter(sigma: 12.0);
+      final Color dialogBg = (!style.isGlass && blurFilter != null)
+          ? BlurUtils.resolveMaterialHudColor(
+              style.overlayFill,
+              isDark: style.isDark,
+              blurEnabled: true,
+              darkAlpha: 0.84,
+              lightAlpha: 0.88,
+            )
+          : style.overlayFill;
+      final Color borderColor = (style.isGlass || blurFilter != null)
+          ? (style.isDark
+              ? Colors.white.withValues(alpha: style.isGlass ? 0.16 : 0.12)
+              : Colors.black.withValues(alpha: style.isGlass ? 0.08 : 0.07))
+          : style.hairlineBorder;
+
+      card = Container(
+        constraints: const BoxConstraints(maxWidth: 344),
+        decoration: BoxDecoration(
+          color: dialogBg,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: borderColor,
+            width: (style.isGlass || blurFilter != null) ? 0.6 : 0.5,
+          ),
+          boxShadow: style.floatingShadow,
+        ),
+        child: innerContent,
+      );
+
+      if (blurFilter != null) {
+        card = ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: BackdropFilter.grouped(
+            filter: blurFilter,
+            child: card,
+          ),
+        );
+      }
+      if (op < 0.999) {
+        card = Opacity(opacity: op, child: card);
+      }
     }
 
     return Center(

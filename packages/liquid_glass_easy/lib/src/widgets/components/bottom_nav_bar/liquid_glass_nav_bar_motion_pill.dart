@@ -3,7 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../../lens/liquid_glass_blender.dart' show LiquidGlassBlenderScope;
 import '../../lens/liquid_glass_lens.dart';
+import '../../lens/liquid_glass_shape_cache.dart'
+    show LiquidGlassShapeCacheExclude;
+import '../../liquid_glass_configuration.dart' show LiquidGlassOverrideExclude;
 import '../../lens/render_liquid_glass_lens.dart' show LiquidGlassShaderClip;
 import '../../liquid_glass_config.dart'
     show LiquidGlassAppearance, LiquidGlassRefraction;
@@ -121,6 +125,11 @@ class LiquidGlassNavBarMotionPill extends StatefulWidget {
   /// this widget only renders what it is given.
   final double? deviation;
 
+  /// The vertical half of a host-supplied deformation, when the two axes
+  /// are not a mirrored pair: `scaleY = 1 − deviationY`. `null` (the
+  /// default) mirrors [deviation]. Read only with [deviation].
+  final double? deviationY;
+
   /// How much of the glass is present, `0`..`1`, on top of the lift.
   ///
   /// The lift ([morphProgress]) says how big and how raised the pill is;
@@ -190,6 +199,7 @@ class LiquidGlassNavBarMotionPill extends StatefulWidget {
         refractionIndex: 1.5, refractionWidth: 30, blur: 0),
     this.motion = const LiquidGlassLensMotionSpec(),
     this.deviation,
+    this.deviationY,
     this.glassPresence = 1.0,
     this.expandStiffness = 247,
     this.expandDamping = 18.9,
@@ -382,11 +392,12 @@ class _LiquidGlassNavBarMotionPillState
     final double morphH = envelope?.height ??
         rest.height + (active.height - rest.height) * _morph;
     final double d = _deviation;
+    final double dy = widget.deviation != null ? (widget.deviationY ?? d) : d;
     return (
       morphW: morphW,
       morphH: morphH,
       pillW: morphW * (1 + d),
-      pillH: morphH * (1 - d),
+      pillH: morphH * (1 - dy),
     );
   }
 
@@ -424,7 +435,15 @@ class _LiquidGlassNavBarMotionPillState
     // still easing out behind it — edges first, body after.
     final double rim = ((presence - 0.45) / 0.55).clamp(0.0, 1.0);
 
-    Widget glassPill = LiquidGlassLens(
+    // Out of the shape cache: the pill changes shape on every touch and
+    // every tab change, so a bake taken on settle never pays off. Out of
+    // the blur and dispersion overrides too: its look is the tab bar's.
+    // Out of any enclosing blender: the bar's capsule may join one, the
+    // glass pill and the magnifier keep their own glass.
+    Widget glassPill = LiquidGlassBlenderScope.exclude(
+        child: LiquidGlassShapeCacheExclude(
+            child: LiquidGlassOverrideExclude(
+                child: LiquidGlassLens(
       style: _resolveStyle(styleProgress, scaleX, presence: presence, rim: rim),
       honorBackdropAlpha: widget.honorBackdropAlpha,
       // The 4.1.0 clip, kept for the two tab bar pills only: a padded rect
@@ -442,7 +461,7 @@ class _LiquidGlassNavBarMotionPillState
         childTranslateY: 0,
         pressAmount: 0,
       ),
-    );
+    ))));
 
     // The shadow remains part of this same surface and eases away with the
     // active style instead of being hidden by a replacement rest widget.
@@ -519,8 +538,8 @@ class _LiquidGlassNavBarMotionPillState
     return s.copyWith(
       specular: s.specular.copyWith(thickness: s.specular.thickness * factor),
       glow: s.glow.copyWith(thickness: s.glow.thickness * factor),
-      secondSpecular: s.secondSpecular?.copyWith(
-          thickness: s.secondSpecular!.thickness * factor),
+      secondSpecular: s.secondSpecular
+          ?.copyWith(thickness: s.secondSpecular!.thickness * factor),
     );
   }
 

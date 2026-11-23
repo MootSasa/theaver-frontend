@@ -158,37 +158,59 @@ Future<T?> showSafariWebAlert<T>({
           'Dismiss',
       barrierColor: Colors.black.withValues(alpha: 0.36),
       transitionDuration: const Duration(milliseconds: 230),
-      pageBuilder: (ctx, _, __) {
-        final Widget card = SafariWebAlertCard<T>(
-          key: dialogKey,
-          title: title,
-          message: message,
-          customBody: customBody,
-          tone: tone,
-          iconOverride: iconOverride,
-          originLabel: originLabel,
-          originIsSecure: originIsSecure,
-          actions: actions,
-        );
-        final Widget centered = Center(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              24,
-              24,
-              24,
-              24 + MediaQuery.viewInsetsOf(ctx).bottom,
+      pageBuilder: (ctx, animation, __) {
+        final bool disableAnim =
+            MediaQuery.maybeDisableAnimationsOf(ctx) ?? false;
+        Widget buildCard(double op) {
+          final Widget card = SafariWebAlertCard<T>(
+            key: dialogKey,
+            title: title,
+            message: message,
+            customBody: customBody,
+            tone: tone,
+            iconOverride: iconOverride,
+            originLabel: originLabel,
+            originIsSecure: originIsSecure,
+            actions: actions,
+            opacity: op,
+          );
+          final Widget centered = Center(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                24,
+                24,
+                24 + MediaQuery.viewInsetsOf(ctx).bottom,
+              ),
+              child: SingleChildScrollView(
+                clipBehavior: Clip.none,
+                child: card,
+              ),
             ),
-            child: SingleChildScrollView(
-              clipBehavior: Clip.none,
-              child: card,
-            ),
-          ),
+          );
+          final Widget scoped = _SafariAlertDismissScope(
+            barrierDismissible: barrierDismissible,
+            child: centered,
+          );
+          return isGlass ? scoped : BackdropGroup(child: scoped);
+        }
+
+        if (disableAnim) {
+          return buildCard(1.0);
+        }
+        return AnimatedBuilder(
+          animation: animation,
+          builder: (animCtx, _) {
+            final bool isReversing =
+                animation.status == AnimationStatus.reverse;
+            final double op = (isReversing
+                    ? Curves.easeInCubic
+                    : Curves.easeOutCubic)
+                .transform(animation.value)
+                .clamp(0.0, 1.0);
+            return buildCard(op);
+          },
         );
-        final Widget scoped = _SafariAlertDismissScope(
-          barrierDismissible: barrierDismissible,
-          child: centered,
-        );
-        return isGlass ? scoped : BackdropGroup(child: scoped);
       },
       transitionBuilder: (ctx, animation, _, child) {
         if (MediaQuery.maybeDisableAnimationsOf(ctx) ?? false) {
@@ -217,6 +239,7 @@ class _SafariGlassSurface extends StatelessWidget {
   final double maxWidth;
   final double borderRadius;
   final EdgeInsetsGeometry padding;
+  final double opacity;
 
   const _SafariGlassSurface({
     super.key,
@@ -224,29 +247,36 @@ class _SafariGlassSurface extends StatelessWidget {
     required this.maxWidth,
     required this.borderRadius,
     required this.padding,
+    this.opacity = 1.0,
   });
 
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
+    final double op = opacity.clamp(0.0, 1.0);
     final Widget body = Material(
       type: MaterialType.transparency,
       child: Padding(padding: padding, child: child),
     );
 
     if (style.isGlass && style.glassProvider != null) {
+      final baseGlassStyle = style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: borderRadius,
+        refractionIndex: 1.1,
+        refractionWidth: 20.0,
+        borderWidth: 1.1,
+        color: style.hudFill.withValues(alpha: style.isDark ? 0.82 : 0.88),
+      );
       return ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: LiquidGlassLens(
-          style: style.glassProvider!.createStyle(
-            context: context,
-            cornerRadius: borderRadius,
-            refractionIndex: 1.1,
-            refractionWidth: 20.0,
-            borderWidth: 1.1,
-            color: style.hudFill.withValues(alpha: style.isDark ? 0.82 : 0.88),
+          opacity: op,
+          style: style.glassProvider!.scaleStyleForLensOpacity(
+            baseGlassStyle,
+            op,
           ),
-          child: body,
+          child: op < 0.999 ? Opacity(opacity: op, child: body) : body,
         ),
       );
     }
@@ -284,7 +314,7 @@ class _SafariGlassSurface extends StatelessWidget {
       );
     }
 
-    return ConstrainedBox(
+    Widget wrapped = ConstrainedBox(
       constraints: BoxConstraints(maxWidth: maxWidth),
       child: DecoratedBox(
         decoration: BoxDecoration(
@@ -297,6 +327,10 @@ class _SafariGlassSurface extends StatelessWidget {
         ),
       ),
     );
+    if (op < 0.999) {
+      wrapped = Opacity(opacity: op, child: wrapped);
+    }
+    return wrapped;
   }
 }
 
@@ -311,6 +345,7 @@ class SafariWebAlertCard<T> extends StatelessWidget {
   final String? originLabel;
   final bool originIsSecure;
   final List<SafariAlertAction<T>> actions;
+  final double opacity;
 
   const SafariWebAlertCard({
     super.key,
@@ -322,6 +357,7 @@ class SafariWebAlertCard<T> extends StatelessWidget {
     this.originLabel,
     this.originIsSecure = true,
     required this.actions,
+    this.opacity = 1.0,
   });
 
   @override
@@ -341,6 +377,7 @@ class SafariWebAlertCard<T> extends StatelessWidget {
       maxWidth: 312.0,
       borderRadius: 28.0,
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+      opacity: opacity,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

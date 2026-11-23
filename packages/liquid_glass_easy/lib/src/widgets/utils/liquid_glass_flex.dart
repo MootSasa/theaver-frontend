@@ -186,7 +186,7 @@ class LiquidGlassFlex {
   /// See [LiquidGlassFlexAdvanced.releaseDamping].
   double get releaseDamping => advanced.releaseDamping;
 
-  /// The shipped feel: the blended-list spec, at a [stretch] of 13.
+  /// The shipped feel: the blended-list spec, at a [stretch] of 8.
   ///
   /// Dialled in on a real panel rather than derived — a list-sized lens that
   /// deforms visibly under a drag without leaving its own footprint, leans
@@ -194,7 +194,7 @@ class LiquidGlassFlex {
   /// [compressInward] is on, so driving the grabbed edge into the body
   /// squashes it rather than inflating it whichever way it is shoved.
   const LiquidGlassFlex({
-    this.stretch = 13,
+    this.stretch = 8,
     this.squeeze = 0.70,
     this.lean = 0.50,
     this.grip = 0.70,
@@ -354,8 +354,8 @@ class LiquidGlassFlexAdvanced {
   /// **Off by default**, and deliberately separate from [refractionBoost].
   /// Magnification is not a refraction depth — it scales the content behind
   /// the lens about its centre, so a press reads as the background sliding
-  /// rather than as glass bending. Apple keys lensing to a surface's SIZE,
-  /// not to a finger being down, and its press cue is light instead. Turn
+  /// rather than as glass bending. Lensing usually follows a surface's SIZE,
+  /// not a finger being down, and the press cue is light instead. Turn
   /// this up only if you want that zoom on purpose.
   final double magnificationBoost;
 

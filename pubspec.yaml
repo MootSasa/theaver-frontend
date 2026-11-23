@@ -42,7 +42,7 @@ dependencies:
   webview_flutter_android: ^4.10.0
   webview_flutter_wkwebview: ^3.20.0
   open_file: ^3.3.2
-  liquid_glass_easy: ^5.0.0
+  liquid_glass_easy: ^5.2.0
   motor: ^1.1.0
   visibility_detector: ^0.4.0+2
   drift: ^2.22.1

@@ -23,7 +23,9 @@ import 'tab_bar_page.dart';
 import 'adaptivity_page.dart';
 import 'adaptivity_advanced_page.dart';
 import 'adaptivity_controller_page.dart';
+import 'showcases/music_page.dart';
 import 'showcases/photos_library_page.dart';
+import 'social_feed.dart';
 
 // =============================================================
 // Liquid Glass Easy - example gallery.
@@ -55,10 +57,11 @@ class GalleryApp extends StatelessWidget {
     // switches can flip the whole app from anywhere. The lite-glass one is
     // listened to as well so every mounted lens rebuilds when it flips.
     return ListenableBuilder(
-      listenable: Listenable.merge(<Listenable>[darkMode, liteGlass]),
+      listenable: Listenable.merge(
+          <Listenable>[darkMode, liteGlass, performanceOverlay]),
       builder: (BuildContext context, Widget? _) => MaterialApp(
         debugShowCheckedModeBanner: false,
-        // showPerformanceOverlay: true,
+        showPerformanceOverlay: performanceOverlay.value,
         theme: galleryTheme(Brightness.light),
         darkTheme: galleryTheme(Brightness.dark),
         themeMode: darkMode.value ? ThemeMode.dark : ThemeMode.light,
@@ -252,6 +255,22 @@ class HomePage extends StatelessWidget {
       icon: Icons.photo_library_rounded,
       gradient: const [Color(0xFF0A84FF), Color(0xFF0B3E8C)],
       builder: (_) => const PhotosLibraryPage(),
+    ),
+    _Destination(
+      title: 'Social Feed',
+      subtitle: 'A plain feed with all the glass floating over it: batch '
+          'switch, blur 0-20 and the performance overlay',
+      icon: Icons.dynamic_feed_rounded,
+      gradient: const [Color(0xFFF97316), Color(0xFF9A3412)],
+      builder: (_) => const SocialFeedPage(),
+    ),
+    _Destination(
+      title: 'Music',
+      subtitle: 'An album grid under the default tab bar, four SF Symbols '
+          'tabs and search on its own glass',
+      icon: Icons.music_note_rounded,
+      gradient: const [Color(0xFFFF375F), Color(0xFFB0123A)],
+      builder: (_) => const MusicPage(),
     ),
   ];
 

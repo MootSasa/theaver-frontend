@@ -71,7 +71,7 @@ uniform vec2 u_resolution;
 uniform sampler2D u_texture_input;
 
 // --- Packed uniforms (Metal [[buffer(N)]] limit fix) -----------------------
-// iOS 26 Impeller binds each runtime-effect uniform to its own Metal buffer
+// Impeller on iOS binds each runtime-effect uniform to its own Metal buffer
 // and caps at ~30, so what is scarce here is DECLARATIONS, not floats.
 //
 // The per-lens data therefore rides in mat4s: one holds TWO members, as four
@@ -91,15 +91,16 @@ uniform sampler2D u_texture_input;
 //
 // Column layout of each u_lensPairN:
 //   [0] lens A = (centerX, centerY, halfWidth, halfHeight) px
-//   [1] meta A = (cornerRadius px, packedScale, cornerStyle, spare)
+//   [1] meta A = (cornerRadius px, packedScale, cornerStyle, opacity)
 //   [2] lens B, [3] meta B — the same, for the odd member of the pair.
 //
 //   packedScale is that lens's flex (deformed/rest) as two 11-bit values
 //   — see unpackScale; 0 means undeformed. It took over the old `enabled`
 //   slot: an absent lens is packed all-zero, so the lens column's .z
 //   (half-width) already IS the enabled bit and every guard reads that.
-//   The meta's fourth slot is unused. It carried per-side blend activations
-//   back when a continuous corner had to be flattened to blend cleanly.
+//   The meta's fourth slot is the member's own opacity, 0 to 1: it blends
+//   across the bridge on the same weight as the tint, and the group's
+//   u_glassOpacity multiplies the result.
 uniform mat4 u_lensPair0;
 uniform mat4 u_lensPair1;
 uniform mat4 u_lensPair2;
@@ -197,6 +198,19 @@ uniform vec4 u_lightOpposite;
 // packMetaballGlassUniforms.
 uniform vec4 u_imageRegion;
 
+// The baked field (metaball_geometry.frag): x = distance range px, 0 = none,
+// y = 1 when one tint covers every member, zw = texture size px.
+uniform vec4 u_geom;
+// xy = the bake's origin in fragment px; z = which texture a bake pass writes;
+// w = the glass's opacity, which every glass output is multiplied by.
+uniform vec4 u_geomB;
+uniform sampler2D u_geomDist;    // raw field (16 bits), gradient
+uniform sampler2D u_geomAnchor;  // anchor x, y (16 bits each)
+// Keep bend before tint, matching their first use below. Vulkan reflection can
+// order samplers by use; Dart binds these textures by their sampler index.
+uniform sampler2D u_geomBend;    // bend xy, bridge
+uniform sampler2D u_geomTint;    // the blended member colour
+
 // --- Restore original names ------------------------------------------------
 // u_lensN / u_lensMetaN are real individual uniforms, so they need no aliases;
 // only the scalar vec4 packs are aliased back to their original names below.
@@ -211,7 +225,10 @@ uniform vec4 u_imageRegion;
 #define u_borderAlpha                  u_warpC.x
 #define u_specularIntensity            u_warpC.y
 #define u_specularAngle                u_warpC.z
-#define u_honorBackdropAlpha           u_warpC.w
+// u_warpC.w: 1.0 honors the backdrop's alpha, plus 2.0 when the glow fades
+// over dark backdrops (LiquidGlassConfiguration.rimLiftOnDark off).
+#define u_honorBackdropAlpha           (mod(u_warpC.w, 2.0))
+#define u_rimDarkFade                  (step(1.5, u_warpC.w))
 #define u_blur                         u_warpD.x
 #define u_shapeAaPx                    u_warpD.y
 #define u_specularSpread               u_warpD.z
@@ -225,6 +242,8 @@ uniform vec4 u_imageRegion;
 #define u_borderSharpness              u_packA.z
 #define u_glowIntensity                u_packA.w
 #define u_specular2Intensity           u_lightOpposite.w
+// The glass's opacity: 1 draws it whole, 0 leaves the backdrop as it was.
+#define u_glassOpacity                 u_geomB.w
 // Each light as the border reads it: (angle in degrees, spread, intensity).
 #define u_specular vec3(u_specularAngle, u_specularSpread, u_specularIntensity)
 #define u_glow     vec3(u_glowAngle, u_glowSpread, u_glowIntensity)
@@ -353,6 +372,30 @@ vec2 lensGradDir(vec2 p, vec4 lens, vec4 meta) {
     if (q.x > 0.0 && q.y > 0.0) return sg * normalize(max(q, vec2(EPS)));
     if (q.x > q.y) return vec2(sg.x, 0.0);
     return vec2(0.0, sg.y);
+}
+
+// The bend's direction for one member: away from its spine, as a capsule
+// along the long side bends, whatever the corners. Zero on the spine.
+vec2 lensCapsuleDir(vec2 p, vec4 lens, vec4 meta) {
+#if LIQUID_GLASS_CAPSULE_BEND
+    vec2 s = unpackScale(meta.y);
+    vec2 halfSize, pRest;
+    lensRestSpace(p, lens, s, halfSize, pRest);
+    vec2 rel = pRest - lens.xy;
+    vec2 spine = max(halfSize - min(halfSize.x, halfSize.y), vec2(0.0));
+    vec2 away = (rel - clamp(rel, -spine, spine)) / s;
+    float awayLen = length(away);
+    return awayLen > EPS ? away / awayLen : vec2(0.0);
+#else
+    return vec2(0.0);
+#endif
+}
+
+// The blended capsule direction as a unit normal; the shape's own normal
+// where the members' directions cancel out.
+vec2 bendNormal(vec2 bend, vec2 fallback) {
+    float bendLen = length(bend);
+    return bendLen > EPS ? bend / bendLen : fallback;
 }
 
 // The distance actually fed into the metaball smin. For CONTINUOUS lenses,
@@ -536,7 +579,8 @@ ShapeData evaluateField(vec2 fragPx) {
 // hands over across the bridge at exactly the rate u_smoothness set for the
 // geometry — so the colour seam sits where the shape seam already is.
 void accumulateAnchor(vec4 lens, vec4 meta, vec4 tint, vec2 p,
-                      inout vec3 acc, inout float wsum, inout vec4 tintAcc) {
+                      inout vec3 acc, inout float wsum, inout vec4 tintAcc,
+                      inout float opacityAcc) {
     if (lens.z <= 0.0) return;
     float w = exp(-max(lensDistance(p, lens, meta), 0.0) / max(u_smoothness, EPS));
     // z carries the member's refraction depth: half its largest side.
@@ -546,6 +590,9 @@ void accumulateAnchor(vec4 lens, vec4 meta, vec4 tint, vec2 p,
     // averaging straight alpha would drag the more transparent one's colour in
     // at full strength.
     tintAcc += vec4(tint.rgb * tint.a, tint.a) * w;
+    // The member's opacity rides the same weight, so two members fading
+    // apart cross over where their shapes fuse, as their colours do.
+    opacityAcc += meta.w * w;
 }
 
 // Weighted premultiplied accumulation back to the straight-alpha colour
@@ -555,6 +602,11 @@ vec4 resolveTint(vec4 tintAcc, float wsum) {
     if (wsum <= EPS) return u_lensColor;
     vec4 pm = tintAcc / wsum;
     return (pm.a > EPS) ? vec4(pm.rgb / pm.a, pm.a) : vec4(0.0);
+}
+
+// The blended member opacity; whole where no member reaches (masked out).
+float resolveOpacity(float opacityAcc, float wsum) {
+    return (wsum > EPS) ? opacityAcc / wsum : 1.0;
 }
 
 // ── Hard union (u_mergeEnabled == 0) ─────────────────────────────────────
@@ -608,27 +660,38 @@ NearestMember nearestMember(vec2 p) {
     return n;
 }
 
-vec2 anchorFor(vec2 p, out vec4 tint, out float depth) {
+vec2 anchorFor(vec2 p, out vec4 tint, out float depth, out float opacity) {
     // The branch is on a UNIFORM, so it costs nothing: every fragment in the
     // draw takes the same side of it.
     if (u_mergeEnabled < 0.5) {
         NearestMember n = nearestMember(p);
         tint = n.tint;
+        opacity = n.meta.w;
         depth = min(n.lens.z, n.lens.w);
         return (n.dist < 1e8) ? n.lens.xy : p;
     }
     vec3 acc = vec3(0.0);
     float wsum = 0.0;
     vec4 tintAcc = vec4(0.0);
-    accumulateAnchor(u_lens0, u_lensMeta0, u_lensTint0, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens1, u_lensMeta1, u_lensTint1, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens2, u_lensMeta2, u_lensTint2, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens3, u_lensMeta3, u_lensTint3, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens4, u_lensMeta4, u_lensTint4, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens5, u_lensMeta5, u_lensTint5, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens6, u_lensMeta6, u_lensTint6, p, acc, wsum, tintAcc);
-    accumulateAnchor(u_lens7, u_lensMeta7, u_lensTint7, p, acc, wsum, tintAcc);
+    float opacityAcc = 0.0;
+    accumulateAnchor(u_lens0, u_lensMeta0, u_lensTint0, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens1, u_lensMeta1, u_lensTint1, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens2, u_lensMeta2, u_lensTint2, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens3, u_lensMeta3, u_lensTint3, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens4, u_lensMeta4, u_lensTint4, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens5, u_lensMeta5, u_lensTint5, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens6, u_lensMeta6, u_lensTint6, p, acc, wsum, tintAcc,
+                     opacityAcc);
+    accumulateAnchor(u_lens7, u_lensMeta7, u_lensTint7, p, acc, wsum, tintAcc,
+                     opacityAcc);
     tint = resolveTint(tintAcc, wsum);
+    opacity = resolveOpacity(opacityAcc, wsum);
     depth = (wsum > EPS) ? acc.z / wsum : 0.0;
     return (wsum > EPS) ? acc.xy / wsum : p;
 }
@@ -654,14 +717,20 @@ struct MergedField {
     vec2  anchor;      // == anchorFor(p)
     float depth;       // == anchorFor's depth out — the blended refraction depth
     vec4  tint;        // == anchorFor's tint out — the blended member colour
+    float opacity;     // == anchorFor's opacity out — the blended member opacity
     vec2  grad;        // analytic merged gradient (METABALL_GRAD_ANALYTIC only)
+    vec2  bend;        // the members' capsule directions, blended as grad
+    vec4  h03;         // each member's blend weight, so the band alone
+    vec4  h47;         // folds the bend (mergedBend)
 };
 
-void accumulateMerged(vec2 p, vec4 lens, vec4 meta, vec4 tint,
-                      inout float smoothSdf, inout float hardSdf,
-                      inout vec3 anchorAcc, inout float anchorW,
-                      inout vec4 tintAcc, inout vec2 gradAcc) {
-    if (lens.z <= 0.0) return;
+// Returns the member's blend weight h; 1 (no effect) for an absent member.
+float accumulateMerged(vec2 p, vec4 lens, vec4 meta, vec4 tint,
+                       inout float smoothSdf, inout float hardSdf,
+                       inout vec3 anchorAcc, inout float anchorW,
+                       inout vec4 tintAcc, inout float opacityAcc,
+                       inout vec2 gradAcc, inout vec2 bendAcc) {
+    if (lens.z <= 0.0) return 1.0;
 
     // The one raw SDF for this lens — shared by all three accumulators.
     float base = lensDistance(p, lens, meta);
@@ -675,6 +744,7 @@ void accumulateMerged(vec2 p, vec4 lens, vec4 meta, vec4 tint,
     anchorW   += w;
     // Tint on the same weight — see accumulateAnchor.
     tintAcc   += vec4(tint.rgb * tint.a, tint.a) * w;
+    opacityAcc += meta.w * w;
 
     // Smooth union, inlined so the blend weight h is shared with the gradient.
     // h and the value are bit-identical to smoothUnion(smoothSdf, base, k).
@@ -690,6 +760,12 @@ void accumulateMerged(vec2 p, vec4 lens, vec4 meta, vec4 tint,
     // takes its direction outright.
     gradAcc = mix(lensGradDir(p, lens, meta), gradAcc, h);
 #endif
+    // The capsule direction blends on the same weight as the gradient.
+    // Mobile folds it later, in the band only (mergedBend).
+#ifdef LIQUID_GLASS_DESKTOP
+    bendAcc = mix(lensCapsuleDir(p, lens, meta), bendAcc, h);
+#endif
+    return h;
 }
 
 MergedField evaluateMerged(vec2 p) {
@@ -702,49 +778,86 @@ MergedField evaluateMerged(vec2 p) {
         m.anchor    = (n.dist < 1e8) ? n.lens.xy : p;
         m.depth     = min(n.lens.z, n.lens.w);
         m.tint      = n.tint;
+        m.opacity   = n.meta.w;
 #if METABALL_GRAD_ANALYTIC
         // One gradient — the winner's own — instead of eight blended together.
         m.grad = (n.dist < 1e8) ? lensGradDir(p, n.lens, n.meta) : vec2(0.0);
 #else
         m.grad = vec2(0.0);
 #endif
+        m.bend = (n.dist < 1e8) ? lensCapsuleDir(p, n.lens, n.meta) : vec2(0.0);
         return m;
     }
     m.smoothSdf = 1e9;
     m.hardSdf   = 1e9;
     m.grad      = vec2(0.0);
+    m.bend      = vec2(0.0);
+    m.h03       = vec4(1.0);
+    m.h47       = vec4(1.0);
     vec3 anchorAcc = vec3(0.0);
     float anchorW = 0.0;
     vec4 tintAcc = vec4(0.0);
+    float opacityAcc = 0.0;
 #ifdef LIQUID_GLASS_DESKTOP
     for (int k = 0; k < 8; k++) {
         accumulateMerged(p, memberLens(k), memberMeta(k), memberTint(k),
                          m.smoothSdf, m.hardSdf, anchorAcc, anchorW, tintAcc,
-                         m.grad);
+                         opacityAcc, m.grad, m.bend);
     }
 #else
-    accumulateMerged(p, u_lens0, u_lensMeta0, u_lensTint0, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens1, u_lensMeta1, u_lensTint1, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens2, u_lensMeta2, u_lensTint2, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens3, u_lensMeta3, u_lensTint3, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens4, u_lensMeta4, u_lensTint4, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens5, u_lensMeta5, u_lensTint5, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens6, u_lensMeta6, u_lensTint6, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
-    accumulateMerged(p, u_lens7, u_lensMeta7, u_lensTint7, m.smoothSdf,
-                     m.hardSdf, anchorAcc, anchorW, tintAcc, m.grad);
+    m.h03.x = accumulateMerged(p, u_lens0, u_lensMeta0, u_lensTint0, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h03.y = accumulateMerged(p, u_lens1, u_lensMeta1, u_lensTint1, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h03.z = accumulateMerged(p, u_lens2, u_lensMeta2, u_lensTint2, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h03.w = accumulateMerged(p, u_lens3, u_lensMeta3, u_lensTint3, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h47.x = accumulateMerged(p, u_lens4, u_lensMeta4, u_lensTint4, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h47.y = accumulateMerged(p, u_lens5, u_lensMeta5, u_lensTint5, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h47.z = accumulateMerged(p, u_lens6, u_lensMeta6, u_lensTint6, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
+    m.h47.w = accumulateMerged(p, u_lens7, u_lensMeta7, u_lensTint7, m.smoothSdf,
+                     m.hardSdf, anchorAcc, anchorW, tintAcc, opacityAcc, m.grad,
+                     m.bend);
 #endif
     m.anchor = (anchorW > EPS) ? anchorAcc.xy / anchorW : p;
     m.depth  = (anchorW > EPS) ? anchorAcc.z / anchorW : 0.0;
     m.tint   = resolveTint(tintAcc, anchorW);
+    m.opacity = resolveOpacity(opacityAcc, anchorW);
     return m;
 }
+
+#ifndef LIQUID_GLASS_DESKTOP
+void foldBend(vec2 p, vec4 lens, vec4 meta, float h, inout vec2 bend) {
+    if (lens.z > 0.0) bend = mix(lensCapsuleDir(p, lens, meta), bend, h);
+}
+
+// The merged bend, folded on the weights evaluateMerged kept: the same mixes
+// in the same order, run only where the band needs them.
+vec2 mergedBend(vec2 p, MergedField m) {
+    if (u_mergeEnabled < 0.5) return m.bend;
+    vec2 bend = vec2(0.0);
+    foldBend(p, u_lens0, u_lensMeta0, m.h03.x, bend);
+    foldBend(p, u_lens1, u_lensMeta1, m.h03.y, bend);
+    foldBend(p, u_lens2, u_lensMeta2, m.h03.z, bend);
+    foldBend(p, u_lens3, u_lensMeta3, m.h03.w, bend);
+    foldBend(p, u_lens4, u_lensMeta4, m.h47.x, bend);
+    foldBend(p, u_lens5, u_lensMeta5, m.h47.y, bend);
+    foldBend(p, u_lens6, u_lensMeta6, m.h47.z, bend);
+    foldBend(p, u_lens7, u_lensMeta7, m.h47.w, bend);
+    return bend;
+}
+#endif
 
 // The fused path is exact only when fieldShape == field (no experiment macro)
 // AND the gradient comes from a SINGLE per-fragment pass: the 1-tap derivative
@@ -788,25 +901,56 @@ vec2 refractedToUv(vec2 refractedPx) {
 }
 
 vec3 sampleDispersed(vec2 uv, float shift) {
-    return texture(u_texture_input, uv).rgb;
+    vec3 color = texture(u_texture_input, uv).rgb;
+    if (shift < DISPERSION_MIN_LOGICAL_PX) return color;
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    vec2 offset = dispersionOffsetUv(shift, luma, imageSizePx(), max(u_shapeAaPx, 1.0));
+    float r = texture(u_texture_input, uv + offset).r;
+    float g = texture(u_texture_input, uv).g;
+    float b = texture(u_texture_input, uv - offset).b;
+    return vec3(r, g, b);
 }
 
-// Two-ring blur where EACH tap is a dispersed sample, so dispersion happens BEFORE
-// the blur — the colour fringe is diffused by the frost, not laid over it.
+// In-shader frost, as the lens's: equal-weight taps from the Gaussian's
+// inverse CDF on a golden-angle spiral each pixel turns by its own noise.
+#define BLUR_MAX_TAPS 40
+// Interleaved gradient noise in [0, 1).
+float blurNoise(vec2 p) {
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 vec3 blurFieldDispersed(vec2 uv, float shift) {
-    vec2 pxToUv = 1.0 / max(imageSizePx(), vec2(EPS));
-    vec3 color = sampleDispersed(uv, shift);
-    float count = 1.0;
-    for (int ring = 1; ring <= 2; ring++) {
-        float radius = u_blur * float(ring) * 0.5;
-        for (int tap = 0; tap < 6; tap++) {
-            float angle = 6.2831853 * float(tap) / 6.0 + float(ring) * 0.5;
-            vec2 duv = vec2(cos(angle), sin(angle)) * radius * pxToUv;
-            color += sampleDispersed(clamp(uv + duv, vec2(0.001), vec2(0.999)), shift);
-            count += 1.0;
-        }
+    float sigma = u_blur;
+    vec2 texSizePx = imageSizePx();
+    vec2 pxToUv = 1.0 / max(texSizePx, vec2(1.0));
+    // A small blur needs few taps; the full 40 from sigma ~9.5 px up.
+    float n = clamp(floor(8.0 + 0.35 * sigma * sigma), 8.0, float(BLUR_MAX_TAPS));
+    vec2 p = FlutterFragCoord().xy;
+    float spin = 6.2831853 * blurNoise(p);
+    float jitter = blurNoise(p + vec2(23.0, 61.0));
+    // Each tap splits by the centre's luma, so the fringe blurs with the frost.
+    bool split = shift >= DISPERSION_MIN_LOGICAL_PX;
+    vec2 off = vec2(0.0);
+    if (split) {
+        float luma = dot(texture(u_texture_input, uv).rgb,
+                         vec3(0.2126, 0.7152, 0.0722));
+        off = dispersionOffsetUv(shift, luma, texSizePx, max(u_shapeAaPx, 1.0));
     }
-    return color / count;
+    vec3 sum = vec3(0.0);
+    for (int k = 0; k < BLUR_MAX_TAPS; k++) {
+        if (float(k) >= n) break;
+        // Radius by the 2D Gaussian's inverse CDF, cut at 3 sigma (98.9%).
+        float u = (float(k) + jitter) / n * 0.98889;
+        float r = sigma * sqrt(-2.0 * log(1.0 - u));
+        float a = float(k) * 2.39996323 + spin;
+        vec2 t = clamp(uv + vec2(cos(a), sin(a)) * r * pxToUv,
+                       vec2(0.001), vec2(0.999));
+        sum += split
+            ? vec3(texture(u_texture_input, t + off).r,
+                   texture(u_texture_input, t).g,
+                   texture(u_texture_input, t - off).b)
+            : texture(u_texture_input, t).rgb;
+    }
+    return sum / n;
 }
 
 vec3 sampleBackground(vec2 refractedPx, float dispersionShift) {
@@ -819,7 +963,6 @@ vec3 sampleBackground(vec2 refractedPx, float dispersionShift) {
 }
 
 vec3 applySaturation(vec3 color, float saturation) {
-    if (abs(saturation - 1.0) < 0.001) return color;
     float luminance = dot(color, vec3(0.299, 0.587, 0.114));
     return mix(vec3(luminance), color, saturation);
 }
@@ -848,6 +991,80 @@ float computeShapeMask(float shapeDistPx) {
 }
 
 // =====================================================
+// Baked field
+// =====================================================
+float unpack16(vec2 b) { return (b.x * 255.0 * 256.0 + b.y * 255.0) / 65535.0; }
+vec2 pack16(float v) {
+    float q = floor(clamp(v, 0.0, 1.0) * 65535.0 + 0.5);
+    float hi = floor(q / 256.0);
+    return vec2(hi, q - hi * 256.0) / 255.0;
+}
+
+vec2 geomUv(vec2 texel) {
+    return glassRenderTextureUv((texel + 0.5) / u_geom.zw);
+}
+
+vec3 distTexel(vec2 texel) {
+    vec4 t = texture(u_geomDist, geomUv(texel));
+    return vec3((2.0 * unpack16(t.rg) - 1.0) * u_geom.x, 4.0 * t.ba - 2.0);
+}
+
+vec2 anchorTexel(vec2 texel) {
+    vec4 t = texture(u_geomAnchor, geomUv(texel));
+    return vec2(unpack16(t.rg), unpack16(t.ba)) * u_geom.zw;
+}
+
+// The field and its anchor at [fragPx], filtered here: a 16-bit value
+// cannot be blended in its two bytes.
+void readBake(vec2 fragPx, out ShapeData sd, out vec2 anchorPx) {
+    vec2 tp = fragPx - u_geomB.xy - 0.5;
+    vec2 i0 = clamp(floor(tp), vec2(0.0), u_geom.zw - 2.0);
+    vec2 f = clamp(tp - i0, 0.0, 1.0);
+    vec2 dx = vec2(1.0, 0.0);
+    vec2 dy = vec2(0.0, 1.0);
+    vec3 v = mix(mix(distTexel(i0), distTexel(i0 + dx), f.x),
+                 mix(distTexel(i0 + dy), distTexel(i0 + dx + dy), f.x), f.y);
+    vec2 a = mix(mix(anchorTexel(i0), anchorTexel(i0 + dx), f.x),
+                 mix(anchorTexel(i0 + dy), anchorTexel(i0 + dx + dy), f.x),
+                 f.y);
+    // Rebuilt as shapeFrom1Tap builds it: the raw field over its gradient.
+    float gl = max(length(v.yz), EPS);
+    sd.sdf       = v.x;
+    sd.grad      = v.yz;
+    sd.normal    = v.yz / gl;
+    sd.orthoDist = v.x / gl;
+    anchorPx = a + u_geomB.xy;
+}
+
+#ifdef METABALL_BAKE
+// One texture of the bake per pass, chosen by u_geomB.z, in bake space.
+void main() {
+    vec2 p = FlutterFragCoord().xy;
+    MergedField mf = evaluateMerged(p);
+#if METABALL_GRAD_ANALYTIC
+    vec2 grad = mf.grad;
+#else
+    vec2 grad = shapeFrom1Tap(mf.smoothSdf).grad;
+#endif
+    float sel = u_geomB.z;
+    if (sel < 0.5) {
+        // The raw field, not the distance: refraction bends by it, as unbaked.
+        frag_color = vec4(pack16(0.5 + 0.5 * mf.smoothSdf / max(u_geom.x, EPS)),
+                          clamp(0.5 + 0.25 * grad, 0.0, 1.0));
+    } else if (sel < 1.5) {
+        vec2 a = mf.anchor / u_geom.zw;
+        frag_color = vec4(pack16(a.x), pack16(a.y));
+    } else if (sel < 2.5) {
+        frag_color = mf.tint;
+    } else {
+        float bridge = clamp((mf.hardSdf - mf.smoothSdf) /
+                             max(u_smoothness * 0.25, EPS), 0.0, 1.0);
+        frag_color = vec4(0.5 + 0.5 * clamp(mergedBend(p, mf), -1.0, 1.0),
+                          bridge, 1.0);
+    }
+}
+#else
+// =====================================================
 // Main
 // =====================================================
 void main() {
@@ -860,37 +1077,49 @@ void main() {
     // Fast path: one per-lens pass yields the smooth union, the hard min and
     // the anchor together (see evaluateMerged). Bit-identical to the
     // separate-pass branch below for this config.
-    MergedField mf      = evaluateMerged(fragPx);
-#if METABALL_GRAD_ANALYTIC
-    // Skia: build ShapeData from the merged ANALYTIC gradient (no dFdx). The
-    // gradient is a blend of unit per-lens gradients, so |grad| <= 1 — dividing
-    // by it inflates orthoDist at the neck exactly like a true distance field.
+    MergedField mf;
     ShapeData shapeData;
-    shapeData.sdf       = mf.smoothSdf;
-    shapeData.grad      = mf.grad;
-    float gLen          = max(length(mf.grad), EPS);
-    shapeData.normal    = mf.grad / gLen;
-    shapeData.orthoDist = mf.smoothSdf / gLen;
+    float rimWrap;
+    vec2 anchorPx;
+    vec4 lensTint;
+    float memberOpacity;
+    vec2 bend;
+    if (u_geom.x > 0.0) {
+        // Baked: the field, anchor, colour and bend read back, no member walked.
+        readBake(fragPx, shapeData, anchorPx);
+        vec2 uv = glassRenderTextureUv((fragPx - u_geomB.xy) / u_geom.zw);
+        vec4 b = texture(u_geomBend, uv);
+        bend = 2.0 * b.xy - 1.0;
+        if (length(bend) < 0.02) bend = vec2(0.0);
+        rimWrap = b.z * METABALL_RIM_WRAP;
+        lensTint = u_geom.y > 0.5 ? u_lensTint0 : texture(u_geomTint, uv);
+        // Only a group whose members share one opacity is baked.
+        memberOpacity = u_lensMeta0.w;
+    } else {
+        mf = evaluateMerged(fragPx);
+#if METABALL_GRAD_ANALYTIC
+        // Skia: ShapeData from the merged ANALYTIC gradient (no dFdx); |grad|
+        // <= 1, so dividing inflates orthoDist at the neck like a true SDF.
+        shapeData.sdf       = mf.smoothSdf;
+        shapeData.grad      = mf.grad;
+        float gLen          = max(length(mf.grad), EPS);
+        shapeData.normal    = mf.grad / gLen;
+        shapeData.orthoDist = mf.smoothSdf / gLen;
 #else
-    ShapeData shapeData = shapeFrom1Tap(mf.smoothSdf);
+        shapeData = shapeFrom1Tap(mf.smoothSdf);
 #endif
+        // Rim wrap only at the blend neck; 0 on isolated lenses.
+        float bridge = mf.hardSdf - mf.smoothSdf;                    // >= 0
+        rimWrap = clamp(bridge / max(u_smoothness * 0.25, EPS), 0.0, 1.0)
+                  * METABALL_RIM_WRAP;
+        anchorPx = mf.anchor;
+        lensTint = mf.tint;
+        memberOpacity = mf.opacity;
+        bend     = mf.bend;
+    }
     float shapeDistPx   = shapeData.orthoDist;
     float shapeMask     = computeShapeMask(shapeDistPx);
-    if (shapeMask <= 1e-4) {
-        frag_color = vec4(0.0);
-        return;
-    }
-
-    // Rim wrap only at the blend neck; 0 on isolated lenses (== bridgeWrap,
-    // reusing the hard min we already have).
-    float bridge  = mf.hardSdf - mf.smoothSdf;                       // >= 0
-    float rimWrap = clamp(bridge / max(u_smoothness * 0.25, EPS), 0.0, 1.0)
-                    * METABALL_RIM_WRAP;
-
-    vec2 anchorPx   = mf.anchor;
     vec2 anchorNorm = anchorPx * invResY;
-    vec4 lensTint   = mf.tint;
-    float refrDepth = mf.depth;
 #else
     ShapeData shapeData = evaluateField(fragPx);
     float shapeDistPx   = shapeData.orthoDist;
@@ -901,9 +1130,22 @@ void main() {
 
     vec4 lensTint;
     float refrDepth;
-    vec2 anchorPx   = anchorFor(fragPx, lensTint, refrDepth);
+    float memberOpacity;
+    vec2 anchorPx   = anchorFor(fragPx, lensTint, refrDepth, memberOpacity);
     vec2 anchorNorm = anchorPx * invResY;
+    // The experiment paths keep the shape's own normal.
+    vec2 bend       = vec2(0.0);
 #endif
+
+    // The group's opacity over the members' own.
+    float glassOpacity = u_glassOpacity * memberOpacity;
+
+    // Past the AA ramp the glass and its rim are exactly transparent: the
+    // gaps between members skip the sample and the rim.
+    if (shapeMask <= 0.0) {
+        frag_color = vec4(0.0);
+        return;
+    }
 
     float distAbsPx = abs(shapeDistPx);
     float zoneLimit = u_refractionWidthPx;
@@ -922,7 +1164,7 @@ void main() {
 
         vec2 refrPx;
         refrPx = computeRefractedPosition(
-            magPx, shapeData.normal, shapeData.sdf,
+            magPx, bendNormal(bend, shapeData.normal), shapeData.sdf,
             u_refractionWidthPx, u_refractionIndex,
             REFRACTION_DEPTH_LOGICAL_PX * max(u_shapeAaPx, 1.0), zoneT
         );
@@ -944,11 +1186,11 @@ void main() {
         u_glowThickness, u_glow, u_glowColor,
         u_specular2, u_specular2Intensity, u_specular2Color,
         u_lightOpposite.xyz,
-        u_shapeAaPx,
+        u_shapeAaPx, u_rimDarkFade,
         rimWrap
     );
 
-    frag_color = overlayPremul(base, borderPremul);
+    frag_color = overlayPremul(base, borderPremul) * glassOpacity;
 #else
     if (zoneMask < 0.5) {
         // Outside the distortion band — straight magnified sample + border.
@@ -963,19 +1205,22 @@ void main() {
             u_glowThickness, u_glow, u_glowColor,
             u_specular2, u_specular2Intensity, u_specular2Color,
             u_lightOpposite.xyz,
-            u_shapeAaPx,
+            u_shapeAaPx, u_rimDarkFade,
             rimWrap
         );
 
-        frag_color = overlayPremul(base, borderPremul);
+        frag_color = overlayPremul(base, borderPremul) * glassOpacity;
         return;
     }
 
     float zoneT = 1.0 - clamp(distAbsPx / max(zoneLimit, EPS), 0.0, 1.0);
+#if METABALL_FUSED_PATH
+    if (u_geom.x <= 0.0) bend = mergedBend(fragPx, mf);
+#endif
 
     vec2 refrPx;
     refrPx = computeRefractedPosition(
-        magPx, shapeData.normal, shapeData.sdf,
+        magPx, bendNormal(bend, shapeData.normal), shapeData.sdf,
         u_refractionWidthPx, u_refractionIndex,
             REFRACTION_DEPTH_LOGICAL_PX * max(u_shapeAaPx, 1.0), zoneT
     );
@@ -992,10 +1237,11 @@ void main() {
         u_glowThickness, u_glow, u_glowColor,
         u_specular2, u_specular2Intensity, u_specular2Color,
         u_lightOpposite.xyz,
-        u_shapeAaPx,
+        u_shapeAaPx, u_rimDarkFade,
         rimWrap
     );
 
-    frag_color = overlayPremul(base, borderPremul);
+    frag_color = overlayPremul(base, borderPremul) * glassOpacity;
 #endif
 }
+#endif

@@ -2349,25 +2349,32 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         key: const ValueKey('in_app_browser_compact_domain_row'),
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            isFullySecure ? Icons.lock_rounded : Icons.warning_amber_rounded,
-            size: 10.5,
-            color: isFullySecure
-                ? resolved.palette.primary
-                : resolved.palette.error,
+          LiquidGlassMorphShared(
+            tag: 'browser_security_lock',
+            child: Icon(
+              isFullySecure ? Icons.lock_rounded : Icons.warning_amber_rounded,
+              size: 10.5,
+              color: isFullySecure
+                  ? resolved.palette.primary
+                  : resolved.palette.error,
+            ),
           ),
           const SizedBox(width: 4),
           Flexible(
-            child: Text(
-              host,
+            child: LiquidGlassMorphShared(
               key: const ValueKey('in_app_browser_compact_domain'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12.0,
-                fontWeight: FontWeight.w600,
-                height: 1.1,
-                color: resolved.headerFg,
+              tag: 'browser_host_label',
+              child: Text(
+                host,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.0,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                  decoration: TextDecoration.none,
+                  color: resolved.headerFg,
+                ),
               ),
             ),
           ),
@@ -2402,14 +2409,17 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             onTap: _toggleSiteInfoPopover,
             child: Padding(
               padding: const EdgeInsets.only(right: 6, top: 6, bottom: 6),
-              child: Icon(
-                isFullySecure
-                    ? Icons.lock_rounded
-                    : Icons.warning_amber_rounded,
-                size: 14,
-                color: isFullySecure
-                    ? resolved.palette.primary
-                    : resolved.palette.error,
+              child: LiquidGlassMorphShared(
+                tag: 'browser_security_lock',
+                child: Icon(
+                  isFullySecure
+                      ? Icons.lock_rounded
+                      : Icons.warning_amber_rounded,
+                  size: 14,
+                  color: isFullySecure
+                      ? resolved.palette.primary
+                      : resolved.palette.error,
+                ),
               ),
             ),
           ),
@@ -2430,14 +2440,18 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                     color: resolved.headerFg,
                   ),
                 ),
-                Text(
-                  host,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    height: 1.15,
-                    color: resolved.headerFg.withValues(alpha: 0.68),
+                LiquidGlassMorphShared(
+                  tag: 'browser_host_label',
+                  child: Text(
+                    host,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      height: 1.15,
+                      decoration: TextDecoration.none,
+                      color: resolved.headerFg.withValues(alpha: 0.68),
+                    ),
                   ),
                 ),
               ],
@@ -2646,15 +2660,13 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             builder: (context, rowChild) {
               final double rawT = _findBarController.value;
               final double eased = _findBarAnimation.value;
-              final double travelY = topInset + 116.0;
+              const double travelY = 22.0;
               final double dy = -travelY * (1.0 - eased);
               final double clamped = eased.clamp(0.0, 1.03);
-              final double scaleX = 0.90 + 0.10 * clamped.clamp(0.0, 1.015);
-              final double scaleY = 0.84 + 0.16 * clamped;
-              final double visualBottomY =
-                  (topInset + 60.0) + dy + 46.0 * scaleY;
-              final bool capsuleVisible =
-                  rawT > 0.01 && visualBottomY > -2.0;
+              final double scaleX = 0.94 + 0.06 * clamped.clamp(0.0, 1.015);
+              final double scaleY = 0.88 + 0.12 * clamped;
+              final double capsuleOpacity = rawT.clamp(0.0, 1.0);
+              final bool capsuleVisible = rawT > 0.005;
 
               return Transform.translate(
                 offset: Offset(0.0, dy),
@@ -2668,6 +2680,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                       height: 46,
                       borderRadius: 22,
                       visible: capsuleVisible,
+                      opacity: capsuleOpacity,
                       padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
                       child: rowChild!,
                     ),

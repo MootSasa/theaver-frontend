@@ -1702,6 +1702,22 @@ class StickerService extends ChangeNotifier {
     return _rasterFileCache[fullUrl];
   }
 
+  @visibleForTesting
+  void putRasterFileCacheForTest(String rawUrl, File file) {
+    final fullUrl = resolveUrl(rawUrl);
+    if (fullUrl.isNotEmpty) {
+      _rasterFileCache[fullUrl] = file;
+    }
+  }
+
+  @visibleForTesting
+  void removeRasterFileCacheForTest(String rawUrl) {
+    final fullUrl = resolveUrl(rawUrl);
+    if (fullUrl.isNotEmpty) {
+      _rasterFileCache.remove(fullUrl);
+    }
+  }
+
   /// Downloads and caches a raster sticker or GIF file on disk so scrolling never re-fetches over HTTP.
   Future<File?> getOrDownloadRasterFile(String rawUrl) async {
     if (kIsWeb) return null;

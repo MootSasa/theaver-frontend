@@ -8481,6 +8481,7 @@ class WebViewFloatingCapsule extends StatelessWidget {
   final EdgeInsetsGeometry? padding;
   final Color? colorOverride;
   final bool visible;
+  final double opacity;
 
   const WebViewFloatingCapsule({
     super.key,
@@ -8491,11 +8492,13 @@ class WebViewFloatingCapsule extends StatelessWidget {
     this.padding,
     this.colorOverride,
     this.visible = true,
+    this.opacity = 1.0,
   });
 
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
+    final double op = opacity.clamp(0.0, 1.0);
 
     Widget content = child;
     if (padding != null) {
@@ -8518,20 +8521,26 @@ class WebViewFloatingCapsule extends StatelessWidget {
               alpha: math.min(colorOverride!.a, style.isDark ? 0.78 : 0.84),
             )
           : style.hudFill;
+      final baseGlassStyle = style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: borderRadius,
+        refractionIndex: 1.1,
+        refractionWidth: 22.0,
+        borderWidth: 1.1,
+        color: glassFill,
+      );
+      final Widget lensChild = Material(
+        type: MaterialType.transparency,
+        child: content,
+      );
       return LiquidGlassLens(
         visibility: visible,
-        style: style.glassProvider!.createStyle(
-          context: context,
-          cornerRadius: borderRadius,
-          refractionIndex: 1.1,
-          refractionWidth: 22.0,
-          borderWidth: 1.1,
-          color: glassFill,
+        opacity: op,
+        style: style.glassProvider!.scaleStyleForLensOpacity(
+          baseGlassStyle,
+          op,
         ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: content,
-        ),
+        child: op < 0.999 ? Opacity(opacity: op, child: lensChild) : lensChild,
       );
     }
 
@@ -8577,7 +8586,7 @@ class WebViewFloatingCapsule extends StatelessWidget {
       );
     }
 
-    return DecoratedBox(
+    Widget wrapped = DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(borderRadius),
         boxShadow: style.floatingShadow,
@@ -8587,6 +8596,10 @@ class WebViewFloatingCapsule extends StatelessWidget {
         child: box,
       ),
     );
+    if (op < 0.999) {
+      wrapped = Opacity(opacity: op, child: wrapped);
+    }
+    return wrapped;
   }
 }
 
@@ -8839,6 +8852,14 @@ class WebViewFloatingHeader extends StatelessWidget {
             ),
             smoothness: 0,
             style: morphStyle,
+            touch: !menuExpanded
+                ? const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                    stretch: 5,
+                    squeeze: 0.72,
+                    lean: 0.25,
+                    grip: 0.45,
+                  ))
+                : null,
             child: menuExpanded ? expandedBox : collapsedBox,
           ),
         ),
@@ -9067,6 +9088,14 @@ class WebViewFloatingHeader extends StatelessWidget {
                 ),
           smoothness: 0,
           style: centerPopoverExpanded ? centerPopoverGlassStyle : morphStyle,
+          touch: !centerPopoverExpanded
+              ? const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                  stretch: 5,
+                  squeeze: 0.72,
+                  lean: 0.25,
+                  grip: 0.45,
+                ))
+              : null,
           child: activeGlassCenterChild,
         ),
       );

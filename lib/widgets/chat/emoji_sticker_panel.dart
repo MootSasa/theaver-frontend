@@ -717,6 +717,7 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
                   alignment: barAlignment,
                   margin: barMargin,
                   itemPadding: 3,
+                  swell: null,
                   style: barStyle,
                   itemStyle: LiquidGlassTabItemStyle(
                     selectedColor: theme.colorScheme.primary,
