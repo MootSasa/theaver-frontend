@@ -28,12 +28,15 @@ class AvatarDecorationFrame extends StatefulWidget {
   });
 
   @override
-  State<AvatarDecorationFrame> createState() => _AvatarDecorationFrameState();
+  AvatarDecorationFrameState createState() => AvatarDecorationFrameState();
 }
 
-class _AvatarDecorationFrameState extends State<AvatarDecorationFrame>
+class AvatarDecorationFrameState extends State<AvatarDecorationFrame>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+
+  @visibleForTesting
+  double get debugAnimationValue => _controller.value;
 
   @override
   void initState() {
@@ -54,11 +57,12 @@ class _AvatarDecorationFrameState extends State<AvatarDecorationFrame>
   @override
   void didUpdateWidget(covariant AvatarDecorationFrame oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final presetChanged = oldWidget.decoration?.id != widget.decoration?.id;
     if (oldWidget.decoration != widget.decoration ||
         oldWidget.animate != widget.animate ||
         oldWidget.avatarDiameter != widget.avatarDiameter ||
         oldWidget.opacity != widget.opacity) {
-      _syncAnimationState();
+      _syncAnimationState(resetStaticPhase: presetChanged);
     }
   }
 
@@ -72,7 +76,7 @@ class _AvatarDecorationFrameState extends State<AvatarDecorationFrame>
     return true;
   }
 
-  void _syncAnimationState() {
+  void _syncAnimationState({bool resetStaticPhase = false}) {
     if (!mounted) return;
     if (_shouldAnimate(context)) {
       if (!_controller.isAnimating) {
@@ -82,7 +86,9 @@ class _AvatarDecorationFrameState extends State<AvatarDecorationFrame>
       if (_controller.isAnimating) {
         _controller.stop();
       }
-      _controller.value = 0.25;
+      if (resetStaticPhase) {
+        _controller.value = 0.25;
+      }
     }
   }
 
@@ -128,7 +134,7 @@ class _AvatarDecorationFrameState extends State<AvatarDecorationFrame>
               style: style,
               primary: dec.primaryColor,
               secondary: dec.secondaryColor,
-              progress: shouldAnimate ? _controller.value : 0.25,
+              progress: _controller.value,
               opacity: widget.opacity.clamp(0.0, 1.0),
               avatarDiameter: widget.avatarDiameter,
             ),

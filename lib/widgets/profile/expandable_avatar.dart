@@ -53,6 +53,10 @@ class ExpandableAvatar extends StatefulWidget {
   /// Декорация рамки вокруг круглой аватарки (плавно растворяется при раскрытии)
   final AvatarDecorationPreset? decoration;
 
+  /// Показывать ли встроенный оверлей декорации внутри [ExpandableAvatar].
+  /// Отключается, когда внешний слой метабола рисует рамку отдельным необрезаемым компаньоном.
+  final bool showDecoration;
+
   /// Имя пользователя для плейсхолдера
   final String displayName;
 
@@ -92,6 +96,7 @@ class ExpandableAvatar extends StatefulWidget {
     this.tintColor,
     this.backgroundColor,
     this.decoration,
+    this.showDecoration = true,
     this.displayName = '',
     this.heroTagPrefix = 'avatar_hero',
     this.chatAvatarHeroTag,
@@ -507,7 +512,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
 
     Widget finalChild = avatarContentBox;
     final dec = widget.decoration;
-    if (dec != null && progress < 0.32) {
+    if (widget.showDecoration && dec != null && progress < 0.32) {
       final frameOpacity =
           (1.0 - ((progress - 0.05) / 0.25).clamp(0.0, 1.0)).clamp(0.0, 1.0);
       if (frameOpacity > 0.001) {

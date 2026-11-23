@@ -134,6 +134,7 @@ class MainActivity : FlutterFragmentActivity() {
             resolveTargetWebView(flutterEngine, targetUrl, webViewId)
         }
         BrowserOtpChannel.register(flutterEngine, this)
+        DisplayCutoutChannel.register(flutterEngine, this)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "app.theaver.messenger/screen_security"

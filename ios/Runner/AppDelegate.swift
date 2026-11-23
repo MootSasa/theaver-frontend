@@ -81,6 +81,7 @@ private final class WebViewPullToRefreshHandler: NSObject {
       setupNativeNotifications(messenger: messenger)
       setupBrowserStorageChannel(messenger: messenger)
       setupWebViewSnapshotChannel(messenger: messenger)
+      setupDisplayCutoutChannel(messenger: messenger)
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
@@ -93,6 +94,7 @@ private final class WebViewPullToRefreshHandler: NSObject {
     setupNativeNotifications(messenger: messenger)
     setupBrowserStorageChannel(messenger: messenger)
     setupWebViewSnapshotChannel(messenger: messenger)
+    setupDisplayCutoutChannel(messenger: messenger)
   }
 
   private func setupProximityAndMediaSession(messenger: FlutterBinaryMessenger) {
@@ -1078,6 +1080,132 @@ private final class WebViewPullToRefreshHandler: NSObject {
 
       default:
         result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private static func currentMachineModelIdentifier() -> String {
+    #if targetEnvironment(simulator)
+    if let simId = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"], !simId.isEmpty {
+      return simId
+    }
+    #endif
+    var systemInfo = utsname()
+    guard uname(&systemInfo) == 0 else { return "" }
+    return withUnsafePointer(to: &systemInfo.machine) {
+      $0.withMemoryRebound(to: CChar.self, capacity: 1) {
+        String(validatingUTF8: $0) ?? ""
+      }
+    }
+  }
+
+  private func setupDisplayCutoutChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "app.theaver.messenger/display_cutout",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { [weak self] (call, result) in
+      guard call.method == "getDisplayCutout" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      DispatchQueue.main.async {
+        guard UIDevice.current.userInterfaceIdiom == .phone else {
+          result(["hasCutout": false])
+          return
+        }
+        let activeWindow: UIWindow? = self?.window ?? UIApplication.shared.connectedScenes
+          .compactMap { $0 as? UIWindowScene }
+          .flatMap { $0.windows }
+          .first { $0.isKeyWindow }
+        let bounds = activeWindow?.bounds ?? UIScreen.main.bounds
+        let screenW = Double(bounds.width)
+        let screenH = Double(bounds.height)
+        guard screenW > 0, screenH > 0, screenW <= screenH else {
+          result(["hasCutout": false])
+          return
+        }
+        let safeTop = Double(activeWindow?.safeAreaInsets.top ?? 0.0)
+        guard safeTop >= 38.0 else {
+          result(["hasCutout": false])
+          return
+        }
+
+        let model = Self.currentMachineModelIdentifier()
+        var kind = ""
+        var baseWidth = 0.0
+        var baseHeight = 0.0
+        var baseTop = 0.0
+        var standardScreenWidth = screenW
+
+        switch model {
+        // Classic Top Notch (iPhone X -> iPhone 14 / 16e)
+        case "iPhone10,3", "iPhone10,6", "iPhone11,2", "iPhone12,3":
+          kind = "topNotch"; baseWidth = 223.0; baseHeight = 30.0; baseTop = 0.0; standardScreenWidth = 375.0
+        case "iPhone11,4", "iPhone11,6", "iPhone12,5":
+          kind = "topNotch"; baseWidth = 223.0; baseHeight = 30.0; baseTop = 0.0; standardScreenWidth = 414.0
+        case "iPhone11,8", "iPhone12,1":
+          kind = "topNotch"; baseWidth = 246.0; baseHeight = 33.0; baseTop = 0.0; standardScreenWidth = 414.0
+        case "iPhone13,1":
+          kind = "topNotch"; baseWidth = 242.0; baseHeight = 34.0; baseTop = 0.0; standardScreenWidth = 375.0
+        case "iPhone13,2", "iPhone13,3":
+          kind = "topNotch"; baseWidth = 222.0; baseHeight = 32.0; baseTop = 0.0; standardScreenWidth = 390.0
+        case "iPhone13,4":
+          kind = "topNotch"; baseWidth = 222.0; baseHeight = 32.0; baseTop = 0.0; standardScreenWidth = 428.0
+        case "iPhone14,4":
+          kind = "topNotch"; baseWidth = 189.0; baseHeight = 38.0; baseTop = 0.0; standardScreenWidth = 375.0
+        case "iPhone14,5", "iPhone14,2", "iPhone14,7", "iPhone17,5":
+          kind = "topNotch"; baseWidth = 176.0; baseHeight = 34.0; baseTop = 0.0; standardScreenWidth = 390.0
+        case "iPhone14,3", "iPhone14,8":
+          kind = "topNotch"; baseWidth = 176.0; baseHeight = 34.0; baseTop = 0.0; standardScreenWidth = 428.0
+
+        // Dynamic Island (iPhone 14 Pro, 15/15 Pro, 16/16 Plus)
+        case "iPhone15,2", "iPhone15,4", "iPhone16,1", "iPhone17,3":
+          kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 11.0; standardScreenWidth = 393.0
+        case "iPhone15,3", "iPhone15,5", "iPhone16,2", "iPhone17,4":
+          kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 11.0; standardScreenWidth = 430.0
+
+        // Dynamic Island (iPhone 16 Pro / Pro Max & newer Pro generations)
+        case "iPhone17,1", "iPhone18,1", "iPhone19,1":
+          kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 41.0 / 3.0; standardScreenWidth = 402.0
+        case "iPhone17,2", "iPhone18,2", "iPhone19,2":
+          kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 41.0 / 3.0; standardScreenWidth = 440.0
+
+        default:
+          if safeTop >= 65.0 {
+            kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 59.0 / 3.0
+          } else if safeTop >= 58.0 {
+            kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 41.0 / 3.0
+          } else if safeTop >= 50.0 || (safeTop >= 46.5 && screenW == 375.0) {
+            kind = "dynamicIsland"; baseWidth = 126.0; baseHeight = 112.0 / 3.0; baseTop = 11.0
+          } else if safeTop >= 43.0 {
+            kind = "topNotch"; baseWidth = 176.0; baseHeight = 34.0; baseTop = 0.0
+          } else {
+            result(["hasCutout": false])
+            return
+          }
+        }
+
+        let zoomFactor = (standardScreenWidth > 0 && screenW < standardScreenWidth - 1.0)
+          ? (screenW / standardScreenWidth)
+          : 1.0
+        let finalWidth = baseWidth * zoomFactor
+        let finalHeight = baseHeight * zoomFactor
+        let finalTop = baseTop * zoomFactor
+        let finalLeft = (screenW - finalWidth) * 0.5
+        let radius = kind == "dynamicIsland" ? finalHeight * 0.5 : 16.0 * zoomFactor
+
+        result([
+          "hasCutout": true,
+          "kind": kind,
+          "gravity": "center",
+          "left": finalLeft,
+          "top": finalTop,
+          "width": finalWidth,
+          "height": finalHeight,
+          "cornerRadius": radius,
+          "isOval": kind == "dynamicIsland"
+        ])
       }
     }
   }

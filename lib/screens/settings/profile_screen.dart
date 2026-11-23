@@ -28,6 +28,7 @@ import '../../services/chat_actions_helper.dart';
 import '../../services/chat_service.dart';
 import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
+import '../../services/display_cutout_service.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
@@ -58,6 +59,7 @@ import '../../widgets/profile/liquid_glass_info_panel.dart';
 import '../../widgets/profile/liquid_glass_music_status.dart';
 import '../../widgets/profile/liquid_glass_profile_buttons.dart';
 import '../../widgets/profile/manage_user_badge_sheet.dart';
+import '../../widgets/profile/profile_avatar_metaball_layer.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 import 'change_email_screen.dart';
@@ -230,6 +232,7 @@ class ProfileScreenState extends State<ProfileScreen>
 
   /// Ключи и измерения для единственного экземпляра капсулы разделов (`ProfileSectionPill`)
   final GlobalKey _profileStackKey = GlobalKey();
+  final GlobalKey _expandableAvatarKey = GlobalKey();
   final GlobalKey _sectionPillSlotKey = GlobalKey();
   final GlobalKey<ProfileSectionPillState> _sectionPillKey =
       GlobalKey<ProfileSectionPillState>();
@@ -5617,7 +5620,12 @@ class ProfileScreenState extends State<ProfileScreen>
     final isDark = theme.brightness == Brightness.dark;
 
     final profileTheme = context.watch<ProfileThemeProvider>();
-    final custCache = context.watch<PeerCustomizationCache>();
+    PeerCustomizationCache custCache;
+    try {
+      custCache = context.watch<PeerCustomizationCache>();
+    } on ProviderNotFoundException {
+      custCache = PeerCustomizationCache.instance;
+    }
     final PeerCustomization? activeCustomization = _isSelf
         ? profileTheme.ownCustomization
         : (_isUser && widget.userId != null && widget.userId!.isNotEmpty
@@ -5770,6 +5778,22 @@ class ProfileScreenState extends State<ProfileScreen>
     final sections = _buildSections(l10n);
     final int safeSectionIdx =
         _selectedSectionIndex.clamp(0, math.max<int>(0, sections.length - 1));
+
+    final double avatarHideProgress = _expandFactor > 0.0
+        ? 0.0
+        : (scrollOffset / ProfileAvatarMetaballGeometry.defaultCollapseExtent)
+            .clamp(0.0, 1.0);
+    final String? effectiveChatAvatarHeroTag = (_expandFactor >= 0.85 ||
+            _isAvatarViewerOpen ||
+            avatarHideProgress > 0.55)
+        ? null
+        : 'profile_avatar_$_heroKey';
+
+    // Proactively prime native display cutout cache for the current window size.
+    DisplayCutoutService.instance.ensureQueried(
+      windowSize: MediaQuery.sizeOf(context),
+      topViewPadding: MediaQuery.viewPaddingOf(context).top,
+    );
 
     return PopScope(
       canPop: !_isAnyMenuOpen,
@@ -6338,49 +6362,40 @@ class ProfileScreenState extends State<ProfileScreen>
                         ),
                       ),
 
-                      // 4. Аватарка с непрерывным морфингом и ShaderMask альфа-растворением нижней кромки
-                      Positioned(
-                        top: avatarTopY,
-                        left: (screenWidth - currentSize) / 2,
-                        width: currentSize,
-                        height: currentSize,
-                        child: IgnorePointer(
-                          ignoring: _expandFactor == 0.0 && scrollOffset > 80.0,
-                          child: Opacity(
-                            opacity: _expandFactor > 0.0
-                                ? 1.0
-                                : (1.0 - ((scrollOffset - 35.0) / 115.0))
-                                    .clamp(0.0, 1.0),
-                            child: ExpandableAvatar(
-                              pageController: _avatarPageController,
-                              initialPage: _currentAvatarIndex,
-                              avatarUrls: _avatarUrls,
-                              avatarFile: _avatarFile,
-                              expandFactor: _expandFactor,
-                              overExpandProgress: _overExpandProgress,
-                              bottomCollapseOverlap: bottomCollapseOverlap,
-                              tintColor: backgroundColor,
-                              backgroundColor: backgroundColor,
-                              displayName: _getDisplayName(),
-                              decoration: activeCustomization?.avatarDecoration,
-                              chatAvatarHeroTag:
-                                  (_expandFactor >= 0.85 || _isAvatarViewerOpen)
-                                      ? null
-                                      : 'profile_avatar_$_heroKey',
-                              onTap: _openFullAvatarViewer,
-                              onVerticalDragStart: _handleVerticalDragStart,
-                              onVerticalDragUpdate: _handleVerticalDragUpdate,
-                              onVerticalDragEnd: _handleVerticalDragEnd,
-                              onPageChanged: (index) {
-                                setState(() {
-                                  _currentAvatarIndex = index;
-                                });
-                                _updateTopLuminance();
-                              },
-                            ),
+                      // 4. Раскрывающаяся аватарка (активна при потягивании вниз _expandFactor > 0.0)
+                      if (_expandFactor > 0.0)
+                        Positioned(
+                          top: avatarTopY,
+                          left: (screenWidth - currentSize) / 2,
+                          width: currentSize,
+                          height: currentSize,
+                          child: ExpandableAvatar(
+                            key: _expandableAvatarKey,
+                            pageController: _avatarPageController,
+                            initialPage: _currentAvatarIndex,
+                            avatarUrls: _avatarUrls,
+                            avatarFile: _avatarFile,
+                            expandFactor: _expandFactor,
+                            overExpandProgress: _overExpandProgress,
+                            bottomCollapseOverlap: bottomCollapseOverlap,
+                            tintColor: backgroundColor,
+                            backgroundColor: backgroundColor,
+                            displayName: _getDisplayName(),
+                            decoration: activeCustomization?.avatarDecoration,
+                            showDecoration: true,
+                            chatAvatarHeroTag: effectiveChatAvatarHeroTag,
+                            onTap: _openFullAvatarViewer,
+                            onVerticalDragStart: _handleVerticalDragStart,
+                            onVerticalDragUpdate: _handleVerticalDragUpdate,
+                            onVerticalDragEnd: _handleVerticalDragEnd,
+                            onPageChanged: (index) {
+                              setState(() {
+                                _currentAvatarIndex = index;
+                              });
+                              _updateTopLuminance();
+                            },
                           ),
                         ),
-                      ),
 
                       // 5. Мягкое оптическое размытие нижней зоны альфа-перехода аватарки (LiquidGlassScrollEdge)
                       if (_expandFactor > 0.38 && blurFactor > 0.001)
@@ -6422,6 +6437,37 @@ class ProfileScreenState extends State<ProfileScreen>
                               ),
                             ),
                           ),
+                        ),
+
+                      // 6.2. Круглая аватарка с жидким метаболом втягивания в вырез / Dynamic Island / угловую камеру
+                      // (расположена над статус-барным edge-blur и ниже капсул Liquid Glass "<", ProfileSectionPill и "•••")
+                      if (_expandFactor == 0.0)
+                        ProfileAvatarMetaballLayer(
+                          avatarKey: _expandableAvatarKey,
+                          viewportKey: _profileStackKey,
+                          scrollOffset: scrollOffset,
+                          screenWidth: screenWidth,
+                          statusBarHeight: statusBarHeight,
+                          topOffset: topOffset,
+                          pageController: _avatarPageController,
+                          initialPage: _currentAvatarIndex,
+                          avatarUrls: _avatarUrls,
+                          avatarFile: _avatarFile,
+                          tintColor: backgroundColor,
+                          backgroundColor: backgroundColor,
+                          displayName: _getDisplayName(),
+                          decoration: activeCustomization?.avatarDecoration,
+                          chatAvatarHeroTag: effectiveChatAvatarHeroTag,
+                          onTap: _openFullAvatarViewer,
+                          onVerticalDragStart: _handleVerticalDragStart,
+                          onVerticalDragUpdate: _handleVerticalDragUpdate,
+                          onVerticalDragEnd: _handleVerticalDragEnd,
+                          onPageChanged: (index) {
+                            setState(() {
+                              _currentAvatarIndex = index;
+                            });
+                            _updateTopLuminance();
+                          },
                         ),
 
                       // 6.5. Полноэкранный барьер закрытия открытого меню ("•••" или "Стена / Медиа / ..."):
@@ -7067,9 +7113,11 @@ class _RoundHeaderButton extends StatelessWidget {
       return GestureDetector(
         onTap: onTap,
         behavior: HitTestBehavior.opaque,
-        child: LiquidGlassLens(
-          style: glassStyle,
-          child: buttonChild,
+        child: LiquidGlassBatch.exclude(
+          child: LiquidGlassLens(
+            style: glassStyle,
+            child: buttonChild,
+          ),
         ),
       );
     }
