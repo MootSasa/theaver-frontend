@@ -312,10 +312,11 @@ void main() {
       expect(start.isScalarFieldActive, isFalse);
 
       double prevX = start.avatarCenter.dx;
+      const extent = ProfileAvatarMetaballGeometry.defaultCollapseExtent;
       double prevY = start.avatarCenter.dy;
       for (int i = 1; i <= 10; i++) {
         final g = ProfileAvatarMetaballGeometry.compute(
-          scrollOffset: 155.0 * (i / 10.0),
+          scrollOffset: extent * (i / 10.0),
           screenWidth: screenWidth,
           statusBarHeight: statusBarHeight,
           topOffset: topOffset,
@@ -335,7 +336,7 @@ void main() {
       }
 
       final end = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 155.0,
+        scrollOffset: extent,
         screenWidth: screenWidth,
         statusBarHeight: statusBarHeight,
         topOffset: topOffset,
@@ -353,7 +354,7 @@ void main() {
         cornerRadius: 12.0,
       );
       final rightEnd = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 155.0,
+        scrollOffset: extent,
         screenWidth: screenWidth,
         statusBarHeight: statusBarHeight,
         topOffset: topOffset,
@@ -364,6 +365,7 @@ void main() {
     });
 
     test('clips floating Dynamic Island top edge, keeps photo full-color until p > 0.72, and lazy-activates scalar field within 24dp', () {
+      const extent = ProfileAvatarMetaballGeometry.defaultCollapseExtent;
       const island = DisplayCutoutSpec(
         kind: CutoutAnchorKind.dynamicIsland,
         gravity: CutoutHorizontalGravity.center,
@@ -373,7 +375,7 @@ void main() {
       );
 
       final early = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 35.0, // p ≈ 0.226 <= 0.45
+        scrollOffset: extent * 0.22,
         screenWidth: 393.0,
         statusBarHeight: 54.0,
         topOffset: 100.0,
@@ -386,7 +388,7 @@ void main() {
       expect(early.avatarRgbScale, equals(1.0));
 
       final preContact = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 105.0, // p ≈ 0.677 <= 0.72: approaching cutout, still 100% colored!
+        scrollOffset: extent * 0.68, // p = 0.68 <= 0.72: approaching cutout, still 100% colored!
         screenWidth: 393.0,
         statusBarHeight: 54.0,
         topOffset: 100.0,
@@ -400,13 +402,57 @@ void main() {
       expect(preContact.avatarCenter.dx, closeTo(196.5, 0.01));
 
       final absorbing = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 140.0, // p ≈ 0.903: inside cutout, darkening into #000
+        scrollOffset: extent * 0.90, // p = 0.90: inside cutout, darkening into #000
         screenWidth: 393.0,
         statusBarHeight: 54.0,
         topOffset: 100.0,
         cutout: island,
       );
       expect(absorbing.avatarRgbScale, lessThan(0.55));
+    });
+
+    test('pours smoothly into top screen edge when CutoutAnchorKind.none (no cutout)', () {
+      const extent = ProfileAvatarMetaballGeometry.defaultCollapseExtent;
+
+      // Approaching y = 0 (p = 0.62 -> dGap ≈ 21dp <= 34dp): wide viscous 10.5dp scalar field activates.
+      final approachingEdge = ProfileAvatarMetaballGeometry.compute(
+        scrollOffset: extent * 0.62,
+        screenWidth: 393.0,
+        statusBarHeight: 28.0,
+        topOffset: 74.0,
+        cutout: DisplayCutoutSpec.none,
+      );
+      expect(approachingEdge.isScalarFieldActive, isTrue);
+      expect(approachingEdge.scalarBlurSigma, closeTo(10.5, 0.01));
+      expect(approachingEdge.cutoutClipTopY, equals(0.0));
+
+      // Half-submerged across y = 0 (p = 0.84 -> avatarCenter near y = 0, edgeGapDp < -12dp):
+      // scalar field & top-rim black gradient stay active while bottom half is still on screen!
+      final pouringIntoEdge = ProfileAvatarMetaballGeometry.compute(
+        scrollOffset: extent * 0.84,
+        screenWidth: 393.0,
+        statusBarHeight: 28.0,
+        topOffset: 74.0,
+        cutout: DisplayCutoutSpec.none,
+      );
+      expect(pouringIntoEdge.edgeGapDp, lessThan(-10.0));
+      expect(pouringIntoEdge.avatarCenter.dy + pouringIntoEdge.avatarDiameter * 0.5, greaterThan(4.0));
+      expect(pouringIntoEdge.isScalarFieldActive, isTrue);
+      expect(pouringIntoEdge.scalarFieldOpacity, equals(1.0));
+      expect(pouringIntoEdge.topEdgeRimDarken, greaterThan(0.75));
+
+      // At p = 1.0: completely submerged into top screen bezel (bottom < 0).
+      final submerged = ProfileAvatarMetaballGeometry.compute(
+        scrollOffset: extent,
+        screenWidth: 393.0,
+        statusBarHeight: 28.0,
+        topOffset: 74.0,
+        cutout: DisplayCutoutSpec.none,
+      );
+      expect(
+        submerged.avatarCenter.dy + submerged.avatarDiameter * 0.5,
+        lessThan(0.0),
+      );
     });
 
     test('normalizes Android vertical OEM slot (top = 0, height > width) to bottom circular camera and scales referenceWidthDp', () {
@@ -557,8 +603,8 @@ void main() {
           findsNothing,
         );
 
-        // Past p >= 0.36 (scrollOffset = 65 -> p ≈ 0.419): frame unmounts completely before black merge peaks.
-        await tester.pumpWidget(buildLayer(65.0));
+        // Past p >= 0.36 (scrollOffset = 72 -> p = 0.40): frame unmounts completely before black merge peaks.
+        await tester.pumpWidget(buildLayer(72.0));
         await tester.pump();
         expect(find.byType(AvatarDecorationFrame), findsNothing);
         expect(find.byType(ExpandableAvatar), findsOneWidget);
@@ -653,10 +699,10 @@ void main() {
           });
         }
 
-        // 2. Scroll to 120dp (p ≈ 0.774): GPU metaball scalar field + absorption darkening active; Hero tag disabled (> 0.55).
+        // 2. Scroll to 140dp (p ≈ 0.778): GPU metaball scalar field + absorption darkening active; Hero tag disabled (> 0.55).
         final scrollableFinder = find.byType(Scrollable).first;
         final scrollableState = tester.state<ScrollableState>(scrollableFinder);
-        scrollableState.position.jumpTo(120.0);
+        scrollableState.position.jumpTo(140.0);
         await tester.pump();
 
         expect(
@@ -681,8 +727,8 @@ void main() {
         );
         expect(tester.takeException(), isNull);
 
-        // 3. Scroll past 155dp (180dp): ExpandableAvatar unmounts cleanly from metaball layer.
-        scrollableState.position.jumpTo(180.0);
+        // 3. Scroll past 180dp (185dp): ExpandableAvatar unmounts cleanly from metaball layer.
+        scrollableState.position.jumpTo(185.0);
         await tester.pump();
         expect(
           find.descendant(
@@ -856,6 +902,75 @@ void main() {
 
       await gestureUp.up();
       await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('No-cutout top-edge pour & gentle two-zone header settle on finger release', (tester) async {
+      DisplayCutoutService.instance.debugOverrideSpec = DisplayCutoutSpec.none;
+      final glassProvider = LiquidGlassProvider();
+      await glassProvider.setMode(GlassMode.disabled);
+
+      await tester.pumpWidget(
+        _buildProfileTestApp(
+          glassProvider: glassProvider,
+          padding: const EdgeInsets.only(top: 28.0, bottom: 24.0),
+          child: const ProfileScreen(
+            userId: 'no_cutout_peer',
+            initialName: 'Top Edge Pour',
+            initialIsOnline: true,
+            heroTag: 'no_cutout_peer',
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final scrollableState =
+          tester.state<ScrollableState>(find.byType(Scrollable).first);
+
+      // 1. Small upward scroll (< 55% of 180dp) + calm finger release returns smoothly to 0.0 (no abrupt snap away).
+      final gentleNudge = await tester.startGesture(const Offset(196.0, 500.0));
+      for (int i = 0; i < 4; i++) {
+        await gentleNudge.moveBy(const Offset(0.0, -20.0));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await tester.pump(const Duration(milliseconds: 140));
+      await gentleNudge.up();
+      await tester.pumpAndSettle();
+      expect(scrollableState.position.pixels, closeTo(0.0, 0.5));
+
+      // 2. Scroll past 55% (~120dp) + calm finger release:
+      // Settles smoothly to defaultCollapseExtent (180dp, NOT shooting past to 255dp),
+      // and at +140ms is still visibly mid-pour into the top screen edge (with ShaderMask rim gradient active)!
+      final midScroll = await tester.startGesture(const Offset(196.0, 520.0));
+      for (int i = 0; i < 6; i++) {
+        await midScroll.moveBy(const Offset(0.0, -23.0));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      await tester.pump(const Duration(milliseconds: 140));
+      await midScroll.up();
+
+      // At +140ms into the ~460ms gentle settle, avatar is still smoothly pouring into y = 0 (not snapped instantly!).
+      await tester.pump(const Duration(milliseconds: 140));
+      expect(scrollableState.position.pixels, greaterThan(125.0));
+      expect(
+        scrollableState.position.pixels,
+        lessThan(ProfileAvatarMetaballGeometry.defaultCollapseExtent - 4.0),
+      );
+      final metaballLayerFinder = find.byType(ProfileAvatarMetaballLayer);
+      expect(
+        find.descendant(
+          of: metaballLayerFinder,
+          matching: find.byType(ShaderMask),
+        ),
+        findsWidgets,
+      );
+
+      await tester.pumpAndSettle();
+      // Stops right at defaultCollapseExtent (180.0), NOT 255.0!
+      expect(
+        scrollableState.position.pixels,
+        closeTo(ProfileAvatarMetaballGeometry.defaultCollapseExtent, 0.5),
+      );
       expect(tester.takeException(), isNull);
     });
   });

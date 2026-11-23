@@ -14,13 +14,14 @@ import 'expandable_avatar.dart';
 /// vertical [scrollOffset]. Separated for deterministic `O(1)` evaluation and unit testing.
 @immutable
 class ProfileAvatarMetaballGeometry {
-  static const double defaultCollapseExtent = 155.0;
+  static const double defaultCollapseExtent = 180.0;
   static const double baseAvatarDiameter = 110.0;
   static const double decorationOuterMultiplier = 1.24;
   static const double decorationFullContractScale = 0.81;
   static const double decorationUnmountProgress = 0.36;
   static const double scalarFieldActivationGapDp = 24.0;
-  static const double blackKingBarHeight = 32.0;
+  static const double topEdgeActivationGapDp = 34.0;
+  static const double blackKingBarHeight = 48.0;
 
   final double progress;
   final Offset startCenter;
@@ -37,6 +38,7 @@ class ProfileAvatarMetaballGeometry {
   final bool isScalarFieldActive;
   final double scalarBlurSigma;
   final double scalarFieldOpacity;
+  final double topEdgeRimDarken;
   final double avatarBlurSigma;
   final double avatarRgbScale;
   final double avatarAlpha;
@@ -61,6 +63,7 @@ class ProfileAvatarMetaballGeometry {
     required this.isScalarFieldActive,
     required this.scalarBlurSigma,
     required this.scalarFieldOpacity,
+    required this.topEdgeRimDarken,
     required this.avatarBlurSigma,
     required this.avatarRgbScale,
     required this.avatarAlpha,
@@ -100,8 +103,10 @@ class ProfileAvatarMetaballGeometry {
         p2 = Offset(halfW, math.max(6.0, cutout.bounds.bottom - 10.0));
         d2 = 18.0;
       case CutoutAnchorKind.none:
-        p2 = Offset(halfW, -18.0);
-        d2 = 22.0;
+        // Matches Telegram's ProfileGooeyView / SettingsActivity: shrinks to 24dp
+        // while pouring completely past y = 0 into the top screen bezel (-20dp).
+        p2 = Offset(halfW, -20.0);
+        d2 = 24.0;
     }
 
     final bool isCorner = cutout.isCorner;
@@ -181,36 +186,56 @@ class ProfileAvatarMetaballGeometry {
     final cutoutClipTopY =
         (cutout.hasCutout && cutout.bounds.top > 1.0) ? cutout.bounds.top : 0.0;
 
-    // Compact logical-dp Gaussian sigma (matching Telegram's ~15px = ~5dp radius)
-    // so the cutout anchor stays strictly inside the physical camera hole without
-    // shifting its center or edges when the neck forms.
+    // Compact logical-dp Gaussian sigma (5–6dp) for physical camera cutouts so
+    // hardware holes never inflate or drift, and a lush viscous 10.5dp sigma when
+    // pouring into the top screen bezel (CutoutAnchorKind.none, matching Telegram's
+    // ProfileGooeyView BLACK_KING_BAR).
+    final isTopEdgePour = !cutout.hasCutout;
     final scalarBlurSigma = switch (cutout.kind) {
       CutoutAnchorKind.punchHole => 5.0,
+      CutoutAnchorKind.none => 10.5,
       _ => 6.0,
     };
 
-    final scalarFieldOpacity = p <= 0.93
+    final fadeStartP = isTopEdgePour ? 0.96 : 0.93;
+    final fadeSpanP = isTopEdgePour ? 0.038 : 0.066;
+    final scalarFieldOpacity = p <= fadeStartP
         ? 1.0
         : (1.0 -
-            Curves.easeInCubic.transform(((p - 0.93) / 0.066).clamp(0.0, 1.0)));
+            Curves.easeInCubic
+                .transform(((p - fadeStartP) / fadeSpanP).clamp(0.0, 1.0)));
 
+    final activationGap = isTopEdgePour
+        ? topEdgeActivationGapDp
+        : scalarFieldActivationGapDp;
     final isScalarFieldActive = p > 0.002 &&
         p < 0.998 &&
-        dGap <= scalarFieldActivationGapDp &&
+        dGap <= activationGap &&
         scalarFieldOpacity > 0.002;
 
-    // Keep photo 100% sharp through the first 45% of scroll, then apply subtle
-    // optical softness (up to 4.5dp) as it nears the camera cutout.
-    final avatarBlurProgress = ((p - 0.45) / 0.45).clamp(0.0, 1.0);
-    final avatarBlurSigma =
-        4.5 * Curves.easeInQuad.transform(avatarBlurProgress);
+    // Top-rim black gradient (matching Telegram's ProfileMetaballView 16dp top gradient)
+    // so the upper rim of the colored avatar melts seamlessly into the black liquid neck at y = 0.
+    final topEdgeRimDarken = isTopEdgePour
+        ? Curves.easeInOutQuad
+            .transform(((18.0 - dGap) / 20.0).clamp(0.0, 1.0))
+        : 0.0;
 
-    // Keep full natural photo colors all the way to cutout contact (p <= 0.72),
-    // darkening into #000000 only during final absorption inside the cutout (0.72..0.95).
-    final darkenProgress = ((p - 0.72) / 0.23).clamp(0.0, 1.0);
+    // Keep photo 100% sharp through the first 45% of scroll, then apply subtle
+    // optical softness as it nears the cutout or screen edge.
+    final avatarBlurProgress = ((p - 0.45) / 0.45).clamp(0.0, 1.0);
+    final maxAvatarBlur = isTopEdgePour ? 5.5 : 4.5;
+    final avatarBlurSigma =
+        maxAvatarBlur * Curves.easeInQuad.transform(avatarBlurProgress);
+
+    // Keep full natural photo colors until contact, darkening into #000000 during final absorption.
+    final darkenStart = isTopEdgePour ? 0.68 : 0.72;
+    final darkenSpan = isTopEdgePour ? 0.25 : 0.23;
+    final darkenProgress = ((p - darkenStart) / darkenSpan).clamp(0.0, 1.0);
     final avatarRgbScale = 1.0 - Curves.easeInCubic.transform(darkenProgress);
 
-    final fadeProgress = ((p - 0.88) / 0.105).clamp(0.0, 1.0);
+    final fadeProgress =
+        ((p - (isTopEdgePour ? 0.91 : 0.88)) / (isTopEdgePour ? 0.08 : 0.105))
+            .clamp(0.0, 1.0);
     final avatarAlpha = 1.0 - Curves.easeInOutCubic.transform(fadeProgress);
 
     // Custom avatar decoration frame ("absorb into droplet" on scroll up, "bloom" on scroll down).
@@ -243,6 +268,7 @@ class ProfileAvatarMetaballGeometry {
       isScalarFieldActive: isScalarFieldActive,
       scalarBlurSigma: scalarBlurSigma,
       scalarFieldOpacity: scalarFieldOpacity,
+      topEdgeRimDarken: topEdgeRimDarken,
       avatarBlurSigma: avatarBlurSigma,
       avatarRgbScale: avatarRgbScale,
       avatarAlpha: avatarAlpha,
@@ -311,7 +337,7 @@ class ProfileAvatarMetaballLayer extends StatefulWidget {
 
 class _ProfileAvatarMetaballLayerState
     extends State<ProfileAvatarMetaballLayer> {
-  static const double _kStaticTopBufferPad = 40.0;
+  static const double _kStaticTopBufferPad = 48.0;
 
   static const ColorFilter _kMetaballThresholdColorFilter =
       ColorFilter.matrix(<double>[
@@ -534,6 +560,26 @@ class _ProfileAvatarMetaballLayerState
               );
             }
 
+            if (!cutout.hasCutout && geom.topEdgeRimDarken > 0.01) {
+              final localTopEdgeY = -avatarBoxTop;
+              avatarNode = ShaderMask(
+                blendMode: BlendMode.srcATop,
+                shaderCallback: (Rect _) {
+                  return LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: <Color>[
+                      Colors.black.withValues(alpha: geom.topEdgeRimDarken),
+                      Colors.transparent,
+                    ],
+                  ).createShader(
+                    Rect.fromLTWH(0.0, localTopEdgeY, baseD, 18.0),
+                  );
+                },
+                child: avatarNode,
+              );
+            }
+
             final scaledTopY =
                 geom.avatarCenter.dy - (baseD * 0.5) * geom.avatarScale;
             if (scaledTopY - geom.avatarBlurSigma * 2.5 <
@@ -711,8 +757,91 @@ class _MetaballScalarFieldPainter extends CustomPainter {
     final u = geometry.suctionDirection;
     final n = Offset(-u.dy, u.dx);
 
-    // Bell-shaped tension weight: ramps up only within 20dp of contact and
-    // retracts smoothly back to 0 once the droplet passes inside the cutout.
+    if (!cutout.hasCutout) {
+      // Top-edge bezel pour (CutoutAnchorKind.none — matching Telegram's
+      // ProfileGooeyView BLACK_KING_BAR + ProfileMetaballView flared shoulders):
+      // 1) Solid off-screen black bezel ending at y = -0.60dp so far from the avatar
+      //    at y >= 0 its blurred alpha (120/255) stays strictly below the 125/255
+      //    threshold (zero top hairline), while right above the avatar any meniscus
+      //    mass crosses 125/255 to form wide, concave liquid fillets tangent to y = 0.
+      final barRect = Rect.fromLTRB(
+        -48.0,
+        -topBufferPad,
+        screenWidth + 48.0,
+        -0.60,
+      );
+      canvas.drawRect(barRect, blackPaint);
+
+      final approach = ((32.0 - geometry.edgeGapDp) / 30.0).clamp(0.0, 1.0);
+      final bottomSubmergedY = avatarCenter.dy + avatarR;
+      final sinkRetract =
+          (bottomSubmergedY / math.max(10.0, avatarR * 0.90)).clamp(0.0, 1.0);
+      final edgePourWeight = Curves.easeOutCubic.transform(approach) *
+          Curves.easeInOutSine.transform(sinkRetract);
+
+      final seedAvatarR = math.max(2.5, avatarR - 0.8);
+      canvas.drawCircle(avatarCenter, seedAvatarR, blackPaint);
+
+      if (edgePourWeight > 0.01 && bottomSubmergedY > 0.2) {
+        final cx = avatarCenter.dx;
+        final shoulderHalfW = (avatarR * 1.75 + 16.0) * edgePourWeight;
+        final double meniscusDrop = (12.5 * edgePourWeight)
+            .clamp(0.0, math.max(1.5, bottomSubmergedY * 0.78))
+            .toDouble();
+
+        final meniscusPath = Path()
+          ..moveTo(cx - shoulderHalfW, -6.0)
+          ..lineTo(cx - shoulderHalfW, 0.0)
+          ..cubicTo(
+            cx - shoulderHalfW * 0.44,
+            0.0,
+            cx - avatarR * 0.58,
+            meniscusDrop,
+            cx,
+            meniscusDrop,
+          )
+          ..cubicTo(
+            cx + avatarR * 0.58,
+            meniscusDrop,
+            cx + shoulderHalfW * 0.44,
+            0.0,
+            cx + shoulderHalfW,
+            0.0,
+          )
+          ..lineTo(cx + shoulderHalfW, -6.0)
+          ..close();
+        canvas.drawPath(meniscusPath, blackPaint);
+
+        // 45-degree tangent cone on the avatar reaching up into y = 0
+        // (matching Telegram's ProfileGooeyView lines 401-406).
+        final tangentHalfW = seedAvatarR * 0.80;
+        final tangentBaseY = avatarCenter.dy - seedAvatarR * 0.58;
+        final tangentTipY =
+            avatarCenter.dy - seedAvatarR - 10.5 * edgePourWeight;
+        final avatarCone = Path()
+          ..moveTo(cx - tangentHalfW, tangentBaseY)
+          ..quadraticBezierTo(
+            cx - tangentHalfW * 0.36,
+            tangentTipY,
+            cx,
+            tangentTipY,
+          )
+          ..quadraticBezierTo(
+            cx + tangentHalfW * 0.36,
+            tangentTipY,
+            cx + tangentHalfW,
+            tangentBaseY,
+          )
+          ..close();
+        canvas.drawPath(avatarCone, blackPaint);
+      }
+
+      canvas.restore();
+      return;
+    }
+
+    // Bell-shaped tension weight for hardware cutouts: ramps up within 20dp of
+    // contact and retracts smoothly once the droplet passes inside the cutout.
     final approach = ((20.0 - geometry.edgeGapDp) / 18.0).clamp(0.0, 1.0);
     final retract = ((geometry.edgeGapDp + 16.0) / 15.0).clamp(0.0, 1.0);
     final bridgeWeight = Curves.easeOutQuad.transform(approach) *
@@ -726,70 +855,57 @@ class _MetaballScalarFieldPainter extends CustomPainter {
     Offset anchorSurfacePoint;
     double anchorBeakHalfWidth;
 
-    if (cutout.hasCutout) {
-      final bounds = cutout.bounds;
-      final rMin = math.min(bounds.width, bounds.height) * 0.5;
-      final deflate = rMin > 4.0 ? 0.6 : 0.0;
+    final bounds = cutout.bounds;
+    final rMin = math.min(bounds.width, bounds.height) * 0.5;
+    final deflate = rMin > 4.0 ? 0.6 : 0.0;
 
-      final poly = cutout.polygonDp;
-      if (poly != null && poly.length >= 6 && !cutout.isOval) {
-        final path = Path()..moveTo(poly.first.dx, poly.first.dy);
-        for (int i = 1; i < poly.length; i++) {
-          path.lineTo(poly[i].dx, poly[i].dy);
-        }
-        path.close();
-        canvas.drawPath(path, blackPaint);
-      } else if (cutout.kind == CutoutAnchorKind.topNotch &&
-          bounds.top <= 1.0) {
-        final notchSeed = Rect.fromLTRB(
-          bounds.left + deflate,
-          -16.0,
-          bounds.right - deflate,
-          bounds.bottom - deflate,
-        );
-        final radius = math.max(0.0, cutout.cornerRadius - deflate);
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(notchSeed, Radius.circular(radius)),
-          blackPaint,
-        );
-      } else {
-        final seedBounds = bounds.deflate(deflate);
-        final radius = (cutout.cornerRadius - deflate).clamp(
-          0.0,
-          math.min(seedBounds.width, seedBounds.height) * 0.5,
-        );
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(seedBounds, Radius.circular(radius)),
-          blackPaint,
-        );
+    final poly = cutout.polygonDp;
+    if (poly != null && poly.length >= 6 && !cutout.isOval) {
+      final path = Path()..moveTo(poly.first.dx, poly.first.dy);
+      for (int i = 1; i < poly.length; i++) {
+        path.lineTo(poly[i].dx, poly[i].dy);
       }
-
-      if (cutout.kind == CutoutAnchorKind.topNotch) {
-        anchorSurfacePoint = Offset(
-          geometry.anchorNeckOrigin.dx,
-          bounds.bottom - deflate,
-        );
-        anchorBeakHalfWidth = math.min(bounds.width * 0.22, 4.5);
-      } else {
-        final a = math.max(1.0, bounds.width * 0.5 - deflate);
-        final b = math.max(1.0, bounds.height * 0.5 - deflate);
-        final denom = math.sqrt(
-          (b * u.dx) * (b * u.dx) + (a * u.dy) * (a * u.dy),
-        );
-        final supportR = denom > 0.001 ? (a * b / denom) : b;
-        anchorSurfacePoint = bounds.center - u * supportR;
-        anchorBeakHalfWidth = math.min(rMin * 0.42, 3.8);
-      }
-    } else {
-      final barRect = Rect.fromLTWH(
-        -36.0,
-        -ProfileAvatarMetaballGeometry.blackKingBarHeight,
-        screenWidth + 72.0,
-        ProfileAvatarMetaballGeometry.blackKingBarHeight - 0.5,
+      path.close();
+      canvas.drawPath(path, blackPaint);
+    } else if (cutout.kind == CutoutAnchorKind.topNotch && bounds.top <= 1.0) {
+      final notchSeed = Rect.fromLTRB(
+        bounds.left + deflate,
+        -16.0,
+        bounds.right - deflate,
+        bounds.bottom - deflate,
       );
-      canvas.drawRect(barRect, blackPaint);
-      anchorSurfacePoint = Offset(avatarCenter.dx, -0.5);
-      anchorBeakHalfWidth = 5.0;
+      final radius = math.max(0.0, cutout.cornerRadius - deflate);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(notchSeed, Radius.circular(radius)),
+        blackPaint,
+      );
+    } else {
+      final seedBounds = bounds.deflate(deflate);
+      final radius = (cutout.cornerRadius - deflate).clamp(
+        0.0,
+        math.min(seedBounds.width, seedBounds.height) * 0.5,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(seedBounds, Radius.circular(radius)),
+        blackPaint,
+      );
+    }
+
+    if (cutout.kind == CutoutAnchorKind.topNotch) {
+      anchorSurfacePoint = Offset(
+        geometry.anchorNeckOrigin.dx,
+        bounds.bottom - deflate,
+      );
+      anchorBeakHalfWidth = math.min(bounds.width * 0.22, 4.5);
+    } else {
+      final a = math.max(1.0, bounds.width * 0.5 - deflate);
+      final b = math.max(1.0, bounds.height * 0.5 - deflate);
+      final denom = math.sqrt(
+        (b * u.dx) * (b * u.dx) + (a * u.dy) * (a * u.dy),
+      );
+      final supportR = denom > 0.001 ? (a * b / denom) : b;
+      anchorSurfacePoint = bounds.center - u * supportR;
+      anchorBeakHalfWidth = math.min(rMin * 0.42, 3.8);
     }
 
     // 2. Draw the avatar black droplet seed strictly inside the photo circle

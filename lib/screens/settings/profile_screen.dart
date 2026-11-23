@@ -285,12 +285,19 @@ class ProfileScreenState extends State<ProfileScreen>
   double _collapseSlideReturnStart = 0.0;
   double _collapseMorphStartSlideUp = 0.0;
 
-  /// Полный ход доводчика верхней шапки при скролле (круглая аватарка + имя/статус + ряд кнопок быстрых действий)
-  static const double _headerCollapseSnapExtent = 245.0;
+  /// Двухступенчатые точки фиксации шапки (как `settleHeader` в Telegram `ProfileActivity.java:6156-6165`):
+  /// 1) `_avatarCollapseSnapExtent` (`180dp`) — аватарка плавно и без спешки влилась в вырез/край экрана, кнопки действий видны;
+  /// 2) `_headerCollapseSnapExtent` (`255dp`) — свёрнут и ряд кнопок действий (только если скролл уже ушёл дальше `180dp`).
+  static const double _avatarCollapseSnapExtent =
+      ProfileAvatarMetaballGeometry.defaultCollapseExtent;
+  static const double _headerCollapseSnapExtent = 255.0;
 
-  /// Фирменные кривые Telegram (`CubicBezierInterpolator.EASE_OUT_QUINT` и `EASE_BOTH`)
+  /// Фирменные кривые Telegram (`EASE_OUT_QUINT`, `EASE_BOTH`) и мягкие вязкие кривые доводки шапки без стартового рывка
   static const Curve _kTelegramEaseOutQuint = Cubic(0.23, 1.0, 0.32, 1.0);
   static const Curve _kTelegramEaseBoth = Cubic(0.45, 0.0, 0.15, 1.0);
+  static const Curve _kGentleHeaderSettleRest = Cubic(0.32, 0.08, 0.22, 1.0);
+  static const Curve _kGentleHeaderSettleMomentum =
+      Cubic(0.22, 0.68, 0.24, 1.0);
 
   bool _autoExpandedInCurrentGesture = false;
   bool _isPointerDown = false;
@@ -4404,27 +4411,72 @@ class ProfileScreenState extends State<ProfileScreen>
       return;
     }
 
-    // Если инерционный флинг снизу замедлился внутри зоны шапки (0 .. snapThreshold),
-    // плавно доводим шапку кривой Telegram EASE_OUT_QUINT, чтобы аватарка не застревала в вырезе.
+    // Если инерционный флинг из глубины списка почти остановился внутри зоны шапки,
+    // мягко доводим до ближайшей точки покоя без резкого ускорения.
     final sim = _activeBallisticSim;
-    final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
+    final fullHeaderSnap = math.min(_headerCollapseSnapExtent, maxScroll);
     if (sim != null &&
-        snapThreshold > 1.0 &&
+        fullHeaderSnap > 1.0 &&
         clamped > 0.5 &&
-        clamped < snapThreshold - 0.5) {
+        clamped < fullHeaderSnap - 0.5) {
       final elapsed = _ballisticScrollController.lastElapsedDuration;
       final currentVel = elapsed != null
           ? sim.dx(elapsed.inMicroseconds / 1e6)
           : _ballisticScrollController.velocity;
-      if (currentVel.abs() < 220.0) {
+      if (currentVel.abs() < 85.0) {
         _ballisticScrollController.stop();
         _activeBallisticSim = null;
-        final target = currentVel < -40.0
-            ? 0.0
-            : (clamped >= snapThreshold * 0.45 ? snapThreshold : 0.0);
-        _animateHeaderSettleTo(target);
+        final target = _resolveHeaderSettleTarget(
+          clamped,
+          maxScroll: maxScroll,
+          scrollVelocity: currentVel,
+        );
+        if (target != null) {
+          _animateHeaderSettleTo(target, velocity: currentVel);
+        }
       }
     }
+  }
+
+  double? _resolveHeaderSettleTarget(
+    double offset, {
+    required double maxScroll,
+    double scrollVelocity = 0.0,
+  }) {
+    final avatarSnap = math.min(_avatarCollapseSnapExtent, maxScroll);
+    final fullHeaderSnap = math.min(_headerCollapseSnapExtent, maxScroll);
+    if (avatarSnap <= 1.0) return null;
+
+    // Зона 1 (0 .. 180dp): сворачивание самой аватарки в вырез / край экрана.
+    // Останавливаемся ровно на avatarSnap (180dp), чтобы вливание метабола шло на самом мягком
+    // замедляющемся хвосте кривой, а не пролетало транзитом к 255dp за 50ms!
+    if (offset > 0.5 && offset < avatarSnap - 0.5) {
+      if (scrollVelocity >= 380.0) {
+        return avatarSnap;
+      }
+      if (scrollVelocity <= -320.0) {
+        return 0.0;
+      }
+      return offset >= avatarSnap * 0.55 ? avatarSnap : 0.0;
+    }
+
+    // Зона 2 (180 .. 255dp): аватарка уже полностью ушла в вырез/край, доводим только ряд кнопок действий.
+    if (fullHeaderSnap > avatarSnap + 4.0 &&
+        offset > avatarSnap + 0.5 &&
+        offset < fullHeaderSnap - 0.5) {
+      if (scrollVelocity >= 320.0) {
+        return fullHeaderSnap;
+      }
+      if (scrollVelocity <= -320.0) {
+        return avatarSnap;
+      }
+      final buttonsSpan = fullHeaderSnap - avatarSnap;
+      return (offset - avatarSnap) >= buttonsSpan * 0.5
+          ? fullHeaderSnap
+          : avatarSnap;
+    }
+
+    return null;
   }
 
   void _animateHeaderSettleTo(double target, {double velocity = 0.0}) {
@@ -4433,13 +4485,23 @@ class ProfileScreenState extends State<ProfileScreen>
     final dist = (target - currentOffset).abs();
     if (dist <= 0.5) return;
 
-    final speedBoost = (velocity.abs() / 1600.0).clamp(0.0, 0.45);
-    final durationMs =
-        ((250.0 + dist * 0.42) * (1.0 - speedBoost)).clamp(190.0, 390.0);
+    final absVel = velocity.abs();
+    final bool isFromRest = absVel < 260.0;
+    final double durationMs;
+    final Curve settleCurve;
+    if (isFromRest) {
+      durationMs = (390.0 + dist * 1.15).clamp(410.0, 580.0);
+      settleCurve = _kGentleHeaderSettleRest;
+    } else {
+      final momentumTrim = ((absVel - 260.0) / 2800.0).clamp(0.0, 0.16);
+      durationMs =
+          ((370.0 + dist * 0.95) * (1.0 - momentumTrim)).clamp(360.0, 530.0);
+      settleCurve = _kGentleHeaderSettleMomentum;
+    }
     _scrollController.animateTo(
       target,
       duration: Duration(milliseconds: durationMs.round()),
-      curve: _kTelegramEaseOutQuint,
+      curve: settleCurve,
     );
   }
 
@@ -5067,20 +5129,13 @@ class ProfileScreenState extends State<ProfileScreen>
     if (!_scrollController.hasClients) return;
     final currentOffset = _scrollController.offset;
     final maxScroll = _scrollController.position.maxScrollExtent;
-    final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
-
-    if (snapThreshold > 1.0 &&
-        currentOffset > 0.5 &&
-        currentOffset < snapThreshold - 0.5) {
-      final double target;
-      if (_lastWheelDy > 20.0 && currentOffset >= snapThreshold * 0.22) {
-        target = snapThreshold;
-      } else if (_lastWheelDy < -20.0 &&
-          currentOffset <= snapThreshold * 0.78) {
-        target = 0.0;
-      } else {
-        target = currentOffset >= snapThreshold * 0.45 ? snapThreshold : 0.0;
-      }
+    final pseudoVel = _lastWheelDy * 6.0;
+    final target = _resolveHeaderSettleTarget(
+      currentOffset,
+      maxScroll: maxScroll,
+      scrollVelocity: pseudoVel,
+    );
+    if (target != null) {
       _animateHeaderSettleTo(target);
     }
   }
@@ -5362,11 +5417,11 @@ class ProfileScreenState extends State<ProfileScreen>
       // а резкий уверенный свайп вверх (`velocity <= -920`) сворачивает аватарку в круг.
       if (velocity <= -920.0 && _collapseSlideUp >= 18.0) {
         _triggerAutoCollapse(velocity: velocity);
-        if (velocity < -1650.0 && _scrollController.hasClients) {
+        if (velocity < -1850.0 && _scrollController.hasClients) {
           final maxScroll = _scrollController.position.maxScrollExtent;
-          final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
-          if (snapThreshold > 1.0) {
-            _animateHeaderSettleTo(snapThreshold, velocity: velocity);
+          final avatarSnap = math.min(_avatarCollapseSnapExtent, maxScroll);
+          if (avatarSnap > 1.0) {
+            _animateHeaderSettleTo(avatarSnap, velocity: -velocity);
           }
         }
       } else if (_collapseSlideUp > 0.5) {
@@ -5400,22 +5455,23 @@ class ProfileScreenState extends State<ProfileScreen>
       return;
     }
 
-    // Настоящая нативная инерция ClampingScrollSimulation + доводка шапки Telegram EASE_OUT_QUINT
+    // Настоящая нативная инерция ClampingScrollSimulation + плавная двухзонная доводка шапки без рывка
     if (_scrollController.hasClients) {
       final currentOffset = _scrollController.offset;
       final maxScroll = _scrollController.position.maxScrollExtent;
       if (maxScroll <= 0.5) return;
 
-      final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
+      final fullHeaderSnap = math.min(_headerCollapseSnapExtent, maxScroll);
       final scrollVelocity = -velocity; // > 0 вниз по списку, < 0 обратно к верху
 
-      if (scrollVelocity.abs() < 65.0) {
-        if (snapThreshold > 1.0 &&
-            currentOffset > 0.5 &&
-            currentOffset < snapThreshold - 0.5) {
-          final target =
-              currentOffset >= snapThreshold * 0.45 ? snapThreshold : 0.0;
-          _animateHeaderSettleTo(target);
+      if (scrollVelocity.abs() < 90.0) {
+        final target = _resolveHeaderSettleTarget(
+          currentOffset,
+          maxScroll: maxScroll,
+          scrollVelocity: scrollVelocity,
+        );
+        if (target != null) {
+          _animateHeaderSettleTo(target, velocity: scrollVelocity);
         }
         return;
       }
@@ -5426,22 +5482,21 @@ class ProfileScreenState extends State<ProfileScreen>
       );
       final naturalEnd = sim.x(double.infinity).clamp(0.0, maxScroll);
 
-      if (snapThreshold > 1.0 &&
+      if (fullHeaderSnap > 1.0 &&
           naturalEnd > 0.5 &&
-          naturalEnd < snapThreshold - 0.5) {
-        final double target;
-        if (scrollVelocity > 200.0) {
-          target = snapThreshold;
-        } else if (scrollVelocity < -200.0) {
-          target = 0.0;
-        } else {
-          target = naturalEnd >= snapThreshold * 0.45 ? snapThreshold : 0.0;
+          naturalEnd < fullHeaderSnap - 0.5) {
+        final target = _resolveHeaderSettleTarget(
+          naturalEnd,
+          maxScroll: maxScroll,
+          scrollVelocity: scrollVelocity,
+        );
+        if (target != null) {
+          _animateHeaderSettleTo(target, velocity: scrollVelocity);
+          return;
         }
-        _animateHeaderSettleTo(target, velocity: scrollVelocity);
-        return;
       }
 
-      if (naturalEnd <= 0.5 && currentOffset <= snapThreshold) {
+      if (naturalEnd <= 0.5 && currentOffset <= fullHeaderSnap) {
         _animateHeaderSettleTo(0.0, velocity: scrollVelocity);
         return;
       }
