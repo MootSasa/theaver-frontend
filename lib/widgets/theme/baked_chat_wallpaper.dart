@@ -144,7 +144,7 @@ class _BakedChatWallpaperState extends State<BakedChatWallpaper> {
       if (wp == null) {
         if (kIsWeb || fallbackPath == null || fallbackPath.isEmpty) return null;
         final file = File(fallbackPath);
-        if (!file.existsSync()) return null;
+        if (!await file.exists()) return null;
         final provider = ResizeImage.resizeIfNeeded(
           _kMaxBakedDimensionPx,
           null,
@@ -204,7 +204,7 @@ class _BakedChatWallpaperState extends State<BakedChatWallpaper> {
         } else if (!kIsWeb &&
             customSvg != null &&
             customSvg.isNotEmpty &&
-            File(customSvg).existsSync()) {
+            await File(customSvg).exists()) {
           patternTile = await TiledWallpaperPattern.resolveTileImage(
             filePath: customSvg,
             colorFilter: filter,

@@ -62,6 +62,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
   late final AnimationController _singlePaneChatController;
   bool _wasShowingSinglePaneChat = false;
+  String? _lastSinglePaneChatSignature;
   bool _isSinglePaneInteractiveDrag = false;
   bool _isClosingSinglePaneAnimated = false;
 
@@ -73,11 +74,17 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   @override
   void initState() {
     super.initState();
-    _wasShowingSinglePaneChat = _controller.singlePaneShowingChat;
+    final initialActive = _controller.focusedChatTile;
+    final bool hasInitialSinglePane =
+        _controller.singlePaneShowingChat && initialActive != null;
+    _wasShowingSinglePaneChat = hasInitialSinglePane;
+    _lastSinglePaneChatSignature = hasInitialSinglePane
+        ? '${initialActive.tileId}_${initialActive.chatId}_${initialActive.revision}'
+        : null;
     _singlePaneChatController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 250),
-      reverseDuration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 300),
+      reverseDuration: const Duration(milliseconds: 260),
       value: _wasShowingSinglePaneChat ? 1.0 : 0.0,
     );
     _controller.attachWorkspace(
@@ -105,8 +112,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   }
 
   bool _isCurrentlySinglePaneMode() {
-    final double w =
-        _lastReportedWindowSize?.width ?? _controller.windowSize.width;
+    final double w = _lastReportedWindowSize?.width ??
+        (mounted ? MediaQuery.maybeSizeOf(context)?.width : null) ??
+        _controller.windowSize.width;
     return w < TilingLayoutController.kTwoColumnBreakpoint &&
         _controller.chatTiles.length < 2;
   }
@@ -120,7 +128,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     try {
       await _singlePaneChatController.animateTo(
         0.0,
-        duration: const Duration(milliseconds: 250),
+        duration: const Duration(milliseconds: 260),
         curve: Curves.easeOutCubic,
       );
     } finally {
@@ -141,16 +149,27 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       _chatTileHeroControllers.remove(id)?.dispose();
     }
 
+    final activeChat = _controller.focusedChatTile;
     final bool nowShowingChat =
-        _controller.singlePaneShowingChat && _controller.focusedChatTile != null;
-    if (nowShowingChat && !_wasShowingSinglePaneChat) {
+        _controller.singlePaneShowingChat && activeChat != null;
+    final String? nextChatSig = nowShowingChat
+        ? '${activeChat.tileId}_${activeChat.chatId}_${activeChat.revision}'
+        : null;
+    final bool chatReplacedInSinglePane = nowShowingChat &&
+        _wasShowingSinglePaneChat &&
+        _lastSinglePaneChatSignature != null &&
+        _lastSinglePaneChatSignature != nextChatSig;
+
+    if ((nowShowingChat && !_wasShowingSinglePaneChat) ||
+        chatReplacedInSinglePane) {
       _isClosingSinglePaneAnimated = false;
       _isSinglePaneInteractiveDrag = false;
       if (_isCurrentlySinglePaneMode()) {
+        _singlePaneChatController.value = 0.0;
         _singlePaneChatController.animateTo(
           1.0,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 300),
+          curve: const Cubic(0.22, 0.82, 0.24, 1.0),
         );
       } else {
         _singlePaneChatController.value = 1.0;
@@ -162,6 +181,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       }
     }
     _wasShowingSinglePaneChat = nowShowingChat;
+    _lastSinglePaneChatSignature = nextChatSig;
 
     setState(() {});
   }
@@ -553,21 +573,22 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
         return Stack(
           fit: StackFit.expand,
+          clipBehavior: Clip.none,
           children: [
             Offstage(
               offstage: hideMain,
               child: TickerMode(
-                enabled: !hideMain,
+                enabled: !hideMain && t < 0.02,
                 child: FractionalTranslation(
-                  translation: Offset(-0.3 * t, 0.0),
-                  child: leftMainTile,
+                  translation: Offset(-0.28 * t, 0.0),
+                  child: RepaintBoundary(child: leftMainTile),
                 ),
               ),
             ),
-            if (t > 0.0 && !hideMain)
+            if (t > 0.001 && !hideMain)
               IgnorePointer(
                 child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.4 * t),
+                  color: Colors.black.withValues(alpha: 0.35 * t),
                 ),
               ),
             if (activeChat != null && chatTileWidget != null)
@@ -577,43 +598,56 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   enabled: !hideChat,
                   child: FractionalTranslation(
                     translation: Offset(1.0 - t, 0.0),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        boxShadow: t > 0.0 && t < 1.0
-                            ? [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.15 * t),
-                                  blurRadius: 20,
-                                  spreadRadius: 2,
-                                  offset: const Offset(-5, 0),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      clipBehavior: Clip.none,
+                      children: [
+                        if (t > 0.002 && t < 0.998)
+                          Positioned(
+                            left: -16.0,
+                            top: 0.0,
+                            bottom: 0.0,
+                            width: 16.0,
+                            child: IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                    colors: [
+                                      Colors.transparent,
+                                      Colors.black.withValues(alpha: 0.14 * t),
+                                    ],
+                                  ),
                                 ),
-                              ]
-                            : const [],
-                      ),
-                      child: InteractiveSwipeBackGestureDetector(
-                        animationController: _singlePaneChatController,
-                        viewportSizeOverride: viewportSize,
-                        canSwipeBack: () => _canSinglePaneSwipeBack(activeChat),
-                        isPopBlocked: () =>
-                            activeChat.rootRoute?.popDisposition ==
-                            RoutePopDisposition.doNotPop,
-                        onDragStart: () {
-                          if (!_isSinglePaneInteractiveDrag) {
-                            setState(() => _isSinglePaneInteractiveDrag = true);
-                          }
-                        },
-                        onRestored: () {
-                          if (_isSinglePaneInteractiveDrag) {
-                            setState(() => _isSinglePaneInteractiveDrag = false);
-                          }
-                        },
-                        onDismissed: () {
-                          _isSinglePaneInteractiveDrag = false;
-                          _controller.recordBackTransition();
-                          _controller.closeChatTile(activeChat.tileId);
-                        },
-                        child: chatTileWidget,
-                      ),
+                              ),
+                            ),
+                          ),
+                        InteractiveSwipeBackGestureDetector(
+                          animationController: _singlePaneChatController,
+                          viewportSizeOverride: viewportSize,
+                          canSwipeBack: () => _canSinglePaneSwipeBack(activeChat),
+                          isPopBlocked: () =>
+                              activeChat.rootRoute?.popDisposition ==
+                              RoutePopDisposition.doNotPop,
+                          onDragStart: () {
+                            if (!_isSinglePaneInteractiveDrag) {
+                              setState(() => _isSinglePaneInteractiveDrag = true);
+                            }
+                          },
+                          onRestored: () {
+                            if (_isSinglePaneInteractiveDrag) {
+                              setState(() => _isSinglePaneInteractiveDrag = false);
+                            }
+                          },
+                          onDismissed: () {
+                            _isSinglePaneInteractiveDrag = false;
+                            _controller.recordBackTransition();
+                            _controller.closeChatTile(activeChat.tileId);
+                          },
+                          child: RepaintBoundary(child: chatTileWidget),
+                        ),
+                      ],
                     ),
                   ),
                 ),

@@ -229,6 +229,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   final Set<String> _viewedPostIdsThisSession = <String>{};
   final Set<String> _pendingViewIds = <String>{};
   Timer? _viewsFlushTimer;
+  Timer? _entrySettleTimer;
 
   DateTime _dateOnly(DateTime dt) {
     final local = dt.toLocal();
@@ -614,9 +615,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       _isLoading = false;
       _hasMoreMessages = _messages.length >= 35;
       _updateFeedItems();
+    } else {
+      unawaited(_loadMessages());
     }
-
-    ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
 
     _emojiPanelController = AnimationController(
       vsync: this,
@@ -628,10 +629,14 @@ class _ChannelScreenState extends State<ChannelScreen>
       reverseCurve: Curves.easeInCubic,
     );
 
-    _loadData();
-    _loadCachedKeyboardHeight();
-    unawaited(_loadInlineDirectoryBots());
     _initWebSocket();
+    _entrySettleTimer = Timer(const Duration(milliseconds: 320), () {
+      if (!mounted) return;
+      ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
+      unawaited(_loadData());
+      unawaited(_loadCachedKeyboardHeight());
+      unawaited(_loadInlineDirectoryBots());
+    });
     _inputFocusNode.addListener(_onFocusChanged);
     _stickerInputTarget = ChatStickerInputTarget(
       chatId: widget.channelId,
@@ -4238,6 +4243,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       ScreenProtectionService.instance.release('channel_${widget.channelId}'),
     );
     WidgetsBinding.instance.removeObserver(this);
+    _entrySettleTimer?.cancel();
     _transitionTimer?.cancel();
     _syncDebounceTimer?.cancel();
     _viewsFlushTimer?.cancel();

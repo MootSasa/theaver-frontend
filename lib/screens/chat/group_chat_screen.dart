@@ -213,6 +213,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   StagedForwardPayload? _stagedForward;
   int _slowmodeRemainingSeconds = 0;
   Timer? _slowmodeTimer;
+  Timer? _entrySettleTimer;
   List<ChatParticipant> _participants = [];
   int _cachedMemberCount = 0;
 
@@ -588,9 +589,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _isLoading = false;
       _hasMoreMessages = _messages.length >= 35;
       _updateFeedItems();
+    } else {
+      unawaited(_loadMessages());
     }
-
-    ProfileInstantCache.instance.prefetchGroupOrChannel(widget.chatId);
 
     _emojiPanelController = AnimationController(
       vsync: this,
@@ -602,11 +603,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       reverseCurve: Curves.easeInCubic,
     );
 
-    _loadData();
-    _loadCachedKeyboardHeight();
-    unawaited(_loadInlineDirectoryBots());
-    unawaited(_loadChatAppearance());
     _initWebSocket();
+    _entrySettleTimer = Timer(const Duration(milliseconds: 320), () {
+      if (!mounted) return;
+      ProfileInstantCache.instance.prefetchGroupOrChannel(widget.chatId);
+      unawaited(_loadData());
+      unawaited(_loadCachedKeyboardHeight());
+      unawaited(_loadInlineDirectoryBots());
+      unawaited(_loadChatAppearance());
+      StickerService.instance.loadMyPacks();
+    });
     _inputFocusNode.addListener(_onFocusChanged);
     _stickerInputTarget = ChatStickerInputTarget(
       chatId: widget.chatId,
@@ -620,7 +626,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onSendGif: _sendGifMessage,
     );
     StickerService.instance.registerInputTarget(_stickerInputTarget);
-    StickerService.instance.loadMyPacks();
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
     if (_isDesktopPlatform) {
@@ -5122,6 +5127,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _entrySettleTimer?.cancel();
     _syncDebounceTimer?.cancel();
     _transitionTimer?.cancel();
     _stickyDateStateNotifier.dispose();

@@ -8,6 +8,7 @@ import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/models/profile_customization.dart';
 import 'package:theaver/screens/chat/channel_screen.dart';
 import 'package:theaver/screens/chat/private_chat_screen.dart';
+import 'package:theaver/screens/settings/profile_screen.dart';
 import 'package:theaver/services/bot_service.dart';
 import 'package:theaver/services/chat_instant_cache.dart';
 import 'package:theaver/services/chat_service.dart';
@@ -610,6 +611,46 @@ void main() {
         );
         expect(ownerBar.canPostInChannel, isTrue);
         expect(find.byType(ChatInputBar), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 3));
+      },
+    );
+
+    testWidgets(
+      'PrivateChatScreen -> ProfileScreen transition keeps immutable Hero tag when otherUserId is initially null',
+      (tester) async {
+        final l10n = await _loadTestL10n(tester);
+        await tester.pumpWidget(
+          _buildHost(
+            l10n: l10n,
+            child: const PrivateChatScreen(
+              chatId: 'dm_hero_stable_42',
+              otherUserName: 'Alice Wonder',
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final appBar = tester.widget<FloatingGlassAppBar>(
+          find.byType(FloatingGlassAppBar),
+        );
+        expect(appBar.heroTag, equals('chat_dm_hero_stable_42'));
+
+        // Tap center pill in FloatingGlassAppBar to push ProfileScreen via SwipeBackPageRoute.
+        await tester.tap(find.text('Alice Wonder'));
+        await tester.pump();
+        // Step through transition frames smoothly without exceptions or Hero tag mismatch.
+        for (int i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(tester.takeException(), isNull);
+        }
+        await tester.pumpAndSettle();
+
+        final profileScreen = tester.widget<ProfileScreen>(
+          find.byType(ProfileScreen),
+        );
+        expect(profileScreen.heroTag, equals('chat_dm_hero_stable_42'));
 
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pump(const Duration(seconds: 3));

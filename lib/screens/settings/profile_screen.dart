@@ -257,10 +257,14 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
+  static final Dio _sharedSecurityDio = Dio();
+
   double _measuredSlotStackY = 460.0;
   double _measuredAtScrollOffset = 0.0;
   double _measuredAtTopSpacerHeight = 160.0;
   bool _hasSlotMeasurement = false;
+  bool _slotMeasurePostFrameScheduled = false;
+  final ValueNotifier<int> _slotMeasureNotifier = ValueNotifier<int>(0);
 
   /// Логическое состояние аватарки (false = свёрнута в круг, true = развёрнута на всю ширину)
   bool _isAvatarExpanded = false;
@@ -420,9 +424,10 @@ class ProfileScreenState extends State<ProfileScreen>
     _ballisticScrollController = AnimationController.unbounded(vsync: this);
     _ballisticScrollController.addListener(_onBallisticScrollTick);
 
-    // Мгновенная синхронная гидратация всех данных профиля на Frame 0 (без lazy-загрузки)
+    // Мгновенная синхронная гидратация всех данных профиля на Frame 0 (без lazy-загрузки);
+    // сетевые и SQL-запросы _initializeProfileData() запускаются в didChangeDependencies
+    // строго после окончания анимации перехода маршрута, чтобы не рвать Hero-перелёт.
     _hydrateSynchronouslyFromCache();
-    _initializeProfileData();
   }
 
   /// Мгновенно (синхронно до первого build) заполняет все поля профиля из `ProfileInstantCache` и `AccountManager`.
@@ -605,10 +610,60 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   String? _boundTileId;
+  bool _didScheduleProfileDataInit = false;
+  bool _didRunProfileDataInit = false;
+  Animation<double>? _boundRouteAnimation;
+  Timer? _routeInitFallbackTimer;
+
+  void _onRouteInitStatusChanged(AnimationStatus status) {
+    if (status == AnimationStatus.completed ||
+        status == AnimationStatus.dismissed) {
+      _boundRouteAnimation?.removeStatusListener(_onRouteInitStatusChanged);
+      _boundRouteAnimation = null;
+      _routeInitFallbackTimer?.cancel();
+      _routeInitFallbackTimer = null;
+      if (mounted && status == AnimationStatus.completed) {
+        _runDeferredProfileInit();
+      }
+    }
+  }
+
+  void _runDeferredProfileInit() {
+    if (_didRunProfileDataInit || !mounted) return;
+    _didRunProfileDataInit = true;
+    unawaited(_initializeProfileData());
+    unawaited(_updateTopLuminance());
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Проактивно прогреваем кэш выреза экрана при смене метрик окна (вне build()).
+    DisplayCutoutService.instance.ensureQueried(
+      windowSize: MediaQuery.sizeOf(context),
+      topViewPadding: MediaQuery.viewPaddingOf(context).top,
+    );
+
+    if (!_didScheduleProfileDataInit) {
+      _didScheduleProfileDataInit = true;
+      final routeAnim = ModalRoute.of(context)?.animation;
+      if (routeAnim == null ||
+          routeAnim.isCompleted ||
+          routeAnim.status == AnimationStatus.completed) {
+        _runDeferredProfileInit();
+      } else {
+        _boundRouteAnimation = routeAnim;
+        routeAnim.addStatusListener(_onRouteInitStatusChanged);
+        _routeInitFallbackTimer =
+            Timer(const Duration(milliseconds: 360), () {
+          _boundRouteAnimation?.removeStatusListener(_onRouteInitStatusChanged);
+          _boundRouteAnimation = null;
+          _routeInitFallbackTimer = null;
+          _runDeferredProfileInit();
+        });
+      }
+    }
+
     final newTileId = TileViewportScope.maybeTileIdOf(context);
     if (newTileId != _boundTileId) {
       if (_boundTileId != null) {
@@ -645,12 +700,16 @@ class ProfileScreenState extends State<ProfileScreen>
 
   @override
   void dispose() {
+    _boundRouteAnimation?.removeStatusListener(_onRouteInitStatusChanged);
+    _boundRouteAnimation = null;
+    _routeInitFallbackTimer?.cancel();
     if (_boundTileId != null) {
       TilingLayoutController.instance.unregisterTileBackHandler(
         _boundTileId!,
         _handleTileBack,
       );
     }
+    _slotMeasureNotifier.dispose();
     _wheelSnapTimer?.cancel();
     _memberSearchDebounce?.cancel();
     _memberSearchController.dispose();
@@ -871,7 +930,11 @@ class ProfileScreenState extends State<ProfileScreen>
     }
     _isOnline = widget.initialIsOnline ?? false;
     _lastSeen = widget.initialLastSeen;
-    _updateTopLuminance();
+    final cachedLum =
+        ProfileInstantCache.instance.getAvatarLuminanceSync(_avatarUrl);
+    if (cachedLum != null) {
+      _topLuminance = cachedLum;
+    }
   }
 
   Future<void> _loadPeerThemePreset() async {
@@ -909,8 +972,7 @@ class ProfileScreenState extends State<ProfileScreen>
 
         final token = await AuthService.getToken();
         if (token != null) {
-          final dio = Dio();
-          final resp = await dio.get(
+          final resp = await _sharedSecurityDio.get(
             '${AppConfig.baseUrl}/api/security/blocked',
             options: Options(headers: {'Authorization': 'Bearer $token'}),
           );
@@ -1533,14 +1595,20 @@ class ProfileScreenState extends State<ProfileScreen>
     }
 
     final cachedLum = ProfileInstantCache.instance.getAvatarLuminanceSync(avatarKey);
-    if (cachedLum != null && mounted) {
-      if ((_topLuminance - cachedLum).abs() > 0.001) {
+    if (cachedLum != null) {
+      if (mounted && (_topLuminance - cachedLum).abs() > 0.001) {
         setState(() => _topLuminance = cachedLum);
       }
+      return;
     }
 
     try {
-      final ImageStream stream = provider.resolve(const ImageConfiguration());
+      // Масштабируем до 32x32 (4 КБ вместо 4–16 МБ) перед readback image.toByteData,
+      // чтобы не блокировать GPU/Raster поток во время работы с профилем.
+      final ImageProvider thumbProvider =
+          ResizeImage(provider, width: 32, height: 32);
+      final ImageStream stream =
+          thumbProvider.resolve(const ImageConfiguration());
       final Completer<ui.Image> completer = Completer<ui.Image>();
       late ImageStreamListener listener;
       listener = ImageStreamListener((ImageInfo info, bool _) {
@@ -1559,12 +1627,12 @@ class ProfileScreenState extends State<ProfileScreen>
 
       final width = image.width;
       final height = image.height;
-      final sampleHeight = (height * 0.18).clamp(1, height).toInt();
+      final sampleHeight = (height * 0.20).clamp(1, height).toInt();
       double totalLuminance = 0;
       int countTop = 0;
 
-      for (int y = 0; y < sampleHeight; y += 2) {
-        for (int x = 0; x < width; x += 4) {
+      for (int y = 0; y < sampleHeight; y += 1) {
+        for (int x = 0; x < width; x += 2) {
           final offset = (y * width + x) * 4;
           if (offset + 2 < byteData.lengthInBytes) {
             final r = byteData.getUint8(offset);
@@ -2107,9 +2175,8 @@ class ProfileScreenState extends State<ProfileScreen>
     try {
       final token = await AuthService.getToken();
       if (token == null) return;
-      final dio = Dio();
       if (_isBlocked) {
-        await dio.delete(
+        await _sharedSecurityDio.delete(
           '${AppConfig.baseUrl}/api/security/blocked/$uid',
           options: Options(headers: {'Authorization': 'Bearer $token'}),
         );
@@ -2118,7 +2185,7 @@ class ProfileScreenState extends State<ProfileScreen>
           _showToast(_tr(l10n, 'profile_user_unblocked', 'Пользователь разблокирован'));
         }
       } else {
-        await dio.post(
+        await _sharedSecurityDio.post(
           '${AppConfig.baseUrl}/api/security/blocked',
           data: {'user_id': uid},
           options: Options(headers: {'Authorization': 'Bearer $token'}),
@@ -4880,7 +4947,10 @@ class ProfileScreenState extends State<ProfileScreen>
     required double scrollOffset,
     required double topSpacerHeight,
   }) {
+    if (_slotMeasurePostFrameScheduled) return;
+    _slotMeasurePostFrameScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _slotMeasurePostFrameScheduled = false;
       if (!mounted) return;
       final stackCtx = _profileStackKey.currentContext;
       final slotCtx = _sectionPillSlotKey.currentContext;
@@ -4912,9 +4982,13 @@ class ProfileScreenState extends State<ProfileScreen>
 
       if (!_hasSlotMeasurement ||
           (slotTopLeft.dy - prevPredicted).abs() > 1.0) {
-        setState(() {
-          _hasSlotMeasurement = true;
-        });
+        _hasSlotMeasurement = true;
+        // Обновляем локально только позицию Positioned у ProfileSectionPill через ValueNotifier,
+        // без полного setState() всего ProfileScreen на первом кадре перехода!
+        _slotMeasureNotifier.value++;
+        if (currentScroll > 20.0) {
+          setState(() {});
+        }
       } else {
         _hasSlotMeasurement = true;
       }
@@ -5758,7 +5832,6 @@ class ProfileScreenState extends State<ProfileScreen>
 
     // Капсула разделов останавливается ровно на одном уровне с кнопками "<" и "•••"
     final minPillTopY = headerTopY;
-    final pillTopY = math.max(minPillTopY, currentSlotY);
 
     // Прогресс приближения кнопки "Стена / Медиа / ..." к верхнему краю экрана:
     // карточка информации плавно ускоряется вверх и полностью уходит за верхнюю границу экрана (y < 0),
@@ -5815,12 +5888,6 @@ class ProfileScreenState extends State<ProfileScreen>
             avatarHideProgress > 0.55)
         ? null
         : 'profile_avatar_$_heroKey';
-
-    // Proactively prime native display cutout cache for the current window size.
-    DisplayCutoutService.instance.ensureQueried(
-      windowSize: MediaQuery.sizeOf(context),
-      topViewPadding: MediaQuery.viewPaddingOf(context).top,
-    );
 
     return PopScope(
       canPop: !_isAnyMenuOpen,
@@ -6517,10 +6584,21 @@ class ProfileScreenState extends State<ProfileScreen>
 
                       // 7. ЕДИНАЯ кнопка выбора разделов ("Стена / Медиа / ..."),
                       // которая едет вместе со скроллом и останавливается на уровне верхнего бара (headerTopY)
-                      Positioned(
-                        top: pillTopY,
-                        left: 68,
-                        right: 68,
+                      ValueListenableBuilder<int>(
+                        valueListenable: _slotMeasureNotifier,
+                        builder: (context, _, pillChild) {
+                          final liveSlotY = _hasSlotMeasurement
+                              ? (_measuredSlotStackY -
+                                  (scrollOffset - _measuredAtScrollOffset) +
+                                  (topSpacerHeight - _measuredAtTopSpacerHeight))
+                              : (topSpacerHeight + 290.0 - scrollOffset);
+                          return Positioned(
+                            top: math.max(minPillTopY, liveSlotY),
+                            left: 68,
+                            right: 68,
+                            child: pillChild!,
+                          );
+                        },
                         child: IgnorePointer(
                           ignoring: _isHeaderMenuOpen,
                           child: Center(

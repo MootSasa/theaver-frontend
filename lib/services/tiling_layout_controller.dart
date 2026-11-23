@@ -238,7 +238,20 @@ class TilingLayoutController extends ChangeNotifier {
     }
   }
 
-  Size _windowSize = const Size(1100, 750);
+  static Size _resolveInitialWindowSize() {
+    try {
+      final view = WidgetsBinding.instance.platformDispatcher.views.firstOrNull;
+      if (view != null && view.devicePixelRatio > 0) {
+        final logical = view.physicalSize / view.devicePixelRatio;
+        if (logical.width > 0 && logical.height > 0) {
+          return logical;
+        }
+      }
+    } catch (_) {}
+    return const Size(1100, 750);
+  }
+
+  Size _windowSize = _resolveInitialWindowSize();
   Size get windowSize => _windowSize;
 
   /// Находится ли окно в узком однооконном режиме (`width < 640px` и не более 1 открытого чата).

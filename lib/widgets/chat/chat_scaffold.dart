@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -199,16 +198,13 @@ class ChatScaffold extends StatelessWidget {
     }
 
     if (!kIsWeb && wallpaperPath != null && wallpaperPath.isNotEmpty) {
-      final file = File(wallpaperPath);
-      if (file.existsSync()) {
-        return Positioned.fill(
-          child: RepaintBoundary(
-            child: BakedChatWallpaper(
-              fallbackWallpaperPath: wallpaperPath,
-            ),
+      return Positioned.fill(
+        child: RepaintBoundary(
+          child: BakedChatWallpaper(
+            fallbackWallpaperPath: wallpaperPath,
           ),
-        );
-      }
+        ),
+      );
     }
 
     return const SizedBox.shrink();

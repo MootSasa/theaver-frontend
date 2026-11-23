@@ -89,6 +89,16 @@ class _MainScreenState extends State<MainScreen>
   int _activeFilter = 0; // Index of the active folder in _folderService.folders
   final ChatFolderService _folderService = ChatFolderService();
   String _lastTilingSignature = '';
+  Timer? _saveChatsDebounceTimer;
+
+  void _scheduleSaveChats() {
+    _saveChatsDebounceTimer?.cancel();
+    _saveChatsDebounceTimer = Timer(const Duration(milliseconds: 650), () {
+      if (mounted) {
+        _localStorage.saveChats(_chats);
+      }
+    });
+  }
 
   void _onServiceUpdate() {
     if (mounted) setState(() {});
@@ -97,10 +107,13 @@ class _MainScreenState extends State<MainScreen>
   void _onTilingUpdate() {
     if (!mounted) return;
     final tiling = TilingLayoutController.instance;
-    final openIds = tiling.chatTiles.map((t) => t.chatId).join(',');
-    final focusedId = tiling.focusedChatTile?.chatId ?? '';
-    final isTwoCol = tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
-    final sig = '$openIds|$focusedId|$isTwoCol|${tiling.isWorkspaceMounted}';
+    final isTwoCol =
+        tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
+    // В однооконном мобильном режиме (< 640px) список чатов не подсвечивает активный тайл справа,
+    // поэтому не вызываем лишний полный setState() всех строк чатов в момент старта анимации открытия чата.
+    final sig = isTwoCol
+        ? '${tiling.chatTiles.map((t) => t.chatId).join(",")}|${tiling.focusedChatTile?.chatId ?? ""}|1|${tiling.isWorkspaceMounted}'
+        : 'single|${tiling.isWorkspaceMounted}';
     if (sig != _lastTilingSignature) {
       _lastTilingSignature = sig;
       setState(() {});
@@ -1056,7 +1069,7 @@ class _MainScreenState extends State<MainScreen>
       }
       if (changed) {
         setState(() {});
-        _localStorage.saveChats(_chats);
+        _scheduleSaveChats();
       }
     } catch (_) {}
   }
@@ -1091,7 +1104,7 @@ class _MainScreenState extends State<MainScreen>
       }
     } catch (_) {}
 
-    _localStorage.saveChats(_chats);
+    _scheduleSaveChats();
   }
 
   @override
@@ -1379,6 +1392,10 @@ class _MainScreenState extends State<MainScreen>
     _wsService.unsubscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
     _wsService.unsubscribe(WebSocketEventType.chatArchiveUpdated, _onChatArchiveUpdated);
     _wsService.unsubscribe(WebSocketEventType.typing, _onChatTyping);
+    if (_saveChatsDebounceTimer?.isActive ?? false) {
+      _saveChatsDebounceTimer!.cancel();
+      _localStorage.saveChats(_chats);
+    }
     for (final state in _chatTypingStates.values) {
       state.timer.cancel();
     }
@@ -1409,6 +1426,7 @@ class _MainScreenState extends State<MainScreen>
       _exitSelectMode();
     }
     _liveUserPresence.clear();
+    _saveChatsDebounceTimer?.cancel();
     for (final state in _chatTypingStates.values) {
       state.timer.cancel();
     }
@@ -2774,8 +2792,12 @@ class _MainScreenState extends State<MainScreen>
           ? (action: typing.action, userName: typing.userName)
           : null,
       fallbackEntities: _chatLastMessageEntities[chat.id] ?? const [],
-      isOpenInTile: tiling.isChatOpen(chat.id),
-      isFocusedInTile: tiling.focusedChatTile?.chatId == chat.id,
+      isOpenInTile: tiling.windowSize.width >=
+              TilingLayoutController.kTwoColumnBreakpoint &&
+          tiling.isChatOpen(chat.id),
+      isFocusedInTile: tiling.windowSize.width >=
+              TilingLayoutController.kTwoColumnBreakpoint &&
+          tiling.focusedChatTile?.chatId == chat.id,
       onTap: () {
         if (_isSelectMode) {
           HapticUtils.selection();

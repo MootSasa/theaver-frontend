@@ -145,6 +145,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   bool _isSending = false;
   bool _isSyncing = false;
   Timer? _syncDebounceTimer;
+  Timer? _entrySettleTimer;
+  late final String _stableHeroTag;
   String? _currentUserId;
   String _chatName = '';
   String? _chatAvatar;
@@ -531,11 +533,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _isVerified = true;
         }
       }
-      ProfileInstantCache.instance.prefetchUser(
-        _otherUserId!,
-        chatId: widget.chatId,
-      );
     }
+    _stableHeroTag = _chatType == 'saved'
+        ? 'self'
+        : ((_otherUserId != null && _otherUserId!.isNotEmpty)
+            ? _otherUserId!
+            : 'chat_${widget.chatId}');
+
     if (instant != null && instant.hasMessages) {
       _messages.addAll(instant.messages!);
       for (final m in _messages) {
@@ -549,12 +553,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _isLoading = false;
       _hasMoreMessages = _messages.length >= 35;
       _updateFeedItems();
+    } else {
+      // Если instant-кэш холодный, поднимаем только локальную историю из Drift,
+      // а сетевые запросы и тяжёлый prefetch профиля откладываем до окончания анимации входа.
+      unawaited(_loadMessages());
     }
-    ProfileInstantCache.instance.prefetchSharedContent(widget.chatId);
     WidgetsBinding.instance.addObserver(this);
-    _loadData();
-    unawaited(_loadInlineDirectoryBots());
     _initWebSocket();
+    _entrySettleTimer = Timer(const Duration(milliseconds: 320), () {
+      if (!mounted) return;
+      if (_otherUserId != null && _otherUserId!.isNotEmpty) {
+        ProfileInstantCache.instance.prefetchUser(
+          _otherUserId!,
+          chatId: widget.chatId,
+        );
+      }
+      ProfileInstantCache.instance.prefetchSharedContent(widget.chatId);
+      unawaited(_loadData());
+      unawaited(_loadInlineDirectoryBots());
+    });
     _scrollController.addListener(_onScroll);
     _inputFocusNode.addListener(_onFocusChanged);
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
@@ -4657,7 +4674,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                       _otherUserId != null &&
                       _otherUserId!.isNotEmpty &&
                       _otherUserId == _currentUserId);
-              final heroTag = _otherUserId ?? displayName;
+              final heroTag = _stableHeroTag;
               return FloatingGlassAppBar(
                 name: displayName,
                 avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
@@ -6902,7 +6919,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             rawDisplayName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
         : rawDisplayName;
-    final heroTag = _otherUserId ?? displayName;
+    final heroTag = _stableHeroTag;
     Navigator.push(
       context,
       SwipeBackPageRoute(
@@ -7689,6 +7706,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     );
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
     HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
+    _entrySettleTimer?.cancel();
     _syncDebounceTimer?.cancel();
 
     // Stop typing / recording indicator if active
@@ -7842,8 +7860,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   bool _inputHeightCheckScheduled = false;
+  bool _hasMeasuredInputOnce = false;
+  String? _lastMeasuredInputSignature;
 
   void _updateInputHeight() {
+    final currentSig =
+        '${_textController.text.length}|${_replyToMessage != null}|$_isEditing|${_attachedFiles.length}';
+    if (_hasMeasuredInputOnce && _lastMeasuredInputSignature == currentSig) {
+      return;
+    }
     if (_inputHeightCheckScheduled) return;
     _inputHeightCheckScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -7853,11 +7878,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _inputKey.currentContext?.findRenderObject() as RenderBox?;
       if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
-        if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
-          ChatInstantCache.instance.setInputHeight(widget.chatId, newHeight);
-          setState(() {
-            _inputHeight = newHeight;
-          });
+        if (newHeight > 0) {
+          _hasMeasuredInputOnce = true;
+          _lastMeasuredInputSignature =
+              '${_textController.text.length}|${_replyToMessage != null}|$_isEditing|${_attachedFiles.length}';
+          if ((newHeight - _inputHeight).abs() > 0.5) {
+            ChatInstantCache.instance.setInputHeight(widget.chatId, newHeight);
+            setState(() {
+              _inputHeight = newHeight;
+            });
+          }
         }
       }
     });

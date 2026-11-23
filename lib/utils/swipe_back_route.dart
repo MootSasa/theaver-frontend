@@ -17,7 +17,17 @@ import 'haptic_utils.dart';
 /// **Свайп**: текущий экран линейно следует за пальцем,
 ///           предыдущий экран плавно проявляется и сдвигается (параллакс).
 class SwipeBackPageRoute<T> extends MaterialPageRoute<T> {
+  static const Curve _kPushCurve = Cubic(0.22, 0.82, 0.24, 1.0);
+  static const Curve _kPopCurve = Curves.easeInCubic;
+
   AnimationController? _animationController;
+  CurvedAnimation? _curvedPrimary;
+  Animation<Offset>? _curvedPrimarySlide;
+  Animation<Offset>? _linearPrimarySlide;
+  Animation<Offset>? _secondarySlideAnim;
+  Animation<double>? _secondaryDimAnim;
+  Animation<double>? _boundPrimary;
+  Animation<double>? _boundSecondary;
 
   SwipeBackPageRoute({
     required WidgetBuilder builder,
@@ -32,10 +42,10 @@ class SwipeBackPageRoute<T> extends MaterialPageRoute<T> {
         );
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 250);
+  Duration get transitionDuration => const Duration(milliseconds: 300);
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 250);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 260);
 
   @override
   bool get opaque => true;
@@ -47,80 +57,109 @@ class SwipeBackPageRoute<T> extends MaterialPageRoute<T> {
     return controller;
   }
 
+  void _ensureAnimations(
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    if (!identical(_boundPrimary, animation)) {
+      _curvedPrimary?.dispose();
+      _boundPrimary = animation;
+      _curvedPrimary = CurvedAnimation(
+        parent: animation,
+        curve: _kPushCurve,
+        reverseCurve: _kPopCurve,
+      );
+      final slideTween = Tween<Offset>(
+        begin: const Offset(1.0, 0.0),
+        end: Offset.zero,
+      );
+      _curvedPrimarySlide = slideTween.animate(_curvedPrimary!);
+      _linearPrimarySlide = slideTween.animate(animation);
+    }
+    if (!identical(_boundSecondary, secondaryAnimation)) {
+      _boundSecondary = secondaryAnimation;
+      _secondarySlideAnim = Tween<Offset>(
+        begin: Offset.zero,
+        end: const Offset(-0.28, 0.0),
+      ).animate(secondaryAnimation);
+      _secondaryDimAnim = Tween<double>(
+        begin: 0.0,
+        end: 0.35,
+      ).animate(secondaryAnimation);
+    }
+  }
+
   @override
-  Widget buildTransitions(BuildContext context, Animation<double> animation,
-      Animation<double> secondaryAnimation, Widget child) {
+  void dispose() {
+    _curvedPrimary?.dispose();
+    _curvedPrimary = null;
+    _boundPrimary = null;
+    _boundSecondary = null;
+    super.dispose();
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    _ensureAnimations(animation, secondaryAnimation);
     final bool isInteractive = popGestureInProgress;
-    final bool isIdle = animation.isCompleted &&
-        secondaryAnimation.isDismissed &&
-        !isInteractive;
-
-    // === Primary animation: current route entering/leaving ===
-    final slideTransition = Tween<Offset>(
-      begin: const Offset(1.0, 0.0),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: animation,
-      curve: isInteractive ? Curves.linear : Curves.easeOutCubic,
-      reverseCurve: isInteractive ? Curves.linear : Curves.easeInCubic,
-    ));
-
-    // Shadow for the left edge of the current screen
-    final shadowAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(animation);
-
-    // === Secondary animation: this route when covered by another ===
-    // Parallax effect: -0.3 offset
-    final secondarySlide = Tween<Offset>(
-      begin: Offset.zero,
-      end: const Offset(-0.3, 0.0),
-    ).animate(CurvedAnimation(
-      parent: secondaryAnimation,
-      curve: Curves.linear, // Linear for interactive sync
-    ));
-
-    // Dimming overlay on the route below
-    final secondaryDim = Tween<double>(
-      begin: 0.0,
-      end: 0.4,
-    ).animate(CurvedAnimation(
-      parent: secondaryAnimation,
-      curve: Curves.linear,
-    ));
+    final bool showEdgeShadow =
+        animation.value > 0.002 && animation.value < 0.998;
+    final Animation<Offset> activePrimarySlide =
+        isInteractive ? _linearPrimarySlide! : _curvedPrimarySlide!;
 
     return Stack(
       fit: StackFit.passthrough,
+      clipBehavior: Clip.none,
       children: [
-        // Dimming overlay for the screen BELOW
-        if (secondaryAnimation.value > 0)
-          FadeTransition(
-            opacity: secondaryDim,
-            child: Container(color: Colors.black),
-          ),
-
-        SlideTransition(
-          position: slideTransition,
-          child: _SwipeBackGestureDetector(
-            animationController: _animationController,
-            animation: animation,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                boxShadow: isIdle
-                    ? const []
-                    : [
-                        BoxShadow(
-                          color: Colors.black.withValues(
-                              alpha: 0.15 * shadowAnimation.value),
-                          blurRadius: 20,
-                          spreadRadius: 2,
-                          offset: const Offset(-5, 0),
-                        ),
-                      ],
-              ),
-              child: SlideTransition(
-                position: secondarySlide,
-                child: child,
-              ),
+        if (secondaryAnimation.value > 0.001)
+          IgnorePointer(
+            child: FadeTransition(
+              opacity: _secondaryDimAnim!,
+              child: const ColoredBox(color: Colors.black),
             ),
+          ),
+        SlideTransition(
+          position: activePrimarySlide,
+          child: Stack(
+            fit: StackFit.passthrough,
+            clipBehavior: Clip.none,
+            children: [
+              if (showEdgeShadow)
+                Positioned(
+                  left: -16.0,
+                  top: 0.0,
+                  bottom: 0.0,
+                  width: 16.0,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black
+                                .withValues(alpha: 0.14 * animation.value),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              _SwipeBackGestureDetector(
+                animationController: _animationController,
+                animation: animation,
+                child: SlideTransition(
+                  position: _secondarySlideAnim!,
+                  child: RepaintBoundary(child: child),
+                ),
+              ),
+            ],
           ),
         ),
       ],

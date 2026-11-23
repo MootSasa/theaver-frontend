@@ -185,6 +185,8 @@ class FloatingGlassAppBar extends StatefulWidget {
 class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   bool _isMenuOpen = false;
   String? _registeredTileId;
+  String? _cachedMenuWidthSignature;
+  double? _cachedMenuWidth;
 
   // Состояние перетаскивания тайла чата за центральную плашку
   Offset? _dragStartGlobal;
@@ -689,6 +691,16 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
   double _calculateAdaptiveMenuWidth(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final fontFamily = theme.textTheme.bodyMedium?.fontFamily ?? '';
+    final screenWidth = TileViewportScope.widthOf(context);
+    final textScale = MediaQuery.textScalerOf(context).scale(15.0);
+    final extraSig = widget.extraMenuItems.map((e) => e.label).join('|');
+    final sig =
+        '${l10n.locale.languageCode}|$fontFamily|${textScale.toStringAsFixed(2)}|${widget.isMuted}|${screenWidth.toStringAsFixed(1)}|$extraSig';
+    if (_cachedMenuWidth != null && _cachedMenuWidthSignature == sig) {
+      return _cachedMenuWidth!;
+    }
+
     final textStyle = TextStyle(
       fontSize: 15,
       fontWeight: FontWeight.w500,
@@ -698,7 +710,9 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     final labels = [
       l10n.translate('chat_menu_profile'),
       l10n.translate('chat_menu_search_messages'),
-      widget.isMuted ? l10n.translate('chat_menu_unmute') : l10n.translate('chat_menu_mute'),
+      widget.isMuted
+          ? l10n.translate('chat_menu_unmute')
+          : l10n.translate('chat_menu_mute'),
       l10n.translate('chat_menu_clear_history'),
       l10n.translate('chat_menu_report'),
       for (final extra in widget.extraMenuItems) extra.label,
@@ -715,14 +729,17 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
       if (painter.width > maxTextWidth) {
         maxTextWidth = painter.width;
       }
+      painter.dispose();
     }
 
     // 16 (left padding) + 22 (icon) + 12 (gap) + 16 (right padding) + 18 (safe curve margin) = 84.0
     final computedWidth = (maxTextWidth + 84.0).ceilToDouble();
-    final screenWidth = TileViewportScope.widthOf(context);
     final maxAvailableWidth = screenWidth - (_kAppBarHorizontalPadding * 2);
+    final result = computedWidth.clamp(200.0, maxAvailableWidth);
 
-    return computedWidth.clamp(200.0, maxAvailableWidth);
+    _cachedMenuWidthSignature = sig;
+    _cachedMenuWidth = result;
+    return result;
   }
 
   Widget _buildBackButton(BuildContext context) {
