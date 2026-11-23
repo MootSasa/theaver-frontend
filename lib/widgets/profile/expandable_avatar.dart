@@ -41,6 +41,10 @@ class ExpandableAvatar extends StatefulWidget {
   /// Опциональный диаметр свёрнутого состояния (используется для бесшовного стыка со скролл-метаболом)
   final double? collapsedDiameterOverride;
 
+  /// Опциональная высота развёрнутого фото (в Telegram при скролле вверх фото сначала уходит/подрезается вверх
+  /// по высоте без уменьшения ширины `screenWidth`, и только после порога `expandProgress < 0.33` сворачивается в круг)
+  final double? expandedHeightOverride;
+
   /// Прогресс перетягивания вниз поверх уже раскрытой аватарки (0.0 .. 1.0) для Telegram-зума
   final double overExpandProgress;
 
@@ -99,6 +103,7 @@ class ExpandableAvatar extends StatefulWidget {
     this.expandFactor = 0.0,
     this.pullPreviewProgress = 0.0,
     this.collapsedDiameterOverride,
+    this.expandedHeightOverride,
     this.overExpandProgress = 0.0,
     this.bottomCollapseOverlap = 0.0,
     this.isCollapsing = false,
@@ -118,7 +123,7 @@ class ExpandableAvatar extends StatefulWidget {
   }) : super(key: key);
 
   static const double baseCollapsedSize = 110.0;
-  static const double maxPullPreviewExtraSize = 26.0;
+  static const double maxPullPreviewExtraSize = 28.0;
 
   /// Вычисляет размер круглой аватарки с учётом эластичного потягивания вниз до порога раскрытия (`110 -> 136dp`),
   /// как в Telegram (`ProfileActivity`: `avatarScale` `96 -> 138` до срабатывания `isPulledDown`).
@@ -347,15 +352,25 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         Curves.easeOutCubic
             .transform(widget.overExpandProgress.clamp(0.0, 1.0));
 
-    final size = ExpandableAvatar.calculateAvatarSize(
+    final boxWidth = ExpandableAvatar.calculateAvatarSize(
           largeSize,
           progress,
           pullPreviewProgress: widget.pullPreviewProgress,
           collapsedSizeOverride: widget.collapsedDiameterOverride,
         ) +
         extraOverPullSize;
+    final fullExpandedHeight = widget.expandedHeightOverride ?? largeSize;
+    final boxHeight = ExpandableAvatar.calculateAvatarSize(
+          fullExpandedHeight,
+          progress,
+          pullPreviewProgress: widget.pullPreviewProgress,
+          collapsedSizeOverride: widget.collapsedDiameterOverride,
+        ) +
+        extraOverPullSize;
 
-    final borderRadius = ExpandableAvatar.calculateBorderRadius(size, progress);
+    final minBoxDim = math.min(boxWidth, boxHeight);
+    final borderRadius =
+        ExpandableAvatar.calculateBorderRadius(minBoxDim, progress);
 
     // Размер иконки/буквы плейсхолдера
     final iconProgress = Curves.easeInOutCubic.transform(progress);
@@ -388,7 +403,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Widget avatarContent;
 
     if (isFullyExpanded && widget.avatarUrls.length > 1) {
-      avatarContent = _buildPageView(size, size, iconSize, bgColor, isDark, Alignment.center, enableInnerHero);
+      avatarContent = _buildPageView(boxWidth, boxHeight, iconSize, bgColor, isDark, Alignment.center, enableInnerHero);
     } else if (_currentPage != 0 && targetUrl != null && primaryUrl != null && targetUrl != primaryUrl) {
       avatarContent = AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
@@ -396,19 +411,19 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         switchOutCurve: Curves.easeInOutCubic,
         child: SizedBox.expand(
           key: ValueKey(targetUrl),
-          child: _buildAvatarImage(targetUrl, size, size, bgColor, iconSize, isDark, Alignment.center, enableInnerHero),
+          child: _buildAvatarImage(targetUrl, boxWidth, boxHeight, bgColor, iconSize, isDark, Alignment.center, enableInnerHero),
         ),
       );
     } else {
       avatarContent = (primaryUrl != null && primaryUrl.isNotEmpty
-          ? _buildAvatarImage(primaryUrl, size, size, bgColor, iconSize, isDark, Alignment.center, enableInnerHero)
+          ? _buildAvatarImage(primaryUrl, boxWidth, boxHeight, bgColor, iconSize, isDark, Alignment.center, enableInnerHero)
           : (widget.avatarFile != null
               ? Image.file(
                   widget.avatarFile!,
                   fit: BoxFit.cover,
                   alignment: Alignment.center,
-                  width: size,
-                  height: size,
+                  width: boxWidth,
+                  height: boxHeight,
                 )
               : const SizedBox.expand()));
     }
@@ -455,13 +470,13 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
 
     // Истинное альфа-растворение нижней кромки развёрнутой аватарки в реальный фон/градиент экрана
     if (dissolveProgress > 0.001) {
-      final safeSize = math.max(1.0, size);
+      final safeHeight = math.max(1.0, boxHeight);
       final overlapShift =
-          (widget.bottomCollapseOverlap * dissolveProgress).clamp(0.0, safeSize * 0.45);
-      final endStop = ((safeSize - overlapShift) / safeSize).clamp(0.10, 1.0);
+          (widget.bottomCollapseOverlap * dissolveProgress).clamp(0.0, safeHeight * 0.45);
+      final endStop = ((safeHeight - overlapShift) / safeHeight).clamp(0.10, 1.0);
       final dissolveHeight = 44.0 * dissolveProgress;
       final startStop =
-          (endStop - (dissolveHeight / safeSize)).clamp(0.0, endStop);
+          (endStop - (dissolveHeight / safeHeight)).clamp(0.0, endStop);
       final midStop =
           (startStop + (endStop - startStop) * 0.55).clamp(startStop, endStop);
 
@@ -486,8 +501,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     }
 
     Widget avatarContentBox = Container(
-      width: size,
-      height: size,
+      width: boxWidth,
+      height: boxHeight,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(borderRadius),
       ),
@@ -538,9 +553,9 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
             IgnorePointer(
               child: AvatarDecorationFrame(
                 decoration: dec,
-                avatarDiameter: size,
+                avatarDiameter: minBoxDim,
                 opacity: frameOpacity,
-                child: SizedBox(width: size, height: size),
+                child: SizedBox(width: minBoxDim, height: minBoxDim),
               ),
             ),
           ],

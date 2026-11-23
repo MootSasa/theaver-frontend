@@ -756,13 +756,13 @@ void main() {
 
     test('ExpandableAvatar morphs size and borderRadius continuously without 0.38 kink', () {
       const w = 393.0;
-      // Pull-down preview swells circle smoothly 110 -> 136dp while remaining 100% round.
+      // Pull-down preview swells circle smoothly 110 -> 138dp while remaining 100% round.
       final swollen = ExpandableAvatar.calculateAvatarSize(
         w,
         0.0,
         pullPreviewProgress: 1.0,
       );
-      expect(swollen, closeTo(136.0, 0.01));
+      expect(swollen, closeTo(138.0, 0.01));
       expect(
         ExpandableAvatar.calculateBorderRadius(swollen, 0.0),
         closeTo(swollen * 0.5, 0.01),
@@ -775,7 +775,7 @@ void main() {
       expect(radiusAt75, greaterThan(30.0));
     });
 
-    testWidgets('Telegram-style pull-down expands to 1:1 square and single upward swipe collapses to circle without stopping at 0.38', (tester) async {
+    testWidgets('Telegram two-phase avatar: damped pull-to-expand and slide-up crop before circle collapse', (tester) async {
       final glassProvider = LiquidGlassProvider();
       await glassProvider.setMode(GlassMode.disabled);
 
@@ -792,9 +792,22 @@ void main() {
       );
       await tester.pump();
 
-      // Pull down past threshold (20px touch slop + 75px drag > 58dp) while keeping finger down, then settle.
+      // 1. Small pull-down (+65px < ~135px damped threshold) swells as a pure circle and does NOT pop open 1:1 square.
+      final smallPull = await tester.startGesture(const Offset(196.0, 220.0));
+      await smallPull.moveBy(const Offset(0.0, 65.0));
+      await tester.pump(const Duration(milliseconds: 16));
+      final previewSize = tester.getSize(find.byType(ExpandableAvatar));
+      expect(previewSize.width, greaterThan(110.5));
+      expect(previewSize.width, lessThan(138.0));
+      expect(previewSize.height, closeTo(previewSize.width, 0.05));
+      await tester.pump(const Duration(milliseconds: 120));
+      await smallPull.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(ProfileAvatarMetaballLayer), findsOneWidget);
+
+      // 2. Intentional pull-down past weighted threshold expands into full 393x393 (1:1) square.
       final gestureDown = await tester.startGesture(const Offset(196.0, 220.0));
-      await gestureDown.moveBy(const Offset(0.0, 95.0));
+      await gestureDown.moveBy(const Offset(0.0, 175.0));
       await tester.pump();
       await gestureDown.up();
       await tester.pumpAndSettle();
@@ -802,19 +815,44 @@ void main() {
       final expandedAvatar =
           tester.widget<ExpandableAvatar>(find.byType(ExpandableAvatar));
       expect(expandedAvatar.expandFactor, closeTo(1.0, 0.005));
-      expect(tester.getSize(find.byType(ExpandableAvatar)).width, closeTo(393.0, 0.5));
+      expect(tester.getSize(find.byType(ExpandableAvatar)), const Size(393.0, 393.0));
 
-      // Single upward swipe WHILE holding finger down: must NOT freeze at 0.38 — collapses all the way to 0.0!
+      // 3. Phase 1 upward drag (-85px < collapseTrigger ~119dp):
+      // Avatar slides/crops upward (height decreases) while keeping 100% full screenWidth (393.0),
+      // and releasing without a fast flick glides height smoothly back to 393x393!
+      final partialSlideUp = await tester.startGesture(const Offset(196.0, 300.0));
+      for (int i = 0; i < 5; i++) {
+        await partialSlideUp.moveBy(const Offset(0.0, -17.0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final croppedSize = tester.getSize(find.byType(ExpandableAvatar));
+      expect(croppedSize.width, closeTo(393.0, 0.5));
+      expect(croppedSize.height, lessThan(345.0));
+      expect(croppedSize.height, greaterThan(260.0));
+
+      // Pause finger briefly so release velocity is near 0 -> settles back to full 393x393 square.
+      await tester.pump(const Duration(milliseconds: 140));
+      await partialSlideUp.up();
+      await tester.pumpAndSettle();
+      expect(tester.getSize(find.byType(ExpandableAvatar)), const Size(393.0, 393.0));
+
+      // 4. Phase 2 full upward drag past collapseTrigger (~119dp) WHILE holding finger down:
+      // Crosses trigger and morphs all the way into 110dp circle, then continues scrolling the profile list!
       final gestureUp = await tester.startGesture(const Offset(196.0, 300.0));
-      for (int i = 0; i < 6; i++) {
+      for (int i = 0; i < 8; i++) {
         await gestureUp.moveBy(const Offset(0.0, -22.0));
         await tester.pump(const Duration(milliseconds: 16));
       }
-      // Keep holding finger stationary across frames: spring completes all the way to 0.0 even with finger held!
       for (int i = 0; i < 12; i++) {
         await tester.pump(const Duration(milliseconds: 32));
       }
       expect(find.byType(ProfileAvatarMetaballLayer), findsOneWidget);
+
+      await gestureUp.moveBy(const Offset(0.0, -60.0));
+      await tester.pump(const Duration(milliseconds: 16));
+      final scrollableState =
+          tester.state<ScrollableState>(find.byType(Scrollable).first);
+      expect(scrollableState.position.pixels, greaterThan(40.0));
 
       await gestureUp.up();
       await tester.pumpAndSettle();

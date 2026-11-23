@@ -8,7 +8,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
@@ -269,23 +268,29 @@ class ProfileScreenState extends State<ProfileScreen>
   /// Непрерывный фактор морфинга аватарки: 0.0 = круглая, 1.0 = полноширинный квадрат 1:1
   double _expandFactor = 0.0;
 
-  /// Эластичное преднатяжение круглой аватарки (110 -> 136dp) при тяге вниз до порога раскрытия
+  /// Эластичное преднатяжение круглой аватарки (110 -> 138dp) при тяге вниз до порога раскрытия
   double _pullPreviewProgress = 0.0;
   double _pullPreviewReturnStart = 0.0;
 
-  /// Накопленный свайп вниз до порога авто-открытия (`_expandThreshold`)
+  /// Демпфированный ход тяги вниз до раскрытия квадрата (`expandProgress >= 0.33` в Telegram ~ 84dp с учётом сопротивления 0.72x -> ~116dp хода пальца)
   double _rawExpandDrag = 0.0;
-  static const double _expandThreshold = 58.0;
+  double _overscrollGuardDrag = 0.0;
+  bool _gestureStartedAtTop = true;
+  static const double _expandThreshold = 84.0;
+  static const double _expandPullDamping = 0.72;
 
-  /// Накопленный свайп вверх до порога авто-сворачивания квадрата в круг (`_collapseThreshold`)
-  double _rawCollapseDrag = 0.0;
-  static const double _collapseThreshold = 56.0;
+  /// Сдвиг/подрезка развёрнутого квадратного фото вверх до порога сворачивания (в Telegram фото сначала уходит вверх
+  /// при полной ширине `screenWidth` и `borderRadius = 0`, и лишь при `expandProgress < 0.33` сворачивается в круг)
+  double _collapseSlideUp = 0.0;
+  double _collapseSlideReturnStart = 0.0;
+  double _collapseMorphStartSlideUp = 0.0;
 
   /// Полный ход доводчика верхней шапки при скролле (круглая аватарка + имя/статус + ряд кнопок быстрых действий)
   static const double _headerCollapseSnapExtent = 245.0;
 
-  /// Фирменная кривая доводки шапки Telegram (`CubicBezierInterpolator.EASE_OUT_QUINT`)
+  /// Фирменные кривые Telegram (`CubicBezierInterpolator.EASE_OUT_QUINT` и `EASE_BOTH`)
   static const Curve _kTelegramEaseOutQuint = Cubic(0.23, 1.0, 0.32, 1.0);
+  static const Curve _kTelegramEaseBoth = Cubic(0.45, 0.0, 0.15, 1.0);
 
   bool _autoExpandedInCurrentGesture = false;
   bool _isPointerDown = false;
@@ -301,6 +306,7 @@ class ProfileScreenState extends State<ProfileScreen>
   late AnimationController _expandController;
   late AnimationController _overExpandController;
   late AnimationController _pullPreviewController;
+  late AnimationController _collapseSlideController;
   late AnimationController _ballisticScrollController;
   ClampingScrollSimulation? _activeBallisticSim;
   late ScrollController _scrollController;
@@ -379,14 +385,27 @@ class ProfileScreenState extends State<ProfileScreen>
 
     _pullPreviewController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 210),
+      duration: const Duration(milliseconds: 240),
       lowerBound: 0.0,
       upperBound: 1.0,
     );
     _pullPreviewController.addListener(() {
-      final t = Curves.easeOutCubic.transform(_pullPreviewController.value);
+      final t = _kTelegramEaseOutQuint.transform(_pullPreviewController.value);
       setState(() {
         _pullPreviewProgress = _pullPreviewReturnStart * (1.0 - t);
+      });
+    });
+
+    _collapseSlideController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+      lowerBound: 0.0,
+      upperBound: 1.0,
+    );
+    _collapseSlideController.addListener(() {
+      final t = _kTelegramEaseOutQuint.transform(_collapseSlideController.value);
+      setState(() {
+        _collapseSlideUp = _collapseSlideReturnStart * (1.0 - t);
       });
     });
 
@@ -640,6 +659,7 @@ class ProfileScreenState extends State<ProfileScreen>
     _phoneController.dispose();
     _avatarPageController.dispose();
     _ballisticScrollController.dispose();
+    _collapseSlideController.dispose();
     _pullPreviewController.dispose();
     _overExpandController.dispose();
     _expandController.dispose();
@@ -4223,6 +4243,13 @@ class ProfileScreenState extends State<ProfileScreen>
   // Анимация расширения аватарки
   // ============================================================
 
+  double _collapseTriggerDistanceFor(double screenWidth, double topOffset) {
+    final expandRange = math.max(150.0, screenWidth - (topOffset + 110.0));
+    // В Telegram (`ProfileActivity.java:8736, 8750`) квадрат держится при `expandProgress >= 0.33f`,
+    // т.е. пока фото не ушло вверх на ~65% разницы высот между квадратом и кругом (~120..145dp).
+    return (expandRange * 0.65).clamp(112.0, 165.0);
+  }
+
   void _animateToExpand(double target, {double velocity = 0.0}) {
     final willExpand = target >= 0.5;
     if (willExpand != _isAvatarExpanded) {
@@ -4230,32 +4257,44 @@ class ProfileScreenState extends State<ProfileScreen>
     }
     _isAvatarExpanded = willExpand;
     _rawExpandDrag = 0.0;
-    _rawCollapseDrag = 0.0;
+    _overscrollGuardDrag = 0.0;
     if (_pullPreviewController.isAnimating) {
       _pullPreviewController.stop();
     }
-    if (!willExpand) {
+    if (_collapseSlideController.isAnimating) {
+      _collapseSlideController.stop();
+    }
+    if (willExpand) {
+      _collapseSlideUp = 0.0;
+      _collapseMorphStartSlideUp = 0.0;
+    } else {
       _pullPreviewProgress = 0.0;
     }
 
-    final simulation = SpringSimulation(
-      SpringDescription.withDampingRatio(
-        mass: 1.0,
-        stiffness: willExpand ? 420.0 : 460.0,
-        ratio: 1.0,
-      ),
-      _expandController.value,
+    final durationFactor =
+        (velocity.abs() / 1100.0).clamp(1.0, 1.75);
+    final distance = (target - _expandController.value).abs();
+    final durationMs =
+        ((260.0 * distance) / durationFactor).clamp(140.0, 290.0).round();
+
+    _expandController
+        .animateTo(
       target,
-      (velocity / 900.0).clamp(-3.2, 3.2),
-      tolerance: const Tolerance(distance: 0.004, velocity: 0.08),
-    );
-    _expandController.animateWith(simulation).then((_) {
+      duration: Duration(milliseconds: durationMs),
+      curve: _kTelegramEaseBoth,
+    )
+        .then((_) {
       if (mounted && !_expandController.isAnimating) {
         setState(() {
           _expandFactor = target;
           _expandController.value = target;
           _pullPreviewProgress = 0.0;
-          if (target == 0.0) {
+          if (target == 1.0) {
+            _collapseSlideUp = 0.0;
+            _collapseMorphStartSlideUp = 0.0;
+          } else if (target == 0.0) {
+            _collapseSlideUp = 0.0;
+            _collapseMorphStartSlideUp = 0.0;
             _currentAvatarIndex = 0;
           }
         });
@@ -4263,44 +4302,67 @@ class ProfileScreenState extends State<ProfileScreen>
     });
   }
 
-  /// Бесшовное непрерывное сжатие квадратной аватарки в круг (`1.0 -> 0.0`) в стиле Telegram
-  /// без промежуточной остановки на `0.38`, позволяющее в том же свайпе сразу продолжать скролл профиля.
+  /// Двухфазное сворачивание Telegram (`ProfileActivity.java:8848-8905`):
+  /// после того как полноширинное фото ушло вверх на `_collapseSlideUp` (`expandProgress < 0.33`),
+  /// фиксирует текущую высоту подрезанного фото `_collapseMorphStartSlideUp` и плавно сворачивает
+  /// прямоугольник в круг `110dp` кривой `EASE_BOTH` за `~250ms` без малейшего скачка размеров.
   void _triggerAutoCollapse({double velocity = 0.0}) {
     HapticUtils.selection();
     _isAvatarExpanded = false;
-    _rawCollapseDrag = 0.0;
+    _collapseMorphStartSlideUp = _collapseSlideUp;
+    _collapseSlideUp = 0.0;
     _rawExpandDrag = 0.0;
+    _overscrollGuardDrag = 0.0;
     _pullPreviewProgress = 0.0;
     if (_pullPreviewController.isAnimating) {
       _pullPreviewController.stop();
     }
+    if (_collapseSlideController.isAnimating) {
+      _collapseSlideController.stop();
+    }
 
-    final initialVel = math.min(-1.15, (velocity / 900.0).clamp(-3.5, -0.5));
-    final simulation = SpringSimulation(
-      SpringDescription.withDampingRatio(
-        mass: 1.0,
-        stiffness: 470.0,
-        ratio: 1.0,
-      ),
-      _expandController.value,
+    final durationFactor =
+        (velocity.abs() / 1100.0).clamp(1.0, 1.80);
+    final durationMs =
+        ((255.0 * _expandController.value) / durationFactor)
+            .clamp(150.0, 275.0)
+            .round();
+
+    _expandController
+        .animateTo(
       0.0,
-      initialVel,
-      tolerance: const Tolerance(distance: 0.004, velocity: 0.08),
-    );
-    _expandController.animateWith(simulation).then((_) {
+      duration: Duration(milliseconds: durationMs),
+      curve: _kTelegramEaseBoth,
+    )
+        .then((_) {
       if (mounted && !_expandController.isAnimating && !_isAvatarExpanded) {
         setState(() {
           _expandFactor = 0.0;
           _expandController.value = 0.0;
           _pullPreviewProgress = 0.0;
+          _collapseMorphStartSlideUp = 0.0;
           _currentAvatarIndex = 0;
         });
       }
     });
   }
 
+  void _returnExpandedSlideToZero() {
+    if (_collapseSlideUp <= 0.5) {
+      if (_collapseSlideUp != 0.0) {
+        setState(() {
+          _collapseSlideUp = 0.0;
+        });
+      }
+      return;
+    }
+    _collapseSlideReturnStart = _collapseSlideUp;
+    _collapseSlideController.forward(from: 0.0);
+  }
+
   void _returnPullPreviewToZero() {
     _rawExpandDrag = 0.0;
+    _overscrollGuardDrag = 0.0;
     if (_pullPreviewProgress <= 0.001) {
       if (_pullPreviewProgress != 0.0) {
         setState(() {
@@ -4863,7 +4925,7 @@ class ProfileScreenState extends State<ProfileScreen>
     final screenWidth = TileViewportScope.widthOf(context);
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final topOffset = statusBarHeight + 46.0;
-    final expandSpan = math.max(140.0, screenWidth - (topOffset + 110.0));
+    final collapseTrigger = _collapseTriggerDistanceFor(screenWidth, topOffset);
     final currentScroll =
         _scrollController.hasClients ? _scrollController.offset : 0.0;
 
@@ -4878,21 +4940,19 @@ class ProfileScreenState extends State<ProfileScreen>
           _scrollController.jumpTo(nextScroll);
         }
         remainingUp -= consumed;
-        if (remainingUp <= 0.01) {
-          _scheduleWheelSnap();
-          return;
-        }
+        // При возврате колёсиком снизу к 0 останавливаемся на шапке без случайного раскрытия фото.
+        _scheduleWheelSnap();
+        return;
       }
 
       if (_isAvatarExpanded) {
-        if (_rawCollapseDrag > 0.0) {
-          _rawCollapseDrag =
-              (_rawCollapseDrag - remainingUp).clamp(0.0, _collapseThreshold);
-          final dragFrac =
-              (_rawCollapseDrag / (expandSpan * 1.15)).clamp(0.0, 0.34);
+        if (_collapseSlideController.isAnimating) {
+          _collapseSlideController.stop();
+        }
+        if (_collapseSlideUp > 0.0) {
           setState(() {
-            _expandFactor = 1.0 - dragFrac;
-            _expandController.value = _expandFactor;
+            _collapseSlideUp =
+                (_collapseSlideUp - remainingUp).clamp(0.0, collapseTrigger);
           });
         }
         _scheduleWheelSnap();
@@ -4907,11 +4967,11 @@ class ProfileScreenState extends State<ProfileScreen>
       if (_pullPreviewController.isAnimating) {
         _pullPreviewController.stop();
       }
-      _rawExpandDrag += remainingUp;
+      _rawExpandDrag += remainingUp * _expandPullDamping;
       if (_rawExpandDrag >= _expandThreshold) {
         _autoExpandedInCurrentGesture = true;
         _pullPreviewProgress = 1.0;
-        _animateToExpand(1.0, velocity: 540.0);
+        _animateToExpand(1.0, velocity: 700.0);
         _scheduleWheelSnap();
         return;
       }
@@ -4928,19 +4988,20 @@ class ProfileScreenState extends State<ProfileScreen>
     final downDy = wheelDy;
 
     if (_isAvatarExpanded) {
+      if (_collapseSlideController.isAnimating) {
+        _collapseSlideController.stop();
+      }
       if (_expandController.isAnimating) {
         _expandController.stop();
+        _expandFactor = 1.0;
+        _expandController.value = 1.0;
       }
-      _rawCollapseDrag += downDy;
-      final dragFrac =
-          (_rawCollapseDrag / (expandSpan * 1.15)).clamp(0.0, 0.34);
-      final liveFactor = 1.0 - dragFrac;
-      _expandFactor = liveFactor;
-      _expandController.value = liveFactor;
 
-      if (_rawCollapseDrag >= _collapseThreshold) {
-        final overflowDy = _rawCollapseDrag - _collapseThreshold;
-        _triggerAutoCollapse(velocity: -680.0);
+      _collapseSlideUp += downDy;
+      if (_collapseSlideUp >= collapseTrigger) {
+        final overflowDy = _collapseSlideUp - collapseTrigger;
+        _collapseSlideUp = collapseTrigger;
+        _triggerAutoCollapse(velocity: -900.0);
         if (overflowDy > 0.01 && _scrollController.hasClients) {
           final maxScroll = _scrollController.position.maxScrollExtent;
           _scrollController.jumpTo(overflowDy.clamp(0.0, maxScroll));
@@ -4966,8 +5027,6 @@ class ProfileScreenState extends State<ProfileScreen>
       }
     }
 
-    // При непрерывном скролле вниз сразу прокручиваем контент, даже пока аватарка
-    // заканчивает финальное пружинное сжатие из квадрата в круг (как в Telegram).
     if (_scrollController.hasClients) {
       final maxScroll = _scrollController.position.maxScrollExtent;
       final target = (currentScroll + downDy).clamp(0.0, maxScroll);
@@ -4984,8 +5043,11 @@ class ProfileScreenState extends State<ProfileScreen>
     _autoExpandedInCurrentGesture = false;
 
     if (_isAvatarExpanded) {
-      if (_rawCollapseDrag > 0.0 ||
-          (_expandFactor < 0.999 && !_expandController.isAnimating)) {
+      if (_collapseSlideUp > 0.5) {
+        _returnExpandedSlideToZero();
+        return;
+      }
+      if (_expandFactor < 0.999 && !_expandController.isAnimating) {
         _animateToExpand(1.0);
       }
       return;
@@ -5060,27 +5122,31 @@ class ProfileScreenState extends State<ProfileScreen>
     }
     _ignoreDragForMenuDismiss = false;
     _isPointerDown = true;
+
+    final currentScroll =
+        _scrollController.hasClients ? _scrollController.offset : 0.0;
+    _gestureStartedAtTop = currentScroll <= 2.0 && !_isAvatarExpanded;
+    _overscrollGuardDrag = 0.0;
+
     if (_pullPreviewController.isAnimating) {
       _pullPreviewController.stop();
       _rawExpandDrag = _pullPreviewProgress * _expandThreshold;
     }
+    if (_collapseSlideController.isAnimating) {
+      _collapseSlideController.stop();
+    }
     if (_overExpandController.isAnimating) {
       _overExpandController.stop();
     }
-    if (_expandController.isAnimating) {
-      if (_isAvatarExpanded && _expandFactor < 0.45) {
+    if (_expandController.isAnimating && _isAvatarExpanded) {
+      if (_expandFactor < 0.45) {
         _expandController.stop();
         _isAvatarExpanded = false;
-      } else if (_isAvatarExpanded) {
+      } else {
         _expandController.stop();
-        final screenWidth = TileViewportScope.widthOf(context);
-        final topOffset = MediaQuery.of(context).padding.top + 46.0;
-        final expandSpan = math.max(140.0, screenWidth - (topOffset + 110.0));
-        _rawCollapseDrag =
-            ((1.0 - _expandFactor) * (expandSpan * 1.15)).clamp(0.0, _collapseThreshold);
+        _expandFactor = 1.0;
+        _expandController.value = 1.0;
       }
-      // Если идёт быстрое автоматическое доведение квадрата в круг (!_isAvatarExpanded),
-      // не прерываем пружину — позволяем ей плавно долететь в круг параллельно со скроллом!
     }
     _didTriggerFullscreenOnOverPull = false;
     _autoExpandedInCurrentGesture = false;
@@ -5095,7 +5161,7 @@ class ProfileScreenState extends State<ProfileScreen>
     final screenHeight = TileViewportScope.heightOf(context);
     final statusBarHeight = MediaQuery.of(context).padding.top;
     final topOffset = statusBarHeight + 46.0;
-    final expandSpan = math.max(140.0, screenWidth - (topOffset + 110.0));
+    final collapseTrigger = _collapseTriggerDistanceFor(screenWidth, topOffset);
     final currentScroll =
         _scrollController.hasClients ? _scrollController.offset : 0.0;
 
@@ -5116,16 +5182,12 @@ class ProfileScreenState extends State<ProfileScreen>
       }
 
       if (_isAvatarExpanded) {
-        // Если пользователь начал тянуть квадрат вверх, а потом повёл палец обратно вниз —
-        // плавно возвращаем квадрат к 1.0 строго за пальцем.
-        if (_rawCollapseDrag > 0.0) {
-          _rawCollapseDrag =
-              (_rawCollapseDrag - remainingDy).clamp(0.0, _collapseThreshold);
-          final dragFrac =
-              (_rawCollapseDrag / (expandSpan * 1.15)).clamp(0.0, 0.34);
+        // Если развёрнутое фото было сдвинуто вверх (_collapseSlideUp > 0), а палец пошёл обратно вниз —
+        // плавно опускаем фото обратно к полному квадрату 1:1 без уменьшения ширины.
+        if (_collapseSlideUp > 0.0) {
           setState(() {
-            _expandFactor = 1.0 - dragFrac;
-            _expandController.value = _expandFactor;
+            _collapseSlideUp =
+                (_collapseSlideUp - remainingDy).clamp(0.0, collapseTrigger);
           });
           return;
         }
@@ -5149,7 +5211,7 @@ class ProfileScreenState extends State<ProfileScreen>
             _overExpandProgress = nextOver;
           });
 
-          if (nextOver >= 0.42 && !_didTriggerFullscreenOnOverPull) {
+          if (nextOver >= 0.46 && !_didTriggerFullscreenOnOverPull) {
             _didTriggerFullscreenOnOverPull = true;
             HapticUtils.impact();
             _openFullAvatarViewer(fromOverPull: true);
@@ -5158,14 +5220,13 @@ class ProfileScreenState extends State<ProfileScreen>
         }
       }
 
-      // Если аватарка прямо сейчас сворачивается из квадрата, а палец резко пошёл вниз на >= 24dp —
-      // плавно разворачиваем её обратно в квадрат!
+      // Если аватарка прямо сейчас сворачивается из квадрата, а палец явно потянул обратно вниз (>= 42dp):
       if (_expandController.isAnimating && !_isAvatarExpanded) {
         _rawExpandDrag += remainingDy;
-        if (_rawExpandDrag >= 24.0) {
+        if (_rawExpandDrag >= 42.0) {
           _expandController.stop();
           _autoExpandedInCurrentGesture = true;
-          _animateToExpand(1.0, velocity: 540.0);
+          _animateToExpand(1.0, velocity: 700.0);
         }
         return;
       }
@@ -5174,13 +5235,28 @@ class ProfileScreenState extends State<ProfileScreen>
         return;
       }
 
-      // Эластичное набухание круглой аватарки (110 -> 136dp) до порога _expandThreshold,
-      // после которого она плавно раскрывается в полноширинный квадрат 1:1 (как в Telegram).
-      _rawExpandDrag += remainingDy;
+      // Если жест начался из глубины прокрученного списка, гасим инерционный упор в 0,
+      // чтобы обычный возврат к верху профиля не раскрывал аватарку случайно.
+      if (!_gestureStartedAtTop) {
+        const double guardBand = 48.0;
+        if (_overscrollGuardDrag < guardBand) {
+          final guardConsumed =
+              math.min(remainingDy, guardBand - _overscrollGuardDrag);
+          _overscrollGuardDrag += guardConsumed;
+          remainingDy -= guardConsumed;
+          if (remainingDy <= 0.01) {
+            return;
+          }
+        }
+      }
+
+      final effectiveDamping =
+          _gestureStartedAtTop ? _expandPullDamping : 0.48;
+      _rawExpandDrag += remainingDy * effectiveDamping;
       if (_rawExpandDrag >= _expandThreshold) {
         _autoExpandedInCurrentGesture = true;
         _pullPreviewProgress = 1.0;
-        _animateToExpand(1.0, velocity: 540.0);
+        _animateToExpand(1.0, velocity: 700.0);
         return;
       }
 
@@ -5206,18 +5282,20 @@ class ProfileScreenState extends State<ProfileScreen>
     if (_isAvatarExpanded) {
       if (_expandController.isAnimating) {
         _expandController.stop();
+        _expandFactor = 1.0;
+        _expandController.value = 1.0;
       }
 
-      _rawCollapseDrag += (-dy);
-      final dragFrac =
-          (_rawCollapseDrag / (expandSpan * 1.15)).clamp(0.0, 0.34);
-      final liveFactor = 1.0 - dragFrac;
-      _expandFactor = liveFactor;
-      _expandController.value = liveFactor;
-
-      if (_rawCollapseDrag >= _collapseThreshold) {
-        final overflowUp = _rawCollapseDrag - _collapseThreshold;
-        _triggerAutoCollapse(velocity: -680.0);
+      // Фаза 1 (точно как в Telegram `ProfileActivity.java:8831-8850`):
+      // аватарка остаётся полноширинной (`width = screenWidth`, `borderRadius = 0`),
+      // плавно уезжая/подрезаясь вверх вместе с контентом на `_collapseSlideUp` (~125dp).
+      // Только когда пройдено `collapseTrigger` (`expandProgress < 0.33`), включается Фаза 2 —
+      // быстрое обтекаемое сворачивание в круг `110dp` с продолжением скролла списка!
+      _collapseSlideUp += (-dy);
+      if (_collapseSlideUp >= collapseTrigger) {
+        final overflowUp = _collapseSlideUp - collapseTrigger;
+        _collapseSlideUp = collapseTrigger;
+        _triggerAutoCollapse(velocity: -900.0);
         if (overflowUp > 0.01 && _scrollController.hasClients) {
           final maxScroll = _scrollController.position.maxScrollExtent;
           _scrollController.jumpTo(overflowUp.clamp(0.0, maxScroll));
@@ -5232,7 +5310,8 @@ class ProfileScreenState extends State<ProfileScreen>
     // Если пользователь чуть потянул круглую аватарку вниз (не дойдя до порога) и повёл вверх:
     if ((_rawExpandDrag > 0.0 || _pullPreviewProgress > 0.001) &&
         !_expandController.isAnimating) {
-      _rawExpandDrag = (_rawExpandDrag + dy).clamp(0.0, _expandThreshold);
+      _rawExpandDrag =
+          (_rawExpandDrag + dy * _expandPullDamping).clamp(0.0, _expandThreshold);
       setState(() {
         _pullPreviewProgress =
             (_rawExpandDrag / _expandThreshold).clamp(0.0, 1.0);
@@ -5241,8 +5320,9 @@ class ProfileScreenState extends State<ProfileScreen>
         return;
       }
     }
+    _overscrollGuardDrag = 0.0;
 
-    // Сразу прокручиваем основной список профиля (в том числе прямо во время доводки квадрата в круг!)
+    // Сразу прокручиваем основной список профиля (в том числе параллельно с финальной доводкой в круг!)
     if (_scrollController.hasClients) {
       final maxScroll = _scrollController.position.maxScrollExtent;
       final target = (currentScroll - dy).clamp(0.0, maxScroll);
@@ -5261,7 +5341,7 @@ class ProfileScreenState extends State<ProfileScreen>
 
     if (_overExpandProgress > 0.0) {
       if (!_didTriggerFullscreenOnOverPull &&
-          (velocity > 500.0 || _overExpandProgress >= 0.35)) {
+          (velocity > 650.0 || _overExpandProgress >= 0.38)) {
         _didTriggerFullscreenOnOverPull = true;
         HapticUtils.impact();
         _openFullAvatarViewer(fromOverPull: true);
@@ -5278,36 +5358,41 @@ class ProfileScreenState extends State<ProfileScreen>
     _autoExpandedInCurrentGesture = false;
 
     if (_isAvatarExpanded) {
-      if (velocity < -380.0 || _rawCollapseDrag >= _collapseThreshold * 0.72) {
+      // В Telegram до порога `expandProgress < 0.33` отпускание пальца плавно возвращает фото вниз (`EASE_OUT_QUINT`),
+      // а резкий уверенный свайп вверх (`velocity <= -920`) сворачивает аватарку в круг.
+      if (velocity <= -920.0 && _collapseSlideUp >= 18.0) {
         _triggerAutoCollapse(velocity: velocity);
-        // При резком флинге вверх из развёрнутого фото передаём избыточный импульс в доводку шапки
-        if (velocity < -1450.0 && _scrollController.hasClients) {
+        if (velocity < -1650.0 && _scrollController.hasClients) {
           final maxScroll = _scrollController.position.maxScrollExtent;
           final snapThreshold = math.min(_headerCollapseSnapExtent, maxScroll);
           if (snapThreshold > 1.0) {
             _animateHeaderSettleTo(snapThreshold, velocity: velocity);
           }
         }
-      } else if (_rawCollapseDrag > 0.0 ||
-          (_expandFactor < 0.999 && !_expandController.isAnimating)) {
+      } else if (_collapseSlideUp > 0.5) {
+        _returnExpandedSlideToZero();
+      } else if (_expandFactor < 0.999 && !_expandController.isAnimating) {
         _animateToExpand(1.0, velocity: velocity);
       }
       return;
     }
 
-    // Недотянутый предпросмотр круглой аватарки вниз:
+    // Недотянутый предпросмотр круглой аватарки вниз: раскрываем только при явном сильном флинге вниз,
+    // иначе плавно возвращаем круг 138dp -> 110dp.
     if ((_rawExpandDrag > 0.0 || _pullPreviewProgress > 0.001) &&
         !_expandController.isAnimating) {
-      if (velocity > 520.0) {
+      if (velocity > 1050.0 && _rawExpandDrag >= 26.0) {
+        _pullPreviewProgress = math.max(_pullPreviewProgress, 0.65);
         _animateToExpand(1.0, velocity: velocity);
       } else {
         _returnPullPreviewToZero();
       }
       return;
     }
+    _overscrollGuardDrag = 0.0;
 
     if (_expandFactor > 0.001 && !_expandController.isAnimating) {
-      if (velocity > 620.0) {
+      if (velocity > 850.0) {
         _animateToExpand(1.0, velocity: velocity);
       } else {
         _animateToExpand(0.0, velocity: velocity);
@@ -5528,7 +5613,7 @@ class ProfileScreenState extends State<ProfileScreen>
     final m = _expandFactor.clamp(0.0, 1.0);
     final pullPreviewEased =
         Curves.easeOutQuad.transform(_pullPreviewProgress.clamp(0.0, 1.0));
-    final previewDownShift = 10.0 * pullPreviewEased * (1.0 - m);
+    final previewDownShift = 16.0 * pullPreviewEased * (1.0 - m);
 
     final activeCutout = DisplayCutoutService.instance.resolveForContext(
       context,
@@ -5542,30 +5627,42 @@ class ProfileScreenState extends State<ProfileScreen>
       cutout: activeCutout,
     );
 
-    // При потягивании раскрытой аватарки вниз:
-    // её верхний край остаётся у верхнего края экрана (avatarTopY = 0),
-    // сама аватарка чуть увеличивается на extraOverPullSize,
-    // а её нижний край и весь интерфейс под ней смещаются вниз синхронно на extraOverPullSize.
     final extraOverPullSize = 36.0 *
         Curves.easeOutCubic.transform(_overExpandProgress.clamp(0.0, 1.0));
 
+    // В развёрнутом режиме (_isAvatarExpanded == true) активный сдвиг вверх равен _collapseSlideUp;
+    // в момент пересечения порога сворачивания (_isAvatarExpanded == false) стартовая высота прямоугольника
+    // фиксируется через _collapseMorphStartSlideUp, обеспечивая 0.0px скачка между Фазой 1 (уход вверх) и Фазой 2 (сжатие в круг).
+    final activeExpandedSlideUp =
+        _isAvatarExpanded ? _collapseSlideUp : _collapseMorphStartSlideUp;
+    final expandedTargetHeight =
+        math.max(110.0, screenWidth - activeExpandedSlideUp);
+
     final collapsedAnchorCenter =
         metaballTargetGeom.avatarCenter + Offset(0.0, previewDownShift);
-    final expandedSquareCenter = Offset(screenWidth * 0.5, screenWidth * 0.5);
-    final morphedCenter =
-        Offset.lerp(collapsedAnchorCenter, expandedSquareCenter, m)!;
 
-    final baseAvatarSize = ExpandableAvatar.calculateAvatarSize(
+    final baseAvatarWidth = ExpandableAvatar.calculateAvatarSize(
       screenWidth,
       m,
       pullPreviewProgress: _pullPreviewProgress,
       collapsedSizeOverride: metaballTargetGeom.avatarDiameter,
     );
-    final currentSize = baseAvatarSize + extraOverPullSize;
-    final avatarLeft = morphedCenter.dx - currentSize * 0.5;
-    final avatarTopY =
-        morphedCenter.dy - baseAvatarSize * 0.5; // при m=1: W/2 - W/2 = 0.0
-    final avatarBottomY = avatarTopY + currentSize;
+    final baseAvatarHeight = ExpandableAvatar.calculateAvatarSize(
+      expandedTargetHeight,
+      m,
+      pullPreviewProgress: _pullPreviewProgress,
+      collapsedSizeOverride: metaballTargetGeom.avatarDiameter,
+    );
+
+    final currentWidth = baseAvatarWidth + extraOverPullSize;
+    final currentHeight = baseAvatarHeight + extraOverPullSize;
+
+    final collapsedLeft = collapsedAnchorCenter.dx - currentWidth * 0.5;
+    final collapsedTop = collapsedAnchorCenter.dy - baseAvatarHeight * 0.5;
+
+    final avatarLeft = ui.lerpDouble(collapsedLeft, -extraOverPullSize * 0.5, m)!;
+    final avatarTopY = ui.lerpDouble(collapsedTop, 0.0, m)!;
+    final avatarBottomY = avatarTopY + currentHeight;
 
     final blurProgress = ((m - 0.15) / 0.85).clamp(0.0, 1.0);
     final blurFactor = Curves.easeOutCubic.transform(blurProgress);
@@ -5585,7 +5682,11 @@ class ProfileScreenState extends State<ProfileScreen>
         previewDownShift;
     final topSpacerHeight = math.max(
       0.0,
-      ui.lerpDouble(collapsedSpacerHeight, screenWidth + extraOverPullSize, m)!,
+      ui.lerpDouble(
+        collapsedSpacerHeight,
+        expandedTargetHeight + extraOverPullSize,
+        m,
+      )!,
     );
 
     final bool useExpandedAvatarLayer =
@@ -6244,8 +6345,8 @@ class ProfileScreenState extends State<ProfileScreen>
                         Positioned(
                           top: avatarTopY,
                           left: avatarLeft,
-                          width: currentSize,
-                          height: currentSize,
+                          width: currentWidth,
+                          height: currentHeight,
                           child: ExpandableAvatar(
                             key: _expandableAvatarKey,
                             pageController: _avatarPageController,
@@ -6256,6 +6357,7 @@ class ProfileScreenState extends State<ProfileScreen>
                             pullPreviewProgress: _pullPreviewProgress,
                             collapsedDiameterOverride:
                                 metaballTargetGeom.avatarDiameter,
+                            expandedHeightOverride: expandedTargetHeight,
                             overExpandProgress: _overExpandProgress,
                             bottomCollapseOverlap: bottomCollapseOverlap,
                             tintColor: backgroundColor,
