@@ -3108,6 +3108,7 @@ class MiniAppSession {
     if (typeof window !== 'undefined' && window === window.top && !window.__theaverPtrInstalled) {
       window.__theaverPtrInstalled = true;
       var ptrActive = false;
+      var ptrEngaged = false;
       var ptrStartX = 0;
       var ptrStartY = 0;
       var ptrLastProg = 0;
@@ -3125,15 +3126,32 @@ class MiniAppSession {
         return Math.max(0, window.scrollY || window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0);
       };
 
+      var ptrHasBlockedOverscroll = function(el) {
+        if (!el || typeof window.getComputedStyle !== 'function') return false;
+        var cs = window.getComputedStyle(el);
+        if (!cs) return false;
+        var osb = (cs.overscrollBehaviorY || cs.overscrollBehavior || '').toLowerCase();
+        return osb.indexOf('none') !== -1 || osb.indexOf('contain') !== -1;
+      };
+
       var ptrAncestorsAtTop = function(node) {
+        if (ptrHasBlockedOverscroll(document.documentElement) || ptrHasBlockedOverscroll(document.body)) {
+          return false;
+        }
         var cur = node && node.nodeType === 1 ? node : (node && node.parentElement ? node.parentElement : null);
         var steps = 0;
         while (cur && cur !== document.documentElement && steps < 32) {
           if (typeof window.getComputedStyle === 'function') {
             var cs = window.getComputedStyle(cur);
-            var oy = cs ? cs.overflowY : '';
-            if ((oy === 'auto' || oy === 'scroll') && cur.scrollHeight > cur.clientHeight + 1) {
-              if ((cur.scrollTop || 0) > 0) return false;
+            if (cs) {
+              var osb = (cs.overscrollBehaviorY || cs.overscrollBehavior || '').toLowerCase();
+              if (osb.indexOf('none') !== -1 || osb.indexOf('contain') !== -1) {
+                return false;
+              }
+              var oy = cs.overflowY || '';
+              if ((oy === 'auto' || oy === 'scroll') && cur.scrollHeight > cur.clientHeight + 1) {
+                if ((cur.scrollTop || 0) > 0) return false;
+              }
             }
           } else if ((cur.scrollTop || 0) > 0) {
             return false;
@@ -3164,6 +3182,7 @@ class MiniAppSession {
           postPtrTelemetry(0, true);
         }
         ptrActive = false;
+        ptrEngaged = false;
         ptrLastProg = 0;
         ptrPendingProg = -1;
         ptrLastSentProg = -1;
@@ -3171,6 +3190,7 @@ class MiniAppSession {
 
       document.addEventListener('touchstart', function(e) {
         ptrActive = false;
+        ptrEngaged = false;
         ptrLastProg = 0;
         ptrPendingProg = -1;
         ptrLastSentProg = -1;
@@ -3195,19 +3215,35 @@ class MiniAppSession {
         }
         var dx = e.touches[0].clientX - ptrStartX;
         var dy = e.touches[0].clientY - ptrStartY;
-        if (dy <= 0 || Math.abs(dx) > dy * 0.65) {
+        if (!ptrEngaged) {
+          if (dy < -8 || (Math.abs(dx) > 12 && Math.abs(dx) > Math.max(dy, 1) * 0.85)) {
+            cancelPtrTracking();
+            return;
+          }
+          if (dy <= 12) {
+            return;
+          }
+          ptrEngaged = true;
+        } else if (dy < -10) {
           cancelPtrTracking();
           return;
         }
-        var prog = dy > 14 ? Math.min(1, Math.max(0, (dy - 14) / 82)) : 0;
+        var raw = dy > 12 ? Math.max(0, (dy - 12) / 96) : 0;
+        var prog = raw <= 1
+          ? raw
+          : Math.min(1.35, 1 + 0.35 * (1 - Math.exp(-(raw - 1) * 1.15)));
+        ptrLastProg = prog;
         if (prog > 0 || ptrLastSentProg > 0) {
-          ptrLastProg = prog;
           ptrPendingProg = prog;
           if (!ptrRaf) {
             ptrRaf = ptrRafFn(function() {
               ptrRaf = 0;
               if (!ptrActive) return;
-              if (ptrPendingProg >= 0 && Math.abs(ptrPendingProg - ptrLastSentProg) > 0.005) {
+              if (
+                ptrPendingProg >= 0 &&
+                (Math.abs(ptrPendingProg - ptrLastSentProg) > 0.004 ||
+                  (ptrPendingProg === 0 && ptrLastSentProg !== 0))
+              ) {
                 ptrLastSentProg = ptrPendingProg;
                 postPtrTelemetry(ptrPendingProg, false);
               }
@@ -3227,6 +3263,7 @@ class MiniAppSession {
           postPtrTelemetry(0, true);
         }
         ptrActive = false;
+        ptrEngaged = false;
         ptrLastProg = 0;
         ptrPendingProg = -1;
         ptrLastSentProg = -1;
@@ -3274,7 +3311,7 @@ class MiniAppSession {
             ? rawProg.toDouble()
             : (double.tryParse(rawProg?.toString() ?? '') ?? 0.0);
         final double prog =
-            (parsedProg.isFinite ? parsedProg : 0.0).clamp(0.0, 1.0).toDouble();
+            (parsedProg.isFinite ? parsedProg : 0.0).clamp(0.0, 1.35).toDouble();
         onBrowserPullToRefreshEvent?.call(prog, map['pullRelease'] == true);
         if (!map.containsKey('collapsed') && !map.containsKey('canvasColor')) {
           return;
@@ -3581,7 +3618,9 @@ class MiniAppSession {
           settings.cookiePolicy == BrowserCookiePolicy.allowAll,
       blockAllCookies: settings.cookiePolicy == BrowserCookiePolicy.blockAll,
       enableOsAutofill: settings.osAutofillEnabled,
-      enablePullToRefresh: isBrowser && !isReaderModeActive,
+      // InAppBrowserSheet renders the unified Safari Liquid Glass droplet
+      // spinner below the floating address capsule on both Android and iOS.
+      enablePullToRefresh: false,
     );
   }
 

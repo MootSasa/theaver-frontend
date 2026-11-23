@@ -107,7 +107,25 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   bool _isMenuOpen = false;
   bool _isSiteInfoOpen = false;
   bool _isFindOpen = false;
-  double _pullRefreshProgress = 0.0;
+  late final AnimationController _ptrSettleController;
+  late final AnimationController _ptrSpinController;
+  late final AnimationController _ptrPulseController;
+  final ValueNotifier<_PullRefreshHudState> _ptrHudNotifier =
+      ValueNotifier<_PullRefreshHudState>((
+    visual: 0.0,
+    refreshing: false,
+    armed: false,
+  ));
+  double _ptrSettleFrom = 0.0;
+  double _ptrSettleTo = 0.0;
+  Curve _ptrSettleCurve = Curves.easeOutCubic;
+  bool _ptrRefreshing = false;
+  bool _ptrRetracting = false;
+  bool _ptrMinHoldElapsed = false;
+  bool _ptrPageLoadDone = false;
+  int _ptrCycleId = 0;
+  Timer? _ptrHoldTimer;
+  Timer? _ptrMaxTimer;
   bool _pullRefreshThresholdHapticFired = false;
   Timer? _findDebounceTimer;
   int _findRequestSeq = 0;
@@ -137,6 +155,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       mounted ? Overlay.maybeOf(context, rootOverlay: true) : null;
 
   void _onSessionStateChanged() {
+    if (_ptrRefreshing &&
+        !_ptrRetracting &&
+        _session.webResourceErrorDescription != null) {
+      _markPullRefreshLoadDone();
+    }
     if (mounted && !_isDisposing) setState(() {});
   }
 
@@ -284,6 +307,20 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       parent: _findBarController,
       curve: const Cubic(0.22, 1.06, 0.32, 1.0),
       reverseCurve: Curves.easeInCubic,
+    );
+    _ptrSettleController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )
+      ..addListener(_onPtrSettleTick)
+      ..addStatusListener(_onPtrSettleStatus);
+    _ptrSpinController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    );
+    _ptrPulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
     );
     _dialogDelegate = SheetBrowserUiDialogDelegate(
       contextResolver: () => context,
@@ -468,6 +505,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _earlyWebViewWarmupTimer = null;
     _findDebounceTimer?.cancel();
     _findDebounceTimer = null;
+    _ptrHoldTimer?.cancel();
+    _ptrHoldTimer = null;
+    _ptrMaxTimer?.cancel();
+    _ptrMaxTimer = null;
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatusChanged);
     _routeAnimation = null;
     BrowserDataService.instance.removeListener(_onBrowserDataChanged);
@@ -500,6 +541,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _readerScrollCtrl.dispose();
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
+    _ptrSettleController.dispose();
+    _ptrSpinController.dispose();
+    _ptrPulseController.dispose();
+    _ptrHudNotifier.dispose();
     _findBarAnimation.dispose();
     _findBarController.dispose();
     _findFocusNode.dispose();
@@ -514,6 +559,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }) async {
     if (_isMinimizing) return;
     _isMinimizing = true;
+    _resetPullRefreshImmediate();
     _findFocusNode.unfocus();
     _closeMenu();
     _closeSiteInfoPopover();
@@ -625,6 +671,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _closeTab() {
+    _resetPullRefreshImmediate();
     _findDebounceTimer?.cancel();
     _findDebounceTimer = null;
     _findFocusNode.unfocus();
@@ -651,6 +698,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _toggleMenu() {
     HapticUtils.tap();
     if (!_isMenuOpen) {
+      _resetPullRefreshImmediate();
       if (_isSiteInfoOpen) {
         _isSiteInfoOpen = false;
       }
@@ -670,6 +718,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _toggleSiteInfoPopover() {
     HapticUtils.tap();
     if (!_isSiteInfoOpen) {
+      _resetPullRefreshImmediate();
       if (_isMenuOpen) _isMenuOpen = false;
       if (_session.browserChromeCollapsed) {
         unawaited(_session.setBrowserChromeCollapsed(false));
@@ -687,6 +736,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _openFindBar() {
+    _resetPullRefreshImmediate();
     final bool disableAnims =
         MediaQuery.maybeDisableAnimationsOf(context) ?? false;
     setState(() => _isFindOpen = true);
@@ -1102,12 +1152,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final BrowserReaderArticle? article = await _session.extractReaderArticle();
     if (!mounted) return;
     if (article != null) {
+      _resetPullRefreshImmediate();
       setState(() {
         _session.isReaderModeActive = true;
         _session.activeReaderArticle = article;
         _session.focusedAutofillField = null;
-        _pullRefreshProgress = 0.0;
-        _pullRefreshThresholdHapticFired = false;
       });
       if (_session.browserChromeCollapsed) {
         unawaited(_session.setBrowserChromeCollapsed(false));
@@ -1178,6 +1227,145 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
   }
 
+  void _onPtrSettleTick() {
+    if (!mounted || _isDisposing) return;
+    final double t = _ptrSettleCurve.transform(_ptrSettleController.value);
+    final double nextVisual =
+        _ptrSettleFrom + (_ptrSettleTo - _ptrSettleFrom) * t;
+    final current = _ptrHudNotifier.value;
+    _ptrHudNotifier.value = (
+      visual: nextVisual.clamp(0.0, 1.35).toDouble(),
+      refreshing: current.refreshing,
+      armed: current.armed,
+    );
+  }
+
+  void _onPtrSettleStatus(AnimationStatus status) {
+    if (!mounted || _isDisposing || status != AnimationStatus.completed) return;
+    if (_ptrSettleTo <= 0.001) {
+      _ptrRefreshing = false;
+      _ptrRetracting = false;
+      _ptrSpinController.stop();
+      _ptrPulseController.stop();
+      _ptrHudNotifier.value = (
+        visual: 0.0,
+        refreshing: false,
+        armed: false,
+      );
+    }
+  }
+
+  void _animatePullRefreshVisualTo(
+    double target, {
+    required Duration duration,
+    required Curve curve,
+    bool? refreshing,
+    bool? armed,
+  }) {
+    final current = _ptrHudNotifier.value;
+    final bool nextRefreshing = refreshing ?? current.refreshing;
+    final bool nextArmed = armed ?? current.armed;
+    final bool disableAnims =
+        mounted && (MediaQuery.maybeDisableAnimationsOf(context) ?? false);
+    if (disableAnims || (current.visual - target).abs() <= 0.004) {
+      _ptrSettleController.stop();
+      if (target <= 0.001) {
+        _ptrRefreshing = false;
+        _ptrRetracting = false;
+        _ptrSpinController.stop();
+        _ptrPulseController.stop();
+        _ptrHudNotifier.value = (
+          visual: 0.0,
+          refreshing: false,
+          armed: false,
+        );
+      } else {
+        _ptrHudNotifier.value = (
+          visual: target,
+          refreshing: nextRefreshing,
+          armed: nextArmed,
+        );
+      }
+      return;
+    }
+    _ptrSettleFrom = current.visual;
+    _ptrSettleTo = target;
+    _ptrSettleCurve = curve;
+    _ptrHudNotifier.value = (
+      visual: current.visual,
+      refreshing: nextRefreshing,
+      armed: nextArmed,
+    );
+    _ptrSettleController.duration = duration;
+    _ptrSettleController.forward(from: 0.0);
+  }
+
+  void _resetPullRefreshImmediate() {
+    _ptrCycleId++;
+    _ptrHoldTimer?.cancel();
+    _ptrHoldTimer = null;
+    _ptrMaxTimer?.cancel();
+    _ptrMaxTimer = null;
+    _ptrRefreshing = false;
+    _ptrRetracting = false;
+    _ptrMinHoldElapsed = false;
+    _ptrPageLoadDone = false;
+    _pullRefreshThresholdHapticFired = false;
+    _ptrSettleController.stop();
+    _ptrSpinController.stop();
+    _ptrPulseController.stop();
+    if (_ptrHudNotifier.value.visual != 0.0 ||
+        _ptrHudNotifier.value.refreshing ||
+        _ptrHudNotifier.value.armed) {
+      _ptrHudNotifier.value = (
+        visual: 0.0,
+        refreshing: false,
+        armed: false,
+      );
+    }
+  }
+
+  void _startPullRefreshRetract() {
+    if (!mounted || _isDisposing || _ptrRetracting) return;
+    _ptrRetracting = true;
+    _ptrHoldTimer?.cancel();
+    _ptrHoldTimer = null;
+    _ptrMaxTimer?.cancel();
+    _ptrMaxTimer = null;
+    _animatePullRefreshVisualTo(
+      0.0,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeInCubic,
+      refreshing: true,
+      armed: true,
+    );
+  }
+
+  void _markPullRefreshLoadDone() {
+    if (!_ptrRefreshing || _ptrRetracting) return;
+    _ptrPageLoadDone = true;
+    if (_ptrMinHoldElapsed) {
+      _startPullRefreshRetract();
+    }
+  }
+
+  Future<void> _triggerPullRefreshReload() async {
+    final ctrl = _session.controller;
+    if (ctrl == null || !_hasPlatformWebView) {
+      _markPullRefreshLoadDone();
+      return;
+    }
+    try {
+      if (_session.webResourceErrorDescription != null) {
+        await _session.retryMainFrameLoad();
+      } else {
+        await ctrl.reload();
+      }
+    } catch (_) {
+      _markPullRefreshLoadDone();
+    }
+  }
+
   void _handlePullToRefreshEvent(double progress, bool released) {
     if (!mounted || _isDisposing) return;
     final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
@@ -1188,40 +1376,108 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         isRouteCovered ||
         activeSafariWebAlertCount.value > 0;
     if (blocked) {
-      if (_pullRefreshProgress != 0.0 || _pullRefreshThresholdHapticFired) {
-        setState(() {
-          _pullRefreshProgress = 0.0;
-          _pullRefreshThresholdHapticFired = false;
-        });
-      }
+      _resetPullRefreshImmediate();
+      return;
+    }
+
+    if (_ptrRefreshing && !_ptrRetracting) {
       return;
     }
 
     final double clamped =
-        (progress.isFinite ? progress : 0.0).clamp(0.0, 1.0).toDouble();
+        (progress.isFinite ? progress : 0.0).clamp(0.0, 1.35).toDouble();
     if (released) {
-      final bool shouldReload = clamped >= 1.0;
-      if (_pullRefreshProgress != 0.0 || _pullRefreshThresholdHapticFired) {
-        setState(() {
-          _pullRefreshProgress = 0.0;
-          _pullRefreshThresholdHapticFired = false;
-        });
-      }
+      final bool shouldReload =
+          clamped >= 1.0 || (_pullRefreshThresholdHapticFired && clamped >= 0.94);
+      _pullRefreshThresholdHapticFired = false;
       if (shouldReload) {
-        unawaited(_reloadOrStop());
+        final int cycle = ++_ptrCycleId;
+        _ptrRefreshing = true;
+        _ptrRetracting = false;
+        _ptrMinHoldElapsed = false;
+        _ptrPageLoadDone = false;
+        HapticUtils.tap();
+        final bool disableAnims =
+            MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+        if (!disableAnims) {
+          _ptrSpinController.repeat();
+        } else {
+          _ptrSpinController.value = 0.0;
+        }
+        _animatePullRefreshVisualTo(
+          1.0,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          refreshing: true,
+          armed: true,
+        );
+        _ptrHoldTimer?.cancel();
+        _ptrHoldTimer = Timer(const Duration(milliseconds: 480), () {
+          if (!mounted || _isDisposing || _ptrCycleId != cycle) return;
+          _ptrMinHoldElapsed = true;
+          if (_ptrPageLoadDone) {
+            _startPullRefreshRetract();
+          }
+        });
+        _ptrMaxTimer?.cancel();
+        _ptrMaxTimer = Timer(const Duration(milliseconds: 4000), () {
+          if (!mounted || _isDisposing || _ptrCycleId != cycle) return;
+          _ptrMinHoldElapsed = true;
+          _ptrPageLoadDone = true;
+          _startPullRefreshRetract();
+        });
+        unawaited(_triggerPullRefreshReload());
+      } else {
+        final double startVal = _ptrHudNotifier.value.visual;
+        if (startVal <= 0.015) {
+          _resetPullRefreshImmediate();
+        } else {
+          final int retractMs =
+              (145 + 85 * startVal.clamp(0.0, 1.0)).round();
+          _animatePullRefreshVisualTo(
+            0.0,
+            duration: Duration(milliseconds: retractMs),
+            curve: Curves.easeInCubic,
+            refreshing: false,
+            armed: false,
+          );
+        }
       }
       return;
+    }
+
+    if (_ptrRetracting) {
+      _ptrCycleId++;
+      _ptrRefreshing = false;
+      _ptrRetracting = false;
+      _ptrSpinController.stop();
+    }
+    if (_ptrSettleController.isAnimating) {
+      _ptrSettleController.stop();
     }
 
     if (clamped >= 1.0 && !_pullRefreshThresholdHapticFired) {
       _pullRefreshThresholdHapticFired = true;
       HapticUtils.selection();
+      final bool disableAnims =
+          MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+      if (!disableAnims) {
+        _ptrPulseController.forward(from: 0.0);
+      }
     } else if (clamped < 0.88 && _pullRefreshThresholdHapticFired) {
       _pullRefreshThresholdHapticFired = false;
     }
-    if ((clamped - _pullRefreshProgress).abs() > 0.005 ||
-        (clamped == 0.0 && _pullRefreshProgress != 0.0)) {
-      setState(() => _pullRefreshProgress = clamped);
+
+    final current = _ptrHudNotifier.value;
+    final bool nextArmed = _pullRefreshThresholdHapticFired || clamped >= 1.0;
+    if ((clamped - current.visual).abs() > 0.003 ||
+        (clamped == 0.0 && current.visual != 0.0) ||
+        current.armed != nextArmed) {
+      _ptrHudNotifier.value = (
+        visual: clamped,
+        refreshing: false,
+        armed: nextArmed,
+      );
     }
   }
 
@@ -1522,7 +1778,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   void _handleBrowserPageFinished() {
-    if (!mounted || !_isFindOpen || _findCtrl.text.trim().isEmpty) return;
+    if (!mounted || _isDisposing) return;
+    if (_ptrRefreshing) {
+      _markPullRefreshLoadDone();
+    }
+    if (!_isFindOpen || _findCtrl.text.trim().isEmpty) return;
     _findDebounceTimer?.cancel();
     _findDebounceTimer = null;
     unawaited(_runFindSearch(_findCtrl.text, preserveViewportMatch: false));
@@ -1662,6 +1922,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   void _navigateToUrl(String rawUrl) {
     final uri = Uri.tryParse(rawUrl);
     if (uri == null) return;
+    _resetPullRefreshImmediate();
     _isSiteInfoOpen = false;
     final prevHost = BrowserDataService.extractHost(_session.currentUrl);
     final nextHost = BrowserDataService.extractHost(rawUrl);
@@ -1676,8 +1937,6 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       _session.activeReaderArticle = null;
       _session.isReaderAvailable = false;
       _session.pendingCardPrompt = null;
-      _pullRefreshProgress = 0.0;
-      _pullRefreshThresholdHapticFired = false;
       if (hostChanged) {
         _session.browserTopIsDark = null;
         _session.browserCanvasColor = null;
@@ -2847,56 +3106,21 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               ),
             ),
           ),
-        if (_pullRefreshProgress > 0.02 && !isReaderActive)
-          Positioned(
-            key: const ValueKey('in_app_browser_ptr_capsule'),
-            top: topInset + 62.0,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              child: Center(
-                child: Transform.translate(
-                  offset: Offset(0.0, -16.0 * (1.0 - _pullRefreshProgress)),
-                  child: Transform.scale(
-                    scale: 0.85 + 0.15 * _pullRefreshProgress,
-                    child: WebViewFloatingCapsule(
-                      height: 36,
-                      borderRadius: 18,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                              value: _pullRefreshProgress >= 1.0
-                                  ? null
-                                  : _pullRefreshProgress,
-                              strokeWidth: 2.0,
-                              color: _pullRefreshProgress >= 1.0
-                                  ? resolved.palette.primary
-                                  : resolved.headerFg.withValues(alpha: 0.82),
-                            ),
-                          ),
-                          const SizedBox(width: 7),
-                          Transform.rotate(
-                            angle: _pullRefreshProgress * math.pi * 1.5,
-                            child: Icon(
-                              Icons.refresh_rounded,
-                              size: 16,
-                              color: _pullRefreshProgress >= 1.0
-                                  ? resolved.palette.primary
-                                  : resolved.headerFg,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
+        if (!isReaderActive)
+          ValueListenableBuilder<_PullRefreshHudState>(
+            valueListenable: _ptrHudNotifier,
+            builder: (context, ptrState, _) {
+              if (ptrState.visual <= 0.015 && !ptrState.refreshing) {
+                return const SizedBox.shrink();
+              }
+              return _buildPullRefreshDroplet(
+                topInset: topInset,
+                isCompact: isCompact,
+                headerFg: resolved.headerFg,
+                accentColor: resolved.palette.primary,
+                ptrState: ptrState,
+              );
+            },
           ),
         Positioned(
           top: 0,
@@ -3028,6 +3252,80 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     );
   }
 
+  Widget _buildPullRefreshDroplet({
+    required double topInset,
+    required bool isCompact,
+    required Color headerFg,
+    required Color accentColor,
+    required _PullRefreshHudState ptrState,
+  }) {
+    final double clampedPull = ptrState.visual.clamp(0.0, 1.0);
+    final double overPull = (ptrState.visual - 1.0).clamp(0.0, 0.35);
+    final double dropEase = Curves.easeOutCubic.transform(clampedPull);
+    final double restingTop = topInset + (isCompact ? 44.0 : 62.0);
+    final double hiddenLift = isCompact ? 28.0 : 42.0;
+    final double dy = -hiddenLift * (1.0 - dropEase) + 40.0 * overPull;
+    final double baseScale = 0.24 + 0.76 * dropEase;
+    final double overPullScale = 1.0 + 0.08 * overPull;
+
+    return Positioned(
+      key: const ValueKey('in_app_browser_ptr_capsule'),
+      top: restingTop,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: Transform.translate(
+            offset: Offset(0.0, dy),
+            child: AnimatedBuilder(
+              animation: _ptrPulseController,
+              builder: (context, dropletChild) {
+                final double pulse =
+                    math.sin(_ptrPulseController.value * math.pi);
+                final double effectiveScale =
+                    (baseScale * overPullScale * (1.0 + 0.085 * pulse))
+                        .clamp(0.05, 1.22);
+                return Transform.scale(
+                  scale: effectiveScale,
+                  child: dropletChild,
+                );
+              },
+              child: WebViewFloatingCapsule(
+                minWidth: 38.0,
+                height: 38.0,
+                borderRadius: 19.0,
+                padding: EdgeInsets.zero,
+                child: SizedBox.square(
+                  dimension: 38.0,
+                  child: Center(
+                    child: SizedBox.square(
+                      dimension: 20.0,
+                      child: AnimatedBuilder(
+                        animation: _ptrSpinController,
+                        builder: (context, _) => CustomPaint(
+                          key: const ValueKey('in_app_browser_ptr_spinner'),
+                          willChange: ptrState.refreshing,
+                          painter: _SafariPullRefreshSpinnerPainter(
+                            visualProgress: ptrState.visual,
+                            refreshing: ptrState.refreshing,
+                            armed: ptrState.armed,
+                            spinPhase: _ptrSpinController.value,
+                            foregroundColor: headerFg,
+                            accentColor: accentColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _browserMenuItem({
     Key? itemKey,
     required IconData icon,
@@ -3070,5 +3368,122 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         ),
       ),
     );
+  }
+}
+
+typedef _PullRefreshHudState = ({
+  double visual,
+  bool refreshing,
+  bool armed,
+});
+
+/// Safari / iOS 26 style 12-spoke radial tick spinner rendered inside the
+/// circular `38x38` Liquid Glass pull-to-refresh droplet.
+class _SafariPullRefreshSpinnerPainter extends CustomPainter {
+  static const int _spokeCount = 12;
+
+  final double visualProgress;
+  final bool refreshing;
+  final bool armed;
+  final double spinPhase;
+  final Color foregroundColor;
+  final Color accentColor;
+
+  const _SafariPullRefreshSpinnerPainter({
+    required this.visualProgress,
+    required this.refreshing,
+    required this.armed,
+    required this.spinPhase,
+    required this.foregroundColor,
+    required this.accentColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset center = size.center(Offset.zero);
+    final double scale = size.shortestSide / 20.0;
+    final double innerRadius = 4.5 * scale;
+    final double outerRadius = 9.0 * scale;
+    final Paint paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.85 * scale
+      ..strokeCap = StrokeCap.round
+      ..isAntiAlias = true;
+
+    final double accentMix = refreshing || armed
+        ? 1.0
+        : ((visualProgress - 0.82) / 0.18).clamp(0.0, 1.0);
+    final Color baseColor =
+        Color.lerp(foregroundColor, accentColor, accentMix) ?? accentColor;
+
+    if (refreshing) {
+      final double overPullTwist =
+          (visualProgress - 1.0).clamp(0.0, 0.35) * (math.pi / 2);
+      final double head = (spinPhase * _spokeCount) % _spokeCount;
+
+      for (int i = 0; i < _spokeCount; i++) {
+        double trail = (head - i) % _spokeCount;
+        if (trail < 0) trail += _spokeCount;
+        final double alpha;
+        if (trail <= _spokeCount - 0.85) {
+          alpha = (0.18 + 0.82 * math.exp(-trail * 0.36)).clamp(0.18, 1.0);
+        } else {
+          final double leadT =
+              ((trail - (_spokeCount - 0.85)) / 0.85).clamp(0.0, 1.0);
+          const double valley = 0.195;
+          alpha = valley + (1.0 - valley) * (leadT * leadT);
+        }
+        paint.color = baseColor.withValues(
+          alpha: (baseColor.a * alpha).clamp(0.0, 1.0),
+        );
+        final double angle =
+            -math.pi / 2 + overPullTwist + i * (2 * math.pi / _spokeCount);
+        final double cosA = math.cos(angle);
+        final double sinA = math.sin(angle);
+        canvas.drawLine(
+          Offset(center.dx + cosA * innerRadius, center.dy + sinA * innerRadius),
+          Offset(center.dx + cosA * outerRadius, center.dy + sinA * outerRadius),
+          paint,
+        );
+      }
+      return;
+    }
+
+    final double clampedPull = visualProgress.clamp(0.0, 1.0);
+    final double reveal =
+        ((clampedPull - 0.04) / 0.90).clamp(0.0, 1.0) * _spokeCount;
+    final double baseRotation = -math.pi / 2 + visualProgress * (math.pi / 2);
+
+    for (int i = 0; i < _spokeCount; i++) {
+      final double fill = (reveal - i).clamp(0.0, 1.0);
+      if (fill <= 0.01) continue;
+      final double easedFill = Curves.easeOut.transform(fill);
+      final double alpha = armed
+          ? 0.96
+          : (0.28 + 0.64 * easedFill).clamp(0.0, 1.0);
+      paint.color = baseColor.withValues(
+        alpha: (baseColor.a * alpha).clamp(0.0, 1.0),
+      );
+      final double tipRadius =
+          innerRadius + (outerRadius - innerRadius) * (0.48 + 0.52 * easedFill);
+      final double angle = baseRotation + i * (2 * math.pi / _spokeCount);
+      final double cosA = math.cos(angle);
+      final double sinA = math.sin(angle);
+      canvas.drawLine(
+        Offset(center.dx + cosA * innerRadius, center.dy + sinA * innerRadius),
+        Offset(center.dx + cosA * tipRadius, center.dy + sinA * tipRadius),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _SafariPullRefreshSpinnerPainter oldDelegate) {
+    return oldDelegate.visualProgress != visualProgress ||
+        oldDelegate.refreshing != refreshing ||
+        oldDelegate.armed != armed ||
+        oldDelegate.spinPhase != spinPhase ||
+        oldDelegate.foregroundColor != foregroundColor ||
+        oldDelegate.accentColor != accentColor;
   }
 }

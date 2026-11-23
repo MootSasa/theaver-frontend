@@ -349,15 +349,65 @@ void main() {
       expect(find.byKey(const ValueKey('in_app_browser_reader_button')), findsOneWidget);
       _expectNoTranslucentOpacityAboveGlass(tester);
 
-      // Pull-to-refresh overscroll telemetry shows capsule & stays glass-safe
+      // Pull-to-refresh overscroll telemetry shows circular 38x38 droplet with single radial spinner & stays glass-safe
+      final ptrCapsuleFinder =
+          find.byKey(const ValueKey('in_app_browser_ptr_capsule'));
       session.onBrowserPullToRefreshEvent?.call(0.75, false);
       await tester.pump();
-      expect(find.byKey(const ValueKey('in_app_browser_ptr_capsule')), findsOneWidget);
+      expect(ptrCapsuleFinder, findsOneWidget);
+      expect(
+        find.descendant(
+          of: ptrCapsuleFinder,
+          matching: find.byKey(const ValueKey('in_app_browser_ptr_spinner')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: ptrCapsuleFinder,
+          matching: find.byType(CircularProgressIndicator),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: ptrCapsuleFinder,
+          matching: find.byIcon(Icons.refresh_rounded),
+        ),
+        findsNothing,
+      );
+      final WebViewFloatingCapsule dropletCapsule = tester.widget(
+        find.descendant(
+          of: ptrCapsuleFinder,
+          matching: find.byType(WebViewFloatingCapsule),
+        ),
+      );
+      expect(dropletCapsule.minWidth, 38.0);
+      expect(dropletCapsule.height, 38.0);
+      expect(dropletCapsule.borderRadius, 19.0);
+      expect(find.byType(LiquidGlassMorph), findsNWidgets(2));
       _expectNoTranslucentOpacityAboveGlass(tester);
 
+      // Releasing below threshold smoothly retracts back behind the address capsule
       session.onBrowserPullToRefreshEvent?.call(0.40, true);
-      await tester.pump();
-      expect(find.byKey(const ValueKey('in_app_browser_ptr_capsule')), findsNothing);
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(ptrCapsuleFinder, findsOneWidget);
+      _expectNoTranslucentOpacityAboveGlass(tester);
+      await tester.pumpAndSettle();
+      expect(ptrCapsuleFinder, findsNothing);
+
+      // Rubber-band over-pull (> 1.0) and release triggers active spin hold then smooth retraction
+      session.applyBrowserPageMetaPayload('{"pullProgress":1.25,"pullRelease":false}');
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(ptrCapsuleFinder, findsOneWidget);
+      _expectNoTranslucentOpacityAboveGlass(tester);
+
+      session.applyBrowserPageMetaPayload('{"pullProgress":1.15,"pullRelease":true}');
+      await tester.pump(const Duration(milliseconds: 120));
+      expect(ptrCapsuleFinder, findsOneWidget);
+      _expectNoTranslucentOpacityAboveGlass(tester);
+      await tester.pumpAndSettle();
+      expect(ptrCapsuleFinder, findsNothing);
 
       // Activate Reader Mode overlay on session
       session.isReaderModeActive = true;
