@@ -16,6 +16,7 @@ import 'package:theaver/services/power_saving_provider.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/widgets/profile/expandable_avatar.dart';
+import 'package:theaver/widgets/profile/liquid_glass_profile_buttons.dart';
 import 'package:theaver/widgets/profile/profile_avatar_metaball_layer.dart';
 import 'package:theaver/widgets/tiling/tile_viewport_scope.dart';
 import 'package:theaver/widgets/user/avatar_decoration_frame.dart';
@@ -603,8 +604,8 @@ void main() {
           findsNothing,
         );
 
-        // Past p >= 0.36 (scrollOffset = 72 -> p = 0.40): frame unmounts completely before black merge peaks.
-        await tester.pumpWidget(buildLayer(72.0));
+        // Past p >= 0.36 (scrollOffset = 92 -> p ≈ 0.397): frame unmounts completely before black merge peaks.
+        await tester.pumpWidget(buildLayer(92.0));
         await tester.pump();
         expect(find.byType(AvatarDecorationFrame), findsNothing);
         expect(find.byType(ExpandableAvatar), findsOneWidget);
@@ -699,10 +700,10 @@ void main() {
           });
         }
 
-        // 2. Scroll to 140dp (p ≈ 0.778): GPU metaball scalar field + absorption darkening active; Hero tag disabled (> 0.55).
+        // 2. Scroll to 180dp (p ≈ 0.776): GPU metaball scalar field + absorption darkening active; Hero tag disabled (> 0.55).
         final scrollableFinder = find.byType(Scrollable).first;
         final scrollableState = tester.state<ScrollableState>(scrollableFinder);
-        scrollableState.position.jumpTo(140.0);
+        scrollableState.position.jumpTo(180.0);
         await tester.pump();
 
         expect(
@@ -727,8 +728,8 @@ void main() {
         );
         expect(tester.takeException(), isNull);
 
-        // 3. Scroll past 180dp (185dp): ExpandableAvatar unmounts cleanly from metaball layer.
-        scrollableState.position.jumpTo(185.0);
+        // 3. Scroll past 232dp (240dp): ExpandableAvatar unmounts cleanly from metaball layer.
+        scrollableState.position.jumpTo(240.0);
         await tester.pump();
         expect(
           find.descendant(
@@ -905,7 +906,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('No-cutout top-edge pour & gentle two-zone header settle on finger release', (tester) async {
+    testWidgets('No-cutout top-edge pour & gentle header settle removes quick-action buttons completely', (tester) async {
       DisplayCutoutService.instance.debugOverrideSpec = DisplayCutoutSpec.none;
       final glassProvider = LiquidGlassProvider();
       await glassProvider.setMode(GlassMode.disabled);
@@ -927,7 +928,7 @@ void main() {
       final scrollableState =
           tester.state<ScrollableState>(find.byType(Scrollable).first);
 
-      // 1. Small upward scroll (< 55% of 180dp) + calm finger release returns smoothly to 0.0 (no abrupt snap away).
+      // 1. Small upward scroll (< 38% of 248dp ≈ 94dp) + calm finger release returns smoothly to 0.0.
       final gentleNudge = await tester.startGesture(const Offset(196.0, 500.0));
       for (int i = 0; i < 4; i++) {
         await gentleNudge.moveBy(const Offset(0.0, -20.0));
@@ -938,20 +939,21 @@ void main() {
       await tester.pumpAndSettle();
       expect(scrollableState.position.pixels, closeTo(0.0, 0.5));
 
-      // 2. Scroll past 55% (~120dp) + calm finger release:
-      // Settles smoothly to defaultCollapseExtent (180dp, NOT shooting past to 255dp),
-      // and at +140ms is still visibly mid-pour into the top screen edge (with ShaderMask rim gradient active)!
+      // 2. Scroll past threshold (~128dp) + calm finger release:
+      // Gently settles over ~550ms all the way to 248dp so quick-action buttons are 100% gone
+      // (collapseProgress == 1.0, never stuck as a single merged circle!) and avatar pours into y = 0.
       final midScroll = await tester.startGesture(const Offset(196.0, 520.0));
       for (int i = 0; i < 6; i++) {
-        await midScroll.moveBy(const Offset(0.0, -23.0));
+        await midScroll.moveBy(const Offset(0.0, -24.0));
         await tester.pump(const Duration(milliseconds: 20));
       }
       await tester.pump(const Duration(milliseconds: 140));
       await midScroll.up();
+      await tester.pump();
 
-      // At +140ms into the ~460ms gentle settle, avatar is still smoothly pouring into y = 0 (not snapped instantly!).
-      await tester.pump(const Duration(milliseconds: 140));
-      expect(scrollableState.position.pixels, greaterThan(125.0));
+      // At +220ms into the ~550ms gentle settle, avatar is visibly mid-pour into y = 0 (with ShaderMask rim gradient active)!
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(scrollableState.position.pixels, greaterThan(160.0));
       expect(
         scrollableState.position.pixels,
         lessThan(ProfileAvatarMetaballGeometry.defaultCollapseExtent - 4.0),
@@ -966,10 +968,18 @@ void main() {
       );
 
       await tester.pumpAndSettle();
-      // Stops right at defaultCollapseExtent (180.0), NOT 255.0!
+      // Settled cleanly at 248.0dp: quick-action buttons 100% collapsed & hidden (collapseProgress == 1.0)!
+      expect(scrollableState.position.pixels, closeTo(248.0, 0.5));
+      final buttonsWidget = tester.widget<LiquidGlassProfileButtons>(
+        find.byType(LiquidGlassProfileButtons),
+      );
+      expect(buttonsWidget.collapseProgress, closeTo(1.0, 0.001));
       expect(
-        scrollableState.position.pixels,
-        closeTo(ProfileAvatarMetaballGeometry.defaultCollapseExtent, 0.5),
+        find.descendant(
+          of: metaballLayerFinder,
+          matching: find.byType(ExpandableAvatar),
+        ),
+        findsNothing,
       );
       expect(tester.takeException(), isNull);
     });

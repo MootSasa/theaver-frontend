@@ -285,12 +285,13 @@ class ProfileScreenState extends State<ProfileScreen>
   double _collapseSlideReturnStart = 0.0;
   double _collapseMorphStartSlideUp = 0.0;
 
-  /// Двухступенчатые точки фиксации шапки (как `settleHeader` в Telegram `ProfileActivity.java:6156-6165`):
-  /// 1) `_avatarCollapseSnapExtent` (`180dp`) — аватарка плавно и без спешки влилась в вырез/край экрана, кнопки действий видны;
-  /// 2) `_headerCollapseSnapExtent` (`255dp`) — свёрнут и ряд кнопок действий (только если скролл уже ушёл дальше `180dp`).
-  static const double _avatarCollapseSnapExtent =
-      ProfileAvatarMetaballGeometry.defaultCollapseExtent;
-  static const double _headerCollapseSnapExtent = 255.0;
+  /// Полный ход единого доводчика верхней шапки (`0.0 <-> 248.0dp`):
+  /// синхронизирован с `ProfileAvatarMetaballGeometry.defaultCollapseExtent` (`232dp`),
+  /// чтобы аватарка плавно вливалась в вырез/край экрана на замедляющемся хвосте кривой,
+  /// а ряд кнопок быстрых действий полностью уходил за верх экрана (`collapseProgress == 1.0`),
+  /// подводя экран ровно к плашке с информацией о пользователе (`LiquidGlassInfoPanel`).
+  static const double _headerCollapseSnapExtent = 248.0;
+  double _dragStartScrollOffset = 0.0;
 
   /// Фирменные кривые Telegram (`EASE_OUT_QUINT`, `EASE_BOTH`) и мягкие вязкие кривые доводки шапки без стартового рывка
   static const Curve _kTelegramEaseOutQuint = Cubic(0.23, 1.0, 0.32, 1.0);
@@ -4442,38 +4443,24 @@ class ProfileScreenState extends State<ProfileScreen>
     double offset, {
     required double maxScroll,
     double scrollVelocity = 0.0,
+    bool? startedNearTop,
   }) {
-    final avatarSnap = math.min(_avatarCollapseSnapExtent, maxScroll);
     final fullHeaderSnap = math.min(_headerCollapseSnapExtent, maxScroll);
-    if (avatarSnap <= 1.0) return null;
+    if (fullHeaderSnap <= 1.0) return null;
 
-    // Зона 1 (0 .. 180dp): сворачивание самой аватарки в вырез / край экрана.
-    // Останавливаемся ровно на avatarSnap (180dp), чтобы вливание метабола шло на самом мягком
-    // замедляющемся хвосте кривой, а не пролетало транзитом к 255dp за 50ms!
-    if (offset > 0.5 && offset < avatarSnap - 0.5) {
-      if (scrollVelocity >= 380.0) {
-        return avatarSnap;
-      }
-      if (scrollVelocity <= -320.0) {
-        return 0.0;
-      }
-      return offset >= avatarSnap * 0.55 ? avatarSnap : 0.0;
-    }
-
-    // Зона 2 (180 .. 255dp): аватарка уже полностью ушла в вырез/край, доводим только ряд кнопок действий.
-    if (fullHeaderSnap > avatarSnap + 4.0 &&
-        offset > avatarSnap + 0.5 &&
-        offset < fullHeaderSnap - 0.5) {
-      if (scrollVelocity >= 320.0) {
+    // Единая зона доводки шапки (0 .. 248dp): никогда не оставляем слитую в одну каплю кнопку
+    // быстрых действий посередине — всегда мягко доводим либо к полному профилю (0.0),
+    // либо к плашке с информацией о пользователе (fullHeaderSnap = 248dp, кнопки полностью скрыты).
+    if (offset > 0.5 && offset < fullHeaderSnap - 0.5) {
+      if (scrollVelocity >= 340.0) {
         return fullHeaderSnap;
       }
-      if (scrollVelocity <= -320.0) {
-        return avatarSnap;
+      if (scrollVelocity <= -300.0) {
+        return 0.0;
       }
-      final buttonsSpan = fullHeaderSnap - avatarSnap;
-      return (offset - avatarSnap) >= buttonsSpan * 0.5
-          ? fullHeaderSnap
-          : avatarSnap;
+      final fromTop = startedNearTop ?? (offset < fullHeaderSnap * 0.5);
+      final threshold = fromTop ? fullHeaderSnap * 0.38 : fullHeaderSnap * 0.66;
+      return offset >= threshold ? fullHeaderSnap : 0.0;
     }
 
     return null;
@@ -4490,12 +4477,12 @@ class ProfileScreenState extends State<ProfileScreen>
     final double durationMs;
     final Curve settleCurve;
     if (isFromRest) {
-      durationMs = (390.0 + dist * 1.15).clamp(410.0, 580.0);
+      durationMs = (420.0 + dist * 1.10).clamp(440.0, 620.0);
       settleCurve = _kGentleHeaderSettleRest;
     } else {
       final momentumTrim = ((absVel - 260.0) / 2800.0).clamp(0.0, 0.16);
       durationMs =
-          ((370.0 + dist * 0.95) * (1.0 - momentumTrim)).clamp(360.0, 530.0);
+          ((390.0 + dist * 0.92) * (1.0 - momentumTrim)).clamp(380.0, 560.0);
       settleCurve = _kGentleHeaderSettleMomentum;
     }
     _scrollController.animateTo(
@@ -5180,6 +5167,7 @@ class ProfileScreenState extends State<ProfileScreen>
 
     final currentScroll =
         _scrollController.hasClients ? _scrollController.offset : 0.0;
+    _dragStartScrollOffset = currentScroll;
     _gestureStartedAtTop = currentScroll <= 2.0 && !_isAvatarExpanded;
     _overscrollGuardDrag = 0.0;
 
@@ -5419,9 +5407,10 @@ class ProfileScreenState extends State<ProfileScreen>
         _triggerAutoCollapse(velocity: velocity);
         if (velocity < -1850.0 && _scrollController.hasClients) {
           final maxScroll = _scrollController.position.maxScrollExtent;
-          final avatarSnap = math.min(_avatarCollapseSnapExtent, maxScroll);
-          if (avatarSnap > 1.0) {
-            _animateHeaderSettleTo(avatarSnap, velocity: -velocity);
+          final fullHeaderSnap =
+              math.min(_headerCollapseSnapExtent, maxScroll);
+          if (fullHeaderSnap > 1.0) {
+            _animateHeaderSettleTo(fullHeaderSnap, velocity: -velocity);
           }
         }
       } else if (_collapseSlideUp > 0.5) {
@@ -5455,13 +5444,14 @@ class ProfileScreenState extends State<ProfileScreen>
       return;
     }
 
-    // Настоящая нативная инерция ClampingScrollSimulation + плавная двухзонная доводка шапки без рывка
+    // Настоящая нативная инерция ClampingScrollSimulation + плавная доводка шапки прямо к инфо-панели
     if (_scrollController.hasClients) {
       final currentOffset = _scrollController.offset;
       final maxScroll = _scrollController.position.maxScrollExtent;
       if (maxScroll <= 0.5) return;
 
       final fullHeaderSnap = math.min(_headerCollapseSnapExtent, maxScroll);
+      final startedNearTop = _dragStartScrollOffset < fullHeaderSnap * 0.5;
       final scrollVelocity = -velocity; // > 0 вниз по списку, < 0 обратно к верху
 
       if (scrollVelocity.abs() < 90.0) {
@@ -5469,6 +5459,7 @@ class ProfileScreenState extends State<ProfileScreen>
           currentOffset,
           maxScroll: maxScroll,
           scrollVelocity: scrollVelocity,
+          startedNearTop: startedNearTop,
         );
         if (target != null) {
           _animateHeaderSettleTo(target, velocity: scrollVelocity);
@@ -5489,6 +5480,7 @@ class ProfileScreenState extends State<ProfileScreen>
           naturalEnd,
           maxScroll: maxScroll,
           scrollVelocity: scrollVelocity,
+          startedNearTop: startedNearTop,
         );
         if (target != null) {
           _animateHeaderSettleTo(target, velocity: scrollVelocity);
@@ -5788,9 +5780,11 @@ class ProfileScreenState extends State<ProfileScreen>
     final isPhotoTopLight = _topLuminance > 0.55;
     final resolvedBannerUrl =
         AppConfig.resolveMediaUrl(activeCustomization?.profileBannerUrl);
-    final double bannerOpacity =
-        ((1.0 - (_expandFactor * 3.0)) * (1.0 - (scrollOffset / 180.0)))
-            .clamp(0.0, 1.0);
+    final double bannerOpacity = ((1.0 - (_expandFactor * 3.0)) *
+            (1.0 -
+                (scrollOffset /
+                    ProfileAvatarMetaballGeometry.defaultCollapseExtent)))
+        .clamp(0.0, 1.0);
     final targetIconBrightness = _expandFactor > 0.38
         ? (isPhotoTopLight ? Brightness.dark : Brightness.light)
         : (effectiveIsDark ? Brightness.light : Brightness.dark);

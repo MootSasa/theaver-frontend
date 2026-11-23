@@ -14,7 +14,7 @@ import 'expandable_avatar.dart';
 /// vertical [scrollOffset]. Separated for deterministic `O(1)` evaluation and unit testing.
 @immutable
 class ProfileAvatarMetaballGeometry {
-  static const double defaultCollapseExtent = 180.0;
+  static const double defaultCollapseExtent = 232.0;
   static const double baseAvatarDiameter = 110.0;
   static const double decorationOuterMultiplier = 1.24;
   static const double decorationFullContractScale = 0.81;
