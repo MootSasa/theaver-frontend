@@ -483,27 +483,27 @@ class AppConfig {
   /// Official links displayed on the "About Theaver" screen
   static const String newsChannelUrl = String.fromEnvironment(
     'NEWS_CHANNEL_URL',
-    defaultValue: 'https://theaver.ru/c/theaver_news',
+    defaultValue: 'https://theaver.app/c/theaver_news',
   );
   static const String betaChannelUrl = String.fromEnvironment(
     'BETA_CHANNEL_URL',
-    defaultValue: 'https://theaver.ru/c/theaver_beta',
+    defaultValue: 'https://theaver.app/c/theaver_beta',
   );
   static const String officialChatUrl = String.fromEnvironment(
     'OFFICIAL_CHAT_URL',
-    defaultValue: 'https://theaver.ru/c/theaver_chat',
+    defaultValue: 'https://theaver.app/c/theaver_chat',
   );
   static const String floodChatUrl = String.fromEnvironment(
     'FLOOD_CHAT_URL',
-    defaultValue: 'https://theaver.ru/c/theaver_offtop',
+    defaultValue: 'https://theaver.app/c/theaver_offtop',
   );
   static const String sourceCodeUrl = String.fromEnvironment(
     'SOURCE_CODE_URL',
-    defaultValue: 'https://github.com/mootsasa/Theaver',
+    defaultValue: 'https://github.com/MootSasa/theaver-frontend',
   );
   static const String privacyPolicyUrl = String.fromEnvironment(
     'PRIVACY_POLICY_URL',
-    defaultValue: 'https://theaver.ru/privacy',
+    defaultValue: 'https://theaver.app/privacy',
   );
 
   /// Strips the ABI prefix (`1000`, `2000`, `4000`) added by Flutter `--split-per-abi`
@@ -546,14 +546,14 @@ class AppConfig {
   static int get currentBuildNumber => _currentBuildNumber;
 
   /// Returns the Web release channel enforced by the current domain on Flutter Web
-  /// (`alpha.theaver.app` -> `'alpha'`, `beta.theaver.app` -> `'beta'`, `theaver.app` -> `'stable'`),
+  /// (`alpha.theaver.app` -> `'alpha'`, `beta.theaver.app` -> `'beta'`, `app.theaver.app` -> `'stable'`),
   /// or `null` when running on `localhost` / custom dev hosts.
   static String? get webDomainChannel {
     if (!kIsWeb) return null;
     final host = Uri.base.host.toLowerCase();
     if (host.startsWith('alpha.')) return 'alpha';
     if (host.startsWith('beta.')) return 'beta';
-    if (host == 'theaver.app' || host == 'app.theaver.app') return 'stable';
+    if (host == 'app.theaver.app') return 'stable';
     return null;
   }
 
@@ -565,7 +565,7 @@ class AppConfig {
       case 'beta':
         return 'https://beta.theaver.app';
       default:
-        return 'https://theaver.app';
+        return 'https://app.theaver.app';
     }
   }
 
