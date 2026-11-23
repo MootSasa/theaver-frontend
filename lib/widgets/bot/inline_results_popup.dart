@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/bot_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -245,7 +246,7 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
                 onPressed: widget.onClose,
                 visualDensity: VisualDensity.compact,
                 iconSize: 18,
-                tooltip: 'Закрыть',
+                tooltip: context.trOr('common_close', 'Закрыть'),
                 icon: iconoir.Xmark(
                   width: 16,
                   height: 16,
@@ -259,8 +260,16 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
 
     if (results.isEmpty) {
       final emptyMsg = errorCode == 'BOT_INLINE_DISABLED'
-          ? 'У @${widget.botUsername} отключён inline-режим'
-          : 'Нет результатов от @${widget.botUsername}';
+          ? context.trOr(
+              'miniapp_inline_disabled',
+              'У @{bot} отключён inline-режим',
+              {'bot': widget.botUsername},
+            )
+          : context.trOr(
+              'miniapp_inline_no_results',
+              'Нет результатов от @{bot}',
+              {'bot': widget.botUsername},
+            );
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14),
         child: Row(
@@ -279,7 +288,7 @@ class _InlineResultsPopupState extends State<InlineResultsPopup> {
                 onPressed: widget.onClose,
                 visualDensity: VisualDensity.compact,
                 iconSize: 18,
-                tooltip: 'Закрыть',
+                tooltip: context.trOr('common_close', 'Закрыть'),
                 icon: iconoir.Xmark(
                   width: 16,
                   height: 16,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/bot_service.dart';
@@ -135,9 +136,21 @@ Future<String> openThvInvoiceSheet(
   BuildContext context, {
   required String slugOrUrl,
 }) async {
+  final invalidLinkMsg = context.trOr(
+    'miniapp_invoice_invalid_link',
+    'Некорректная ссылка на счёт THV',
+  );
+  final notFoundMsg = context.trOr(
+    'miniapp_invoice_not_found',
+    'Счёт не найден',
+  );
+  final sheetTitle = context.trOr(
+    'miniapp_invoice_sheet_title',
+    'Подтверждение оплаты THV',
+  );
   final slug = extractThvInvoiceSlug(slugOrUrl);
   if (slug == null || slug.isEmpty) {
-    GlassToastService().showError(context, 'Некорректная ссылка на счёт THV');
+    GlassToastService().showError(context, invalidLinkMsg);
     return 'failed';
   }
 
@@ -148,7 +161,7 @@ Future<String> openThvInvoiceSheet(
   if (res['success'] != true || res['invoice'] is! Map) {
     GlassToastService().showError(
       context,
-      res['message']?.toString() ?? 'Счёт не найден',
+      res['message']?.toString() ?? notFoundMsg,
     );
     return 'failed';
   }
@@ -166,7 +179,7 @@ Future<String> openThvInvoiceSheet(
   final result = await showTheavModalSheet<String>(
     context: context,
     useRootNavigator: true,
-    title: 'Подтверждение оплаты THV',
+    title: sheetTitle,
     showCloseButton: true,
     builder: (sheetCtx) => _ThvInvoiceCheckoutBody(
       slug: slug,
@@ -263,7 +276,7 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
     return showTheavDialog<String>(
       context: context,
       barrierDismissible: true,
-      title: 'PIN-код кошелька',
+      title: context.trOr('miniapp_invoice_pin_dialog_title', 'PIN-код кошелька'),
       content: _WalletPinDialogContent(initialError: errorMessage),
     );
   }
@@ -285,7 +298,11 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
         HapticUtils.impact();
         GlassToastService().show(
           context,
-          'Оплачено $amount THV',
+          context.trOr(
+            'miniapp_invoice_paid_toast',
+            'Оплачено {amount} THV',
+            {'amount': '$amount'},
+          ),
           icon: Icons.check,
         );
         Navigator.of(context).pop('paid');
@@ -298,7 +315,10 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
           HapticUtils.impact();
           GlassToastService().show(
             context,
-            'Счёт уже оплачен вами',
+            context.trOr(
+              'miniapp_invoice_already_paid_by_me_toast',
+              'Счёт уже оплачен вами',
+            ),
             icon: Icons.check,
           );
           Navigator.of(context).pop('paid');
@@ -306,7 +326,10 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
           HapticUtils.heavy();
           GlassToastService().showError(
             context,
-            'Счёт уже оплачен другим пользователем',
+            context.trOr(
+              'miniapp_invoice_already_paid_other',
+              'Счёт уже оплачен другим пользователем',
+            ),
           );
           Navigator.of(context).pop('cancelled');
         }
@@ -318,7 +341,11 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
         HapticUtils.heavy();
         GlassToastService().showError(
           context,
-          payRes['message']?.toString() ?? 'Кошелёк @walt заморожен',
+          payRes['message']?.toString() ??
+              context.trOr(
+                'miniapp_invoice_wallet_frozen',
+                'Кошелёк @walt заморожен',
+              ),
         );
         Navigator.of(context).pop('cancelled');
         return;
@@ -329,7 +356,11 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
         setState(() => _submitting = false);
         HapticUtils.heavy();
         final errText = invalidPin
-            ? (payRes['message']?.toString() ?? 'Неверный PIN-код кошелька')
+            ? (payRes['message']?.toString() ??
+                context.trOr(
+                  'miniapp_invoice_invalid_pin',
+                  'Неверный PIN-код кошелька',
+                ))
             : null;
         if (errText != null) {
           GlassToastService().showError(context, errText);
@@ -343,7 +374,8 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
       HapticUtils.heavy();
       GlassToastService().showError(
         context,
-        payRes['message']?.toString() ?? 'Ошибка оплаты',
+        payRes['message']?.toString() ??
+            context.trOr('miniapp_invoice_pay_error', 'Ошибка оплаты'),
       );
       return;
     }
@@ -352,11 +384,12 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
-    final title = widget.invoice['title']?.toString() ?? 'Оплата';
+    final title = widget.invoice['title']?.toString() ??
+        context.trOr('miniapp_invoice_default_title', 'Оплата');
     final description = widget.invoice['description']?.toString() ?? '';
     final botName = widget.invoice['bot_display_name']?.toString() ??
         widget.invoice['bot_username']?.toString() ??
-        'Бот';
+        context.trOr('miniapp_chat_kind_bot', 'Бот');
     final botUsername = widget.invoice['bot_username']?.toString() ?? '';
     final amount = (widget.invoice['amount'] as num?)?.toInt() ?? 0;
     final callerBal =
@@ -436,7 +469,10 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              'Ваш баланс Theav (THV):',
+              context.trOr(
+                'miniapp_invoice_balance_label',
+                'Ваш баланс Theav (THV):',
+              ),
               style: TextStyle(fontSize: 13.5, color: palette.subtext),
             ),
             Text(
@@ -453,20 +489,32 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
         if (alreadyPaid)
           TheavFloatingPillButton(
             label: paidByMe
-                ? 'Этот счёт уже оплачен'
-                : 'Счёт уже оплачен другим пользователем',
+                ? context.trOr(
+                    'miniapp_invoice_already_paid_btn',
+                    'Этот счёт уже оплачен',
+                  )
+                : context.trOr(
+                    'miniapp_invoice_already_paid_other',
+                    'Счёт уже оплачен другим пользователем',
+                  ),
             isPrimary: false,
             onTap: () => Navigator.of(context).pop(paidByMe ? 'paid' : 'cancelled'),
           )
         else if (isFrozen)
           TheavFloatingPillButton(
-            label: 'Кошелёк @walt заморожен',
+            label: context.trOr(
+              'miniapp_invoice_wallet_frozen',
+              'Кошелёк @walt заморожен',
+            ),
             isPrimary: false,
             onTap: () => Navigator.of(context).pop('cancelled'),
           )
         else if (insufficient) ...[
           TheavFloatingPillButton(
-            label: 'Пополнить THV в @walt',
+            label: context.trOr(
+              'miniapp_invoice_topup_walt',
+              'Пополнить THV в @walt',
+            ),
             isPrimary: true,
             onTap: () async {
               HapticUtils.tap();
@@ -489,7 +537,13 @@ class _ThvInvoiceCheckoutBodyState extends State<_ThvInvoiceCheckoutBody> {
           ),
         ] else
           TheavFloatingPillButton(
-            label: _submitting ? 'Оплата...' : 'Оплатить $amount THV',
+            label: _submitting
+                ? context.trOr('miniapp_invoice_paying', 'Оплата...')
+                : context.trOr(
+                    'miniapp_invoice_pay_amount',
+                    'Оплатить {amount} THV',
+                    {'amount': '$amount'},
+                  ),
             isPrimary: true,
             enabled: !_submitting,
             onTap: () => _submitPayment(amount),
@@ -528,7 +582,12 @@ class _WalletPinDialogContentState extends State<_WalletPinDialogContent> {
   void _submit() {
     final pin = _pinController.text.trim();
     if (pin.length < 4 || pin.length > 6) {
-      setState(() => _errorText = 'Введите 4–6 цифр PIN-кода');
+      setState(
+        () => _errorText = context.trOr(
+          'miniapp_invoice_pin_length_error',
+          'Введите 4–6 цифр PIN-кода',
+        ),
+      );
       return;
     }
     Navigator.of(context).pop(pin);
@@ -542,7 +601,10 @@ class _WalletPinDialogContentState extends State<_WalletPinDialogContent> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Введите PIN-код кошелька @walt (4–6 цифр) для подтверждения платежа.',
+          context.trOr(
+            'miniapp_invoice_pin_prompt',
+            'Введите PIN-код кошелька @walt (4–6 цифр) для подтверждения платежа.',
+          ),
           style: TextStyle(fontSize: 13.5, color: palette.subtext, height: 1.35),
         ),
         const SizedBox(height: 12),
@@ -599,7 +661,7 @@ class _WalletPinDialogContentState extends State<_WalletPinDialogContent> {
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: Text(
-                'Отмена',
+                context.trOr('common_cancel', 'Отмена'),
                 style: TextStyle(color: palette.subtext),
               ),
             ),
@@ -613,7 +675,7 @@ class _WalletPinDialogContentState extends State<_WalletPinDialogContent> {
                   borderRadius: BorderRadius.circular(12),
                 ),
               ),
-              child: const Text('Подтвердить'),
+              child: Text(context.trOr('common_confirm', 'Подтвердить')),
             ),
           ],
         ),

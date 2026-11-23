@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show ChangeNotifier, Uint8List, kIsWeb;
-import 'package:flutter/widgets.dart' show AppLifecycleState;
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, Uint8List, kDebugMode, kIsWeb;
+import 'package:flutter/services.dart' show MissingPluginException;
+import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -78,11 +80,24 @@ class AppLockService extends ChangeNotifier {
 
   bool get isLockedOut => lockoutRemaining > Duration.zero;
 
+  static bool get _isFlutterTestBinding {
+    if (!kDebugMode) return false;
+    try {
+      final name = WidgetsBinding.instance.runtimeType.toString();
+      return name.contains('TestWidgetsFlutterBinding') ||
+          name.contains('AutomatedTestWidgetsFlutterBinding');
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<String?> _readKey(String key) async {
-    if (!_usePrefsFallback) {
+    if (!_usePrefsFallback && !_isFlutterTestBinding) {
       try {
         return await _secureStorage.read(key: key);
-      } catch (_) {
+      } on MissingPluginException {
+        _usePrefsFallback = true;
+      } on UnimplementedError {
         _usePrefsFallback = true;
       }
     }
@@ -91,11 +106,13 @@ class AppLockService extends ChangeNotifier {
   }
 
   Future<void> _writeKey(String key, String value) async {
-    if (!_usePrefsFallback) {
+    if (!_usePrefsFallback && !_isFlutterTestBinding) {
       try {
         await _secureStorage.write(key: key, value: value);
         return;
-      } catch (_) {
+      } on MissingPluginException {
+        _usePrefsFallback = true;
+      } on UnimplementedError {
         _usePrefsFallback = true;
       }
     }
@@ -104,11 +121,13 @@ class AppLockService extends ChangeNotifier {
   }
 
   Future<void> _deleteKey(String key) async {
-    if (!_usePrefsFallback) {
+    if (!_usePrefsFallback && !_isFlutterTestBinding) {
       try {
         await _secureStorage.delete(key: key);
         return;
-      } catch (_) {
+      } on MissingPluginException {
+        _usePrefsFallback = true;
+      } on UnimplementedError {
         _usePrefsFallback = true;
       }
     }

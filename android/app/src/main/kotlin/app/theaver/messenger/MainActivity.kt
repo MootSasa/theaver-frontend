@@ -120,6 +120,7 @@ class MainActivity : FlutterFragmentActivity() {
         if (currentActivityRef?.get() === this) {
             currentActivityRef = null
         }
+        BrowserOtpChannel.dispose()
         snapshotExecutor.shutdown()
         super.onDestroy()
     }
@@ -132,6 +133,7 @@ class MainActivity : FlutterFragmentActivity() {
         BrowserStorageChannel.register(flutterEngine, applicationContext) { targetUrl, webViewId ->
             resolveTargetWebView(flutterEngine, targetUrl, webViewId)
         }
+        BrowserOtpChannel.register(flutterEngine, this)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "app.theaver.messenger/screen_security"
@@ -461,6 +463,9 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQUEST_PICK_SOUND) {
             deliverPickedSound(resultCode, data)
+            return
+        }
+        if (BrowserOtpChannel.handleActivityResult(requestCode, resultCode, data)) {
             return
         }
         if (resultCode == Activity.RESULT_OK && data != null) {

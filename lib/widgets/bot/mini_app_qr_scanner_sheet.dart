@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
+import '../../l10n/app_localizations.dart';
 import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
 
@@ -21,7 +22,7 @@ Future<String?> showMiniAppQrScannerSheet(
   final effectiveTitle =
       (title != null && title.trim().isNotEmpty)
           ? title.trim()
-          : 'Сканирование QR-кода';
+          : context.trOr('miniapp_qr_title', 'Сканирование QR-кода');
   return showTheavModalSheet<String>(
     context: context,
     useRootNavigator: true,
@@ -194,7 +195,12 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
       if (!mounted) return;
       final text = clip?.text?.trim() ?? '';
       if (text.isEmpty) {
-        setState(() => _validationError = 'Буфер обмена пуст');
+        setState(
+          () => _validationError = context.trOr(
+            'miniapp_qr_clipboard_empty',
+            'Буфер обмена пуст',
+          ),
+        );
         return;
       }
       HapticUtils.selection();
@@ -205,7 +211,12 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
       setState(() => _validationError = null);
     } catch (_) {
       if (mounted) {
-        setState(() => _validationError = 'Не удалось прочитать буфер обмена');
+        setState(
+          () => _validationError = context.trOr(
+            'miniapp_qr_clipboard_error',
+            'Не удалось прочитать буфер обмена',
+          ),
+        );
       }
     }
   }
@@ -214,7 +225,12 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
     final value = _manualController.text.trim();
     if (value.isEmpty) {
       HapticUtils.selection();
-      setState(() => _validationError = 'Введите или вставьте данные QR-кода');
+      setState(
+        () => _validationError = context.trOr(
+          'miniapp_qr_empty_error',
+          'Введите или вставьте данные QR-кода',
+        ),
+      );
       return;
     }
     HapticUtils.tap();
@@ -280,7 +296,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                         size: 18,
                         color: _torchEnabled ? palette.primary : Colors.white,
                       ),
-                      tooltip: 'Подсветка',
+                      tooltip: context.trOr(
+                        'miniapp_qr_torch_tooltip',
+                        'Подсветка',
+                      ),
                       onTap: _toggleTorch,
                     ),
                     if (_cameras.length > 1) ...[
@@ -291,7 +310,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                           height: 18,
                           color: Colors.white,
                         ),
-                        tooltip: 'Сменить камеру',
+                        tooltip: context.trOr(
+                          'miniapp_qr_switch_camera_tooltip',
+                          'Сменить камеру',
+                        ),
                         onTap: _switchCamera,
                       ),
                     ],
@@ -313,7 +335,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Подключение камеры...',
+                      context.trOr(
+                        'miniapp_qr_connecting_camera',
+                        'Подключение камеры...',
+                      ),
                       style: TextStyle(
                         color: palette.subtext,
                         fontSize: 13.5,
@@ -348,8 +373,14 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                       const SizedBox(height: 10),
                       Text(
                         _cameraUnavailable
-                            ? 'Камера недоступна в текущем окружении'
-                            : 'Наведите камеру на QR-код',
+                            ? context.trOr(
+                                'miniapp_qr_camera_unavailable',
+                                'Камера недоступна в текущем окружении',
+                              )
+                            : context.trOr(
+                                'miniapp_qr_point_camera',
+                                'Наведите камеру на QR-код',
+                              ),
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: palette.onSurface,
@@ -359,7 +390,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Вы можете вставить содержимое QR-кода из буфера или ввести его вручную ниже.',
+                        context.trOr(
+                          'miniapp_qr_fallback_hint',
+                          'Вы можете вставить содержимое QR-кода из буфера или ввести его вручную ниже.',
+                        ),
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: palette.subtext,
@@ -377,7 +411,7 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                             color: palette.primary,
                           ),
                           label: Text(
-                            'Повторить',
+                            context.trOr('common_retry', 'Повторить'),
                             style: TextStyle(
                               color: palette.primary,
                               fontWeight: FontWeight.w600,
@@ -425,7 +459,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
               TheavInlineTextField(
                 key: const ValueKey('mini_app_qr_manual_input'),
                 controller: _manualController,
-                placeholder: 'Содержимое QR-кода (URL, токен, текст)...',
+                placeholder: context.trOr(
+                  'miniapp_qr_manual_placeholder',
+                  'Содержимое QR-кода (URL, токен, текст)...',
+                ),
                 textInputAction: TextInputAction.done,
                 prefix: iconoir.QrCode(
                   width: 18,
@@ -462,7 +499,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
                   height: 19,
                   color: palette.primary,
                 ),
-                title: 'Вставить из буфера обмена',
+                title: context.trOr(
+                  'miniapp_qr_paste_clipboard',
+                  'Вставить из буфера обмена',
+                ),
                 showChevron: false,
                 onTap: _pasteFromClipboard,
               ),
@@ -487,7 +527,7 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
               Expanded(
                 child: TheavFloatingPillButton(
                   key: const ValueKey('mini_app_qr_cancel_button'),
-                  label: 'Отмена',
+                  label: context.trOr('common_cancel', 'Отмена'),
                   isPrimary: false,
                   onTap: () => Navigator.of(context).pop(null),
                 ),
@@ -496,7 +536,10 @@ class _MiniAppQrScannerSheetState extends State<MiniAppQrScannerSheet> {
               Expanded(
                 child: TheavFloatingPillButton(
                   key: const ValueKey('mini_app_qr_submit_button'),
-                  label: 'Отправить код',
+                  label: context.trOr(
+                    'miniapp_qr_submit_btn',
+                    'Отправить код',
+                  ),
                   isPrimary: true,
                   onTap: _submitManualCode,
                 ),

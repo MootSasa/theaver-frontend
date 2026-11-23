@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
+import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
@@ -18,14 +19,17 @@ Future<String?> showMiniAppChatPickerSheet(
   bool allowBotChats = true,
   bool allowGroupChats = true,
   bool allowChannelChats = true,
-  String title = 'Выберите чат',
+  String? title,
   List<dynamic>? debugChatsOverride,
 }) {
+  final effectiveTitle = (title != null && title.trim().isNotEmpty)
+      ? title.trim()
+      : context.trOr('miniapp_chat_picker_title', 'Выберите чат');
   return showTheavModalSheet<String>(
     context: context,
     useRootNavigator: true,
     barrierDismissible: true,
-    title: title,
+    title: effectiveTitle,
     showCloseButton: true,
     maxHeightFactor: 0.86,
     padding: const EdgeInsets.fromLTRB(0, 6, 0, 14),
@@ -130,7 +134,11 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
       setState(() {
         _chats = const [];
         _isLoading = false;
-        _loadError = res['message']?.toString() ?? 'Не удалось загрузить чаты';
+        _loadError = res['message']?.toString() ??
+            context.trOr(
+              'miniapp_chat_picker_load_error',
+              'Не удалось загрузить чаты',
+            );
       });
     }
   }
@@ -150,31 +158,38 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
     return false;
   }
 
-  String _chatDisplayTitle(Chat chat) {
+  String _chatDisplayTitle(BuildContext context, Chat chat) {
     if (chat.chatType.toLowerCase().trim() == 'saved') {
-      return 'Избранное';
+      return context.trOr('miniapp_chat_saved_favorites', 'Избранное');
     }
     if (chat.name.trim().isNotEmpty) return chat.name.trim();
     if (chat.username != null && chat.username!.trim().isNotEmpty) {
       return '@${chat.username!.trim()}';
     }
-    return 'Чат ${chat.id}';
+    return context.trOr(
+      'miniapp_chat_fallback_name',
+      'Чат {id}',
+      {'id': chat.id},
+    );
   }
 
-  String _chatSubtitle(Chat chat) {
+  String _chatSubtitle(BuildContext context, Chat chat) {
     final type = chat.chatType.toLowerCase().trim();
     final uname = chat.username?.trim() ?? '';
     final String kindLabel;
     if (type == 'saved') {
-      kindLabel = 'Сохранённые сообщения';
+      kindLabel = context.trOr(
+        'miniapp_chat_kind_saved',
+        'Сохранённые сообщения',
+      );
     } else if (chat.isBot || type == 'bot') {
-      kindLabel = 'Бот';
+      kindLabel = context.trOr('miniapp_chat_kind_bot', 'Бот');
     } else if (type == 'channel') {
-      kindLabel = 'Канал';
+      kindLabel = context.trOr('miniapp_chat_kind_channel', 'Канал');
     } else if (type == 'group' || type == 'supergroup') {
-      kindLabel = 'Группа';
+      kindLabel = context.trOr('miniapp_chat_kind_group', 'Группа');
     } else {
-      kindLabel = 'Личный чат';
+      kindLabel = context.trOr('miniapp_chat_kind_private', 'Личный чат');
     }
     if (uname.isNotEmpty) {
       return '@$uname • $kindLabel';
@@ -229,7 +244,7 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
     final filtered = _chats.where((chat) {
       if (!_matchesChatTypeFilter(chat)) return false;
       if (query.isEmpty) return true;
-      final title = _chatDisplayTitle(chat).toLowerCase();
+      final title = _chatDisplayTitle(context, chat).toLowerCase();
       final uname = (chat.username ?? '').toLowerCase();
       return title.contains(query) || uname.contains(query);
     }).toList();
@@ -246,7 +261,10 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
                 TheavInlineTextField(
                   key: const ValueKey('mini_app_chat_picker_search'),
                   controller: _searchController,
-                  placeholder: 'Поиск чата...',
+                  placeholder: context.trOr(
+                    'miniapp_chat_picker_search_hint',
+                    'Поиск чата...',
+                  ),
                   prefix: iconoir.Search(
                     width: 18,
                     height: 18,
@@ -297,7 +315,7 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
                               ),
                               const SizedBox(height: 12),
                               TheavFloatingPillButton(
-                                label: 'Повторить',
+                                label: context.trOr('common_retry', 'Повторить'),
                                 isPrimary: true,
                                 onTap: _fetchChats,
                               ),
@@ -320,7 +338,10 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Подходящих чатов не найдено',
+                                    context.trOr(
+                                      'miniapp_chat_picker_empty',
+                                      'Подходящих чатов не найдено',
+                                    ),
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
                                       color: palette.subtext,
@@ -368,8 +389,8 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
                                 ),
                                 itemBuilder: (context, index) {
                                   final chat = filtered[index];
-                                  final title = _chatDisplayTitle(chat);
-                                  final subtitle = _chatSubtitle(chat);
+                                  final title = _chatDisplayTitle(context, chat);
+                                  final subtitle = _chatSubtitle(context, chat);
                                   return Material(
                                     type: MaterialType.transparency,
                                     child: InkWell(

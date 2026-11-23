@@ -69,6 +69,7 @@ abstract interface class BrowserStorageBackend {
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
+    bool enablePullToRefresh = false,
   });
 
   Future<List<BrowserCookieRecord>> exportAllCookies({
@@ -109,6 +110,7 @@ class MethodChannelBrowserStorageBackend implements BrowserStorageBackend {
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
+    bool enablePullToRefresh = false,
   }) async {
     if (kIsWeb) return;
     try {
@@ -120,6 +122,7 @@ class MethodChannelBrowserStorageBackend implements BrowserStorageBackend {
           'acceptThirdPartyCookies': acceptThirdPartyCookies,
           'enableOsAutofill': enableOsAutofill,
           'blockAllCookies': blockAllCookies,
+          'enablePullToRefresh': enablePullToRefresh,
         },
       );
     } on MissingPluginException {
@@ -230,6 +233,7 @@ class InMemoryBrowserStorageBackend implements BrowserStorageBackend {
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
+    bool enablePullToRefresh = false,
   }) async {
     lastConfiguredPolicy = <String, dynamic>{
       'url': url,
@@ -237,6 +241,7 @@ class InMemoryBrowserStorageBackend implements BrowserStorageBackend {
       'acceptThirdPartyCookies': acceptThirdPartyCookies,
       'enableOsAutofill': enableOsAutofill,
       'blockAllCookies': blockAllCookies,
+      'enablePullToRefresh': enablePullToRefresh,
     };
   }
 
@@ -303,6 +308,7 @@ class BrowserStorageBridge {
     required bool acceptThirdPartyCookies,
     required bool enableOsAutofill,
     required bool blockAllCookies,
+    bool enablePullToRefresh = false,
   }) =>
       _backend.configureWebViewPolicies(
         url: url,
@@ -310,6 +316,7 @@ class BrowserStorageBridge {
         acceptThirdPartyCookies: acceptThirdPartyCookies,
         enableOsAutofill: enableOsAutofill,
         blockAllCookies: blockAllCookies,
+        enablePullToRefresh: enablePullToRefresh,
       );
 
   Future<List<BrowserCookieRecord>> exportAllCookies({

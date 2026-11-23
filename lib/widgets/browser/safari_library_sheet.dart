@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../services/browser_data_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
@@ -65,21 +66,6 @@ class SafariLibrarySheet extends StatefulWidget {
 }
 
 class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
-  static const List<String> _kMonthsRu = <String>[
-    'января',
-    'февраля',
-    'марта',
-    'апреля',
-    'мая',
-    'июня',
-    'июля',
-    'августа',
-    'сентября',
-    'октября',
-    'ноября',
-    'декабря',
-  ];
-
   late SafariLibraryTab _activeTab;
   late final PageController _pageController;
   late final TextEditingController _searchCtrl;
@@ -160,12 +146,16 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
   }
 
   Future<void> _copyEntryUrl(String url) async {
+    final copiedMsg = context.trOr(
+      'browser_link_copied_toast',
+      'Ссылка скопирована',
+    );
     HapticUtils.selection();
     await Clipboard.setData(ClipboardData(text: url));
     if (mounted) {
       GlassToastService().show(
         context,
-        'Ссылка скопирована',
+        copiedMsg,
         icon: Icons.check_rounded,
       );
     }
@@ -173,25 +163,34 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
 
   Future<void> _confirmClearHistory() async {
     HapticUtils.tap();
+    final clearedMsg = context.trOr(
+      'browser_history_cleared_toast',
+      'История браузера очищена',
+    );
     final bool? confirmed = await showSafariWebAlert<bool>(
       context: context,
       dialogKey: const ValueKey('safari_clear_history_confirm_dialog'),
       tone: SafariAlertTone.securityWarning,
       iconOverride: Icons.delete_sweep_rounded,
-      title: 'Очистить историю и данные?',
-      message:
-          'История просмотров и файлы cookie встроенного браузера будут удалены. Закладки сохранятся.',
-      actions: const [
+      title: context.trOr(
+        'browser_clear_history_title',
+        'Очистить историю и данные?',
+      ),
+      message: context.trOr(
+        'browser_clear_history_message',
+        'История просмотров и файлы cookie встроенного браузера будут удалены. Закладки сохранятся.',
+      ),
+      actions: [
         SafariAlertAction<bool>(
-          label: 'Отмена',
+          label: context.trOr('common_cancel', 'Отмена'),
           result: false,
-          buttonKey: ValueKey('safari_clear_history_cancel_btn'),
+          buttonKey: const ValueKey('safari_clear_history_cancel_btn'),
         ),
         SafariAlertAction<bool>(
-          label: 'Очистить',
+          label: context.trOr('browser_clear_action', 'Очистить'),
           result: true,
           isDestructive: true,
-          buttonKey: ValueKey('safari_clear_history_confirm_btn'),
+          buttonKey: const ValueKey('safari_clear_history_confirm_btn'),
         ),
       ],
     );
@@ -200,7 +199,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
     if (mounted) {
       GlassToastService().show(
         context,
-        'История браузера очищена',
+        clearedMsg,
         icon: Icons.check_rounded,
       );
     }
@@ -214,14 +213,35 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
         safety.displayHost.toLowerCase().contains(query);
   }
 
-  String _formatDateHeader(DateTime dt, DateTime nowLocal) {
+  String _localizedMonth(BuildContext context, int month) {
+    return switch (month) {
+      1 => context.trOr('browser_month_1', 'января'),
+      2 => context.trOr('browser_month_2', 'февраля'),
+      3 => context.trOr('browser_month_3', 'марта'),
+      4 => context.trOr('browser_month_4', 'апреля'),
+      5 => context.trOr('browser_month_5', 'мая'),
+      6 => context.trOr('browser_month_6', 'июня'),
+      7 => context.trOr('browser_month_7', 'июля'),
+      8 => context.trOr('browser_month_8', 'августа'),
+      9 => context.trOr('browser_month_9', 'сентября'),
+      10 => context.trOr('browser_month_10', 'октября'),
+      11 => context.trOr('browser_month_11', 'ноября'),
+      _ => context.trOr('browser_month_12', 'декабря'),
+    };
+  }
+
+  String _formatDateHeader(
+    BuildContext context,
+    DateTime dt,
+    DateTime nowLocal,
+  ) {
     final DateTime local = dt.toLocal();
     final DateTime today = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
     final DateTime target = DateTime(local.year, local.month, local.day);
     final int diffDays = today.difference(target).inDays;
-    if (diffDays == 0) return 'Сегодня';
-    if (diffDays == 1) return 'Вчера';
-    final String month = _kMonthsRu[(local.month - 1).clamp(0, 11)];
+    if (diffDays == 0) return context.trOr('date_today', 'Сегодня');
+    if (diffDays == 1) return context.trOr('date_yesterday', 'Вчера');
+    final String month = _localizedMonth(context, local.month.clamp(1, 12));
     if (local.year == nowLocal.year) {
       return '${local.day} $month';
     }
@@ -282,7 +302,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
           child: Row(
             children: [
               Tooltip(
-                message: 'Закрыть',
+                message: context.trOr('common_close', 'Закрыть'),
                 child: GestureDetector(
                   key: const ValueKey('safari_library_close_btn'),
                   behavior: HitTestBehavior.opaque,
@@ -307,7 +327,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
-                  'Закладки и история',
+                  context.trOr('browser_library_title', 'Закладки и история'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -344,7 +364,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                             ),
                             const SizedBox(width: 5),
                             Text(
-                              'Очистить',
+                              context.trOr('browser_clear_action', 'Очистить'),
                               style: TextStyle(
                                 color: palette.error,
                                 fontSize: 12.5,
@@ -365,16 +385,16 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
         final Widget segmentedBar = TheavSegmentedControl<SafariLibraryTab>(
           key: const ValueKey('safari_library_segmented_control'),
           height: 40.0,
-          options: const [
+          options: [
             TheavSegmentOption(
               value: SafariLibraryTab.bookmarks,
-              label: 'Закладки',
-              icon: Icon(Icons.bookmarks_rounded),
+              label: context.trOr('browser_bookmarks_tab', 'Закладки'),
+              icon: const Icon(Icons.bookmarks_rounded),
             ),
             TheavSegmentOption(
               value: SafariLibraryTab.history,
-              label: 'История',
-              icon: Icon(Icons.history_rounded),
+              label: context.trOr('browser_history_tab', 'История'),
+              icon: const Icon(Icons.history_rounded),
             ),
           ],
           selected: _activeTab,
@@ -405,8 +425,14 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                   ),
                   decoration: InputDecoration(
                     hintText: _activeTab == SafariLibraryTab.bookmarks
-                        ? 'Поиск по закладкам...'
-                        : 'Поиск в истории...',
+                        ? context.trOr(
+                            'browser_bookmarks_search_hint',
+                            'Поиск по закладкам...',
+                          )
+                        : context.trOr(
+                            'browser_history_search_hint',
+                            'Поиск в истории...',
+                          ),
                     hintStyle: TextStyle(
                       color: palette.subtext.withValues(alpha: 0.78),
                       fontSize: 14.5,
@@ -522,11 +548,24 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
         icon: query.isNotEmpty
             ? Icons.search_off_rounded
             : Icons.bookmarks_outlined,
-        title: query.isNotEmpty ? 'Ничего не найдено' : 'Нет сохранённых закладок',
+        title: query.isNotEmpty
+            ? context.trOr('common_nothing_found', 'Ничего не найдено')
+            : context.trOr(
+                'browser_bookmarks_empty_title',
+                'Нет сохранённых закладок',
+              ),
         subtitle: query.isNotEmpty
-            ? 'Попробуйте изменить запрос поиска.'
-            : 'Сохраняйте нужные страницы, чтобы открывать их в одно касание.',
-        actionLabel: query.isNotEmpty ? 'Сбросить поиск' : null,
+            ? context.trOr(
+                'browser_search_empty_subtitle',
+                'Попробуйте изменить запрос поиска.',
+              )
+            : context.trOr(
+                'browser_bookmarks_empty_subtitle',
+                'Сохраняйте нужные страницы, чтобы открывать их в одно касание.',
+              ),
+        actionLabel: query.isNotEmpty
+            ? context.trOr('browser_search_reset', 'Сбросить поиск')
+            : null,
         onAction: query.isNotEmpty ? _clearSearch : null,
       );
     }
@@ -569,7 +608,10 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Текущая страница',
+                          context.trOr(
+                            'browser_current_page',
+                            'Текущая страница',
+                          ),
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -640,7 +682,9 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                               ),
                               const SizedBox(width: 5),
                               Text(
-                                isCurrentSaved ? 'Сохранено' : 'Сохранить',
+                                isCurrentSaved
+                                    ? context.trOr('browser_saved', 'Сохранено')
+                                    : context.trOr('common_save', 'Сохранить'),
                                 style: TextStyle(
                                   fontSize: 12.5,
                                   fontWeight: FontWeight.w600,
@@ -666,12 +710,23 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                   ? Icons.search_off_rounded
                   : Icons.bookmarks_outlined,
               title: hasAnyBookmarks && query.isNotEmpty
-                  ? 'Ничего не найдено'
-                  : 'Нет сохранённых закладок',
+                  ? context.trOr('common_nothing_found', 'Ничего не найдено')
+                  : context.trOr(
+                      'browser_bookmarks_empty_title',
+                      'Нет сохранённых закладок',
+                    ),
               subtitle: hasAnyBookmarks && query.isNotEmpty
-                  ? 'Попробуйте изменить запрос поиска.'
-                  : 'Нажмите «Сохранить» выше или звёздочку в меню, чтобы добавить сайт.',
-              actionLabel: query.isNotEmpty ? 'Сбросить поиск' : null,
+                  ? context.trOr(
+                      'browser_search_empty_subtitle',
+                      'Попробуйте изменить запрос поиска.',
+                    )
+                  : context.trOr(
+                      'browser_bookmarks_empty_quick_hint',
+                      'Нажмите «Сохранить» выше или звёздочку в меню, чтобы добавить сайт.',
+                    ),
+              actionLabel: query.isNotEmpty
+                  ? context.trOr('browser_search_reset', 'Сбросить поиск')
+                  : null,
               onAction: query.isNotEmpty ? _clearSearch : null,
             )
           else
@@ -683,7 +738,10 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
               showShadow: false,
               backgroundColor: cardFill,
               dividerColor: dividerTint,
-              header: 'Сохранённые сайты',
+              header: context.trOr(
+                'browser_bookmarks_section_header',
+                'Сохранённые сайты',
+              ),
               children: [
                 for (final item in bookmarks)
                   Dismissible(
@@ -720,7 +778,10 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                       removeButtonKey:
                           ValueKey('safari_bookmark_remove_${item.url}'),
                       removeIcon: Icons.close_rounded,
-                      removeTooltip: 'Удалить из закладок',
+                      removeTooltip: context.trOr(
+                        'browser_bookmark_remove_tooltip',
+                        'Удалить из закладок',
+                      ),
                       onTap: () => _selectAndOpen(item.url),
                       onLongPress: () => unawaited(_copyEntryUrl(item.url)),
                       onRemove: () {
@@ -751,13 +812,22 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
             ? Icons.search_off_rounded
             : Icons.history_rounded,
         title: (hasAnyHistory && query.isNotEmpty)
-            ? 'Ничего не найдено'
-            : 'История браузера пуста',
+            ? context.trOr('common_nothing_found', 'Ничего не найдено')
+            : context.trOr(
+                'browser_history_empty_title',
+                'История браузера пуста',
+              ),
         subtitle: (hasAnyHistory && query.isNotEmpty)
-            ? 'Попробуйте изменить запрос поиска.'
-            : 'Посещённые страницы будут группироваться здесь по дням.',
+            ? context.trOr(
+                'browser_search_empty_subtitle',
+                'Попробуйте изменить запрос поиска.',
+              )
+            : context.trOr(
+                'browser_history_empty_subtitle',
+                'Посещённые страницы будут группироваться здесь по дням.',
+              ),
         actionLabel: (hasAnyHistory && query.isNotEmpty)
-            ? 'Сбросить поиск'
+            ? context.trOr('browser_search_reset', 'Сбросить поиск')
             : null,
         onAction: (hasAnyHistory && query.isNotEmpty) ? _clearSearch : null,
       );
@@ -776,7 +846,7 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
     List<BrowserHistoryEntry>? currentBucket;
 
     for (final entry in entries) {
-      final String label = _formatDateHeader(entry.visitedAt, nowLocal);
+      final String label = _formatDateHeader(context, entry.visitedAt, nowLocal);
       if (label != currentLabel || currentBucket == null) {
         currentLabel = label;
         currentBucket = <BrowserHistoryEntry>[];
@@ -853,7 +923,10 @@ class _SafariLibrarySheetState extends State<SafariLibrarySheet> {
                         'safari_history_remove_${entry.url}_${entry.visitedAt.microsecondsSinceEpoch}',
                       ),
                       removeIcon: Icons.close_rounded,
-                      removeTooltip: 'Удалить из истории',
+                      removeTooltip: context.trOr(
+                        'browser_history_remove_tooltip',
+                        'Удалить из истории',
+                      ),
                       onTap: () => _selectAndOpen(entry.url),
                       onLongPress: () => unawaited(_copyEntryUrl(entry.url)),
                       onRemove: () {

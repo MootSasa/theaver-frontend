@@ -29,6 +29,7 @@ class BrowserSitePreference {
   final SitePermissionDecision cameraPolicy;
   final SitePermissionDecision microphonePolicy;
   final bool muteJsDialogs;
+  final double? textZoom;
 
   const BrowserSitePreference({
     required this.asciiHost,
@@ -37,13 +38,20 @@ class BrowserSitePreference {
     this.cameraPolicy = SitePermissionDecision.ask,
     this.microphonePolicy = SitePermissionDecision.ask,
     this.muteJsDialogs = false,
+    this.textZoom,
   });
 
   bool get isDefault =>
       desktopMode == null &&
       cameraPolicy == SitePermissionDecision.ask &&
       microphonePolicy == SitePermissionDecision.ask &&
-      !muteJsDialogs;
+      !muteJsDialogs &&
+      textZoom == null;
+
+  static double? _clampZoom(double? value) {
+    if (value == null || !value.isFinite) return null;
+    return value.clamp(0.85, 1.50).toDouble();
+  }
 
   BrowserSitePreference copyWith({
     bool? desktopMode,
@@ -51,7 +59,12 @@ class BrowserSitePreference {
     SitePermissionDecision? cameraPolicy,
     SitePermissionDecision? microphonePolicy,
     bool? muteJsDialogs,
+    double? textZoom,
+    bool clearTextZoom = false,
   }) {
+    final double? nextZoom = clearTextZoom
+        ? null
+        : (textZoom != null ? _clampZoom(textZoom) : _clampZoom(this.textZoom));
     return BrowserSitePreference(
       asciiHost: asciiHost,
       displayHost: displayHost,
@@ -59,6 +72,7 @@ class BrowserSitePreference {
       cameraPolicy: cameraPolicy ?? this.cameraPolicy,
       microphonePolicy: microphonePolicy ?? this.microphonePolicy,
       muteJsDialogs: muteJsDialogs ?? this.muteJsDialogs,
+      textZoom: nextZoom,
     );
   }
 
@@ -69,6 +83,7 @@ class BrowserSitePreference {
         'cameraPolicy': cameraPolicy.name,
         'microphonePolicy': microphonePolicy.name,
         'muteJsDialogs': muteJsDialogs,
+        if (textZoom != null) 'textZoom': _clampZoom(textZoom),
       };
 
   factory BrowserSitePreference.fromJson(Map<String, dynamic> json) {
@@ -80,6 +95,10 @@ class BrowserSitePreference {
     }
 
     final host = json['asciiHost']?.toString().toLowerCase() ?? '';
+    final rawZoom = json['textZoom'];
+    final double? parsedZoom = rawZoom is num
+        ? _clampZoom(rawZoom.toDouble())
+        : null;
     return BrowserSitePreference(
       asciiHost: host,
       displayHost: (json['displayHost']?.toString().isNotEmpty ?? false)
@@ -89,18 +108,31 @@ class BrowserSitePreference {
       cameraPolicy: parseDecision(json['cameraPolicy']),
       microphonePolicy: parseDecision(json['microphonePolicy']),
       muteJsDialogs: json['muteJsDialogs'] == true,
+      textZoom: parsedZoom,
     );
   }
 }
 
 /// Manages per-account persistent browser preferences (cookie policy, autofill
-/// toggles, and per-host Desktop mode / Camera & Microphone / JS dialog mute).
+/// toggles, vault auth & reader settings, and per-host Desktop mode / Camera &
+/// Microphone / JS dialog mute / text zoom).
 class BrowserSiteSettingsService extends ChangeNotifier {
   BrowserSiteSettingsService._internal();
   static final BrowserSiteSettingsService instance =
       BrowserSiteSettingsService._internal();
 
   static const String _prefsPrefix = 'browser_site_settings_v1_u_';
+  static const Set<String> _allowedReaderThemes = <String>{
+    'light',
+    'sepia',
+    'dark',
+    'oled',
+  };
+  static const Set<String> _allowedReaderFontFamilies = <String>{
+    'sans',
+    'serif',
+    'mono',
+  };
 
   @visibleForTesting
   String? debugUserIdOverride;
@@ -110,6 +142,13 @@ class BrowserSiteSettingsService extends ChangeNotifier {
   bool _savePasswordsEnabled = true;
   bool _contactAutofillEnabled = true;
   bool _osAutofillEnabled = true;
+  bool _cardAutofillEnabled = true;
+  bool _addressAutofillEnabled = true;
+  bool _otpAutofillEnabled = true;
+  bool _requireAuthForVaultAccess = true;
+  String _readerTheme = 'dark';
+  String _readerFontFamily = 'sans';
+  double _readerFontScale = 1.0;
   Map<String, BrowserSitePreference> _sitePreferences =
       <String, BrowserSitePreference>{};
 
@@ -117,6 +156,13 @@ class BrowserSiteSettingsService extends ChangeNotifier {
   bool get savePasswordsEnabled => _savePasswordsEnabled;
   bool get contactAutofillEnabled => _contactAutofillEnabled;
   bool get osAutofillEnabled => _osAutofillEnabled;
+  bool get cardAutofillEnabled => _cardAutofillEnabled;
+  bool get addressAutofillEnabled => _addressAutofillEnabled;
+  bool get otpAutofillEnabled => _otpAutofillEnabled;
+  bool get requireAuthForVaultAccess => _requireAuthForVaultAccess;
+  String get readerTheme => _readerTheme;
+  String get readerFontFamily => _readerFontFamily;
+  double get readerFontScale => _readerFontScale;
   Map<String, BrowserSitePreference> get sitePreferences =>
       Map<String, BrowserSitePreference>.unmodifiable(_sitePreferences);
 
@@ -153,6 +199,21 @@ class BrowserSiteSettingsService extends ChangeNotifier {
     return decoded.replaceFirst(RegExp(r'^www\.'), '');
   }
 
+  void _resetInMemoryDefaults() {
+    _cookiePolicy = BrowserCookiePolicy.allowAll;
+    _savePasswordsEnabled = true;
+    _contactAutofillEnabled = true;
+    _osAutofillEnabled = true;
+    _cardAutofillEnabled = true;
+    _addressAutofillEnabled = true;
+    _otpAutofillEnabled = true;
+    _requireAuthForVaultAccess = true;
+    _readerTheme = 'dark';
+    _readerFontFamily = 'sans';
+    _readerFontScale = 1.0;
+    _sitePreferences = <String, BrowserSitePreference>{};
+  }
+
   Future<void> ensureLoaded({bool forceReload = false}) async {
     final uid = _activeUid;
     if (!forceReload && _loadedUid == uid) return;
@@ -161,11 +222,7 @@ class BrowserSiteSettingsService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('$_prefsPrefix$uid');
       if (raw == null || raw.isEmpty) {
-        _cookiePolicy = BrowserCookiePolicy.allowAll;
-        _savePasswordsEnabled = true;
-        _contactAutofillEnabled = true;
-        _osAutofillEnabled = true;
-        _sitePreferences = <String, BrowserSitePreference>{};
+        _resetInMemoryDefaults();
       } else {
         final decoded = jsonDecode(raw);
         if (decoded is Map) {
@@ -176,6 +233,30 @@ class BrowserSiteSettingsService extends ChangeNotifier {
           _savePasswordsEnabled = decoded['savePasswordsEnabled'] != false;
           _contactAutofillEnabled = decoded['contactAutofillEnabled'] != false;
           _osAutofillEnabled = decoded['osAutofillEnabled'] != false;
+          _cardAutofillEnabled = decoded['cardAutofillEnabled'] != false;
+          _addressAutofillEnabled = decoded['addressAutofillEnabled'] is bool
+              ? decoded['addressAutofillEnabled'] as bool
+              : _contactAutofillEnabled;
+          _otpAutofillEnabled = decoded['otpAutofillEnabled'] != false;
+          _requireAuthForVaultAccess =
+              decoded['requireAuthForVaultAccess'] != false;
+
+          final rawTheme =
+              decoded['readerTheme']?.toString().trim().toLowerCase() ?? '';
+          _readerTheme =
+              _allowedReaderThemes.contains(rawTheme) ? rawTheme : 'dark';
+
+          final rawFont =
+              decoded['readerFontFamily']?.toString().trim().toLowerCase() ??
+                  '';
+          _readerFontFamily = _allowedReaderFontFamilies.contains(rawFont)
+              ? rawFont
+              : 'sans';
+
+          final rawScale = decoded['readerFontScale'];
+          _readerFontScale = (rawScale is num && rawScale.isFinite)
+              ? rawScale.toDouble().clamp(0.85, 1.50).toDouble()
+              : 1.0;
 
           final sites = <String, BrowserSitePreference>{};
           final rawSites = decoded['sites'];
@@ -192,6 +273,8 @@ class BrowserSiteSettingsService extends ChangeNotifier {
             }
           }
           _sitePreferences = sites;
+        } else {
+          _resetInMemoryDefaults();
         }
       }
       notifyListeners();
@@ -214,6 +297,13 @@ class BrowserSiteSettingsService extends ChangeNotifier {
           'savePasswordsEnabled': _savePasswordsEnabled,
           'contactAutofillEnabled': _contactAutofillEnabled,
           'osAutofillEnabled': _osAutofillEnabled,
+          'cardAutofillEnabled': _cardAutofillEnabled,
+          'addressAutofillEnabled': _addressAutofillEnabled,
+          'otpAutofillEnabled': _otpAutofillEnabled,
+          'requireAuthForVaultAccess': _requireAuthForVaultAccess,
+          'readerTheme': _readerTheme,
+          'readerFontFamily': _readerFontFamily,
+          'readerFontScale': _readerFontScale,
           'sites': encodedSites,
         }),
       );
@@ -250,8 +340,12 @@ class BrowserSiteSettingsService extends ChangeNotifier {
 
   Future<void> setContactAutofillEnabled(bool enabled) async {
     await ensureLoaded();
-    if (_contactAutofillEnabled == enabled) return;
+    if (_contactAutofillEnabled == enabled &&
+        _addressAutofillEnabled == enabled) {
+      return;
+    }
     _contactAutofillEnabled = enabled;
+    _addressAutofillEnabled = enabled;
     notifyListeners();
     await _save(_activeUid);
   }
@@ -260,6 +354,68 @@ class BrowserSiteSettingsService extends ChangeNotifier {
     await ensureLoaded();
     if (_osAutofillEnabled == enabled) return;
     _osAutofillEnabled = enabled;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setCardAutofillEnabled(bool enabled) async {
+    await ensureLoaded();
+    if (_cardAutofillEnabled == enabled) return;
+    _cardAutofillEnabled = enabled;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setAddressAutofillEnabled(bool enabled) async {
+    await ensureLoaded();
+    if (_addressAutofillEnabled == enabled) return;
+    _addressAutofillEnabled = enabled;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setOtpAutofillEnabled(bool enabled) async {
+    await ensureLoaded();
+    if (_otpAutofillEnabled == enabled) return;
+    _otpAutofillEnabled = enabled;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setRequireAuthForVaultAccess(bool enabled) async {
+    await ensureLoaded();
+    if (_requireAuthForVaultAccess == enabled) return;
+    _requireAuthForVaultAccess = enabled;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setReaderTheme(String value) async {
+    final normalized = value.trim().toLowerCase();
+    if (!_allowedReaderThemes.contains(normalized)) return;
+    await ensureLoaded();
+    if (_readerTheme == normalized) return;
+    _readerTheme = normalized;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setReaderFontFamily(String value) async {
+    final normalized = value.trim().toLowerCase();
+    if (!_allowedReaderFontFamilies.contains(normalized)) return;
+    await ensureLoaded();
+    if (_readerFontFamily == normalized) return;
+    _readerFontFamily = normalized;
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setReaderFontScale(double value) async {
+    if (!value.isFinite) return;
+    final clamped = value.clamp(0.85, 1.50).toDouble();
+    await ensureLoaded();
+    if (_readerFontScale == clamped) return;
+    _readerFontScale = clamped;
     notifyListeners();
     await _save(_activeUid);
   }
@@ -290,6 +446,21 @@ class BrowserSiteSettingsService extends ChangeNotifier {
     final next = desktopMode == null
         ? existing.copyWith(clearDesktopMode: true)
         : existing.copyWith(desktopMode: desktopMode);
+    _storeOrPrune(next);
+    notifyListeners();
+    await _save(_activeUid);
+  }
+
+  Future<void> setTextZoomForUrl(String rawUrl, double? zoom) async {
+    await ensureLoaded();
+    final key = normalizeHostKey(rawUrl);
+    if (key.isEmpty) return;
+    final existing = _getOrInit(rawUrl);
+    final bool shouldClear =
+        zoom == null || !zoom.isFinite || (zoom - 1.0).abs() < 0.01;
+    final next = shouldClear
+        ? existing.copyWith(clearTextZoom: true)
+        : existing.copyWith(textZoom: zoom.clamp(0.85, 1.50).toDouble());
     _storeOrPrune(next);
     notifyListeners();
     await _save(_activeUid);
@@ -352,11 +523,7 @@ class BrowserSiteSettingsService extends ChangeNotifier {
       await prefs.remove('$_prefsPrefix$uid');
     } catch (_) {}
     if (_loadedUid == uid || _activeUid == uid) {
-      _cookiePolicy = BrowserCookiePolicy.allowAll;
-      _savePasswordsEnabled = true;
-      _contactAutofillEnabled = true;
-      _osAutofillEnabled = true;
-      _sitePreferences = <String, BrowserSitePreference>{};
+      _resetInMemoryDefaults();
       _loadedUid = null;
       notifyListeners();
     }
@@ -365,11 +532,7 @@ class BrowserSiteSettingsService extends ChangeNotifier {
   @visibleForTesting
   void resetForTesting() {
     _loadedUid = null;
-    _cookiePolicy = BrowserCookiePolicy.allowAll;
-    _savePasswordsEnabled = true;
-    _contactAutofillEnabled = true;
-    _osAutofillEnabled = true;
-    _sitePreferences = <String, BrowserSitePreference>{};
+    _resetInMemoryDefaults();
     debugUserIdOverride = null;
   }
 }

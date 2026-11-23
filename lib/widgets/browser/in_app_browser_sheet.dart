@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -6,27 +8,35 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../screens/settings/browser_vault_and_data_screen.dart';
 import '../../services/bot_service.dart';
 import '../../services/browser_data_service.dart';
+import '../../services/browser_otp_autofill_service.dart';
 import '../../services/browser_site_settings_service.dart';
 import '../../services/browser_vault_service.dart';
+import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
 import '../../utils/browser_autofill_script.dart';
+import '../../utils/browser_context_menu_script.dart';
 import '../../utils/browser_find_in_page_script.dart';
+import '../../utils/browser_reader_mode_script.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/safari_url_safety.dart';
 import '../bot/mini_app_webview_sheet.dart';
 import '../design_system/theav_design_system.dart';
 import 'safari_autofill_overlays.dart';
 import 'safari_browser_dialogs.dart';
+import 'safari_element_context_sheet.dart';
 import 'safari_library_sheet.dart';
+import 'safari_reader_mode_view.dart';
 
 /// Opens [url] inside Theaver's Telegram-style full-screen WebView browser,
 /// or restores an already minimized browser tab with the same URL.
@@ -91,11 +101,14 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   final ValueNotifier<double> _dragOffsetNotifier = ValueNotifier<double>(0.0);
   final TextEditingController _findCtrl = TextEditingController();
   final FocusNode _findFocusNode = FocusNode();
+  final ScrollController _readerScrollCtrl = ScrollController();
 
   BrowserContactProfile _contactProfile = const BrowserContactProfile();
   bool _isMenuOpen = false;
   bool _isSiteInfoOpen = false;
   bool _isFindOpen = false;
+  double _pullRefreshProgress = 0.0;
+  bool _pullRefreshThresholdHapticFired = false;
   Timer? _findDebounceTimer;
   int _findRequestSeq = 0;
   int _findCurrentMatch = 0;
@@ -280,8 +293,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     _session.overlayResolver = _resolveRootOverlay;
     _session.onSheetStateChanged = _onSessionStateChanged;
     _session.onBrowserPageFinished = _handleBrowserPageFinished;
+    _session.onBrowserContextMenuRequested = _handleContextMenuRequested;
+    _session.onBrowserPullToRefreshEvent = _handlePullToRefreshEvent;
     activeSafariWebAlertCount.addListener(_onActiveSafariAlertChanged);
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
+    BrowserOtpAutofillService.instance.attachBrowserObserver();
+    BrowserOtpAutofillService.instance.addListener(_onOtpChanged);
     unawaited(BrowserDataService.instance.ensureLoaded());
     unawaited(BrowserVaultService.instance.ensureLoaded());
     unawaited(
@@ -289,11 +306,19 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         if (!mounted || _session.controller != null) {
           return;
         }
-        final savedDesktop = BrowserSiteSettingsService.instance
-            .preferenceForUrl(_session.currentUrl)
-            ?.desktopMode;
-        if (savedDesktop != null && savedDesktop != _session.isDesktopMode) {
-          setState(() => _session.isDesktopMode = savedDesktop);
+        final savedPref = BrowserSiteSettingsService.instance
+            .preferenceForUrl(_session.currentUrl);
+        final savedDesktop = savedPref?.desktopMode;
+        final savedZoom = savedPref?.textZoom;
+        if ((savedDesktop != null && savedDesktop != _session.isDesktopMode) ||
+            (savedZoom != null &&
+                (savedZoom - _session.pageTextZoom).abs() > 0.005)) {
+          setState(() {
+            if (savedDesktop != null) _session.isDesktopMode = savedDesktop;
+            if (savedZoom != null) {
+              _session.pageTextZoom = savedZoom.clamp(0.85, 1.50).toDouble();
+            }
+          });
         }
       }),
     );
@@ -301,6 +326,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     BrowserDataService.instance.addListener(_onBrowserDataChanged);
     BrowserVaultService.instance.addListener(_onVaultOrSettingsChanged);
     BrowserSiteSettingsService.instance.addListener(_onVaultOrSettingsChanged);
+  }
+
+  void _onOtpChanged() {
+    if (mounted && !_isDisposing) {
+      setState(() {});
+    }
   }
 
   Future<void> _reloadContactProfile() async {
@@ -331,6 +362,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       setState(() => _session.pendingCredentialPrompt = null);
       return true;
     }
+    if (_session.pendingCardPrompt != null) {
+      setState(() => _session.pendingCardPrompt = null);
+      return true;
+    }
     if (_isSiteInfoOpen) {
       _closeSiteInfoPopover();
       return true;
@@ -341,6 +376,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     }
     if (_isFindOpen) {
       _closeFindBar();
+      return true;
+    }
+    if (_session.isReaderModeActive) {
+      _exitReaderMode();
       return true;
     }
     return false;
@@ -435,6 +474,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     BrowserVaultService.instance.removeListener(_onVaultOrSettingsChanged);
     BrowserSiteSettingsService.instance
         .removeListener(_onVaultOrSettingsChanged);
+    BrowserOtpAutofillService.instance.removeListener(_onOtpChanged);
+    BrowserOtpAutofillService.instance.detachBrowserObserver();
     if (identical(_session.uiDialogDelegate, _dialogDelegate)) {
       _session.uiDialogDelegate = null;
     }
@@ -447,9 +488,16 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (identical(_session.onBrowserPageFinished, _handleBrowserPageFinished)) {
       _session.onBrowserPageFinished = null;
     }
+    if (_session.onBrowserContextMenuRequested == _handleContextMenuRequested) {
+      _session.onBrowserContextMenuRequested = null;
+    }
+    if (_session.onBrowserPullToRefreshEvent == _handlePullToRefreshEvent) {
+      _session.onBrowserPullToRefreshEvent = null;
+    }
     if (!_isMinimizing) {
       _session.disposeResources();
     }
+    _readerScrollCtrl.dispose();
     _dragOffsetNotifier.dispose();
     _dragResetController.dispose();
     _findBarAnimation.dispose();
@@ -725,7 +773,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (mounted) {
       GlassToastService().show(
         context,
-        'Данные сайта очищены',
+        context.trOr('browser_site_data_cleared', 'Данные сайта очищены'),
         icon: Icons.cleaning_services_rounded,
       );
     }
@@ -789,7 +837,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (mounted) {
       GlassToastService().show(
         context,
-        nextDesktop ? 'Включена версия для ПК' : 'Включена мобильная версия',
+        nextDesktop
+            ? context.trOr(
+                'browser_desktop_mode_enabled',
+                'Включена версия для ПК',
+              )
+            : context.trOr(
+                'browser_mobile_mode_enabled',
+                'Включена мобильная версия',
+              ),
       );
     }
   }
@@ -800,7 +856,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final cred = await BrowserVaultService.instance.unlockAndReadCredential(
       context,
       hint.id,
-      reason: 'Подтвердите личность для входа на ${hint.displayHost}',
+      reason: context.trOr(
+        'browser_autofill_login_unlock_reason',
+        'Подтвердите личность для входа на {host}',
+        <String, String>{'host': hint.displayHost},
+      ),
       originScope: hint.origin,
     );
     if (!mounted || cred == null) return;
@@ -821,6 +881,158 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     }
     if (mounted) {
       setState(() => _session.focusedAutofillField = null);
+    }
+  }
+
+  Future<void> _handleAutofillSelectCard(BrowserCardHint hint) async {
+    final bool isSecureBefore =
+        _session.currentUrl.toLowerCase().startsWith('https://') &&
+            !_session.currentPageHasSslWarning &&
+            !SafariUrlSafetyAnalyzer.analyzeUrl(_session.currentUrl)
+                .isSuspiciousHomograph;
+    if (!isSecureBefore) return;
+    final String? originBefore =
+        BrowserVaultService.normalizeOrigin(_session.currentUrl);
+    if (originBefore == null) return;
+
+    final String cardLabel = '${hint.brand.displayName} •••• ${hint.last4}';
+    final BrowserSavedCard? card =
+        await BrowserVaultService.instance.unlockAndReadCard(
+      context,
+      hint.id,
+      reason: context.trOr(
+        'browser_autofill_card_unlock_reason',
+        'Подтвердите личность для автозаполнения карты {card}',
+        <String, String>{'card': cardLabel},
+      ),
+      originScope: originBefore,
+    );
+    if (!mounted || card == null) return;
+    final bool isSecureAfter =
+        _session.currentUrl.toLowerCase().startsWith('https://') &&
+            !_session.currentPageHasSslWarning &&
+            !SafariUrlSafetyAnalyzer.analyzeUrl(_session.currentUrl)
+                .isSuspiciousHomograph;
+    final String? currentOrigin =
+        BrowserVaultService.normalizeOrigin(_session.currentUrl);
+    if (!isSecureAfter || currentOrigin == null || currentOrigin != originBefore) {
+      return;
+    }
+
+    final ctrl = _session.controller;
+    if (ctrl != null && _hasPlatformWebView) {
+      try {
+        await ctrl.runJavaScript(
+          BrowserAutofillScript.buildFillCardScript(
+            expectedOrigin: currentOrigin,
+            cardNumber: card.cardNumber,
+            holderName: card.holderName,
+            expMonth: card.expMonth,
+            expYear: card.expYear,
+          ),
+        );
+      } catch (_) {}
+    }
+    if (mounted) {
+      setState(() => _session.focusedAutofillField = null);
+    }
+  }
+
+  Future<void> _handleAutofillSelectAddress(BrowserSavedAddress addr) async {
+    final String? currentOrigin =
+        BrowserVaultService.normalizeOrigin(_session.currentUrl);
+    final String? origin =
+        _session.focusedAutofillField?.origin ?? currentOrigin;
+    if (origin == null || currentOrigin == null || origin != currentOrigin) {
+      return;
+    }
+    final ctrl = _session.controller;
+    if (ctrl != null && _hasPlatformWebView) {
+      try {
+        await ctrl.runJavaScript(
+          BrowserAutofillScript.buildFillAddressScript(
+            expectedOrigin: origin,
+            fullName: addr.fullName,
+            organization: addr.organization,
+            addressLine1: addr.addressLine1,
+            addressLine2: addr.addressLine2,
+            city: addr.city,
+            region: addr.region,
+            postalCode: addr.postalCode,
+            country: addr.country,
+            phone: addr.phone,
+            email: addr.email,
+          ),
+        );
+      } catch (_) {}
+    }
+    if (mounted) {
+      setState(() => _session.focusedAutofillField = null);
+    }
+  }
+
+  Future<void> _handleAutofillFillOtp(String code) async {
+    final String? currentOrigin =
+        BrowserVaultService.normalizeOrigin(_session.currentUrl);
+    final String? origin =
+        _session.focusedAutofillField?.origin ?? currentOrigin;
+    if (origin == null || currentOrigin == null || origin != currentOrigin) {
+      return;
+    }
+    final ctrl = _session.controller;
+    if (ctrl != null && _hasPlatformWebView) {
+      try {
+        await ctrl.runJavaScript(
+          BrowserAutofillScript.buildFillOtpScript(
+            expectedOrigin: origin,
+            code: code,
+          ),
+        );
+      } catch (_) {}
+    }
+    BrowserOtpAutofillService.instance.consumeCandidate();
+    if (mounted) {
+      setState(() => _session.focusedAutofillField = null);
+    }
+  }
+
+  Future<void> _handlePasteOtpFromClipboard() async {
+    final String? code =
+        await BrowserOtpAutofillService.instance.readOtpFromClipboardByUserTap();
+    if (!mounted) return;
+    if (code != null && code.isNotEmpty) {
+      await _handleAutofillFillOtp(code);
+    } else {
+      GlassToastService().show(
+        context,
+        context.trOr(
+          'browser_otp_not_found_clipboard',
+          'Код не найден в буфере обмена',
+        ),
+        icon: Icons.info_outline_rounded,
+      );
+    }
+  }
+
+  Future<void> _handleSavePendingCard() async {
+    final BrowserPendingCardSubmission? candidate = _session.pendingCardPrompt;
+    if (candidate == null) return;
+    setState(() => _session.pendingCardPrompt = null);
+    await BrowserVaultService.instance.saveOrUpdateCard(
+      cardNumber: candidate.cardNumber,
+      holderName: candidate.holderName,
+      expMonth: candidate.expMonth,
+      expYear: candidate.expYear,
+      existingId: candidate.existingId,
+    );
+    if (mounted) {
+      GlassToastService().show(
+        context,
+        candidate.isUpdate
+            ? context.trOr('browser_card_updated', 'Карта обновлена')
+            : context.trOr('browser_card_saved', 'Карта сохранена'),
+        icon: Icons.credit_card_rounded,
+      );
     }
   }
 
@@ -859,7 +1071,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (mounted) {
       GlassToastService().show(
         context,
-        candidate.isUpdate ? 'Пароль обновлён' : 'Пароль сохранён',
+        candidate.isUpdate
+            ? context.trOr('browser_password_updated', 'Пароль обновлён')
+            : context.trOr('browser_password_saved', 'Пароль сохранён'),
         icon: Icons.key_rounded,
       );
     }
@@ -873,9 +1087,387 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (mounted) {
       GlassToastService().show(
         context,
-        'Пароли для ${candidate.displayHost} не будут сохраняться',
+        context.trOr(
+          'browser_password_never_save_toast',
+          'Пароли для {host} не будут сохраняться',
+          <String, String>{'host': candidate.displayHost},
+        ),
         icon: Icons.block_rounded,
       );
+    }
+  }
+
+  Future<void> _enterReaderMode() async {
+    if (_session.isReaderModeActive) return;
+    final BrowserReaderArticle? article = await _session.extractReaderArticle();
+    if (!mounted) return;
+    if (article != null) {
+      setState(() {
+        _session.isReaderModeActive = true;
+        _session.activeReaderArticle = article;
+        _session.focusedAutofillField = null;
+        _pullRefreshProgress = 0.0;
+        _pullRefreshThresholdHapticFired = false;
+      });
+      if (_session.browserChromeCollapsed) {
+        unawaited(_session.setBrowserChromeCollapsed(false));
+      }
+      unawaited(_session.syncNativeBrowserPolicies(_session.currentUrl));
+    } else {
+      GlassToastService().show(
+        context,
+        context.trOr(
+          'browser_reader_open_failed',
+          'Не удалось открыть режим чтения',
+        ),
+        icon: Icons.article_outlined,
+      );
+    }
+  }
+
+  void _exitReaderMode() {
+    if (!_session.isReaderModeActive) return;
+    setState(() {
+      _session.isReaderModeActive = false;
+    });
+    unawaited(_session.syncNativeBrowserPolicies(_session.currentUrl));
+  }
+
+  Future<void> _toggleReaderMode() async {
+    if (_session.isReaderModeActive) {
+      _exitReaderMode();
+    } else {
+      await _enterReaderMode();
+    }
+  }
+
+  Future<void> _openTypographySheet() async {
+    _closeMenu();
+    _closeSiteInfoPopover();
+    HapticUtils.tap();
+    await BrowserSiteSettingsService.instance.ensureLoaded();
+    if (!mounted) return;
+    final settings = BrowserSiteSettingsService.instance;
+    await showSafariTypographySheet(
+      context,
+      fontScale: _session.isReaderModeActive
+          ? settings.readerFontScale
+          : _session.pageTextZoom,
+      themeId: settings.readerTheme,
+      fontFamilyId: settings.readerFontFamily,
+      isReaderMode: _session.isReaderModeActive,
+      readerAvailable: _session.isReaderAvailable || _session.isReaderModeActive,
+      onFontScaleChanged: (scale) {
+        if (_session.isReaderModeActive) {
+          unawaited(settings.setReaderFontScale(scale));
+        } else {
+          unawaited(settings.setTextZoomForUrl(_session.currentUrl, scale));
+          unawaited(_session.applyBrowserPageTextZoom(scale));
+          if (mounted) setState(() {});
+        }
+      },
+      onThemeChanged: (themeId) {
+        unawaited(settings.setReaderTheme(themeId));
+      },
+      onFontFamilyChanged: (fontFamilyId) {
+        unawaited(settings.setReaderFontFamily(fontFamilyId));
+      },
+      onToggleReaderMode: () {
+        unawaited(_toggleReaderMode());
+      },
+    );
+  }
+
+  void _handlePullToRefreshEvent(double progress, bool released) {
+    if (!mounted || _isDisposing) return;
+    final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
+    final bool blocked = _session.isReaderModeActive ||
+        _isMenuOpen ||
+        _isFindOpen ||
+        _isSiteInfoOpen ||
+        isRouteCovered ||
+        activeSafariWebAlertCount.value > 0;
+    if (blocked) {
+      if (_pullRefreshProgress != 0.0 || _pullRefreshThresholdHapticFired) {
+        setState(() {
+          _pullRefreshProgress = 0.0;
+          _pullRefreshThresholdHapticFired = false;
+        });
+      }
+      return;
+    }
+
+    final double clamped =
+        (progress.isFinite ? progress : 0.0).clamp(0.0, 1.0).toDouble();
+    if (released) {
+      final bool shouldReload = clamped >= 1.0;
+      if (_pullRefreshProgress != 0.0 || _pullRefreshThresholdHapticFired) {
+        setState(() {
+          _pullRefreshProgress = 0.0;
+          _pullRefreshThresholdHapticFired = false;
+        });
+      }
+      if (shouldReload) {
+        unawaited(_reloadOrStop());
+      }
+      return;
+    }
+
+    if (clamped >= 1.0 && !_pullRefreshThresholdHapticFired) {
+      _pullRefreshThresholdHapticFired = true;
+      HapticUtils.selection();
+    } else if (clamped < 0.88 && _pullRefreshThresholdHapticFired) {
+      _pullRefreshThresholdHapticFired = false;
+    }
+    if ((clamped - _pullRefreshProgress).abs() > 0.005 ||
+        (clamped == 0.0 && _pullRefreshProgress != 0.0)) {
+      setState(() => _pullRefreshProgress = clamped);
+    }
+  }
+
+  ({Uint8List bytes, String ext})? _decodeDataImage(String rawUrl) {
+    final match = RegExp(
+      r'^data:image/([a-z0-9.+-]+)(?:;[^,]*)?;base64,(.+)$',
+      caseSensitive: false,
+      dotAll: true,
+    ).firstMatch(rawUrl.trim());
+    if (match == null) return null;
+    final String subtype = (match.group(1) ?? '').toLowerCase();
+    final String rawB64 =
+        (match.group(2) ?? '').replaceAll(RegExp(r'\s+'), '');
+    if (rawB64.isEmpty) return null;
+    final Uint8List bytes = base64Decode(rawB64);
+    if (bytes.isEmpty) return null;
+    final String ext = switch (subtype) {
+      'jpeg' || 'jpg' => '.jpg',
+      'png' => '.png',
+      'webp' => '.webp',
+      'gif' => '.gif',
+      'svg+xml' => '.svg',
+      'bmp' => '.bmp',
+      'avif' => '.avif',
+      _ => '.png',
+    };
+    return (bytes: bytes, ext: ext);
+  }
+
+  Future<void> _saveContextImage(BrowserContextMenuTarget target) async {
+    final String rawUrl = target.imageUrl.trim();
+    if (rawUrl.isEmpty) return;
+    try {
+      if (rawUrl.toLowerCase().startsWith('data:image/')) {
+        final decoded = _decodeDataImage(rawUrl);
+        if (decoded == null) {
+          throw const FormatException('Invalid base64 image');
+        }
+        final String dirPath = await FileService().getDefaultDownloadDirectory();
+        final Directory dir = Directory(dirPath);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        final String fileName =
+            'image_${DateTime.now().millisecondsSinceEpoch}${decoded.ext}';
+        final File outFile = File(p.join(dirPath, fileName));
+        await outFile.writeAsBytes(decoded.bytes, flush: true);
+      } else {
+        final Uri? uri = Uri.tryParse(rawUrl);
+        if (uri == null ||
+            (uri.scheme.toLowerCase() != 'http' &&
+                uri.scheme.toLowerCase() != 'https')) {
+          throw const FormatException('Unsupported image URL');
+        }
+        String rawName = '';
+        if (uri.pathSegments.isNotEmpty) {
+          try {
+            rawName = Uri.decodeComponent(uri.pathSegments.last.trim());
+          } catch (_) {
+            rawName = uri.pathSegments.last.trim();
+          }
+        }
+        String safeName = rawName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+        if (safeName.isEmpty || safeName == '.' || safeName == '..') {
+          safeName = 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        } else if (p.extension(safeName).isEmpty) {
+          safeName = '$safeName.jpg';
+        }
+        await FileService().downloadToDownloads(rawUrl, safeName);
+      }
+      if (mounted) {
+        GlassToastService().show(
+          context,
+          context.trOr('browser_image_saved', 'Изображение сохранено'),
+          icon: Icons.download_done_rounded,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        GlassToastService().show(
+          context,
+          context.trOr(
+            'browser_image_save_failed',
+            'Не удалось сохранить изображение',
+          ),
+          icon: Icons.error_outline_rounded,
+        );
+      }
+    }
+  }
+
+  Future<void> _shareContextImage(BrowserContextMenuTarget target) async {
+    final String rawUrl = target.imageUrl.trim();
+    if (rawUrl.isEmpty) return;
+    HapticUtils.tap();
+    try {
+      if (rawUrl.toLowerCase().startsWith('data:image/')) {
+        final decoded = _decodeDataImage(rawUrl);
+        if (decoded != null) {
+          final File tmpFile = File(
+            p.join(
+              Directory.systemTemp.path,
+              'share_${DateTime.now().millisecondsSinceEpoch}${decoded.ext}',
+            ),
+          );
+          await tmpFile.writeAsBytes(decoded.bytes, flush: true);
+          await SharePlus.instance.share(
+            ShareParams(files: <XFile>[XFile(tmpFile.path)]),
+          );
+          return;
+        }
+      }
+      await SharePlus.instance.share(ShareParams(text: rawUrl));
+    } catch (_) {}
+  }
+
+  Future<void> _openUrlInNewTab(String targetUrl) async {
+    final String cleanUrl = targetUrl.trim();
+    final Uri? parsed = Uri.tryParse(cleanUrl);
+    final String scheme = parsed?.scheme.toLowerCase() ?? '';
+    if (parsed == null || (scheme != 'http' && scheme != 'https')) {
+      return;
+    }
+    final NavigatorState rootNav = Navigator.of(context, rootNavigator: true);
+    final BuildContext? hostCtx = rootNav.overlay?.context;
+    if (hostCtx == null || !hostCtx.mounted) return;
+    if (rootNav.canPop()) {
+      if (_isMinimizing) return;
+      _isMinimizing = true;
+      _findFocusNode.unfocus();
+      _closeMenu();
+      _closeSiteInfoPopover();
+      await _session.dismissFullscreenVideoOverlay();
+      if (!mounted) return;
+      if (_session.previewImageBytes == null) {
+        await _session.capturePreviewSnapshot().timeout(
+              const Duration(milliseconds: 60),
+              onTimeout: () {},
+            );
+      } else {
+        unawaited(_session.capturePreviewSnapshot());
+      }
+      if (!mounted) return;
+      unawaited(_session.setWebPageInteractionLocked(false));
+      _markRouteSettled(false);
+      _setRouteRestingOpaque(false);
+      _releaseFullScreenRegistration();
+      _allowRoutePop = true;
+      MiniAppSessionController.instance.minimize(_session, navigator: rootNav);
+      if (rootNav.canPop()) {
+        rootNav.pop();
+      }
+    }
+    if (hostCtx.mounted) {
+      unawaited(openInAppBrowser(hostCtx, url: cleanUrl));
+    }
+  }
+
+  Future<void> _handleContextMenuRequested(
+    BrowserContextMenuTarget target,
+  ) async {
+    if (!mounted ||
+        _isDisposing ||
+        _isMinimizing ||
+        _session.isReaderModeActive ||
+        _isMenuOpen ||
+        _isSiteInfoOpen ||
+        activeSafariWebAlertCount.value > 0 ||
+        !(ModalRoute.isCurrentOf(context) ?? true)) {
+      return;
+    }
+    if (!target.hasLink && !target.hasImage) return;
+    HapticUtils.selection();
+    final SafariElementContextAction? action =
+        await showSafariElementContextSheet(
+      context,
+      target: target,
+      alreadyBookmarked: target.hasLink &&
+          BrowserDataService.instance.isBookmarked(target.linkUrl),
+    );
+    if (!mounted || action == null) return;
+
+    switch (action) {
+      case SafariElementContextAction.openInNewTab:
+        await _openUrlInNewTab(target.linkUrl);
+        break;
+      case SafariElementContextAction.openImageInNewTab:
+        await _openUrlInNewTab(target.imageUrl);
+        break;
+      case SafariElementContextAction.addBookmark:
+        final String title = target.linkText.trim().isNotEmpty
+            ? target.linkText.trim()
+            : BrowserDataService.extractHost(target.linkUrl);
+        final bool added = await BrowserDataService.instance.toggleBookmark(
+          target.linkUrl,
+          title,
+        );
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            added
+                ? context.trOr('browser_bookmark_added', 'Добавлено в закладки')
+                : context.trOr('browser_bookmark_removed', 'Удалено из закладок'),
+            icon: added
+                ? Icons.bookmark_added_rounded
+                : Icons.bookmark_remove_rounded,
+          );
+        }
+        break;
+      case SafariElementContextAction.copyLink:
+        await Clipboard.setData(ClipboardData(text: target.linkUrl));
+        HapticUtils.selection();
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            context.trOr('browser_link_copied', 'Ссылка скопирована'),
+            icon: Icons.check,
+          );
+        }
+        break;
+      case SafariElementContextAction.copyImageUrl:
+        await Clipboard.setData(ClipboardData(text: target.imageUrl));
+        HapticUtils.selection();
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            context.trOr(
+              'browser_image_url_copied',
+              'Ссылка на изображение скопирована',
+            ),
+            icon: Icons.check,
+          );
+        }
+        break;
+      case SafariElementContextAction.shareLink:
+        HapticUtils.tap();
+        try {
+          await SharePlus.instance.share(ShareParams(text: target.linkUrl));
+        } catch (_) {}
+        break;
+      case SafariElementContextAction.shareImage:
+        await _shareContextImage(target);
+        break;
+      case SafariElementContextAction.saveImage:
+        await _saveContextImage(target);
+        break;
     }
   }
 
@@ -888,7 +1480,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     if (mounted) {
       GlassToastService().show(
         context,
-        added ? 'Добавлено в закладки' : 'Удалено из закладок',
+        added
+            ? context.trOr('browser_bookmark_added', 'Добавлено в закладки')
+            : context.trOr('browser_bookmark_removed', 'Удалено из закладок'),
         icon: added ? Icons.bookmark_added_rounded : Icons.bookmark_remove_rounded,
       );
     }
@@ -909,7 +1503,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     await Clipboard.setData(ClipboardData(text: _session.currentUrl));
     HapticUtils.selection();
     if (mounted) {
-      GlassToastService().show(context, 'Ссылка скопирована', icon: Icons.check);
+      GlassToastService().show(
+        context,
+        context.trOr('browser_link_copied', 'Ссылка скопирована'),
+        icon: Icons.check,
+      );
     }
   }
 
@@ -1074,6 +1672,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       _session.webResourceErrorDescription = null;
       _session.webResourceErrorUrl = null;
       _session.browserChromeCollapsed = false;
+      _session.isReaderModeActive = false;
+      _session.activeReaderArticle = null;
+      _session.isReaderAvailable = false;
+      _session.pendingCardPrompt = null;
+      _pullRefreshProgress = 0.0;
+      _pullRefreshThresholdHapticFired = false;
       if (hostChanged) {
         _session.browserTopIsDark = null;
         _session.browserCanvasColor = null;
@@ -1085,10 +1689,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           _session.acceptedSslWarningHosts.contains(nextAsciiHost.toLowerCase());
     });
     if (hostChanged) {
-      final bool nextDesktop = BrowserSiteSettingsService.instance
-              .preferenceForUrl(rawUrl)
-              ?.desktopMode ??
-          false;
+      final sitePref =
+          BrowserSiteSettingsService.instance.preferenceForUrl(rawUrl);
+      _session.pageTextZoom =
+          (sitePref?.textZoom ?? 1.0).clamp(0.85, 1.50).toDouble();
+      final bool nextDesktop = sitePref?.desktopMode ?? false;
       if (nextDesktop != _session.isDesktopMode) {
         _session.isDesktopMode = nextDesktop;
         final ctrl = _session.controller;
@@ -1181,7 +1786,16 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final mq = MediaQuery.of(context);
     final topInset = mq.padding.top;
     final bottomInset = mq.padding.bottom;
-    final bool isTopDark = _session.browserTopIsDark ?? style.isDark;
+    final bool isReaderActive =
+        _session.isReaderModeActive && _session.activeReaderArticle != null;
+    final SafariReaderThemeColors? readerColors = isReaderActive
+        ? SafariReaderThemeColors.resolve(
+            BrowserSiteSettingsService.instance.readerTheme,
+            resolved.palette,
+          )
+        : null;
+    final bool isTopDark =
+        readerColors?.isDark ?? _session.browserTopIsDark ?? style.isDark;
     final SystemUiOverlayStyle overlayStyle =
         (isTopDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
             .copyWith(
@@ -1208,7 +1822,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final bool isCompact = _session.browserChromeCollapsed &&
         !_isMenuOpen &&
         !_isFindOpen &&
-        !_isSiteInfoOpen;
+        !_isSiteInfoOpen &&
+        !isReaderActive;
     final bool isRouteCovered = !(ModalRoute.isCurrentOf(context) ?? true);
     final bool isPageInteractionBlocked = isRouteCovered ||
         _isSiteInfoOpen ||
@@ -1221,16 +1836,20 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         unawaited(_session.setWebPageInteractionLocked(isPageInteractionBlocked));
       });
     }
-    final Color topPocketBase = _session.browserTopPocketColor ??
+    final Color topPocketBase = readerColors?.background ??
+        _session.browserTopPocketColor ??
         _session.browserCanvasColor ??
         resolved.bodyBg;
-    final Color bottomPocketBase = _session.browserBottomPocketColor ??
+    final Color bottomPocketBase = readerColors?.background ??
+        _session.browserBottomPocketColor ??
         _session.browserCanvasColor ??
         resolved.bodyBg;
     final bool allowEdgeBlur = style.allowBlur || style.allowMaterialBlur;
 
     final List<BrowserCredentialHint> savedHintsForCurrent =
         BrowserVaultService.instance.getHintsForUrl(currentUrl);
+    final bool readerToggleEnabled =
+        _session.isReaderAvailable || _session.isReaderModeActive;
     final Widget expandedMenuContent = Padding(
       key: const ValueKey('in_app_browser_overflow_menu'),
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1244,7 +1863,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               icon: isFullySecure
                   ? Icons.lock_outline_rounded
                   : Icons.gpp_maybe_rounded,
-              label: 'Сведения о сайте',
+              label: context.trOr('browser_menu_site_info', 'Сведения о сайте'),
               fg: isFullySecure ? resolved.headerFg : resolved.palette.error,
               onTap: () {
                 _closeMenu();
@@ -1253,7 +1872,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
             _browserMenuItem(
               icon: Icons.refresh_rounded,
-              label: 'Обновить',
+              label: context.trOr('browser_menu_refresh', 'Обновить'),
               fg: resolved.headerFg,
               onTap: () {
                 _closeMenu();
@@ -1261,22 +1880,67 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               },
             ),
             _browserMenuItem(
+              itemKey: const ValueKey('in_app_browser_menu_reader'),
+              icon: _session.isReaderModeActive
+                  ? Icons.menu_book_rounded
+                  : Icons.article_outlined,
+              label: _session.isReaderModeActive
+                  ? context.trOr(
+                      'browser_reader_exit_mode',
+                      'Выйти из режима чтения',
+                    )
+                  : context.trOr(
+                      'browser_reader_enter_mode',
+                      'Режим чтения',
+                    ),
+              fg: _session.isReaderModeActive
+                  ? resolved.palette.primary
+                  : resolved.headerFg,
+              onTap: readerToggleEnabled
+                  ? () {
+                      _closeMenu();
+                      unawaited(_toggleReaderMode());
+                    }
+                  : null,
+            ),
+            _browserMenuItem(
+              itemKey: const ValueKey('in_app_browser_menu_typography'),
+              icon: Icons.text_fields_rounded,
+              label: context.trOr(
+                'browser_menu_typography',
+                'Вид и размер текста (Aa)',
+              ),
+              fg: resolved.headerFg,
+              onTap: _openTypographySheet,
+            ),
+            _browserMenuItem(
               icon: bookmarked
                   ? Icons.bookmark_rounded
                   : Icons.bookmark_border_rounded,
-              label: bookmarked ? 'Убрать из закладок' : 'В закладки',
+              label: bookmarked
+                  ? context.trOr(
+                      'browser_menu_remove_bookmark',
+                      'Убрать из закладок',
+                    )
+                  : context.trOr('browser_menu_add_bookmark', 'В закладки'),
               fg: resolved.headerFg,
               onTap: _toggleBookmark,
             ),
             _browserMenuItem(
               icon: Icons.history_rounded,
-              label: 'Закладки и история',
+              label: context.trOr(
+                'browser_menu_library',
+                'Закладки и история',
+              ),
               fg: resolved.headerFg,
               onTap: _openBookmarksAndHistorySheet,
             ),
             _browserMenuItem(
               icon: Icons.key_rounded,
-              label: 'Пароли и автозаполнение',
+              label: context.trOr(
+                'browser_menu_passwords',
+                'Пароли и автозаполнение',
+              ),
               fg: resolved.headerFg,
               onTap: () {
                 _closeMenu();
@@ -1291,7 +1955,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
             _browserMenuItem(
               icon: Icons.search_rounded,
-              label: 'Найти на странице',
+              label: context.trOr(
+                'browser_menu_find_in_page',
+                'Найти на странице',
+              ),
               fg: resolved.headerFg,
               onTap: () {
                 _closeMenu();
@@ -1303,20 +1970,32 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                   ? Icons.phone_android_rounded
                   : Icons.desktop_windows_rounded,
               label: _session.isDesktopMode
-                  ? 'Мобильная версия'
-                  : 'Версия для ПК',
+                  ? context.trOr(
+                      'browser_menu_mobile_version',
+                      'Мобильная версия',
+                    )
+                  : context.trOr(
+                      'browser_menu_desktop_version',
+                      'Версия для ПК',
+                    ),
               fg: resolved.headerFg,
               onTap: _toggleDesktopMode,
             ),
             _browserMenuItem(
               icon: Icons.copy_rounded,
-              label: 'Копировать ссылку',
+              label: context.trOr(
+                'browser_context_copy_link',
+                'Копировать ссылку',
+              ),
               fg: resolved.headerFg,
               onTap: _copyCurrentUrl,
             ),
             _browserMenuItem(
               icon: Icons.open_in_browser_rounded,
-              label: 'Открыть во внешнем браузере',
+              label: context.trOr(
+                'browser_menu_open_external',
+                'Открыть во внешнем браузере',
+              ),
               fg: resolved.headerFg,
               onTap: _openExternalBrowser,
             ),
@@ -1349,7 +2028,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
         if (mounted) {
           GlassToastService().show(
             context,
-            'Разрешения сайта сброшены',
+            context.trOr(
+              'browser_site_permissions_reset',
+              'Разрешения сайта сброшены',
+            ),
             icon: Icons.restart_alt_rounded,
           );
         }
@@ -1416,7 +2098,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       onDismissMenu: _closeMenu,
       expandedMenuWidth: 264.0,
       expandedMenuHeight: math.min(
-        9 * 44.0 + 16.0,
+        11 * 44.0 + 16.0,
         math.max(180.0, mq.size.height - topInset - bottomInset - 24.0),
       ),
       expandedMenuChild: expandedMenuContent,
@@ -1426,7 +2108,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
       onVerticalDragCancel: _resetDragOffset,
       leadingChild: IconButton(
         key: const ValueKey('in_app_browser_close_button'),
-        tooltip: 'Закрыть',
+        tooltip: context.trOr('common_close', 'Закрыть'),
         padding: EdgeInsets.zero,
         icon: Icon(Icons.close_rounded, size: 22, color: resolved.headerFg),
         onPressed: _closeTab,
@@ -1482,6 +2164,38 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               ],
             ),
           ),
+          if (readerToggleEnabled)
+            Tooltip(
+              message: _session.isReaderModeActive
+                  ? context.trOr(
+                      'browser_reader_exit_mode',
+                      'Выйти из режима чтения',
+                    )
+                  : context.trOr(
+                      'browser_reader_enter_mode',
+                      'Режим чтения',
+                    ),
+              child: GestureDetector(
+                key: const ValueKey('in_app_browser_reader_button'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticUtils.tap();
+                  unawaited(_toggleReaderMode());
+                },
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 6, top: 6, bottom: 6),
+                  child: Icon(
+                    _session.isReaderModeActive
+                        ? Icons.menu_book_rounded
+                        : Icons.article_outlined,
+                    size: 16,
+                    color: _session.isReaderModeActive
+                        ? resolved.palette.primary
+                        : resolved.headerFg.withValues(alpha: 0.78),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       trailingActions: [
@@ -1490,7 +2204,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           height: 44,
           child: IconButton(
             key: const ValueKey('in_app_browser_minimize_button'),
-            tooltip: 'Свернуть',
+            tooltip: context.trOr('miniapp_menu_minimize', 'Свернуть'),
             padding: EdgeInsets.zero,
             icon: Icon(
               Icons.keyboard_arrow_down_rounded,
@@ -1505,7 +2219,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
           height: 44,
           child: IconButton(
             key: const ValueKey('in_app_browser_menu_button'),
-            tooltip: 'Меню',
+            tooltip: context.trOr('browser_header_menu', 'Меню'),
             padding: EdgeInsets.zero,
             icon: Icon(
               Icons.more_vert_rounded,
@@ -1546,7 +2260,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                       color: resolved.headerFg,
                     ),
                     decoration: InputDecoration(
-                      hintText: 'Найти на странице...',
+                      hintText: context.trOr(
+                        'browser_find_hint',
+                        'Найти на странице...',
+                      ),
                       hintStyle: TextStyle(
                         fontSize: 13.5,
                         color: resolved.headerFg.withValues(alpha: 0.55),
@@ -1574,8 +2291,15 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: Text(
                       _findTotalMatches > 0
-                          ? '$_findCurrentMatch из $_findTotalMatches'
-                          : '0 из 0',
+                          ? context.trOr(
+                              'browser_find_counter',
+                              '{current} из {total}',
+                              <String, String>{
+                                'current': '$_findCurrentMatch',
+                                'total': '$_findTotalMatches',
+                              },
+                            )
+                          : context.trOr('browser_find_zero', '0 из 0'),
                       key: const ValueKey('in_app_browser_find_counter'),
                       maxLines: 1,
                       softWrap: false,
@@ -1681,7 +2405,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             : null;
     final bool mountWebView = _isTransitionReady && _session.controller != null;
 
-    final Widget webBody = _hasPlatformWebView
+    final Widget baseWebLayer = _hasPlatformWebView
         ? Stack(
             fit: StackFit.expand,
             children: [
@@ -1752,7 +2476,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                'Не удалось открыть страницу',
+                                context.trOr(
+                                  'browser_error_load_title',
+                                  'Не удалось открыть страницу',
+                                ),
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 16,
@@ -1780,7 +2507,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                                     unawaited(_session.retryMainFrameLoad()),
                                 icon:
                                     const Icon(Icons.refresh_rounded, size: 18),
-                                label: const Text('Повторить'),
+                                label: Text(
+                                  context.trOr('common_retry', 'Повторить'),
+                                ),
                               ),
                             ],
                           ),
@@ -1837,7 +2566,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                     ),
                     const SizedBox(height: 16),
                     TheavFloatingPillButton(
-                      label: 'Открыть во внешнем браузере',
+                      label: context.trOr(
+                        'browser_menu_open_external',
+                        'Открыть во внешнем браузере',
+                      ),
                       isPrimary: true,
                       onTap: _openExternalBrowser,
                     ),
@@ -1846,6 +2578,30 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               ),
             ),
           );
+
+    final Widget webBody = Stack(
+      fit: StackFit.expand,
+      children: [
+        IgnorePointer(
+          ignoring: isReaderActive,
+          child: baseWebLayer,
+        ),
+        if (isReaderActive)
+          Positioned.fill(
+            child: SafariReaderModeView(
+              article: _session.activeReaderArticle!,
+              themeId: BrowserSiteSettingsService.instance.readerTheme,
+              fontFamilyId:
+                  BrowserSiteSettingsService.instance.readerFontFamily,
+              fontScale: BrowserSiteSettingsService.instance.readerFontScale,
+              topClearance: topInset + 58.0,
+              bottomClearance: bottomInset + 64.0,
+              scrollController: _readerScrollCtrl,
+              onExitReader: _exitReaderMode,
+            ),
+          ),
+      ],
+    );
 
     final double bottomExpandTarget = isCompact ? 0.0 : 1.0;
     final Widget floatingBottomBar = Positioned(
@@ -1879,7 +2635,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
                         IconButton(
-                          tooltip: 'Назад',
+                          tooltip: context.trOr('common_back', 'Назад'),
                           icon: Icon(
                             Icons.arrow_back_ios_new_rounded,
                             size: 19,
@@ -1890,7 +2646,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                           onPressed: _session.canGoBack ? _goBack : null,
                         ),
                         IconButton(
-                          tooltip: 'Вперёд',
+                          tooltip:
+                              context.trOr('browser_nav_forward', 'Вперёд'),
                           icon: Icon(
                             Icons.arrow_forward_ios_rounded,
                             size: 19,
@@ -1901,7 +2658,8 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                           onPressed: _session.canGoForward ? _goForward : null,
                         ),
                         IconButton(
-                          tooltip: 'Поделиться',
+                          tooltip:
+                              context.trOr('browser_nav_share', 'Поделиться'),
                           icon: Icon(
                             Icons.ios_share_rounded,
                             size: 20,
@@ -1910,7 +2668,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                           onPressed: _shareCurrentUrl,
                         ),
                         IconButton(
-                          tooltip: 'Закладки и история',
+                          tooltip: context.trOr(
+                            'browser_menu_library',
+                            'Закладки и история',
+                          ),
                           icon: Icon(
                             bookmarked
                                 ? Icons.bookmark_rounded
@@ -1928,7 +2689,12 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                             final bool isLoading =
                                 progress > 0.0 && progress < 1.0;
                             return IconButton(
-                              tooltip: isLoading ? 'Стоп' : 'Обновить',
+                              tooltip: isLoading
+                                  ? context.trOr('browser_nav_stop', 'Стоп')
+                                  : context.trOr(
+                                      'browser_menu_refresh',
+                                      'Обновить',
+                                    ),
                               icon: Icon(
                                 isLoading
                                     ? Icons.close_rounded
@@ -1969,7 +2735,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             ),
           ),
         floatingBottomBar,
-        if (_session.focusedAutofillField != null)
+        if (_session.focusedAutofillField != null && !isReaderActive)
           Positioned(
             left: 0,
             right: 0,
@@ -1995,13 +2761,46 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                   ),
                 ),
                 onFillContact: () => unawaited(_handleAutofillFillContact()),
+                cards: BrowserVaultService.instance.cardHints,
+                totalSavedCardsCount:
+                    BrowserVaultService.instance.cardHints.length,
+                onSelectCard: (card) =>
+                    unawaited(_handleAutofillSelectCard(card)),
+                onOpenCardPicker: () => unawaited(
+                  showBrowserVaultAndDataSheet(
+                    context,
+                    initialSection: 1,
+                    autoUnlockPasswords: false,
+                    onSelectCardForAutofill: (card) =>
+                        unawaited(_handleAutofillSelectCard(card)),
+                  ),
+                ),
+                addresses: BrowserVaultService.instance.addresses,
+                onSelectAddress: (addr) =>
+                    unawaited(_handleAutofillSelectAddress(addr)),
+                onOpenAddressPicker: () => unawaited(
+                  showBrowserVaultAndDataSheet(
+                    context,
+                    initialSection: 1,
+                    autoUnlockPasswords: false,
+                    onSelectAddressForAutofill: (addr) =>
+                        unawaited(_handleAutofillSelectAddress(addr)),
+                  ),
+                ),
+                otpCandidateCode:
+                    BrowserOtpAutofillService.instance.activeCandidate?.code,
+                showExplicitPasteOtpChip: BrowserOtpAutofillService
+                    .instance.showExplicitPasteOtpAction,
+                onFillOtp: (code) => unawaited(_handleAutofillFillOtp(code)),
+                onPasteOtpFromClipboard: () =>
+                    unawaited(_handlePasteOtpFromClipboard()),
                 onDismiss: () {
                   setState(() => _session.focusedAutofillField = null);
                 },
               ),
             ),
           ),
-        if (_session.pendingCredentialPrompt != null)
+        if (_session.pendingCredentialPrompt != null && !isReaderActive)
           Positioned(
             left: 0,
             right: 0,
@@ -2020,6 +2819,81 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                   onDismiss: () {
                     setState(() => _session.pendingCredentialPrompt = null);
                   },
+                ),
+              ),
+            ),
+          ),
+        if (_session.pendingCardPrompt != null &&
+            _session.pendingCredentialPrompt == null &&
+            !isReaderActive)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: math.max(
+              bottomInset + 66.0,
+              mq.viewInsets.bottom + 12.0,
+            ),
+            child: IgnorePointer(
+              ignoring: isPageInteractionBlocked,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: SafariSaveCardSheet(
+                  candidate: _session.pendingCardPrompt!,
+                  onSave: () => unawaited(_handleSavePendingCard()),
+                  onDismiss: () {
+                    setState(() => _session.pendingCardPrompt = null);
+                  },
+                ),
+              ),
+            ),
+          ),
+        if (_pullRefreshProgress > 0.02 && !isReaderActive)
+          Positioned(
+            key: const ValueKey('in_app_browser_ptr_capsule'),
+            top: topInset + 62.0,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: Center(
+                child: Transform.translate(
+                  offset: Offset(0.0, -16.0 * (1.0 - _pullRefreshProgress)),
+                  child: Transform.scale(
+                    scale: 0.85 + 0.15 * _pullRefreshProgress,
+                    child: WebViewFloatingCapsule(
+                      height: 36,
+                      borderRadius: 18,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              value: _pullRefreshProgress >= 1.0
+                                  ? null
+                                  : _pullRefreshProgress,
+                              strokeWidth: 2.0,
+                              color: _pullRefreshProgress >= 1.0
+                                  ? resolved.palette.primary
+                                  : resolved.headerFg.withValues(alpha: 0.82),
+                            ),
+                          ),
+                          const SizedBox(width: 7),
+                          Transform.rotate(
+                            angle: _pullRefreshProgress * math.pi * 1.5,
+                            child: Icon(
+                              Icons.refresh_rounded,
+                              size: 16,
+                              color: _pullRefreshProgress >= 1.0
+                                  ? resolved.palette.primary
+                                  : resolved.headerFg,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -2108,6 +2982,10 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
               setState(() => _session.pendingCredentialPrompt = null);
               return;
             }
+            if (_session.pendingCardPrompt != null) {
+              setState(() => _session.pendingCardPrompt = null);
+              return;
+            }
             if (_isSiteInfoOpen) {
               _closeSiteInfoPopover();
               return;
@@ -2118,6 +2996,11 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
             }
             if (_isFindOpen) {
               _closeFindBar();
+              return;
+            }
+            if (_session.isReaderModeActive) {
+              HapticUtils.tap();
+              _exitReaderMode();
               return;
             }
             final movedBack = await _session.performWebBack();
@@ -2146,23 +3029,29 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
   }
 
   Widget _browserMenuItem({
+    Key? itemKey,
     required IconData icon,
     required String label,
     required Color fg,
-    required VoidCallback onTap,
+    VoidCallback? onTap,
   }) {
+    final bool enabled = onTap != null;
+    final Color effectiveFg = enabled ? fg : fg.withValues(alpha: 0.36);
     return InkWell(
-      onTap: () {
-        HapticUtils.tap();
-        onTap();
-      },
+      key: itemKey,
+      onTap: enabled
+          ? () {
+              HapticUtils.tap();
+              onTap();
+            }
+          : null,
       child: SizedBox(
         height: 44,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              Icon(icon, size: 19, color: fg),
+              Icon(icon, size: 19, color: effectiveFg),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
@@ -2172,7 +3061,7 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
                   style: TextStyle(
                     fontSize: 14.5,
                     fontWeight: FontWeight.w500,
-                    color: fg,
+                    color: effectiveFg,
                   ),
                 ),
               ),

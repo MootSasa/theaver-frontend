@@ -7,8 +7,16 @@ import '../services/auth_service.dart';
 
 /// Класс для управления локализацией приложения
 class AppLocalizations {
+  static AppLocalizations? _current;
+
+  /// Текущий загруженный экземпляр локализации (может быть null до вызова [load]).
+  static AppLocalizations? get current => _current;
+
+  @visibleForTesting
+  static set debugCurrent(AppLocalizations? value) => _current = value;
+
   final Locale locale;
-  late Map<String, String> _localizedStrings;
+  Map<String, String> _localizedStrings = const {};
   Map<String, String> _fallbackStrings = const {};
 
   AppLocalizations(this.locale);
@@ -18,15 +26,36 @@ class AppLocalizations {
     return Localizations.of<AppLocalizations>(context, AppLocalizations);
   }
 
+  /// Проверяет, определён ли ключ [key] в активном или резервном словаре.
+  bool hasKey(String key) =>
+      _localizedStrings.containsKey(key) || _fallbackStrings.containsKey(key);
+
+  static String _interpolate(String raw, [Map<String, String>? params]) {
+    if (params == null || params.isEmpty) return raw;
+    String str = raw;
+    params.forEach((paramKey, paramValue) {
+      str = str.replaceAll('{$paramKey}', paramValue);
+    });
+    return str;
+  }
+
+  /// Переводит [key] через [current], либо возвращает интерполированный [fallback].
+  static String trStatic(
+    String key,
+    String fallback, [
+    Map<String, String>? params,
+  ]) {
+    final cur = _current;
+    if (cur != null && cur.hasKey(key)) {
+      return cur.translate(key, params);
+    }
+    return _interpolate(fallback, params);
+  }
+
   /// Получить локализованный текст по ключу с поддержкой параметров
   String translate(String key, [Map<String, String>? params]) {
-    String str = _localizedStrings[key] ?? _fallbackStrings[key] ?? key;
-    if (params != null) {
-      params.forEach((paramKey, paramValue) {
-        str = str.replaceAll('{$paramKey}', paramValue);
-      });
-    }
-    return str;
+    final String str = _localizedStrings[key] ?? _fallbackStrings[key] ?? key;
+    return _interpolate(str, params);
   }
 
   /// Загрузить файл локализации (с резервным fallback на EN при отсутствующих ключах)
@@ -51,6 +80,7 @@ class AppLocalizations {
     } else {
       _fallbackStrings = const {};
     }
+    _current = this;
     return true;
   }
 
@@ -83,9 +113,23 @@ class _AppLocalizationsDelegate
 /// Расширение для удобного доступа к переводам
 extension AppLocalizationsExtension on BuildContext {
   AppLocalizations get l10n => AppLocalizations.of(this)!;
-  
+
   /// Получить перевод по ключу с поддержкой параметров
   String tr(String key, [Map<String, String>? params]) => l10n.translate(key, params);
+
+  /// Безопасный перевод с fallback-строкой (не бросает исключение в изолированных
+  /// виджет-тестах без делегата [AppLocalizations.delegate]).
+  String trOr(
+    String key,
+    String fallback, [
+    Map<String, String>? params,
+  ]) {
+    final loc = AppLocalizations.of(this);
+    if (loc != null && loc.hasKey(key)) {
+      return loc.translate(key, params);
+    }
+    return AppLocalizations._interpolate(fallback, params);
+  }
 }
 
 /// Провайдер для управления языком приложения

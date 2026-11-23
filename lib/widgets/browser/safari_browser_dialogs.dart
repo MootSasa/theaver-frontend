@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../services/browser_site_settings_service.dart';
 import '../../services/browser_vault_service.dart';
 import '../../utils/blur_utils.dart';
@@ -569,21 +570,26 @@ Future<bool> showSafariSslWarningDialog(
     tone: SafariAlertTone.securityWarning,
     originLabel: displayHost.isNotEmpty ? displayHost : null,
     originIsSecure: false,
-    title: 'Соединение не защищено',
-    message:
-        'Сертификат безопасности этого сайта не прошёл проверку. Злоумышленники могут перехватить или подменить передаваемые данные.',
-    actions: const [
+    title: context.trOr('browser_ssl_warning_title', 'Соединение не защищено'),
+    message: context.trOr(
+      'browser_ssl_warning_message',
+      'Сертификат безопасности этого сайта не прошёл проверку. Злоумышленники могут перехватить или подменить передаваемые данные.',
+    ),
+    actions: [
       SafariAlertAction<bool>(
-        label: 'Вернуться назад',
+        label: context.trOr('browser_ssl_go_back', 'Вернуться назад'),
         result: false,
         isPrimary: true,
-        buttonKey: ValueKey('safari_ssl_go_back_btn'),
+        buttonKey: const ValueKey('safari_ssl_go_back_btn'),
       ),
       SafariAlertAction<bool>(
-        label: 'Посетить сайт (небезопасно)',
+        label: context.trOr(
+          'browser_ssl_proceed',
+          'Посетить сайт (небезопасно)',
+        ),
         result: true,
         isDestructive: true,
-        buttonKey: ValueKey('safari_ssl_proceed_btn'),
+        buttonKey: const ValueKey('safari_ssl_proceed_btn'),
       ),
     ],
   );
@@ -605,21 +611,30 @@ Future<bool> showSafariSuspiciousLinkDialog(
     tone: SafariAlertTone.securityWarning,
     originLabel: hostDetails,
     originIsSecure: info.securityLevel == SafariConnectionSecurityLevel.secureHttps,
-    title: 'Подозрительный адрес сайта',
-    message:
-        'Домен содержит смешанные символы разных алфавитов и может имитировать известный сайт.\n\nРеальный адрес: ${info.asciiHost}',
-    actions: const [
+    title: context.trOr(
+      'browser_suspicious_link_title',
+      'Подозрительный адрес сайта',
+    ),
+    message: context.trOr(
+      'browser_suspicious_link_message',
+      'Домен содержит смешанные символы разных алфавитов и может имитировать известный сайт.\n\nРеальный адрес: {host}',
+      {'host': info.asciiHost},
+    ),
+    actions: [
       SafariAlertAction<bool>(
-        label: 'Отмена',
+        label: context.trOr('common_cancel', 'Отмена'),
         result: false,
         isPrimary: true,
-        buttonKey: ValueKey('safari_suspicious_cancel_btn'),
+        buttonKey: const ValueKey('safari_suspicious_cancel_btn'),
       ),
       SafariAlertAction<bool>(
-        label: 'Всё равно открыть',
+        label: context.trOr(
+          'browser_suspicious_open_anyway',
+          'Всё равно открыть',
+        ),
         result: true,
         isDestructive: true,
-        buttonKey: ValueKey('safari_suspicious_proceed_btn'),
+        buttonKey: const ValueKey('safari_suspicious_proceed_btn'),
       ),
     ],
   );
@@ -645,10 +660,10 @@ Future<bool> showSafariExternalAppDialog(
     title: schemeInfo.title,
     message: schemeInfo.message,
     actions: [
-      const SafariAlertAction<bool>(
-        label: 'Отмена',
+      SafariAlertAction<bool>(
+        label: context.trOr('common_cancel', 'Отмена'),
         result: false,
-        buttonKey: ValueKey('safari_external_cancel_btn'),
+        buttonKey: const ValueKey('safari_external_cancel_btn'),
       ),
       SafariAlertAction<bool>(
         label: schemeInfo.confirmLabel,
@@ -669,6 +684,7 @@ enum SafariSitePermissionChoice {
 }
 
 ({IconData icon, String resourcePhrase}) _resolvePermissionUiInfo(
+  BuildContext context,
   Set<WebViewPermissionResourceType> types,
 ) {
   final bool wantsCam = types.contains(WebViewPermissionResourceType.camera);
@@ -677,24 +693,30 @@ enum SafariSitePermissionChoice {
   if (wantsCam && wantsMic) {
     return (
       icon: Icons.videocam_rounded,
-      resourcePhrase: 'камере и микрофону',
+      resourcePhrase: context.trOr(
+        'browser_perm_resource_cam_mic',
+        'камере и микрофону',
+      ),
     );
   }
   if (wantsMic) {
     return (
       icon: Icons.mic_rounded,
-      resourcePhrase: 'микрофону',
+      resourcePhrase: context.trOr('browser_perm_resource_mic', 'микрофону'),
     );
   }
   if (wantsCam) {
     return (
       icon: Icons.camera_alt_rounded,
-      resourcePhrase: 'камере',
+      resourcePhrase: context.trOr('browser_perm_resource_cam', 'камере'),
     );
   }
   return (
     icon: Icons.sensors_rounded,
-    resourcePhrase: 'защищённым функциям устройства',
+    resourcePhrase: context.trOr(
+      'browser_perm_resource_protected',
+      'защищённым функциям устройства',
+    ),
   );
 }
 
@@ -707,10 +729,10 @@ Future<SafariSitePermissionChoice> showSafariSitePermissionDialog(
   required Set<WebViewPermissionResourceType> types,
   bool offerPersistentAlways = true,
 }) async {
-  final info = _resolvePermissionUiInfo(types);
+  final info = _resolvePermissionUiInfo(context, types);
   final cleanHost = host.trim().isNotEmpty
       ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
-      : 'этот сайт';
+      : context.trOr('browser_this_site', 'этот сайт');
   final res = await showSafariWebAlert<SafariSitePermissionChoice>(
     context: context,
     dialogKey: const ValueKey('safari_permission_dialog'),
@@ -718,39 +740,52 @@ Future<SafariSitePermissionChoice> showSafariSitePermissionDialog(
     iconOverride: info.icon,
     originLabel: cleanHost,
     originIsSecure: true,
-    title: 'Доступ к ${info.resourcePhrase}',
-    message:
-        'Разрешить сайту «$cleanHost» использовать доступ к ${info.resourcePhrase}?',
+    title: context.trOr(
+      'browser_perm_dialog_title',
+      'Доступ к {resource}',
+      {'resource': info.resourcePhrase},
+    ),
+    message: context.trOr(
+      'browser_perm_dialog_message',
+      'Разрешить сайту «{host}» использовать доступ к {resource}?',
+      {'host': cleanHost, 'resource': info.resourcePhrase},
+    ),
     actions: [
-      if (offerPersistentAlways) ...const [
+      if (offerPersistentAlways) ...[
         SafariAlertAction<SafariSitePermissionChoice>(
-          label: 'Разрешить для этого сайта',
+          label: context.trOr(
+            'browser_perm_allow_site',
+            'Разрешить для этого сайта',
+          ),
           result: SafariSitePermissionChoice.allowAlways,
           isPrimary: true,
-          buttonKey: ValueKey('safari_permission_allow_always_btn'),
+          buttonKey: const ValueKey('safari_permission_allow_always_btn'),
         ),
         SafariAlertAction<SafariSitePermissionChoice>(
-          label: 'Только в этой сессии',
+          label: context.trOr(
+            'browser_perm_allow_session',
+            'Только в этой сессии',
+          ),
           result: SafariSitePermissionChoice.allowSession,
-          buttonKey: ValueKey('safari_permission_allow_btn'),
+          buttonKey: const ValueKey('safari_permission_allow_btn'),
         ),
         SafariAlertAction<SafariSitePermissionChoice>(
-          label: 'Не разрешать',
+          label: context.trOr('browser_perm_deny', 'Не разрешать'),
           result: SafariSitePermissionChoice.deny,
           isDestructive: true,
-          buttonKey: ValueKey('safari_permission_deny_btn'),
+          buttonKey: const ValueKey('safari_permission_deny_btn'),
         ),
-      ] else ...const [
+      ] else ...[
         SafariAlertAction<SafariSitePermissionChoice>(
-          label: 'Не разрешать',
+          label: context.trOr('browser_perm_deny', 'Не разрешать'),
           result: SafariSitePermissionChoice.deny,
-          buttonKey: ValueKey('safari_permission_deny_btn'),
+          buttonKey: const ValueKey('safari_permission_deny_btn'),
         ),
         SafariAlertAction<SafariSitePermissionChoice>(
-          label: 'Разрешить',
+          label: context.trOr('browser_perm_allow', 'Разрешить'),
           result: SafariSitePermissionChoice.allowSession,
           isPrimary: true,
-          buttonKey: ValueKey('safari_permission_allow_btn'),
+          buttonKey: const ValueKey('safari_permission_allow_btn'),
         ),
       ],
     ],
@@ -786,17 +821,23 @@ Future<void> showSafariSystemPermissionDeniedDialog(
     dialogKey: const ValueKey('safari_os_permission_denied_dialog'),
     tone: SafariAlertTone.securityWarning,
     iconOverride: Icons.settings_rounded,
-    title: 'Доступ запрещён системой',
-    message:
-        'Для использования $resourceLabel включите разрешение для приложения Theaver в системных настройках.',
+    title: context.trOr(
+      'browser_os_perm_denied_title',
+      'Доступ запрещён системой',
+    ),
+    message: context.trOr(
+      'browser_os_perm_denied_message',
+      'Для использования {resource} включите разрешение для приложения Theaver в системных настройках.',
+      {'resource': resourceLabel},
+    ),
     actions: [
-      const SafariAlertAction<void>(
-        label: 'Понятно',
+      SafariAlertAction<void>(
+        label: context.trOr('browser_got_it', 'Понятно'),
         result: null,
       ),
       if (onOpenSettings != null)
         SafariAlertAction<void>(
-          label: 'Настройки',
+          label: context.trOr('browser_open_settings', 'Настройки'),
           isPrimary: true,
           onPressed: () {
             Navigator.of(context).pop();
@@ -855,7 +896,10 @@ class _MuteCheckboxBodyState extends State<_MuteCheckboxBody> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Блокировать повторные окна от этого сайта',
+                    context.trOr(
+                      'browser_js_mute_checkbox',
+                      'Блокировать повторные окна от этого сайта',
+                    ),
                     style: TextStyle(
                       fontSize: 12.5,
                       color: palette.onSurface.withValues(alpha: 0.85),
@@ -885,19 +929,21 @@ Future<({bool muteHost})> showSafariJsAlertDialog(
     dialogKey: const ValueKey('safari_js_alert_dialog'),
     tone: SafariAlertTone.info,
     iconOverride: Icons.chat_bubble_outline_rounded,
-    originLabel: originHost.isNotEmpty ? originHost : 'Веб-страница',
+    originLabel: originHost.isNotEmpty
+        ? originHost
+        : context.trOr('browser_web_page', 'Веб-страница'),
     originIsSecure: isSecure,
-    title: 'Сообщение со страницы',
+    title: context.trOr('browser_js_alert_title', 'Сообщение со страницы'),
     message: message,
     customBody: offerMuteOption
         ? _MuteCheckboxBody(onChanged: (v) => mute = v)
         : null,
-    actions: const [
+    actions: [
       SafariAlertAction<void>(
-        label: 'ОК',
+        label: context.trOr('browser_ok', 'ОК'),
         result: null,
         isPrimary: true,
-        buttonKey: ValueKey('safari_js_alert_ok_btn'),
+        buttonKey: const ValueKey('safari_js_alert_ok_btn'),
       ),
     ],
   );
@@ -918,24 +964,26 @@ Future<({bool confirmed, bool muteHost})> showSafariJsConfirmDialog(
     dialogKey: const ValueKey('safari_js_confirm_dialog'),
     tone: SafariAlertTone.info,
     iconOverride: Icons.help_outline_rounded,
-    originLabel: originHost.isNotEmpty ? originHost : 'Веб-страница',
+    originLabel: originHost.isNotEmpty
+        ? originHost
+        : context.trOr('browser_web_page', 'Веб-страница'),
     originIsSecure: isSecure,
-    title: 'Подтвердите действие',
+    title: context.trOr('browser_js_confirm_title', 'Подтвердите действие'),
     message: message,
     customBody: offerMuteOption
         ? _MuteCheckboxBody(onChanged: (v) => mute = v)
         : null,
-    actions: const [
+    actions: [
       SafariAlertAction<bool>(
-        label: 'Отмена',
+        label: context.trOr('common_cancel', 'Отмена'),
         result: false,
-        buttonKey: ValueKey('safari_js_confirm_cancel_btn'),
+        buttonKey: const ValueKey('safari_js_confirm_cancel_btn'),
       ),
       SafariAlertAction<bool>(
-        label: 'ОК',
+        label: context.trOr('browser_ok', 'ОК'),
         result: true,
         isPrimary: true,
-        buttonKey: ValueKey('safari_js_confirm_ok_btn'),
+        buttonKey: const ValueKey('safari_js_confirm_ok_btn'),
       ),
     ],
   );
@@ -1005,7 +1053,7 @@ class _SafariJsPromptBodyState extends State<_SafariJsPromptBody> {
       style: TextStyle(fontSize: 14.5, color: style.palette.onSurface),
       decoration: _buildSafariDialogInputDecoration(
         style,
-        hintText: 'Введите ответ...',
+        hintText: context.trOr('browser_js_prompt_hint', 'Введите ответ...'),
       ),
       onSubmitted: (_) => Navigator.of(context).pop(true),
     );
@@ -1121,7 +1169,15 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
                     const SizedBox(width: 7),
                     Flexible(
                       child: Text(
-                        'Подставить: ${widget.savedHints.first.username.isNotEmpty ? widget.savedHints.first.username : widget.savedHints.first.displayHost}',
+                        context.trOr(
+                          'browser_http_auth_autofill',
+                          'Подставить: {account}',
+                          {
+                            'account': widget.savedHints.first.username.isNotEmpty
+                                ? widget.savedHints.first.username
+                                : widget.savedHints.first.displayHost,
+                          },
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1146,7 +1202,10 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
           style: TextStyle(fontSize: 14.5, color: palette.onSurface),
           decoration: _buildSafariDialogInputDecoration(
             style,
-            hintText: 'Имя пользователя',
+            hintText: context.trOr(
+              'browser_http_auth_username_hint',
+              'Имя пользователя',
+            ),
           ),
         ),
         const SizedBox(height: 8),
@@ -1158,7 +1217,10 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
           style: TextStyle(fontSize: 14.5, color: palette.onSurface),
           decoration: _buildSafariDialogInputDecoration(
             style,
-            hintText: 'Пароль',
+            hintText: context.trOr(
+              'browser_http_auth_password_hint',
+              'Пароль',
+            ),
             suffixIcon: IconButton(
               icon: Icon(
                 _obscure
@@ -1205,7 +1267,10 @@ class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Сохранить пароль в Theaver',
+                      context.trOr(
+                        'browser_http_auth_save_checkbox',
+                        'Сохранить пароль в Theaver',
+                      ),
                       style: TextStyle(
                         fontSize: 12.5,
                         color: palette.onSurface.withValues(alpha: 0.85),
@@ -1239,9 +1304,14 @@ Future<({String? value, bool muteHost})> showSafariJsPromptDialog(
         dialogKey: const ValueKey('safari_js_prompt_dialog'),
         tone: SafariAlertTone.info,
         iconOverride: Icons.edit_rounded,
-        originLabel: originHost.isNotEmpty ? originHost : 'Веб-страница',
+        originLabel: originHost.isNotEmpty
+            ? originHost
+            : context.trOr('browser_web_page', 'Веб-страница'),
         originIsSecure: isSecure,
-        title: 'Запрос данных со страницы',
+        title: context.trOr(
+          'browser_js_prompt_title',
+          'Запрос данных со страницы',
+        ),
         message: message,
         customBody: _SafariJsPromptBody(
           initialText: defaultText ?? '',
@@ -1249,17 +1319,17 @@ Future<({String? value, bool muteHost})> showSafariJsPromptDialog(
           onTextChanged: (v) => currentValue = v,
           onMuteChanged: (v) => mute = v,
         ),
-        actions: const [
+        actions: [
           SafariAlertAction<bool>(
-            label: 'Отмена',
+            label: context.trOr('common_cancel', 'Отмена'),
             result: false,
-            buttonKey: ValueKey('safari_js_prompt_cancel_btn'),
+            buttonKey: const ValueKey('safari_js_prompt_cancel_btn'),
           ),
           SafariAlertAction<bool>(
-            label: 'ОК',
+            label: context.trOr('browser_ok', 'ОК'),
             result: true,
             isPrimary: true,
-            buttonKey: ValueKey('safari_js_prompt_ok_btn'),
+            buttonKey: const ValueKey('safari_js_prompt_ok_btn'),
           ),
         ],
       ) ??
@@ -1287,7 +1357,7 @@ Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
   bool saveCredential = offerSaveOption;
   final cleanHost = SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim());
   final String realmSuffix = (realm != null && realm.trim().isNotEmpty)
-      ? '\nОбласть: ${realm.trim()}'
+      ? '\n${context.trOr('browser_http_auth_realm', 'Область: {realm}', {'realm': realm.trim()})}'
       : '';
 
   final bool confirmed = await showSafariWebAlert<bool>(
@@ -1296,8 +1366,12 @@ Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
         tone: SafariAlertTone.auth,
         originLabel: cleanHost.isNotEmpty ? cleanHost : null,
         originIsSecure: originIsSecure,
-        title: 'Требуется вход',
-        message: 'Введите имя пользователя и пароль для входа.$realmSuffix',
+        title: context.trOr('browser_http_auth_title', 'Требуется вход'),
+        message: context.trOr(
+          'browser_http_auth_message',
+          'Введите имя пользователя и пароль для входа.{realm}',
+          {'realm': realmSuffix},
+        ),
         customBody: _SafariHttpAuthBody(
           savedHints: savedHints,
           onUnlockSavedHint: onUnlockSavedHint,
@@ -1307,17 +1381,17 @@ Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
           onPasswordChanged: (v) => passValue = v,
           onSaveChanged: (v) => saveCredential = v,
         ),
-        actions: const [
+        actions: [
           SafariAlertAction<bool>(
-            label: 'Отмена',
+            label: context.trOr('common_cancel', 'Отмена'),
             result: false,
-            buttonKey: ValueKey('safari_http_auth_cancel_btn'),
+            buttonKey: const ValueKey('safari_http_auth_cancel_btn'),
           ),
           SafariAlertAction<bool>(
-            label: 'Войти',
+            label: context.trOr('browser_http_auth_submit', 'Войти'),
             result: true,
             isPrimary: true,
-            buttonKey: ValueKey('safari_http_auth_submit_btn'),
+            buttonKey: const ValueKey('safari_http_auth_submit_btn'),
           ),
         ],
       ) ??
@@ -1331,7 +1405,7 @@ Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
 }
 
 /// Anchored Safari iOS 26 "Site Info" popover shown below the floating domain
-/// capsule when tapping the lock/warning icon or choosing "Сведения о сайте".
+/// capsule when tapping the lock/warning icon or choosing Site Info.
 class SafariSiteInfoPopover extends StatelessWidget {
   final SafariHostSafetyInfo safetyInfo;
   final bool isDesktopMode;
@@ -1380,24 +1454,43 @@ class SafariSiteInfoPopover extends StatelessWidget {
       case SafariConnectionSecurityLevel.secureHttps:
         statusIcon = Icons.lock_rounded;
         statusColor = palette.primary;
-        statusTitle = 'Соединение защищено';
-        statusDesc =
-            'Шифрование HTTPS активно для ${safetyInfo.displayHost.isNotEmpty ? safetyInfo.displayHost : 'этой страницы'}.';
+        statusTitle = context.trOr(
+          'browser_site_info_secure_title',
+          'Соединение защищено',
+        );
+        final hostOrPage = safetyInfo.displayHost.isNotEmpty
+            ? safetyInfo.displayHost
+            : context.trOr('browser_site_info_this_page', 'этой страницы');
+        statusDesc = context.trOr(
+          'browser_site_info_secure_desc',
+          'Шифрование HTTPS активно для {host}.',
+          {'host': hostOrPage},
+        );
         break;
       case SafariConnectionSecurityLevel.sslCertificateWarning:
         statusIcon = Icons.gpp_bad_rounded;
         statusColor = palette.error;
-        statusTitle = 'Сертификат не проверен';
-        statusDesc =
-            'Вы продолжили просмотр, несмотря на ошибку сертификата безопасности.';
+        statusTitle = context.trOr(
+          'browser_site_info_ssl_warn_title',
+          'Сертификат не проверен',
+        );
+        statusDesc = context.trOr(
+          'browser_site_info_ssl_warn_desc',
+          'Вы продолжили просмотр, несмотря на ошибку сертификата безопасности.',
+        );
         break;
       case SafariConnectionSecurityLevel.insecureHttp:
       case SafariConnectionSecurityLevel.externalScheme:
         statusIcon = Icons.warning_amber_rounded;
         statusColor = palette.error;
-        statusTitle = 'Соединение не защищено';
-        statusDesc =
-            'Страница загружена по открытому протоколу HTTP. Передаваемые данные не шифруются.';
+        statusTitle = context.trOr(
+          'browser_site_info_insecure_title',
+          'Соединение не защищено',
+        );
+        statusDesc = context.trOr(
+          'browser_site_info_insecure_desc',
+          'Страница загружена по открытому протоколу HTTP. Передаваемые данные не шифруются.',
+        );
         break;
     }
 
@@ -1418,7 +1511,10 @@ class SafariSiteInfoPopover extends StatelessWidget {
                     Text(
                       safetyInfo.displayHost.isNotEmpty
                           ? safetyInfo.displayHost
-                          : 'Текущая страница',
+                          : context.trOr(
+                              'browser_current_page',
+                              'Текущая страница',
+                            ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1527,7 +1623,10 @@ class SafariSiteInfoPopover extends StatelessWidget {
                   _SafariPopoverPillButton(
                     key: const ValueKey('safari_site_info_upgrade_https'),
                     icon: Icons.lock_rounded,
-                    label: 'Открыть по защищённому HTTPS',
+                    label: context.trOr(
+                      'browser_site_info_upgrade_https',
+                      'Открыть по защищённому HTTPS',
+                    ),
                     isAccent: true,
                     onTap: onUpgradeToHttps!,
                   ),
@@ -1540,8 +1639,14 @@ class SafariSiteInfoPopover extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               cookiePolicy == BrowserCookiePolicy.blockAll
-                  ? 'Политика cookie: все cookie заблокированы'
-                  : 'Политика cookie: без сторонних cookie',
+                  ? context.trOr(
+                      'browser_site_info_cookie_block_all',
+                      'Политика cookie: все cookie заблокированы',
+                    )
+                  : context.trOr(
+                      'browser_site_info_cookie_block_third_party',
+                      'Политика cookie: без сторонних cookie',
+                    ),
               style: TextStyle(
                 fontSize: 11.5,
                 color: palette.subtext,
@@ -1563,9 +1668,21 @@ class SafariSiteInfoPopover extends StatelessWidget {
                   Text(
                     [
                       if (grantedPermissionLabels.isNotEmpty)
-                        'Разрешения: ${grantedPermissionLabels.join(', ')}',
-                      if (hasMutedJsDialogs) 'JS-окна заблокированы',
-                      if (hasAcceptedSslWarning) 'Исключение SSL активно',
+                        context.trOr(
+                          'browser_site_info_permissions_list',
+                          'Разрешения: {list}',
+                          {'list': grantedPermissionLabels.join(', ')},
+                        ),
+                      if (hasMutedJsDialogs)
+                        context.trOr(
+                          'browser_site_info_js_muted',
+                          'JS-окна заблокированы',
+                        ),
+                      if (hasAcceptedSslWarning)
+                        context.trOr(
+                          'browser_site_info_ssl_exception',
+                          'Исключение SSL активно',
+                        ),
                     ].join(' • '),
                     style: TextStyle(
                       fontSize: 12,
@@ -1576,7 +1693,10 @@ class SafariSiteInfoPopover extends StatelessWidget {
                   _SafariPopoverPillButton(
                     key: const ValueKey('safari_site_info_reset_permissions'),
                     icon: Icons.restart_alt_rounded,
-                    label: 'Сбросить разрешения',
+                    label: context.trOr(
+                      'browser_site_info_reset_permissions',
+                      'Сбросить разрешения',
+                    ),
                     onTap: onResetPermissions!,
                   ),
                 ],
@@ -1588,7 +1708,11 @@ class SafariSiteInfoPopover extends StatelessWidget {
             _SafariPopoverPillButton(
               key: const ValueKey('safari_site_info_passwords_btn'),
               icon: Icons.key_rounded,
-              label: 'Сохранённые пароли ($savedPasswordCount)',
+              label: context.trOr(
+                'browser_site_info_saved_passwords',
+                'Сохранённые пароли ({count})',
+                {'count': '$savedPasswordCount'},
+              ),
               onTap: onOpenSitePasswords!,
             ),
           ],
@@ -1598,14 +1722,19 @@ class SafariSiteInfoPopover extends StatelessWidget {
             icon: isDesktopMode
                 ? Icons.phone_android_rounded
                 : Icons.desktop_windows_rounded,
-            label: isDesktopMode ? 'Мобильная версия' : 'Версия для ПК',
+            label: isDesktopMode
+                ? context.trOr('browser_mobile_version', 'Мобильная версия')
+                : context.trOr('browser_desktop_version', 'Версия для ПК'),
             onTap: onToggleDesktopMode,
           ),
           const SizedBox(height: 6),
           _SafariPopoverPillButton(
             key: const ValueKey('safari_site_info_clear_site_data'),
             icon: Icons.delete_sweep_rounded,
-            label: 'Очистить данные сайта и обновить',
+            label: context.trOr(
+              'browser_site_info_clear_and_reload',
+              'Очистить данные сайта и обновить',
+            ),
             isDestructive: true,
             onTap: onClearSiteDataAndReload,
           ),
@@ -1718,7 +1847,7 @@ Future<bool> showSafariGeolocationPermissionDialog(
 }) async {
   final cleanHost = host.trim().isNotEmpty
       ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
-      : 'этот сайт';
+      : context.trOr('browser_this_site', 'этот сайт');
   final res = await showSafariWebAlert<bool>(
     context: context,
     dialogKey: const ValueKey('safari_geolocation_dialog'),
@@ -1726,19 +1855,23 @@ Future<bool> showSafariGeolocationPermissionDialog(
     iconOverride: Icons.location_on_rounded,
     originLabel: cleanHost,
     originIsSecure: isSecure,
-    title: 'Доступ к геопозиции',
-    message: 'Разрешить сайту «$cleanHost» определять ваше текущее местоположение?',
-    actions: const [
+    title: context.trOr('browser_geo_perm_title', 'Доступ к геопозиции'),
+    message: context.trOr(
+      'browser_geo_perm_message',
+      'Разрешить сайту «{host}» определять ваше текущее местоположение?',
+      {'host': cleanHost},
+    ),
+    actions: [
       SafariAlertAction<bool>(
-        label: 'Не разрешать',
+        label: context.trOr('browser_perm_deny', 'Не разрешать'),
         result: false,
-        buttonKey: ValueKey('safari_geolocation_deny_btn'),
+        buttonKey: const ValueKey('safari_geolocation_deny_btn'),
       ),
       SafariAlertAction<bool>(
-        label: 'Разрешить',
+        label: context.trOr('browser_perm_allow', 'Разрешить'),
         result: true,
         isPrimary: true,
-        buttonKey: ValueKey('safari_geolocation_allow_btn'),
+        buttonKey: const ValueKey('safari_geolocation_allow_btn'),
       ),
     ],
   );
@@ -1761,8 +1894,15 @@ Future<bool> showSafariDownloadConfirmDialog(
       ? '${trimmedTarget.substring(0, 140)}…'
       : trimmedTarget;
   final String message = displayTarget.isNotEmpty
-      ? 'Загрузить «$displayTarget»?'
-      : 'Загрузить выбранный файл с этого сайта?';
+      ? context.trOr(
+          'browser_download_confirm_file',
+          'Загрузить «{file}»?',
+          {'file': displayTarget},
+        )
+      : context.trOr(
+          'browser_download_confirm_generic',
+          'Загрузить выбранный файл с этого сайта?',
+        );
   final res = await showSafariWebAlert<bool>(
     context: context,
     dialogKey: const ValueKey('safari_download_confirm_dialog'),
@@ -1770,19 +1910,19 @@ Future<bool> showSafariDownloadConfirmDialog(
     iconOverride: Icons.download_rounded,
     originLabel: cleanHost.isNotEmpty ? cleanHost : null,
     originIsSecure: isSecure,
-    title: 'Загрузить файл?',
+    title: context.trOr('browser_download_confirm_title', 'Загрузить файл?'),
     message: message,
-    actions: const [
+    actions: [
       SafariAlertAction<bool>(
-        label: 'Отмена',
+        label: context.trOr('common_cancel', 'Отмена'),
         result: false,
-        buttonKey: ValueKey('safari_download_cancel_btn'),
+        buttonKey: const ValueKey('safari_download_cancel_btn'),
       ),
       SafariAlertAction<bool>(
-        label: 'Скачать',
+        label: context.trOr('browser_download_action', 'Скачать'),
         result: true,
         isPrimary: true,
-        buttonKey: ValueKey('safari_download_confirm_btn'),
+        buttonKey: const ValueKey('safari_download_confirm_btn'),
       ),
     ],
   );

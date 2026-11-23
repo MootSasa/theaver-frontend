@@ -29,9 +29,11 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/bot_service.dart';
 import '../../services/browser_data_service.dart';
+import '../../services/browser_otp_autofill_service.dart';
 import '../../services/browser_site_settings_service.dart';
 import '../../services/browser_storage_bridge.dart';
 import '../../services/browser_vault_auth_gate.dart';
@@ -41,7 +43,9 @@ import '../../services/glass_toast_service.dart';
 import '../../services/mini_app_js_bridge.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/browser_autofill_script.dart';
+import '../../utils/browser_context_menu_script.dart';
 import '../../utils/browser_find_in_page_script.dart';
+import '../../utils/browser_reader_mode_script.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
 import '../../utils/safari_url_safety.dart';
@@ -171,7 +175,10 @@ class MiniAppActionButtonState {
   bool leaveActive = false;
   bool hasShineEffect = false;
   String position = 'left';
-  String text = 'Продолжить';
+  String text = AppLocalizations.trStatic(
+    'miniapp_action_continue',
+    'Продолжить',
+  );
   Color? color;
   Color? textColor;
 }
@@ -465,7 +472,11 @@ class SheetBrowserUiDialogDelegate implements BrowserUiDialogDelegate {
               return vault.unlockAndReadCredential(
                 contextResolver(),
                 hint.id,
-                reason: 'Подтвердите личность для входа на $cleanHost',
+                reason: contextResolver().trOr(
+                  'browser_http_auth_unlock_reason',
+                  'Подтвердите личность для входа на {host}',
+                  <String, String>{'host': cleanHost},
+                ),
                 originScope: effectiveUrl,
               );
             },
@@ -657,6 +668,11 @@ class MiniAppSession {
 
   BrowserFocusedFieldState? focusedAutofillField;
   BrowserPendingCredentialSubmission? pendingCredentialPrompt;
+  BrowserPendingCardSubmission? pendingCardPrompt;
+  bool isReaderAvailable = false;
+  bool isReaderModeActive = false;
+  BrowserReaderArticle? activeReaderArticle;
+  double pageTextZoom = 1.0;
   String? _lastAutofillOrigin;
 
   Future<void> setBrowserChromeCollapsed(bool collapsed) async {
@@ -681,9 +697,13 @@ class MiniAppSession {
   VoidCallback? onPendingLaunchResolved;
   VoidCallback? onRequestBridgeInjection;
   ValueChanged<String>? onInboundBridgeMessage;
+  void Function(BrowserContextMenuTarget target)? onBrowserContextMenuRequested;
+  void Function(double pullProgress, bool triggered)? onBrowserPullToRefreshEvent;
   BrowserUiDialogDelegate? uiDialogDelegate;
   BrowserFindInPageExecutor? debugFindInPageOverride;
   VoidCallback? debugClearFindInPageOverride;
+  @visibleForTesting
+  Future<BrowserReaderArticle?> Function()? debugExtractReaderArticleOverride;
 
   final Set<String> acceptedSslWarningHosts = <String>{};
   final Set<String> acceptedSuspiciousHosts = <String>{};
@@ -894,17 +914,19 @@ class MiniAppSession {
   }
 
   void clearAutofillOverlays({bool notify = true}) {
-    final bool changed =
-        focusedAutofillField != null || pendingCredentialPrompt != null;
+    final bool changed = focusedAutofillField != null ||
+        pendingCredentialPrompt != null ||
+        pendingCardPrompt != null;
     focusedAutofillField = null;
     pendingCredentialPrompt = null;
+    pendingCardPrompt = null;
     if (changed && notify) {
       onSheetStateChanged?.call();
     }
   }
 
   /// Processes JSON messages sent by [BrowserAutofillScript] on the top-level
-  /// web document for autofill bar presentation and login save prompts.
+  /// web document for autofill bar presentation and login/card save prompts.
   Future<void> handleAutofillChannelMessage(String rawMessage) async {
     if (!isBrowser) return;
     try {
@@ -923,14 +945,45 @@ class MiniAppSession {
         return;
       }
 
+      await BrowserSiteSettingsService.instance.ensureLoaded();
+      final settings = BrowserSiteSettingsService.instance;
+
       if (type == 'fieldFocused') {
         final kind = decoded['kind']?.toString() ?? '';
         final subtype = decoded['subtype']?.toString() ?? '';
-        if (kind != 'login' && kind != 'contact') return;
+        if (kind != 'login' &&
+            kind != 'contact' &&
+            kind != 'address' &&
+            kind != 'card' &&
+            kind != 'otp') {
+          return;
+        }
+        if (kind == 'card') {
+          final cardSafety = SafariUrlSafetyAnalyzer.analyzeUrl(
+            currentUrl,
+            hasSslWarning: currentPageHasSslWarning,
+          );
+          if (!settings.cardAutofillEnabled ||
+              !currentUrl.toLowerCase().startsWith('https://') ||
+              currentPageHasSslWarning ||
+              cardSafety.isSuspiciousHomograph) {
+            return;
+          }
+        } else if (kind == 'address' || kind == 'contact') {
+          if (!settings.addressAutofillEnabled) {
+            return;
+          }
+        } else if (kind == 'otp') {
+          if (!settings.otpAutofillEnabled) {
+            return;
+          }
+          unawaited(BrowserOtpAutofillService.instance.onOtpFieldFocused());
+        }
         focusedAutofillField = BrowserFocusedFieldState(
           kind: kind,
           subtype: subtype,
           origin: pageOrigin,
+          isSplitOtp: decoded['isSplitOtp'] == true,
         );
         onSheetStateChanged?.call();
       } else if (type == 'fieldBlurred') {
@@ -939,8 +992,7 @@ class MiniAppSession {
           onSheetStateChanged?.call();
         }
       } else if (type == 'credentialsSubmitted') {
-        await BrowserSiteSettingsService.instance.ensureLoaded();
-        if (!BrowserSiteSettingsService.instance.savePasswordsEnabled) return;
+        if (!settings.savePasswordsEnabled) return;
         String username = (decoded['username']?.toString() ?? '').trim();
         if (username.isEmpty) {
           username = consumePendingStep1Username(pageOrigin) ?? '';
@@ -968,6 +1020,51 @@ class MiniAppSession {
           );
           onSheetStateChanged?.call();
         }
+      } else if (type == 'cardSubmitted') {
+        if (!settings.cardAutofillEnabled ||
+            !currentUrl.toLowerCase().startsWith('https://') ||
+            currentPageHasSslWarning) {
+          return;
+        }
+        final cardNumber = decoded['cardNumber']?.toString() ?? '';
+        final holderName = (decoded['holderName']?.toString() ?? '').trim();
+        final rawMonth = decoded['expMonth'];
+        final rawYear = decoded['expYear'];
+        final int expMonth = rawMonth is num
+            ? rawMonth.toInt()
+            : (int.tryParse(rawMonth?.toString() ?? '') ?? 0);
+        final int expYear = rawYear is num
+            ? rawYear.toInt()
+            : (int.tryParse(rawYear?.toString() ?? '') ?? 0);
+        final evaluation =
+            await BrowserVaultService.instance.evaluateCardSubmission(
+          url: currentUrl,
+          cardNumber: cardNumber,
+          holderName: holderName,
+          expMonth: expMonth,
+          expYear: expYear,
+          hasSslWarning: currentPageHasSslWarning,
+        );
+        if (evaluation.status == BrowserCardSaveStatus.newCard ||
+            evaluation.status == BrowserCardSaveStatus.updateCard) {
+          final safety = SafariUrlSafetyAnalyzer.analyzeUrl(currentUrl);
+          final resolvedHost = safety.displayHost.isNotEmpty
+              ? safety.displayHost
+              : BrowserDataService.extractHost(currentUrl);
+          focusedAutofillField = null;
+          pendingCardPrompt = BrowserPendingCardSubmission(
+            url: currentUrl,
+            origin: pageOrigin,
+            displayHost: resolvedHost.isNotEmpty ? resolvedHost : displayTitle,
+            cardNumber: cardNumber,
+            holderName: holderName,
+            expMonth: expMonth,
+            expYear: expYear,
+            isUpdate: evaluation.status == BrowserCardSaveStatus.updateCard,
+            existingId: evaluation.existingId,
+          );
+          onSheetStateChanged?.call();
+        }
       }
     } catch (_) {}
   }
@@ -984,8 +1081,14 @@ class MiniAppSession {
         perms?[WebViewPermissionResourceType.microphone.name] == true ||
             persistent?.microphonePolicy == SitePermissionDecision.allow;
     final labels = <String>[];
-    if (hasCam) labels.add('Камера');
-    if (hasMic) labels.add('Микрофон');
+    if (hasCam) {
+      labels.add(AppLocalizations.trStatic('browser_perm_camera', 'Камера'));
+    }
+    if (hasMic) {
+      labels.add(
+        AppLocalizations.trStatic('browser_perm_microphone', 'Микрофон'),
+      );
+    }
     return labels;
   }
 
@@ -1204,10 +1307,19 @@ class MiniAppSession {
             onSheetStateChanged?.call();
             if (anyPermanentlyDenied && _hasActiveDialogHost) {
               final label = neededOs.length > 1
-                  ? 'камере и микрофону'
+                  ? AppLocalizations.trStatic(
+                      'browser_perm_resource_cam_mic',
+                      'камере и микрофону',
+                    )
                   : (neededOs.contains(Permission.microphone)
-                      ? 'микрофону'
-                      : 'камере');
+                      ? AppLocalizations.trStatic(
+                          'browser_perm_resource_mic',
+                          'микрофону',
+                        )
+                      : AppLocalizations.trStatic(
+                          'browser_perm_resource_cam',
+                          'камере',
+                        ));
               await uiDialogDelegate!.onSystemPermissionBlocked(
                 resourceLabel: label,
               );
@@ -1416,7 +1528,10 @@ class MiniAppSession {
       pendingLaunchFuture.then((resolved) {
         isLaunchPending = false;
         if (resolved == null || resolved.url.trim().isEmpty) {
-          launchError = 'Не удалось открыть Mini App';
+          launchError = AppLocalizations.trStatic(
+            'miniapp_launch_error',
+            'Не удалось открыть Mini App',
+          );
           onSheetStateChanged?.call();
           return;
         }
@@ -1442,7 +1557,10 @@ class MiniAppSession {
         MiniAppSessionController.instance.notifySessionUpdated();
       }).catchError((_) {
         isLaunchPending = false;
-        launchError = 'Не удалось открыть Mini App';
+        launchError = AppLocalizations.trStatic(
+          'miniapp_launch_error',
+          'Не удалось открыть Mini App',
+        );
         onSheetStateChanged?.call();
       });
     }
@@ -2987,6 +3105,136 @@ class MiniAppSession {
       window.addEventListener('scroll', onScrollEvt, { passive: true });
       document.addEventListener('scroll', onScrollEvt, { passive: true, capture: true });
     }
+    if (typeof window !== 'undefined' && window === window.top && !window.__theaverPtrInstalled) {
+      window.__theaverPtrInstalled = true;
+      var ptrActive = false;
+      var ptrStartX = 0;
+      var ptrStartY = 0;
+      var ptrLastProg = 0;
+      var ptrPendingProg = -1;
+      var ptrLastSentProg = -1;
+      var ptrRaf = 0;
+      var ptrRafFn = typeof window.requestAnimationFrame === 'function'
+        ? function(cb) { return window.requestAnimationFrame(cb); }
+        : function(cb) { return setTimeout(cb, 16); };
+      var ptrCancelRaf = typeof window.cancelAnimationFrame === 'function'
+        ? function(id) { window.cancelAnimationFrame(id); }
+        : function(id) { clearTimeout(id); };
+
+      var ptrDocScrollTop = function() {
+        return Math.max(0, window.scrollY || window.pageYOffset || (document.documentElement && document.documentElement.scrollTop) || 0);
+      };
+
+      var ptrAncestorsAtTop = function(node) {
+        var cur = node && node.nodeType === 1 ? node : (node && node.parentElement ? node.parentElement : null);
+        var steps = 0;
+        while (cur && cur !== document.documentElement && steps < 32) {
+          if (typeof window.getComputedStyle === 'function') {
+            var cs = window.getComputedStyle(cur);
+            var oy = cs ? cs.overflowY : '';
+            if ((oy === 'auto' || oy === 'scroll') && cur.scrollHeight > cur.clientHeight + 1) {
+              if ((cur.scrollTop || 0) > 0) return false;
+            }
+          } else if ((cur.scrollTop || 0) > 0) {
+            return false;
+          }
+          cur = cur.parentElement;
+          steps++;
+        }
+        return true;
+      };
+
+      var postPtrTelemetry = function(prog, release) {
+        try {
+          if (window.TheaverBrowserTheme && typeof window.TheaverBrowserTheme.postMessage === 'function') {
+            window.TheaverBrowserTheme.postMessage(JSON.stringify({
+              pullProgress: prog,
+              pullRelease: !!release
+            }));
+          }
+        } catch (_) {}
+      };
+
+      var cancelPtrTracking = function() {
+        if (ptrRaf) {
+          ptrCancelRaf(ptrRaf);
+          ptrRaf = 0;
+        }
+        if (ptrLastSentProg > 0) {
+          postPtrTelemetry(0, true);
+        }
+        ptrActive = false;
+        ptrLastProg = 0;
+        ptrPendingProg = -1;
+        ptrLastSentProg = -1;
+      };
+
+      document.addEventListener('touchstart', function(e) {
+        ptrActive = false;
+        ptrLastProg = 0;
+        ptrPendingProg = -1;
+        ptrLastSentProg = -1;
+        if (ptrRaf) {
+          ptrCancelRaf(ptrRaf);
+          ptrRaf = 0;
+        }
+        if (window.__theaverInteractionLocked) return;
+        if (!e || !e.touches || e.touches.length !== 1) return;
+        if (ptrDocScrollTop() > 0) return;
+        if (!ptrAncestorsAtTop(e.target)) return;
+        ptrActive = true;
+        ptrStartX = e.touches[0].clientX;
+        ptrStartY = e.touches[0].clientY;
+      }, { passive: true, capture: true });
+
+      document.addEventListener('touchmove', function(e) {
+        if (!ptrActive) return;
+        if (window.__theaverInteractionLocked || !e || !e.touches || e.touches.length !== 1 || ptrDocScrollTop() > 1) {
+          cancelPtrTracking();
+          return;
+        }
+        var dx = e.touches[0].clientX - ptrStartX;
+        var dy = e.touches[0].clientY - ptrStartY;
+        if (dy <= 0 || Math.abs(dx) > dy * 0.65) {
+          cancelPtrTracking();
+          return;
+        }
+        var prog = dy > 14 ? Math.min(1, Math.max(0, (dy - 14) / 82)) : 0;
+        if (prog > 0 || ptrLastSentProg > 0) {
+          ptrLastProg = prog;
+          ptrPendingProg = prog;
+          if (!ptrRaf) {
+            ptrRaf = ptrRafFn(function() {
+              ptrRaf = 0;
+              if (!ptrActive) return;
+              if (ptrPendingProg >= 0 && Math.abs(ptrPendingProg - ptrLastSentProg) > 0.005) {
+                ptrLastSentProg = ptrPendingProg;
+                postPtrTelemetry(ptrPendingProg, false);
+              }
+            });
+          }
+        }
+      }, { passive: true, capture: true });
+
+      var onPtrEnd = function() {
+        if (ptrRaf) {
+          ptrCancelRaf(ptrRaf);
+          ptrRaf = 0;
+        }
+        if (ptrActive && ptrLastProg > 0) {
+          postPtrTelemetry(ptrLastProg, true);
+        } else if (ptrLastSentProg > 0) {
+          postPtrTelemetry(0, true);
+        }
+        ptrActive = false;
+        ptrLastProg = 0;
+        ptrPendingProg = -1;
+        ptrLastSentProg = -1;
+      };
+
+      document.addEventListener('touchend', onPtrEnd, { passive: true, capture: true });
+      document.addEventListener('touchcancel', onPtrEnd, { passive: true, capture: true });
+    }
     return initialMeta;
   } catch (e) {
     return null;
@@ -3020,6 +3268,18 @@ class MiniAppSession {
       }
       if (decoded is! Map) return;
       final map = Map<String, dynamic>.from(decoded);
+      if (map.containsKey('pullProgress')) {
+        final dynamic rawProg = map['pullProgress'];
+        final double parsedProg = rawProg is num
+            ? rawProg.toDouble()
+            : (double.tryParse(rawProg?.toString() ?? '') ?? 0.0);
+        final double prog =
+            (parsedProg.isFinite ? parsedProg : 0.0).clamp(0.0, 1.0).toDouble();
+        onBrowserPullToRefreshEvent?.call(prog, map['pullRelease'] == true);
+        if (!map.containsKey('collapsed') && !map.containsKey('canvasColor')) {
+          return;
+        }
+      }
       final dynamic rawCollapsed = map['collapsed'];
       final bool? nextCollapsed = browserForceExpanded
           ? false
@@ -3321,7 +3581,42 @@ class MiniAppSession {
           settings.cookiePolicy == BrowserCookiePolicy.allowAll,
       blockAllCookies: settings.cookiePolicy == BrowserCookiePolicy.blockAll,
       enableOsAutofill: settings.osAutofillEnabled,
+      enablePullToRefresh: isBrowser && !isReaderModeActive,
     );
+  }
+
+  Future<void> applyBrowserPageTextZoom(double zoom) async {
+    final double clamped =
+        (zoom.isFinite ? zoom : 1.0).clamp(0.85, 1.50).toDouble();
+    pageTextZoom = clamped;
+    final ctrl = controller;
+    if (ctrl == null || WebViewPlatform.instance == null) return;
+    try {
+      final platformCtrl = ctrl.platform;
+      if (platformCtrl is AndroidWebViewController) {
+        await platformCtrl.setTextZoom((clamped * 100).round());
+      } else {
+        await ctrl.runJavaScript(
+          BrowserReaderModeScript.buildApplyPageTextZoomScript(clamped),
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<BrowserReaderArticle?> extractReaderArticle() async {
+    if (debugExtractReaderArticleOverride != null) {
+      return await debugExtractReaderArticleOverride!();
+    }
+    final ctrl = controller;
+    if (ctrl == null || WebViewPlatform.instance == null) return null;
+    try {
+      final raw = await ctrl.runJavaScriptReturningResult(
+        BrowserReaderModeScript.buildExtractArticleScript(),
+      );
+      return BrowserReaderArticle.tryParseJsResult(raw);
+    } catch (_) {
+      return null;
+    }
   }
 
   void _handleBrowserOriginTransition(String nextUrl) {
@@ -3476,7 +3771,10 @@ class MiniAppSession {
       if (perm == LocationPermission.deniedForever) {
         if (_hasActiveDialogHost) {
           await uiDialogDelegate!.onSystemPermissionBlocked(
-            resourceLabel: 'геопозиции',
+            resourceLabel: AppLocalizations.trStatic(
+              'browser_perm_resource_geo',
+              'геопозиции',
+            ),
           );
         }
         return const GeolocationPermissionsResponse(allow: false, retain: false);
@@ -3657,7 +3955,10 @@ class MiniAppSession {
     _clearPendingMainFrameTracking();
     webResourceErrorDescription = error.description.trim().isNotEmpty
         ? error.description.trim()
-        : 'Не удалось загрузить страницу';
+        : AppLocalizations.trStatic(
+            'miniapp_page_load_error',
+            'Не удалось загрузить страницу',
+          );
     webResourceErrorUrl =
         error.url ?? (isBrowser ? currentUrl : launchData.url);
     loadProgress = 1.0;
@@ -3694,12 +3995,13 @@ class MiniAppSession {
 
     if (isBrowser) {
       unawaited(BrowserVaultService.instance.ensureLoaded());
-      final savedDesktop = BrowserSiteSettingsService.instance
-          .preferenceForUrl(targetUrl)
-          ?.desktopMode;
+      final initialPref =
+          BrowserSiteSettingsService.instance.preferenceForUrl(targetUrl);
+      final savedDesktop = initialPref?.desktopMode;
       if (savedDesktop != null) {
         isDesktopMode = savedDesktop;
       }
+      pageTextZoom = (initialPref?.textZoom ?? 1.0).clamp(0.85, 1.50).toDouble();
       _lastAutofillOrigin = BrowserVaultService.normalizeOrigin(targetUrl);
 
       final ctrl = _createPlatformWebViewController()
@@ -3714,6 +4016,15 @@ class MiniAppSession {
           'TheaverBrowserAutofill',
           onMessageReceived: (JavaScriptMessage msg) {
             unawaited(handleAutofillChannelMessage(msg.message));
+          },
+        )
+        ..addJavaScriptChannel(
+          'TheaverBrowserContextMenu',
+          onMessageReceived: (JavaScriptMessage msg) {
+            final target = BrowserContextMenuTarget.tryParseJson(msg.message);
+            if (target != null) {
+              onBrowserContextMenuRequested?.call(target);
+            }
           },
         )
         ..setNavigationDelegate(
@@ -3731,6 +4042,10 @@ class MiniAppSession {
             onPageStarted: (urlStr) {
               _earlyBrowserInsetsStage = 0;
               browserChromeCollapsed = false;
+              isReaderModeActive = false;
+              activeReaderArticle = null;
+              isReaderAvailable = false;
+              pendingCardPrompt = null;
               webResourceErrorDescription = null;
               webResourceErrorUrl = null;
               final nextUrl = urlStr.trim();
@@ -3742,9 +4057,11 @@ class MiniAppSession {
                   browserCanvasColor = null;
                   browserTopPocketColor = null;
                   browserBottomPocketColor = null;
-                  final siteDesktop = BrowserSiteSettingsService.instance
-                      .preferenceForUrl(nextUrl)
-                      ?.desktopMode;
+                  final sitePref = BrowserSiteSettingsService.instance
+                      .preferenceForUrl(nextUrl);
+                  pageTextZoom =
+                      (sitePref?.textZoom ?? 1.0).clamp(0.85, 1.50).toDouble();
+                  final siteDesktop = sitePref?.desktopMode;
                   final bool nextDesktop = siteDesktop ?? false;
                   if (nextDesktop != isDesktopMode) {
                     isDesktopMode = nextDesktop;
@@ -3805,7 +4122,23 @@ class MiniAppSession {
                   BrowserAutofillScript.buildObserverScript(),
                 );
                 await controller?.runJavaScript(_step1ObserverJs);
+                await controller?.runJavaScript(
+                  BrowserContextMenuScript.buildObserverScript(),
+                );
               } catch (_) {}
+              await applyBrowserPageTextZoom(pageTextZoom);
+              bool nextReaderAvail = false;
+              try {
+                final rawAvail = await controller?.runJavaScriptReturningResult(
+                  BrowserReaderModeScript.buildCheckReaderAvailabilityScript(),
+                );
+                nextReaderAvail = rawAvail == true ||
+                    rawAvail?.toString().trim().toLowerCase() == 'true';
+              } catch (_) {
+                nextReaderAvail = false;
+              }
+              isReaderAvailable = nextReaderAvail;
+              onSheetStateChanged?.call();
               await refreshBrowserNavState();
               onBrowserPageFinished?.call();
               await BrowserDataService.instance
@@ -4955,12 +5288,25 @@ Future<bool> _confirmMiniAppCloseDialog(
         originLabel: (originLabel != null && originLabel.trim().isNotEmpty)
             ? originLabel.trim()
             : null,
-        title: closeAll ? 'Закрыть все Mini Apps?' : 'Закрыть Mini App?',
-        message: 'Внесённые изменения могут не сохраниться.',
+        title: closeAll
+            ? context.trOr(
+                'miniapp_close_all_title',
+                'Закрыть все Mini Apps?',
+              )
+            : context.trOr('miniapp_close_one_title', 'Закрыть Mini App?'),
+        message: context.trOr(
+          'miniapp_close_unsaved_warning',
+          'Внесённые изменения могут не сохраниться.',
+        ),
         actions: [
-          const SafariAlertAction<bool>(label: 'Остаться', result: false),
           SafariAlertAction<bool>(
-            label: closeAll ? 'Закрыть все' : 'Закрыть',
+            label: context.trOr('miniapp_close_stay', 'Остаться'),
+            result: false,
+          ),
+          SafariAlertAction<bool>(
+            label: closeAll
+                ? context.trOr('miniapp_close_all_btn', 'Закрыть все')
+                : context.trOr('common_close', 'Закрыть'),
             result: true,
             isDestructive: true,
           ),
@@ -5604,7 +5950,7 @@ class MinimizedMiniAppBar extends StatelessWidget {
               height: 48,
               child: Semantics(
                 button: true,
-                label: 'Закрыть',
+                label: context.trOr('common_close', 'Закрыть'),
                 child: InkWell(
                   key: const ValueKey('minimized_mini_app_close_button'),
                   borderRadius: BorderRadius.circular(24),
@@ -5668,7 +6014,11 @@ class MinimizedMiniAppBar extends StatelessWidget {
                         ),
                         if (extraCount > 0)
                           Text(
-                            ' и ещё $extraCount',
+                            context.trOr(
+                              'miniapp_extra_count',
+                              ' и ещё {count}',
+                              <String, String>{'count': '$extraCount'},
+                            ),
                             key: const ValueKey('minimized_mini_app_extra_count'),
                             maxLines: 1,
                             style: TextStyle(
@@ -5690,7 +6040,7 @@ class MinimizedMiniAppBar extends StatelessWidget {
               height: 48,
               child: Semantics(
                 button: true,
-                label: 'Развернуть',
+                label: context.trOr('miniapp_expand', 'Развернуть'),
                 child: InkWell(
                   key: const ValueKey('minimized_mini_app_expand_button'),
                   borderRadius: BorderRadius.circular(24),
@@ -6158,7 +6508,7 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
           child: Text(
-            'Закрыть все вкладки',
+            context.trOr('miniapp_close_all_tabs', 'Закрыть все вкладки'),
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
@@ -6638,7 +6988,10 @@ class _MiniAppTabsSwitcherState extends State<MiniAppTabsSwitcher>
                                       height: 48,
                                       child: Semantics(
                                         button: true,
-                                        label: 'Закрыть',
+                                        label: context.trOr(
+                                          'common_close',
+                                          'Закрыть',
+                                        ),
                                         child: InkWell(
                                           key: ValueKey(
                                             'mini_app_tab_close_${session.id}',
@@ -7273,7 +7626,10 @@ class _MiniAppContextualFallbackView extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Кошелёк • Баланс счёта',
+                      context.trOr(
+                        'miniapp_preview_wallet_balance',
+                        'Кошелёк • Баланс счёта',
+                      ),
                       style: TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w600,
@@ -7290,9 +7646,22 @@ class _MiniAppContextualFallbackView extends StatelessWidget {
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        _chipBadge('Пополнить', primary),
+                        _chipBadge(
+                          context.trOr(
+                            'miniapp_preview_wallet_topup',
+                            'Пополнить',
+                          ),
+                          primary,
+                        ),
                         const SizedBox(width: 6),
-                        _chipBadge('Перевод', fg.withValues(alpha: 0.14), textColor: fg),
+                        _chipBadge(
+                          context.trOr(
+                            'miniapp_preview_wallet_transfer',
+                            'Перевод',
+                          ),
+                          fg.withValues(alpha: 0.14),
+                          textColor: fg,
+                        ),
                       ],
                     ),
                   ],
@@ -7334,7 +7703,10 @@ class _MiniAppContextualFallbackView extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Bot Studio • Управление ботами',
+                      context.trOr(
+                        'miniapp_preview_bot_studio',
+                        'Bot Studio • Управление ботами',
+                      ),
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
@@ -7345,12 +7717,29 @@ class _MiniAppContextualFallbackView extends StatelessWidget {
                     const SizedBox(height: 6),
                     _previewBar(widthFactor: 0.68, height: 8, color: fg.withValues(alpha: 0.16)),
                     const SizedBox(height: 8),
-                    _chipBadge('Создать бота', primary),
+                    _chipBadge(
+                      context.trOr(
+                        'miniapp_preview_create_bot',
+                        'Создать бота',
+                      ),
+                      primary,
+                    ),
                   ],
                 ),
               ),
               const SizedBox(height: 8),
-              _miniRowTile('BM', 'Мои боты и команды', primary, fg, sub, card, border),
+              _miniRowTile(
+                'BM',
+                context.trOr(
+                  'miniapp_preview_my_bots',
+                  'Мои боты и команды',
+                ),
+                primary,
+                fg,
+                sub,
+                card,
+                border,
+              ),
               const SizedBox(height: 6),
               _miniRowTile('WA', 'WebApp & Webhook', const Color(0xFF7C3AED), fg, sub, card, border),
             ],
@@ -9448,13 +9837,22 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       final resp = await http.get(uri).timeout(const Duration(seconds: 30));
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         if (mounted) {
-          GlassToastService().show(context, 'Не удалось скачать файл');
+          GlassToastService().show(
+            context,
+            context.trOr(
+              'miniapp_download_failed',
+              'Не удалось скачать файл',
+            ),
+          );
         }
         return;
       }
       if (resp.bodyBytes.length > 64 * 1024 * 1024) {
         if (mounted) {
-          GlassToastService().show(context, 'Файл слишком большой');
+          GlassToastService().show(
+            context,
+            context.trOr('miniapp_file_too_large', 'Файл слишком большой'),
+          );
         }
         return;
       }
@@ -9477,7 +9875,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       }
     } catch (_) {
       if (mounted) {
-        GlassToastService().show(context, 'Ошибка загрузки файла');
+        GlassToastService().show(
+          context,
+          context.trOr('miniapp_download_error', 'Ошибка загрузки файла'),
+        );
       }
     }
   }
@@ -9523,7 +9924,11 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
             } else {
               GlassToastService().show(
                 context,
-                res['message']?.toString() ?? 'Ошибка отправки данных',
+                res['message']?.toString() ??
+                    context.trOr(
+                      'miniapp_send_data_error',
+                      'Ошибка отправки данных',
+                    ),
               );
             }
           }
@@ -9739,13 +10144,21 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 tone: SafariAlertTone.permission,
                 iconOverride: Icons.content_paste_rounded,
                 originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-                title: 'Доступ к буферу обмена?',
-                message:
-                    'Mini App запрашивает доступ к тексту из вашего буфера обмена.',
-                actions: const [
-                  SafariAlertAction<bool>(label: 'Запретить', result: false),
+                title: context.trOr(
+                  'miniapp_clipboard_perm_title',
+                  'Доступ к буферу обмена?',
+                ),
+                message: context.trOr(
+                  'miniapp_clipboard_perm_message',
+                  'Mini App запрашивает доступ к тексту из вашего буфера обмена.',
+                ),
+                actions: [
                   SafariAlertAction<bool>(
-                    label: 'Разрешить',
+                    label: context.trOr('miniapp_perm_deny', 'Запретить'),
+                    result: false,
+                  ),
+                  SafariAlertAction<bool>(
+                    label: context.trOr('miniapp_perm_allow', 'Разрешить'),
                     result: true,
                     isPrimary: true,
                   ),
@@ -9777,13 +10190,22 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               tone: SafariAlertTone.permission,
               iconOverride: Icons.mark_chat_unread_rounded,
               originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-              title: 'Разрешить сообщения?',
-              message:
-                  'Бот @$botHandle запрашивает разрешение отправлять вам сообщения.',
-              actions: const [
-                SafariAlertAction<bool>(label: 'Запретить', result: false),
+              title: context.trOr(
+                'miniapp_write_access_title',
+                'Разрешить сообщения?',
+              ),
+              message: context.trOr(
+                'miniapp_write_access_message',
+                'Бот @{bot} запрашивает разрешение отправлять вам сообщения.',
+                <String, String>{'bot': botHandle},
+              ),
+              actions: [
                 SafariAlertAction<bool>(
-                  label: 'Разрешить',
+                  label: context.trOr('miniapp_perm_deny', 'Запретить'),
+                  result: false,
+                ),
+                SafariAlertAction<bool>(
+                  label: context.trOr('miniapp_perm_allow', 'Разрешить'),
                   result: true,
                   isPrimary: true,
                 ),
@@ -9807,19 +10229,32 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         final botHandle = _botDisplayHandle();
         final userPhone = (AccountManager().currentAccount?.phone ?? '').trim();
         final confirmMsg = userPhone.isNotEmpty
-            ? 'Mini App запрашивает ваш номер телефона ($userPhone).'
-            : 'Mini App запрашивает ваш номер телефона.';
+            ? context.trOr(
+                'miniapp_share_phone_message_with_num',
+                'Mini App запрашивает ваш номер телефона ({phone}).',
+                <String, String>{'phone': userPhone},
+              )
+            : context.trOr(
+                'miniapp_share_phone_message',
+                'Mini App запрашивает ваш номер телефона.',
+              );
         final confirmed = await showSafariWebAlert<bool>(
               context: context,
               tone: SafariAlertTone.permission,
               iconOverride: Icons.phone_rounded,
               originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-              title: 'Поделиться контактом?',
+              title: context.trOr(
+                'miniapp_share_phone_title',
+                'Поделиться контактом?',
+              ),
               message: confirmMsg,
-              actions: const [
-                SafariAlertAction<bool>(label: 'Отмена', result: false),
+              actions: [
                 SafariAlertAction<bool>(
-                  label: 'Отправить',
+                  label: context.trOr('common_cancel', 'Отмена'),
+                  result: false,
+                ),
+                SafariAlertAction<bool>(
+                  label: context.trOr('miniapp_share_phone_send', 'Отправить'),
                   result: true,
                   isPrimary: true,
                 ),
@@ -9893,14 +10328,23 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               tone: SafariAlertTone.permission,
               iconOverride: Icons.fingerprint_rounded,
               originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-              title: 'Доступ к биометрии?',
+              title: context.trOr(
+                'miniapp_biometry_perm_title',
+                'Доступ к биометрии?',
+              ),
               message: reason.isNotEmpty
                   ? reason
-                  : 'Mini App запрашивает доступ к биометрической аутентификации.',
-              actions: const [
-                SafariAlertAction<bool>(label: 'Не разрешать', result: false),
+                  : context.trOr(
+                      'miniapp_biometry_perm_message',
+                      'Mini App запрашивает доступ к биометрической аутентификации.',
+                    ),
+              actions: [
                 SafariAlertAction<bool>(
-                  label: 'Разрешить',
+                  label: context.trOr('miniapp_perm_dont_allow', 'Не разрешать'),
+                  result: false,
+                ),
+                SafariAlertAction<bool>(
+                  label: context.trOr('miniapp_perm_allow', 'Разрешить'),
                   result: true,
                   isPrimary: true,
                 ),
@@ -9923,6 +10367,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_biometry_request_auth':
+        final defaultAuthReason = context.trOr(
+          'miniapp_biometry_auth_reason',
+          'Подтвердите личность',
+        );
         final uid = _scopedUserId();
         final botId = _session.launchData.botId.trim();
         bool granted = false;
@@ -9943,7 +10391,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         try {
           ok = await LocalAuthentication().authenticate(
             localizedReason:
-                reason.isNotEmpty ? reason : 'Подтвердите личность',
+                reason.isNotEmpty ? reason : defaultAuthReason,
             options: const AuthenticationOptions(stickyAuth: true),
           );
         } catch (_) {}
@@ -10039,6 +10487,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         break;
 
       case 'web_app_request_location':
+        final geoLabel = context.trOr(
+          'browser_perm_resource_geo',
+          'геопозиции',
+        );
         final botHandle = _botDisplayHandle();
         final hostKey = _session._hostKeyForUrl(_session.launchData.url);
         bool? siteAllowed = _session.sessionGeolocationGrants[hostKey];
@@ -10081,7 +10533,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           }
           if (perm == LocationPermission.deniedForever) {
             await _dialogDelegate.onSystemPermissionBlocked(
-              resourceLabel: 'геопозиции',
+              resourceLabel: geoLabel,
             );
             await _dispatchEventToWebView(
               'location_requested',
@@ -10294,13 +10746,22 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               tone: SafariAlertTone.info,
               iconOverride: Icons.add_to_home_screen_rounded,
               originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-              title: 'Добавить на главный экран?',
-              message:
-                  'Быстрый ярлык для «${_session.displayTitle}» будет сохранён.',
-              actions: const [
-                SafariAlertAction<bool>(label: 'Отмена', result: false),
+              title: context.trOr(
+                'miniapp_add_home_title',
+                'Добавить на главный экран?',
+              ),
+              message: context.trOr(
+                'miniapp_add_home_message',
+                'Быстрый ярлык для «{title}» будет сохранён.',
+                <String, String>{'title': _session.displayTitle},
+              ),
+              actions: [
                 SafariAlertAction<bool>(
-                  label: 'Добавить',
+                  label: context.trOr('common_cancel', 'Отмена'),
+                  result: false,
+                ),
+                SafariAlertAction<bool>(
+                  label: context.trOr('common_add', 'Добавить'),
                   result: true,
                   isPrimary: true,
                 ),
@@ -10316,7 +10777,13 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           } catch (_) {}
           await _dispatchEventToWebView('home_screen_added', const {});
           if (mounted) {
-            GlassToastService().show(context, 'Добавлено на главный экран');
+            GlassToastService().show(
+              context,
+              context.trOr(
+                'miniapp_add_home_done',
+                'Добавлено на главный экран',
+              ),
+            );
           }
         }
         break;
@@ -10328,13 +10795,21 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
               tone: SafariAlertTone.permission,
               iconOverride: Icons.emoji_emotions_rounded,
               originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-              title: 'Изменение эмодзи-статуса?',
-              message:
-                  'Mini App запрашивает разрешение устанавливать ваш эмодзи-статус.',
-              actions: const [
-                SafariAlertAction<bool>(label: 'Запретить', result: false),
+              title: context.trOr(
+                'miniapp_emoji_perm_title',
+                'Изменение эмодзи-статуса?',
+              ),
+              message: context.trOr(
+                'miniapp_emoji_perm_message',
+                'Mini App запрашивает разрешение устанавливать ваш эмодзи-статус.',
+              ),
+              actions: [
                 SafariAlertAction<bool>(
-                  label: 'Разрешить',
+                  label: context.trOr('miniapp_perm_deny', 'Запретить'),
+                  result: false,
+                ),
+                SafariAlertAction<bool>(
+                  label: context.trOr('miniapp_perm_allow', 'Разрешить'),
                   result: true,
                   isPrimary: true,
                 ),
@@ -10382,12 +10857,21 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 tone: SafariAlertTone.permission,
                 iconOverride: Icons.emoji_emotions_rounded,
                 originLabel: botHandle.isNotEmpty ? '@$botHandle' : null,
-                title: 'Установить эмодзи-статус?',
-                message: 'Mini App предлагает обновить ваш эмодзи-статус.',
-                actions: const [
-                  SafariAlertAction<bool>(label: 'Отмена', result: false),
+                title: context.trOr(
+                  'miniapp_emoji_set_title',
+                  'Установить эмодзи-статус?',
+                ),
+                message: context.trOr(
+                  'miniapp_emoji_set_message',
+                  'Mini App предлагает обновить ваш эмодзи-статус.',
+                ),
+                actions: [
                   SafariAlertAction<bool>(
-                    label: 'Установить',
+                    label: context.trOr('common_cancel', 'Отмена'),
+                    result: false,
+                  ),
+                  SafariAlertAction<bool>(
+                    label: context.trOr('miniapp_emoji_set_btn', 'Установить'),
                     result: true,
                     isPrimary: true,
                   ),
@@ -10564,8 +11048,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
         var text = (raw['text'] ?? '').toString().trim();
         if (text.isEmpty) {
           text = type == 'cancel'
-              ? 'Отмена'
-              : (type == 'close' ? 'Закрыть' : 'ОК');
+              ? context.trOr('common_cancel', 'Отмена')
+              : (type == 'close'
+                  ? context.trOr('common_close', 'Закрыть')
+                  : context.trOr('miniapp_popup_ok', 'ОК'));
         }
         actions.add(
           SafariAlertAction<String>(
@@ -10579,8 +11065,8 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
     }
     if (actions.isEmpty) {
       actions.add(
-        const SafariAlertAction<String>(
-          label: 'ОК',
+        SafariAlertAction<String>(
+          label: context.trOr('miniapp_popup_ok', 'ОК'),
           result: 'ok',
           isPrimary: true,
         ),
@@ -10632,7 +11118,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       if (!mounted) return;
       _session.isLaunchPending = false;
       if (resolved == null || resolved.url.trim().isEmpty) {
-        setState(() => _session.launchError = 'Не удалось открыть Mini App');
+        setState(
+          () => _session.launchError = context.trOr(
+            'miniapp_launch_error',
+            'Не удалось открыть Mini App',
+          ),
+        );
         return;
       }
       _session.launchData = resolved;
@@ -10655,7 +11146,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       if (mounted) {
         setState(() {
           _session.isLaunchPending = false;
-          _session.launchError = 'Не удалось открыть Mini App';
+          _session.launchError = context.trOr(
+            'miniapp_launch_error',
+            'Не удалось открыть Mini App',
+          );
         });
       }
     }
@@ -11046,7 +11540,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 height: 18,
                 color: headerFg,
               ),
-              label: 'Обновить страницу',
+              label: context.trOr(
+                'miniapp_menu_refresh',
+                'Обновить страницу',
+              ),
               fgColor: headerFg,
               onTap: () async {
                 _closeMenu();
@@ -11066,7 +11563,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                   height: 18,
                   color: headerFg,
                 ),
-                label: 'Настройки приложения',
+                label: context.trOr(
+                  'miniapp_menu_settings',
+                  'Настройки приложения',
+                ),
                 fgColor: headerFg,
                 onTap: () async {
                   _closeMenu();
@@ -11079,7 +11579,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 height: 18,
                 color: headerFg,
               ),
-              label: 'Свернуть',
+              label: context.trOr('miniapp_menu_minimize', 'Свернуть'),
               fgColor: headerFg,
               onTap: _minimizeMiniApp,
             ),
@@ -11089,7 +11589,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 height: 18,
                 color: headerFg,
               ),
-              label: 'Скопировать ссылку',
+              label: context.trOr(
+                'miniapp_menu_copy_link',
+                'Скопировать ссылку',
+              ),
               fgColor: headerFg,
               onTap: () async {
                 _closeMenu();
@@ -11097,7 +11600,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                   ClipboardData(text: _session.launchData.url),
                 );
                 if (context.mounted) {
-                  GlassToastService().show(context, 'Ссылка скопирована');
+                  GlassToastService().show(
+                    context,
+                    context.trOr('browser_link_copied', 'Ссылка скопирована'),
+                  );
                 }
               },
             ),
@@ -11107,7 +11613,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 height: 18,
                 color: headerFg,
               ),
-              label: 'Открыть в браузере',
+              label: context.trOr(
+                'miniapp_menu_open_browser',
+                'Открыть в браузере',
+              ),
               fgColor: headerFg,
               onTap: () async {
                 _closeMenu();
@@ -11172,7 +11681,9 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
       onVerticalDragCancel: _resetDragOffset,
       leadingChild: IconButton(
         key: const ValueKey('mini_app_close_or_back_button'),
-        tooltip: _session.backButtonVisible ? 'Назад' : 'Закрыть',
+        tooltip: _session.backButtonVisible
+            ? context.trOr('common_back', 'Назад')
+            : context.trOr('common_close', 'Закрыть'),
         padding: EdgeInsets.zero,
         onPressed: _session.backButtonVisible
             ? () {
@@ -11222,7 +11733,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           height: 44,
           child: IconButton(
             key: const ValueKey('mini_app_collapse_expand_button'),
-            tooltip: 'Свернуть',
+            tooltip: context.trOr('miniapp_menu_minimize', 'Свернуть'),
             padding: EdgeInsets.zero,
             onPressed: _minimizeMiniApp,
             icon: Icon(
@@ -11237,7 +11748,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
           height: 44,
           child: IconButton(
             key: const ValueKey('mini_app_more_menu_button'),
-            tooltip: 'Ещё',
+            tooltip: context.trOr('miniapp_header_more', 'Ещё'),
             padding: EdgeInsets.zero,
             onPressed: () {
               HapticUtils.tap();
@@ -11297,12 +11808,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                   children: [
                     OutlinedButton(
                       onPressed: () => _attemptClose(force: true),
-                      child: const Text('Закрыть'),
+                      child: Text(context.trOr('common_close', 'Закрыть')),
                     ),
                     const SizedBox(width: 10),
                     FilledButton(
                       onPressed: _retryLaunch,
-                      child: const Text('Повторить'),
+                      child: Text(context.trOr('common_retry', 'Повторить')),
                     ),
                   ],
                 ),
@@ -11388,7 +11899,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            'Не удалось загрузить страницу',
+                            context.trOr(
+                              'miniapp_page_load_error',
+                              'Не удалось загрузить страницу',
+                            ),
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 16,
@@ -11413,7 +11927,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                             onPressed: () =>
                                 unawaited(_session.retryMainFrameLoad()),
                             icon: const Icon(Icons.refresh_rounded, size: 18),
-                            label: const Text('Повторить'),
+                            label: Text(context.trOr('common_retry', 'Повторить')),
                           ),
                         ],
                       ),
@@ -11861,7 +12375,10 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                 Text(
                   _session.launchError != null
                       ? _session.launchError!
-                      : 'Подпись Telegram.WebApp initData сформирована. Встроенный WebView недоступен на текущей платформе — откройте Mini App во внешнем браузере.',
+                      : context.trOr(
+                          'miniapp_desktop_fallback_desc',
+                          'Подпись Telegram.WebApp initData сформирована. Встроенный WebView недоступен на текущей платформе — откройте Mini App во внешнем браузере.',
+                        ),
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: _session.launchError != null
@@ -11883,7 +12400,7 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                         foregroundColor: palette.onPrimary,
                       ),
                       icon: const Icon(Icons.refresh_rounded, size: 18),
-                      label: const Text('Повторить'),
+                      label: Text(context.trOr('common_retry', 'Повторить')),
                     ),
                   )
                 else
@@ -11906,7 +12423,12 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
                         height: 17,
                         color: palette.onPrimary,
                       ),
-                      label: const Text('Открыть в браузере'),
+                      label: Text(
+                        context.trOr(
+                          'miniapp_menu_open_browser',
+                          'Открыть в браузере',
+                        ),
+                      ),
                     ),
                   ),
               ],

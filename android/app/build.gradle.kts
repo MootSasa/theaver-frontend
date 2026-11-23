@@ -107,6 +107,7 @@ dependencies {
     compileOnly("com.google.firebase:firebase-messaging")
     compileOnly("com.huawei.hms:push:6.13.0.300")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("com.google.android.gms:play-services-auth-api-phone:18.1.0")
 }
 
 flutter {

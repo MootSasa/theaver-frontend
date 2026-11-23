@@ -12,6 +12,7 @@ import '../../services/browser_vault_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/safari_url_safety.dart';
+import '../../widgets/browser/browser_vault_pin_sheet.dart';
 import '../../widgets/browser/safari_library_sheet.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/design_system/theav_design_system.dart';
@@ -20,10 +21,16 @@ import '../../widgets/settings/settings_floating_header.dart';
 Timer? _sharedClipboardWipeTimer;
 String? _lastCopiedSecretValue;
 
-void _copyPasswordWithAutoWipe(BuildContext context, String password) {
-  Clipboard.setData(ClipboardData(text: password));
+enum _VaultPinAction { change, remove }
+
+void _copySecretWithAutoWipe(
+  BuildContext context,
+  String secret, {
+  required String toastMessage,
+}) {
+  Clipboard.setData(ClipboardData(text: secret));
   HapticUtils.selection();
-  _lastCopiedSecretValue = password;
+  _lastCopiedSecretValue = secret;
   _sharedClipboardWipeTimer?.cancel();
   _sharedClipboardWipeTimer = Timer(const Duration(seconds: 60), () async {
     final expected = _lastCopiedSecretValue;
@@ -41,10 +48,32 @@ void _copyPasswordWithAutoWipe(BuildContext context, String password) {
   if (context.mounted) {
     GlassToastService().show(
       context,
-      'Пароль скопирован (очистится через 60 с)',
+      toastMessage,
       icon: Icons.check_rounded,
     );
   }
+}
+
+void _copyPasswordWithAutoWipe(BuildContext context, String password) {
+  _copySecretWithAutoWipe(
+    context,
+    password,
+    toastMessage: context.trOr(
+      'browser_vault_password_copied_toast',
+      'Пароль скопирован (очистится через 60 с)',
+    ),
+  );
+}
+
+void _copyCardNumberWithAutoWipe(BuildContext context, String cardNumber) {
+  _copySecretWithAutoWipe(
+    context,
+    cardNumber,
+    toastMessage: context.trOr(
+      'browser_vault_card_copied_toast',
+      'Номер карты скопирован (очистится через 60 с)',
+    ),
+  );
 }
 
 /// Opens Theaver's Browser Passwords, Autofill, Cookie & Site Settings hub
@@ -55,6 +84,8 @@ Future<void> showBrowserVaultAndDataSheet(
   String? initialSearchQuery,
   bool autoUnlockPasswords = true,
   ValueChanged<BrowserCredentialHint>? onSelectForAutofill,
+  ValueChanged<BrowserCardHint>? onSelectCardForAutofill,
+  ValueChanged<BrowserSavedAddress>? onSelectAddressForAutofill,
 }) async {
   await Future.wait([
     BrowserVaultService.instance.ensureLoaded(),
@@ -74,6 +105,8 @@ Future<void> showBrowserVaultAndDataSheet(
       autoUnlockPasswords: autoUnlockPasswords,
       isModalSheet: true,
       onSelectForAutofill: onSelectForAutofill,
+      onSelectCardForAutofill: onSelectCardForAutofill,
+      onSelectAddressForAutofill: onSelectAddressForAutofill,
     ),
   );
 }
@@ -95,10 +128,10 @@ class BrowserVaultAndDataScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style = TheavSurfaceStyle.of(context);
-    final String headerTitle =
-        Localizations.of<AppLocalizations>(context, AppLocalizations)
-                ?.translate('settings_browser_vault_title') ??
-            'Пароли и данные браузера';
+    final String headerTitle = context.trOr(
+      'settings_browser_vault_title',
+      'Пароли и данные браузера',
+    );
     final topInset = MediaQuery.paddingOf(context).top;
 
     return BackdropGroup(
@@ -140,6 +173,8 @@ class _BrowserVaultHubContent extends StatefulWidget {
   final bool autoUnlockPasswords;
   final bool isModalSheet;
   final ValueChanged<BrowserCredentialHint>? onSelectForAutofill;
+  final ValueChanged<BrowserCardHint>? onSelectCardForAutofill;
+  final ValueChanged<BrowserSavedAddress>? onSelectAddressForAutofill;
 
   const _BrowserVaultHubContent({
     required this.initialSection,
@@ -147,6 +182,8 @@ class _BrowserVaultHubContent extends StatefulWidget {
     required this.autoUnlockPasswords,
     required this.isModalSheet,
     this.onSelectForAutofill,
+    this.onSelectCardForAutofill,
+    this.onSelectAddressForAutofill,
   });
 
   @override
@@ -169,6 +206,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
   String _searchQuery = '';
   bool _unlocked = false;
   bool _unlockInProgress = false;
+  bool _hasVaultPin = false;
+  bool _authToggleInProgress = false;
+  bool _vaultPinActionInProgress = false;
   List<BrowserSavedCredential> _unlockedCredentials =
       <BrowserSavedCredential>[];
   bool _contactAutofillCardLoaded = false;
@@ -207,9 +247,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     final profile = await BrowserVaultService.instance.getContactProfile();
     if (!mounted) return;
     _savedContactProfile = profile;
-    _hasSavedContactSnapshot = profile.fullName.trim().isNotEmpty ||
-        profile.email.trim().isNotEmpty ||
-        profile.phone.trim().isNotEmpty;
+    _hasSavedContactSnapshot = profile.hasAnyField;
     _nameCtrl.text = profile.fullName;
     _emailCtrl.text = profile.email;
     _phoneCtrl.text = profile.phone;
@@ -222,6 +260,29 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     if (widget.autoUnlockPasswords && _activeSection == 0) {
       unawaited(_unlockPasswords());
     }
+    unawaited(_refreshVaultPinState());
+  }
+
+  Future<void> _refreshVaultPinState() async {
+    final hasPin = await BrowserVaultAuthGate.instance
+        .hasVaultPin()
+        .catchError((_) => false);
+    if (!mounted) return;
+    if (_hasVaultPin != hasPin) {
+      setState(() => _hasVaultPin = hasPin);
+    }
+  }
+
+  Future<void> _syncContactControllersFromVault() async {
+    final profile = await BrowserVaultService.instance.getContactProfile();
+    if (!mounted) return;
+    _savedContactProfile = profile;
+    _hasSavedContactSnapshot = profile.hasAnyField;
+    _nameCtrl.text = profile.fullName;
+    _emailCtrl.text = profile.email;
+    _phoneCtrl.text = profile.phone;
+    _syncContactDirtyFlag();
+    setState(() {});
   }
 
   @override
@@ -380,7 +441,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       child: Row(
         children: [
           Tooltip(
-            message: 'Закрыть',
+            message: sheetCtx.trOr('common_close', 'Закрыть'),
             child: GestureDetector(
               key: closeButtonKey,
               behavior: HitTestBehavior.opaque,
@@ -459,8 +520,12 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     FocusNode? focusNode,
     required String hintText,
     TextInputType? keyboardType,
+    TextInputAction? textInputAction,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+    List<TextInputFormatter>? inputFormatters,
     bool obscureText = false,
     Widget? suffixIcon,
+    ValueChanged<String>? onChanged,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
@@ -474,7 +539,11 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               controller: controller,
               focusNode: focusNode,
               keyboardType: keyboardType,
+              textInputAction: textInputAction,
+              textCapitalization: textCapitalization,
+              inputFormatters: inputFormatters,
               obscureText: obscureText,
+              onChanged: onChanged,
               cursorColor: palette.primary,
               style: TextStyle(
                 color: palette.onSurface,
@@ -498,9 +567,14 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     try {
       final creds = await BrowserVaultService.instance.unlockAndReadAllCredentials(
         context,
-        reason: 'Разблокировка сохранённых паролей браузера',
+        reason: context.trOr(
+          'browser_vault_unlock_passwords_reason',
+          'Разблокировка сохранённых паролей браузера',
+        ),
       );
-      if (!mounted || creds == null) return;
+      if (!mounted) return;
+      unawaited(_refreshVaultPinState());
+      if (creds == null) return;
       setState(() {
         _unlocked = true;
         _unlockedCredentials = creds;
@@ -519,10 +593,18 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       final bool ok = await BrowserVaultAuthGate.instance.authenticate(
         context,
         reason: existing == null
-            ? 'Подтвердите личность для добавления пароля'
-            : 'Подтвердите личность для изменения пароля',
+            ? context.trOr(
+                'browser_vault_add_password_reason',
+                'Подтвердите личность для добавления пароля',
+              )
+            : context.trOr(
+                'browser_vault_edit_password_reason',
+                'Подтвердите личность для изменения пароля',
+              ),
       );
-      if (!ok || !mounted) return;
+      if (!mounted) return;
+      unawaited(_refreshVaultPinState());
+      if (!ok) return;
     }
 
     final urlCtrl = TextEditingController(
@@ -549,7 +631,12 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               children: [
                 _buildModalHeaderRow(
                   sheetCtx,
-                  title: existing == null ? 'Новый пароль' : existing.displayHost,
+                  title: existing == null
+                      ? sheetCtx.trOr(
+                          'browser_vault_new_password_title',
+                          'Новый пароль',
+                        )
+                      : existing.displayHost,
                 ),
                 TheavInsetGroup(
                   margin: EdgeInsets.zero,
@@ -566,7 +653,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                         palette: pal,
                         icon: Icons.language_rounded,
                         controller: urlCtrl,
-                        hintText: 'Сайт (https://example.com)',
+                        hintText: sheetCtx.trOr(
+                          'browser_vault_url_hint',
+                          'Сайт (https://example.com)',
+                        ),
                         keyboardType: TextInputType.url,
                       ),
                     _buildSheetFieldRow(
@@ -574,14 +664,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                       palette: pal,
                       icon: Icons.person_outline_rounded,
                       controller: userCtrl,
-                      hintText: 'Логин или Email',
+                      hintText: sheetCtx.trOr(
+                        'browser_save_password_username_hint',
+                        'Логин или Email',
+                      ),
                     ),
                     _buildSheetFieldRow(
                       fieldKey: const ValueKey('browser_vault_add_pass_input'),
                       palette: pal,
                       icon: Icons.key_rounded,
                       controller: passCtrl,
-                      hintText: 'Пароль',
+                      hintText: sheetCtx.trOr(
+                        'browser_http_auth_password_hint',
+                        'Пароль',
+                      ),
                       obscureText: obscure,
                       suffixIcon: GestureDetector(
                         behavior: HitTestBehavior.opaque,
@@ -608,7 +704,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   buttonKey: const ValueKey('browser_vault_save_manual_btn'),
                   backgroundColor: pal.primary,
                   foregroundColor: pal.onPrimary,
-                  label: 'Сохранить',
+                  label: sheetCtx.trOr('common_save', 'Сохранить'),
                   height: 42.0,
                   fontSize: 14.5,
                   onTap: () async {
@@ -619,7 +715,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                         passCtrl.text.isEmpty) {
                       GlassToastService().show(
                         sheetCtx,
-                        'Укажите корректный URL и непустой пароль',
+                        sheetCtx.trOr(
+                          'browser_vault_invalid_url_password',
+                          'Укажите корректный URL и непустой пароль',
+                        ),
                         icon: Icons.error_outline_rounded,
                       );
                       return;
@@ -654,7 +753,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     if (savedResult != null && mounted) {
       GlassToastService().show(
         context,
-        'Пароль сохранён',
+        context.trOr('browser_vault_password_saved_toast', 'Пароль сохранён'),
         icon: Icons.check_rounded,
       );
       if (_unlocked) {
@@ -684,6 +783,26 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       Navigator.of(context).pop();
     }
     cb(hint);
+  }
+
+  void _triggerCardAutofillSelection(BrowserCardHint hint) {
+    final cb = widget.onSelectCardForAutofill;
+    if (cb == null) return;
+    HapticUtils.selection();
+    if (widget.isModalSheet && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    cb(hint);
+  }
+
+  void _triggerAddressAutofillSelection(BrowserSavedAddress addr) {
+    final cb = widget.onSelectAddressForAutofill;
+    if (cb == null) return;
+    HapticUtils.selection();
+    if (widget.isModalSheet && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    cb(addr);
   }
 
   Future<void> _openCredentialDetailSheet(BrowserSavedCredential cred) async {
@@ -717,15 +836,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                     padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
                     minHeight: 50.0,
                     leading: Icon(Icons.language_rounded, size: 19, color: pal.subtext),
-                    title: 'Сайт',
+                    title: sheetCtx.trOr('browser_vault_field_site', 'Сайт'),
                     subtitle: cred.origin,
                   ),
                   TheavListRow(
                     padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
                     minHeight: 50.0,
                     leading: Icon(Icons.person_outline_rounded, size: 19, color: pal.subtext),
-                    title: 'Логин',
-                    subtitle: cred.username.isNotEmpty ? cred.username : 'Без логина',
+                    title: sheetCtx.trOr('browser_vault_field_login', 'Логин'),
+                    subtitle: cred.username.isNotEmpty
+                        ? cred.username
+                        : sheetCtx.trOr(
+                            'browser_vault_no_username',
+                            'Без логина',
+                          ),
                     trailing: cred.username.isEmpty
                         ? null
                         : GestureDetector(
@@ -737,7 +861,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                               HapticUtils.selection();
                               GlassToastService().show(
                                 sheetCtx,
-                                'Логин скопирован',
+                                sheetCtx.trOr(
+                                  'browser_vault_login_copied_toast',
+                                  'Логин скопирован',
+                                ),
                                 icon: Icons.check_rounded,
                               );
                             },
@@ -759,7 +886,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                     padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
                     minHeight: 52.0,
                     leading: Icon(Icons.key_rounded, size: 19, color: pal.subtext),
-                    title: 'Пароль',
+                    title: sheetCtx.trOr(
+                      'browser_http_auth_password_hint',
+                      'Пароль',
+                    ),
                     subtitleWidget: Text(
                       reveal
                           ? cred.password
@@ -824,7 +954,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   backgroundColor: pal.primary,
                   foregroundColor: pal.onPrimary,
                   icon: Icons.login_rounded,
-                  label: 'Автозаполнить',
+                  label: sheetCtx.trOr(
+                    'browser_vault_autofill_btn',
+                    'Автозаполнить',
+                  ),
                   height: 40.0,
                   fontSize: 14.0,
                   onTap: () {
@@ -843,7 +976,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                       ),
                       foregroundColor: pal.primary,
                       icon: Icons.edit_rounded,
-                      label: 'Изменить',
+                      label: sheetCtx.trOr(
+                        'browser_vault_edit_btn',
+                        'Изменить',
+                      ),
                       height: 38.0,
                       fontSize: 13.5,
                       onTap: () {
@@ -863,7 +999,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                       ),
                       foregroundColor: pal.error,
                       icon: Icons.delete_outline_rounded,
-                      label: 'Удалить',
+                      label: sheetCtx.trOr('common_delete', 'Удалить'),
                       height: 38.0,
                       fontSize: 13.5,
                       onTap: () async {
@@ -887,7 +1023,1043 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     );
   }
 
+  Future<void> _toggleRequireVaultAuth(bool next) async {
+    if (_authToggleInProgress) return;
+    final settings = BrowserSiteSettingsService.instance;
+    if (next) {
+      await settings.setRequireAuthForVaultAccess(true);
+      return;
+    }
+    _authToggleInProgress = true;
+    try {
+      final ok = await BrowserVaultAuthGate.instance.authenticate(
+        context,
+        reason: context.trOr(
+          'browser_vault_disable_auth_reason',
+          'Подтвердите личность для отключения защиты хранилища',
+        ),
+        forceChallenge: true,
+      );
+      if (!mounted) return;
+      unawaited(_refreshVaultPinState());
+      if (!ok) return;
+      await settings.setRequireAuthForVaultAccess(false);
+    } finally {
+      _authToggleInProgress = false;
+    }
+  }
+
+  Future<void> _onTapVaultPinTile() async {
+    if (_vaultPinActionInProgress) return;
+    _vaultPinActionInProgress = true;
+    try {
+      final bool hasPin = await BrowserVaultAuthGate.instance.hasVaultPin();
+      if (!mounted) return;
+      if (!hasPin) {
+        final bool created = await showBrowserVaultCreatePinSheet(context);
+        if (!mounted) return;
+        await _refreshVaultPinState();
+        if (created && mounted) {
+          GlassToastService().show(
+            context,
+            context.trOr(
+              'browser_vault_pin_saved_toast',
+              'PIN-код сейфа установлен',
+            ),
+            icon: Icons.check_rounded,
+          );
+        }
+        return;
+      }
+
+      final _VaultPinAction? action = await showTheavModalSheet<_VaultPinAction>(
+        context: context,
+        useRootNavigator: true,
+        barrierDismissible: true,
+        maxHeightFactor: 0.45,
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
+        builder: (sheetCtx) {
+          final st = TheavSurfaceStyle.of(sheetCtx);
+          final pal = st.palette;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildModalHeaderRow(
+                sheetCtx,
+                title: sheetCtx.trOr(
+                  'browser_setting_vault_pin_title',
+                  'PIN-код сейфа браузера',
+                ),
+              ),
+              TheavInsetGroup(
+                margin: EdgeInsets.zero,
+                borderRadius: 20.0,
+                dividerIndent: 46.0,
+                showBorder: false,
+                showShadow: false,
+                backgroundColor: _cardFill(st),
+                dividerColor: _dividerTint(st),
+                children: [
+                  TheavListRow(
+                    key: const ValueKey('browser_vault_pin_change_btn'),
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                    minHeight: 52.0,
+                    leading: Icon(Icons.pin_rounded, size: 20, color: pal.primary),
+                    title: sheetCtx.trOr(
+                      'browser_vault_pin_change',
+                      'Изменить PIN-код сейфа',
+                    ),
+                    showChevron: true,
+                    onTap: () => Navigator.of(sheetCtx).pop(_VaultPinAction.change),
+                  ),
+                  TheavListRow(
+                    key: const ValueKey('browser_vault_pin_remove_btn'),
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                    minHeight: 52.0,
+                    leading: Icon(
+                      Icons.delete_outline_rounded,
+                      size: 20,
+                      color: pal.error,
+                    ),
+                    title: sheetCtx.trOr(
+                      'browser_vault_pin_remove',
+                      'Удалить PIN-код сейфа',
+                    ),
+                    isDestructive: true,
+                    onTap: () => Navigator.of(sheetCtx).pop(_VaultPinAction.remove),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      );
+      if (action == null || !mounted) return;
+      if (action == _VaultPinAction.change) {
+        final bool ok = await BrowserVaultAuthGate.instance.authenticate(
+          context,
+          reason: context.trOr(
+            'browser_vault_change_pin_reason',
+            'Подтвердите доступ для смены PIN-кода сейфа',
+          ),
+          forceChallenge: true,
+        );
+        if (!ok || !mounted) return;
+        final bool changed = await showBrowserVaultCreatePinSheet(context);
+        if (!mounted) return;
+        await _refreshVaultPinState();
+        if (changed && mounted) {
+          GlassToastService().show(
+            context,
+            context.trOr(
+              'browser_vault_pin_updated_toast',
+              'PIN-код сейфа обновлён',
+            ),
+            icon: Icons.check_rounded,
+          );
+        }
+      } else if (action == _VaultPinAction.remove) {
+        final bool ok = await BrowserVaultAuthGate.instance.authenticate(
+          context,
+          reason: context.trOr(
+            'browser_vault_remove_pin_reason',
+            'Подтвердите личность для удаления PIN-кода сейфа',
+          ),
+          forceChallenge: true,
+        );
+        if (!ok || !mounted) return;
+        await BrowserVaultAuthGate.instance.clearVaultPin();
+        if (!mounted) return;
+        await _refreshVaultPinState();
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            context.trOr(
+              'browser_vault_pin_removed_toast',
+              'PIN-код сейфа удалён',
+            ),
+            icon: Icons.check_rounded,
+          );
+        }
+      }
+    } finally {
+      _vaultPinActionInProgress = false;
+    }
+  }
+
+  ({int month, int year})? _parseCardExpiry(String raw) {
+    final clean = raw.trim();
+    final match = RegExp(r'^(\d{1,2})\s*/\s*(\d{2}|\d{4})$').firstMatch(clean);
+    final String? mStr;
+    final String? yStr;
+    if (match != null) {
+      mStr = match.group(1);
+      yStr = match.group(2);
+    } else {
+      final digits = clean.replaceAll(RegExp(r'\D'), '');
+      if (digits.length == 4) {
+        mStr = digits.substring(0, 2);
+        yStr = digits.substring(2, 4);
+      } else if (digits.length == 6) {
+        mStr = digits.substring(0, 2);
+        yStr = digits.substring(2, 6);
+      } else {
+        return null;
+      }
+    }
+    final month = int.tryParse(mStr ?? '');
+    final rawYear = int.tryParse(yStr ?? '');
+    if (month == null || rawYear == null) return null;
+    final year = BrowserVaultService.normalizeExpiryYear(rawYear);
+    return (month: month, year: year);
+  }
+
+  Future<void> _openCardDetailSheet(BrowserCardHint hint) async {
+    BrowserSavedCard? unlockedCard;
+    bool revealNumber = false;
+    bool unlocking = false;
+
+    Future<BrowserSavedCard?> ensureUnlocked(
+      BuildContext sheetCtx,
+      StateSetter setSheetState,
+    ) async {
+      if (unlockedCard != null) return unlockedCard;
+      if (unlocking) return null;
+      setSheetState(() => unlocking = true);
+      try {
+        final card = await BrowserVaultService.instance.unlockAndReadCard(
+          sheetCtx,
+          hint.id,
+          reason: sheetCtx.trOr(
+            'browser_vault_unlock_card_reason',
+            'Подтвердите личность для доступа к данным карты',
+          ),
+        );
+        if (sheetCtx.mounted && card != null) {
+          unlockedCard = card;
+        }
+        return card;
+      } finally {
+        if (sheetCtx.mounted) {
+          setSheetState(() => unlocking = false);
+        }
+      }
+    }
+
+    await showTheavModalSheet<void>(
+      context: context,
+      useRootNavigator: true,
+      maxHeightFactor: 0.80,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) {
+          final st = TheavSurfaceStyle.of(sheetCtx);
+          final pal = st.palette;
+          final String cardDisplayTitle = hint.nickname.isNotEmpty
+              ? '${hint.nickname} (${hint.brand.displayName})'
+              : '${hint.brand.displayName} •••• ${hint.last4}';
+          final String displayedNumber = (revealNumber && unlockedCard != null)
+              ? BrowserVaultService.formatCardNumberGroups(
+                  unlockedCard!.cardNumber,
+                )
+              : '•••• •••• •••• ${hint.last4}';
+
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildModalHeaderRow(sheetCtx, title: cardDisplayTitle),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  borderRadius: 20.0,
+                  dividerIndent: 46.0,
+                  showBorder: false,
+                  showShadow: false,
+                  backgroundColor: _cardFill(st),
+                  dividerColor: _dividerTint(st),
+                  footer: sheetCtx.trOr(
+                    'browser_vault_card_cvv_never_stored',
+                    'CVV/CVC не сохраняется в целях безопасности.',
+                  ),
+                  children: [
+                    TheavListRow(
+                      key: const ValueKey('browser_vault_card_detail_number_tile'),
+                      padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                      minHeight: 52.0,
+                      leading: Icon(
+                        Icons.credit_card_rounded,
+                        size: 19,
+                        color: pal.subtext,
+                      ),
+                      title: sheetCtx.trOr(
+                        'browser_vault_card_number_label',
+                        'Номер карты',
+                      ),
+                      subtitleWidget: Text(
+                        displayedNumber,
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: pal.onSurface,
+                        ),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          GestureDetector(
+                            key: const ValueKey(
+                              'browser_vault_card_detail_reveal_btn',
+                            ),
+                            behavior: HitTestBehavior.opaque,
+                            onTap: unlocking
+                                ? null
+                                : () async {
+                                    HapticUtils.selection();
+                                    if (revealNumber) {
+                                      setSheetState(() => revealNumber = false);
+                                      return;
+                                    }
+                                    final card = await ensureUnlocked(
+                                      sheetCtx,
+                                      setSheetState,
+                                    );
+                                    if (card != null && sheetCtx.mounted) {
+                                      setSheetState(() => revealNumber = true);
+                                    }
+                                  },
+                            child: SizedBox(
+                              width: 34,
+                              height: 34,
+                              child: Center(
+                                child: Icon(
+                                  revealNumber
+                                      ? Icons.visibility_off_rounded
+                                      : Icons.visibility_rounded,
+                                  size: 19,
+                                  color: pal.subtext,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          GestureDetector(
+                            key: const ValueKey(
+                              'browser_vault_card_detail_copy_btn',
+                            ),
+                            behavior: HitTestBehavior.opaque,
+                            onTap: unlocking
+                                ? null
+                                : () async {
+                                    final card = await ensureUnlocked(
+                                      sheetCtx,
+                                      setSheetState,
+                                    );
+                                    if (card != null && sheetCtx.mounted) {
+                                      _copyCardNumberWithAutoWipe(
+                                        sheetCtx,
+                                        card.cardNumber,
+                                      );
+                                    }
+                                  },
+                            child: SizedBox(
+                              width: 34,
+                              height: 34,
+                              child: Center(
+                                child: Icon(
+                                  Icons.copy_rounded,
+                                  size: 18,
+                                  color: pal.subtext,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TheavListRow(
+                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                      minHeight: 50.0,
+                      leading: Icon(
+                        Icons.calendar_today_rounded,
+                        size: 18,
+                        color: pal.subtext,
+                      ),
+                      title: sheetCtx.trOr(
+                        'browser_vault_card_expiry_label',
+                        'Срок действия',
+                      ),
+                      subtitle: hint.formattedExpiry,
+                    ),
+                    TheavListRow(
+                      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                      minHeight: 50.0,
+                      leading: Icon(
+                        Icons.person_outline_rounded,
+                        size: 19,
+                        color: pal.subtext,
+                      ),
+                      title: sheetCtx.trOr(
+                        'browser_vault_card_holder_label',
+                        'Владелец карты',
+                      ),
+                      subtitle: hint.holderName.isNotEmpty
+                          ? hint.holderName
+                          : '—',
+                    ),
+                    if (hint.nickname.isNotEmpty)
+                      TheavListRow(
+                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                        minHeight: 50.0,
+                        leading: Icon(
+                          Icons.label_outline_rounded,
+                          size: 19,
+                          color: pal.subtext,
+                        ),
+                        title: sheetCtx.trOr(
+                          'browser_vault_card_nickname_label',
+                          'Название',
+                        ),
+                        subtitle: hint.nickname,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                if (widget.onSelectCardForAutofill != null) ...[
+                  _buildSafariPillButton(
+                    buttonKey: const ValueKey(
+                      'browser_vault_card_detail_autofill_btn',
+                    ),
+                    backgroundColor: pal.primary,
+                    foregroundColor: pal.onPrimary,
+                    icon: Icons.credit_card_rounded,
+                    label: sheetCtx.trOr(
+                      'browser_vault_autofill_btn',
+                      'Автозаполнить',
+                    ),
+                    height: 40.0,
+                    fontSize: 14.0,
+                    onTap: () {
+                      Navigator.of(sheetCtx).pop();
+                      _triggerCardAutofillSelection(hint);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildSafariPillButton(
+                        buttonKey: const ValueKey(
+                          'browser_vault_card_detail_edit_btn',
+                        ),
+                        backgroundColor: pal.primary.withValues(
+                          alpha: st.isDark ? 0.18 : 0.11,
+                        ),
+                        foregroundColor: pal.primary,
+                        icon: Icons.edit_rounded,
+                        label: sheetCtx.trOr(
+                          'browser_vault_edit_btn',
+                          'Изменить',
+                        ),
+                        height: 38.0,
+                        fontSize: 13.5,
+                        onTap: unlocking
+                            ? null
+                            : () async {
+                                final card = await ensureUnlocked(
+                                  sheetCtx,
+                                  setSheetState,
+                                );
+                                if (card == null || !sheetCtx.mounted) return;
+                                Navigator.of(sheetCtx).pop();
+                                if (mounted) {
+                                  unawaited(
+                                    _openAddOrEditCardDialog(existing: card),
+                                  );
+                                }
+                              },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _buildSafariPillButton(
+                        buttonKey: const ValueKey(
+                          'browser_vault_card_detail_delete_btn',
+                        ),
+                        backgroundColor: pal.error.withValues(
+                          alpha: st.isDark ? 0.18 : 0.10,
+                        ),
+                        foregroundColor: pal.error,
+                        icon: Icons.delete_outline_rounded,
+                        label: sheetCtx.trOr('common_delete', 'Удалить'),
+                        height: 38.0,
+                        fontSize: 13.5,
+                        onTap: unlocking
+                            ? null
+                            : () async {
+                                final card = await ensureUnlocked(
+                                  sheetCtx,
+                                  setSheetState,
+                                );
+                                if (card == null || !sheetCtx.mounted) return;
+                                await BrowserVaultService.instance
+                                    .deleteCard(hint.id);
+                                if (sheetCtx.mounted) {
+                                  Navigator.of(sheetCtx).pop();
+                                }
+                                if (mounted) setState(() {});
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _openAddOrEditCardDialog({BrowserSavedCard? existing}) async {
+    final numberCtrl = TextEditingController(
+      text: existing != null
+          ? BrowserVaultService.formatCardNumberGroups(existing.cardNumber)
+          : '',
+    );
+    final expiryCtrl = TextEditingController(
+      text: existing != null ? existing.formattedExpiry : '',
+    );
+    final holderCtrl = TextEditingController(text: existing?.holderName ?? '');
+    final nicknameCtrl = TextEditingController(text: existing?.nickname ?? '');
+    String? errorText;
+
+    final bool? saved = await showTheavModalSheet<bool>(
+      context: context,
+      useRootNavigator: true,
+      maxHeightFactor: 0.86,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) {
+          final st = TheavSurfaceStyle.of(sheetCtx);
+          final pal = st.palette;
+          final detectedBrand =
+              BrowserVaultService.detectCardBrand(numberCtrl.text);
+
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildModalHeaderRow(
+                  sheetCtx,
+                  title: existing == null
+                      ? sheetCtx.trOr(
+                          'browser_vault_new_card_title',
+                          'Новая банковская карта',
+                        )
+                      : sheetCtx.trOr(
+                          'browser_vault_edit_card_title',
+                          'Редактировать карту',
+                        ),
+                  trailing: detectedBrand != BrowserCardBrand.unknown
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: pal.primary.withValues(
+                              alpha: st.isDark ? 0.20 : 0.12,
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            detectedBrand.displayName,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: pal.primary,
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  borderRadius: 20.0,
+                  dividerIndent: 44.0,
+                  showBorder: false,
+                  showShadow: false,
+                  backgroundColor: _cardFill(st),
+                  dividerColor: _dividerTint(st),
+                  footer: sheetCtx.trOr(
+                    'browser_vault_card_cvv_never_stored',
+                    'CVV/CVC не сохраняется в целях безопасности.',
+                  ),
+                  children: [
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_card_number_input'),
+                      palette: pal,
+                      icon: Icons.credit_card_rounded,
+                      controller: numberCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_card_number_hint',
+                        'Номер карты',
+                      ),
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.next,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[\d\s-]')),
+                        LengthLimitingTextInputFormatter(24),
+                      ],
+                      onChanged: (_) => setSheetState(() => errorText = null),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_card_expiry_input'),
+                      palette: pal,
+                      icon: Icons.calendar_today_rounded,
+                      controller: expiryCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_card_expiry_hint',
+                        'Срок действия (ММ/ГГ)',
+                      ),
+                      keyboardType: TextInputType.datetime,
+                      textInputAction: TextInputAction.next,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[\d/]')),
+                        LengthLimitingTextInputFormatter(7),
+                      ],
+                      onChanged: (_) => setSheetState(() => errorText = null),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_card_holder_input'),
+                      palette: pal,
+                      icon: Icons.person_outline_rounded,
+                      controller: holderCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_card_holder_hint',
+                        'Имя владельца (как на карте)',
+                      ),
+                      textCapitalization: TextCapitalization.characters,
+                      textInputAction: TextInputAction.next,
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey(
+                        'browser_vault_card_nickname_input',
+                      ),
+                      palette: pal,
+                      icon: Icons.label_outline_rounded,
+                      controller: nicknameCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_card_nickname_hint',
+                        'Название карты (необязательно)',
+                      ),
+                      textInputAction: TextInputAction.done,
+                    ),
+                  ],
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(
+                      errorText!,
+                      style: TextStyle(
+                        color: pal.error,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                _buildSafariPillButton(
+                  buttonKey: const ValueKey('browser_vault_card_save_btn'),
+                  backgroundColor: pal.primary,
+                  foregroundColor: pal.onPrimary,
+                  label: sheetCtx.trOr('common_save', 'Сохранить'),
+                  height: 42.0,
+                  fontSize: 14.5,
+                  onTap: () async {
+                    final digits =
+                        BrowserVaultService.stripCardDigits(numberCtrl.text);
+                    if (!BrowserVaultService.isValidLuhn(digits)) {
+                      final msg = sheetCtx.trOr(
+                        'browser_vault_card_invalid_number',
+                        'Укажите корректный номер карты',
+                      );
+                      setSheetState(() => errorText = msg);
+                      GlassToastService().show(
+                        sheetCtx,
+                        msg,
+                        icon: Icons.error_outline_rounded,
+                      );
+                      return;
+                    }
+                    final parsed = _parseCardExpiry(expiryCtrl.text);
+                    if (parsed == null ||
+                        parsed.month < 1 ||
+                        parsed.month > 12) {
+                      final msg = sheetCtx.trOr(
+                        'browser_vault_card_invalid_expiry',
+                        'Укажите срок действия в формате ММ/ГГ',
+                      );
+                      setSheetState(() => errorText = msg);
+                      GlassToastService().show(
+                        sheetCtx,
+                        msg,
+                        icon: Icons.error_outline_rounded,
+                      );
+                      return;
+                    }
+                    if (BrowserVaultService.isCardExpired(
+                      parsed.month,
+                      parsed.year,
+                    )) {
+                      final msg = sheetCtx.trOr(
+                        'browser_vault_card_expired',
+                        'Срок действия карты истёк',
+                      );
+                      setSheetState(() => errorText = msg);
+                      GlassToastService().show(
+                        sheetCtx,
+                        msg,
+                        icon: Icons.error_outline_rounded,
+                      );
+                      return;
+                    }
+                    await BrowserVaultService.instance.saveOrUpdateCard(
+                      cardNumber: digits,
+                      holderName: holderCtrl.text.trim(),
+                      expMonth: parsed.month,
+                      expYear: parsed.year,
+                      nickname: nicknameCtrl.text.trim(),
+                      existingId: existing?.id,
+                      clearNickname:
+                          existing != null && nicknameCtrl.text.trim().isEmpty,
+                    );
+                    if (sheetCtx.mounted) {
+                      Navigator.of(sheetCtx).pop(true);
+                    }
+                  },
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    numberCtrl.dispose();
+    expiryCtrl.dispose();
+    holderCtrl.dispose();
+    nicknameCtrl.dispose();
+
+    if (saved == true && mounted) {
+      GlassToastService().show(
+        context,
+        context.trOr('browser_vault_card_saved_toast', 'Карта сохранена'),
+        icon: Icons.check_rounded,
+      );
+    }
+  }
+
+  Future<void> _openAddOrEditAddressDialog({
+    BrowserSavedAddress? existing,
+  }) async {
+    final labelCtrl = TextEditingController(text: existing?.label ?? '');
+    final fullNameCtrl = TextEditingController(text: existing?.fullName ?? '');
+    final orgCtrl = TextEditingController(text: existing?.organization ?? '');
+    final line1Ctrl = TextEditingController(text: existing?.addressLine1 ?? '');
+    final line2Ctrl = TextEditingController(text: existing?.addressLine2 ?? '');
+    final cityCtrl = TextEditingController(text: existing?.city ?? '');
+    final regionCtrl = TextEditingController(text: existing?.region ?? '');
+    final postalCtrl = TextEditingController(text: existing?.postalCode ?? '');
+    final countryCtrl = TextEditingController(text: existing?.country ?? '');
+    final phoneCtrl = TextEditingController(text: existing?.phone ?? '');
+    final emailCtrl = TextEditingController(text: existing?.email ?? '');
+    bool isDefault =
+        existing?.isDefault ?? BrowserVaultService.instance.addresses.isEmpty;
+
+    final String? actionResult = await showTheavModalSheet<String>(
+      context: context,
+      useRootNavigator: true,
+      maxHeightFactor: 0.88,
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 18),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) {
+          final st = TheavSurfaceStyle.of(sheetCtx);
+          final pal = st.palette;
+          return SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildModalHeaderRow(
+                  sheetCtx,
+                  title: existing == null
+                      ? sheetCtx.trOr(
+                          'browser_vault_new_address_title',
+                          'Новый адрес',
+                        )
+                      : sheetCtx.trOr(
+                          'browser_vault_edit_address_title',
+                          'Редактировать адрес',
+                        ),
+                ),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  borderRadius: 20.0,
+                  dividerIndent: 44.0,
+                  showBorder: false,
+                  showShadow: false,
+                  backgroundColor: _cardFill(st),
+                  dividerColor: _dividerTint(st),
+                  children: [
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_label_input'),
+                      palette: pal,
+                      icon: Icons.label_outline_rounded,
+                      controller: labelCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_label_hint',
+                        'Название (Дом, Работа...)',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey(
+                        'browser_vault_addr_fullname_input',
+                      ),
+                      palette: pal,
+                      icon: Icons.person_outline_rounded,
+                      controller: fullNameCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_fullname_hint',
+                        'ФИО',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_org_input'),
+                      palette: pal,
+                      icon: Icons.business_outlined,
+                      controller: orgCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_org_hint',
+                        'Организация',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_line1_input'),
+                      palette: pal,
+                      icon: Icons.location_on_outlined,
+                      controller: line1Ctrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_line1_hint',
+                        'Улица, дом, квартира',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_line2_input'),
+                      palette: pal,
+                      icon: Icons.apartment_rounded,
+                      controller: line2Ctrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_line2_hint',
+                        'Подъезд, этаж, комментарий',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_city_input'),
+                      palette: pal,
+                      icon: Icons.location_city_rounded,
+                      controller: cityCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_city_hint',
+                        'Город',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_region_input'),
+                      palette: pal,
+                      icon: Icons.map_outlined,
+                      controller: regionCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_region_hint',
+                        'Область / регион',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_postal_input'),
+                      palette: pal,
+                      icon: Icons.markunread_mailbox_outlined,
+                      controller: postalCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_postal_hint',
+                        'Почтовый индекс',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey(
+                        'browser_vault_addr_country_input',
+                      ),
+                      palette: pal,
+                      icon: Icons.public_rounded,
+                      controller: countryCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_addr_country_hint',
+                        'Страна',
+                      ),
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_phone_input'),
+                      palette: pal,
+                      icon: Icons.phone_outlined,
+                      controller: phoneCtrl,
+                      hintText: sheetCtx.trOr(
+                        'browser_vault_contact_phone_hint',
+                        'Телефон',
+                      ),
+                      keyboardType: TextInputType.phone,
+                    ),
+                    _buildSheetFieldRow(
+                      fieldKey: const ValueKey('browser_vault_addr_email_input'),
+                      palette: pal,
+                      icon: Icons.alternate_email_rounded,
+                      controller: emailCtrl,
+                      hintText: 'Email',
+                      keyboardType: TextInputType.emailAddress,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _cardFill(st),
+                    borderRadius: BorderRadius.circular(20.0),
+                  ),
+                  child: TheavListRow(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 14, 10),
+                    minHeight: 52.0,
+                    title: sheetCtx.trOr(
+                      'browser_vault_addr_default_switch_title',
+                      'Использовать по умолчанию',
+                    ),
+                    trailing: AdaptiveSwitch(
+                      key: const ValueKey('browser_vault_addr_default_switch'),
+                      value: isDefault,
+                      onChanged: (v) => setSheetState(() => isDefault = v),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _buildSafariPillButton(
+                  buttonKey: const ValueKey('browser_vault_addr_save_btn'),
+                  backgroundColor: pal.primary,
+                  foregroundColor: pal.onPrimary,
+                  label: sheetCtx.trOr('common_save', 'Сохранить'),
+                  height: 42.0,
+                  fontSize: 14.5,
+                  onTap: () async {
+                    final candidate = BrowserSavedAddress(
+                      id: existing?.id ?? '',
+                      label: labelCtrl.text.trim(),
+                      fullName: fullNameCtrl.text.trim(),
+                      organization: orgCtrl.text.trim(),
+                      addressLine1: line1Ctrl.text.trim(),
+                      addressLine2: line2Ctrl.text.trim(),
+                      city: cityCtrl.text.trim(),
+                      region: regionCtrl.text.trim(),
+                      postalCode: postalCtrl.text.trim(),
+                      country: countryCtrl.text.trim(),
+                      phone: phoneCtrl.text.trim(),
+                      email: emailCtrl.text.trim(),
+                      isDefault: isDefault,
+                    );
+                    if (!candidate.hasAnyField && candidate.label.isEmpty) {
+                      GlassToastService().show(
+                        sheetCtx,
+                        sheetCtx.trOr(
+                          'browser_vault_addr_empty_error',
+                          'Заполните хотя бы одно поле адреса',
+                        ),
+                        icon: Icons.error_outline_rounded,
+                      );
+                      return;
+                    }
+                    await BrowserVaultService.instance
+                        .saveOrUpdateAddress(candidate);
+                    if (sheetCtx.mounted) {
+                      Navigator.of(sheetCtx).pop('saved');
+                    }
+                  },
+                ),
+                if (existing != null) ...[
+                  const SizedBox(height: 10),
+                  _buildSafariPillButton(
+                    buttonKey: const ValueKey('browser_vault_addr_delete_btn'),
+                    backgroundColor: pal.error.withValues(
+                      alpha: st.isDark ? 0.18 : 0.10,
+                    ),
+                    foregroundColor: pal.error,
+                    icon: Icons.delete_outline_rounded,
+                    label: sheetCtx.trOr('common_delete', 'Удалить'),
+                    height: 38.0,
+                    fontSize: 13.5,
+                    onTap: () async {
+                      await BrowserVaultService.instance
+                          .deleteAddress(existing.id);
+                      if (sheetCtx.mounted) {
+                        Navigator.of(sheetCtx).pop('deleted');
+                      }
+                    },
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    labelCtrl.dispose();
+    fullNameCtrl.dispose();
+    orgCtrl.dispose();
+    line1Ctrl.dispose();
+    line2Ctrl.dispose();
+    cityCtrl.dispose();
+    regionCtrl.dispose();
+    postalCtrl.dispose();
+    countryCtrl.dispose();
+    phoneCtrl.dispose();
+    emailCtrl.dispose();
+
+    if (actionResult != null && mounted) {
+      await _syncContactControllersFromVault();
+      if (mounted) {
+        GlassToastService().show(
+          context,
+          actionResult == 'deleted'
+              ? context.trOr(
+                  'browser_vault_address_deleted_toast',
+                  'Адрес удалён',
+                )
+              : context.trOr(
+                  'browser_vault_address_saved_toast',
+                  'Адрес сохранён',
+                ),
+          icon: Icons.check_rounded,
+        );
+      }
+    }
+  }
+
   Future<void> _saveContactProfile({bool showToast = true}) async {
+    final savedMsg = context.trOr(
+      'browser_vault_contact_saved_toast',
+      'Контактные данные сохранены',
+    );
     final profile = BrowserContactProfile(
       fullName: _nameCtrl.text.trim(),
       email: _emailCtrl.text.trim(),
@@ -905,7 +2077,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     if (showToast) {
       GlassToastService().show(
         context,
-        'Контактные данные сохранены',
+        savedMsg,
         icon: Icons.check_rounded,
       );
     }
@@ -925,6 +2097,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     bool clearHistory = true;
     bool clearCookies = true;
     bool clearSiteSettings = false;
+    final clearedMsg = context.trOr(
+      'browser_vault_clear_selected_done_toast',
+      'Выбранные данные очищены',
+    );
 
     final confirmed = await showTheavModalSheet<bool>(
       context: context,
@@ -973,7 +2149,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             children: [
               _buildModalHeaderRow(
                 sheetCtx,
-                title: 'Очистка данных браузера',
+                title: sheetCtx.trOr(
+                  'browser_vault_clear_dialog_title',
+                  'Очистка данных браузера',
+                ),
               ),
               TheavInsetGroup(
                 margin: EdgeInsets.zero,
@@ -983,23 +2162,35 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 showShadow: false,
                 backgroundColor: _cardFill(st),
                 dividerColor: _dividerTint(st),
-                footer: 'Сохранённые пароли останутся в безопасности.',
+                footer: sheetCtx.trOr(
+                  'browser_vault_clear_dialog_footer',
+                  'Сохранённые пароли останутся в безопасности.',
+                ),
                 children: [
                   checkRow(
                     rowKey: const ValueKey('clear_opt_history'),
-                    label: 'История посещений',
+                    label: sheetCtx.trOr(
+                      'browser_vault_clear_opt_history',
+                      'История посещений',
+                    ),
                     value: clearHistory,
                     onChanged: (v) => setSheetState(() => clearHistory = v),
                   ),
                   checkRow(
                     rowKey: const ValueKey('clear_opt_cookies'),
-                    label: 'Cookie и данные сайтов (WebStorage)',
+                    label: sheetCtx.trOr(
+                      'browser_vault_clear_opt_cookies',
+                      'Cookie и данные сайтов (WebStorage)',
+                    ),
                     value: clearCookies,
                     onChanged: (v) => setSheetState(() => clearCookies = v),
                   ),
                   checkRow(
                     rowKey: const ValueKey('clear_opt_site_settings'),
-                    label: 'Настройки сайтов и разрешения',
+                    label: sheetCtx.trOr(
+                      'browser_vault_clear_opt_site_settings',
+                      'Настройки сайтов и разрешения',
+                    ),
                     value: clearSiteSettings,
                     onChanged: (v) => setSheetState(() => clearSiteSettings = v),
                   ),
@@ -1010,7 +2201,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 buttonKey: const ValueKey('clear_opt_confirm_btn'),
                 backgroundColor: pal.error,
                 foregroundColor: Colors.white,
-                label: 'Очистить выбранное',
+                label: sheetCtx.trOr(
+                  'browser_vault_clear_confirm_btn',
+                  'Очистить выбранное',
+                ),
                 icon: Icons.delete_sweep_rounded,
                 height: 42.0,
                 fontSize: 14.5,
@@ -1034,7 +2228,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     if (mounted) {
       GlassToastService().show(
         context,
-        'Выбранные данные очищены',
+        clearedMsg,
         icon: Icons.cleaning_services_rounded,
       );
     }
@@ -1071,7 +2265,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
         ),
         foregroundColor: palette.primary,
         icon: Icons.add_rounded,
-        label: 'Добавить',
+        label: context.trOr('common_add', 'Добавить'),
         height: 30.0,
         horizontalPadding: 10.0,
         fontSize: 12.5,
@@ -1085,7 +2279,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
         ),
         foregroundColor: palette.error,
         icon: Icons.delete_sweep_rounded,
-        label: 'Очистить',
+        label: context.trOr('browser_clear_action', 'Очистить'),
         height: 30.0,
         horizontalPadding: 10.0,
         fontSize: 12.5,
@@ -1100,10 +2294,19 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
         expand: true,
         height: 40.0,
         margin: const EdgeInsets.only(top: 2, bottom: 8),
-        options: const [
-          TheavSegmentOption<int>(value: 0, label: 'Пароли'),
-          TheavSegmentOption<int>(value: 1, label: 'Автозаполнение'),
-          TheavSegmentOption<int>(value: 2, label: 'Cookie и сайты'),
+        options: [
+          TheavSegmentOption<int>(
+            value: 0,
+            label: context.trOr('browser_autofill_passwords', 'Пароли'),
+          ),
+          TheavSegmentOption<int>(
+            value: 1,
+            label: context.trOr('browser_vault_tab_autofill', 'Автозаполнение'),
+          ),
+          TheavSegmentOption<int>(
+            value: 2,
+            label: context.trOr('browser_vault_tab_cookies', 'Cookie и сайты'),
+          ),
         ],
         selected: _activeSection,
         onChanged: _selectSection,
@@ -1141,8 +2344,14 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                         decoration: _transparentFieldDecoration(
                           palette,
                           hintText: _activeSection == 0
-                              ? 'Поиск по сайтам и логинам...'
-                              : 'Поиск по сайтам...',
+                              ? context.trOr(
+                                  'browser_vault_search_passwords_hint',
+                                  'Поиск по сайтам и логинам...',
+                                )
+                              : context.trOr(
+                                  'browser_vault_search_sites_hint',
+                                  'Поиск по сайтам...',
+                                ),
                         ).copyWith(
                           contentPadding: const EdgeInsets.symmetric(
                             vertical: 8,
@@ -1201,7 +2410,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
         if (widget.isModalSheet)
           _buildModalHeaderRow(
             context,
-            title: 'Пароли и данные браузера',
+            title: context.trOr(
+              'browser_vault_sheet_title',
+              'Пароли и данные браузера',
+            ),
             closeButtonKey: const ValueKey('browser_vault_close_btn'),
             trailing: headerTrailing,
           ),
@@ -1250,7 +2462,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
         showShadow: false,
         backgroundColor: cardFill,
         dividerColor: dividerTint,
-        header: 'Никогда не сохранять',
+        header: context.trOr(
+          'browser_vault_never_save_header',
+          'Никогда не сохранять',
+        ),
         headerTrailing: Text(
           '${vault.neverSaveOrigins.length}',
           style: TextStyle(
@@ -1293,14 +2508,28 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
       );
     }
 
+    final String lockedTitle = context.trOr(
+      'browser_vault_passwords_locked_title',
+      'Пароли защищены',
+    );
+    final String lockedSubtitle = context.trOr(
+      'browser_vault_passwords_locked_subtitle',
+      'В связке сохранено паролей: {count}. Подтвердите личность для просмотра.',
+      {'count': '${vault.hints.length}'},
+    );
+    final String lockedBtnLabel = _unlockInProgress
+        ? context.trOr('browser_vault_checking', 'Проверка...')
+        : context.trOr(
+            'browser_vault_unlock_passwords_btn',
+            'Разблокировать пароли',
+          );
+
     if (!_unlocked && vault.neverSaveOrigins.isEmpty) {
       return SafariSheetEmptyState(
         icon: Icons.verified_user_rounded,
-        title: 'Пароли защищены',
-        subtitle:
-            'В связке сохранено паролей: ${vault.hints.length}. Подтвердите личность для просмотра.',
-        actionLabel:
-            _unlockInProgress ? 'Проверка...' : 'Разблокировать пароли',
+        title: lockedTitle,
+        subtitle: lockedSubtitle,
+        actionLabel: lockedBtnLabel,
         actionIcon: Icons.lock_open_rounded,
         isPrimaryAction: true,
         actionButtonKey: const ValueKey('browser_vault_unlock_btn'),
@@ -1311,11 +2540,24 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
     if (_unlocked && filtered.isEmpty && vault.neverSaveOrigins.isEmpty) {
       return SafariSheetEmptyState(
         icon: q.isNotEmpty ? Icons.search_off_rounded : Icons.key_rounded,
-        title: q.isNotEmpty ? 'Ничего не найдено' : 'Нет сохранённых паролей',
+        title: q.isNotEmpty
+            ? context.trOr('common_nothing_found', 'Ничего не найдено')
+            : context.trOr(
+                'browser_vault_no_passwords_title',
+                'Нет сохранённых паролей',
+              ),
         subtitle: q.isNotEmpty
-            ? 'Попробуйте изменить запрос поиска.'
-            : 'Добавьте пароль вручную или сохраните его при входе на сайт.',
-        actionLabel: q.isNotEmpty ? 'Сбросить поиск' : 'Добавить пароль',
+            ? context.trOr(
+                'browser_search_empty_subtitle',
+                'Попробуйте изменить запрос поиска.',
+              )
+            : context.trOr(
+                'browser_vault_no_passwords_subtitle',
+                'Добавьте пароль вручную или сохраните его при входе на сайт.',
+              ),
+        actionLabel: q.isNotEmpty
+            ? context.trOr('browser_search_reset', 'Сбросить поиск')
+            : context.trOr('browser_vault_add_password_btn', 'Добавить пароль'),
         actionIcon: q.isNotEmpty ? null : Icons.add_rounded,
         isPrimaryAction: q.isEmpty,
         onAction: q.isNotEmpty
@@ -1340,11 +2582,9 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               ),
               child: SafariSheetEmptyState(
                 icon: Icons.verified_user_rounded,
-                title: 'Пароли защищены',
-                subtitle:
-                    'В связке сохранено паролей: ${vault.hints.length}. Подтвердите личность для просмотра.',
-                actionLabel:
-                    _unlockInProgress ? 'Проверка...' : 'Разблокировать пароли',
+                title: lockedTitle,
+                subtitle: lockedSubtitle,
+                actionLabel: lockedBtnLabel,
                 actionIcon: Icons.lock_open_rounded,
                 isPrimaryAction: true,
                 actionButtonKey: const ValueKey('browser_vault_unlock_btn'),
@@ -1355,12 +2595,26 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             SafariSheetEmptyState(
               icon: q.isNotEmpty ? Icons.search_off_rounded : Icons.key_rounded,
               title: q.isNotEmpty
-                  ? 'Ничего не найдено'
-                  : 'Нет сохранённых паролей',
+                  ? context.trOr('common_nothing_found', 'Ничего не найдено')
+                  : context.trOr(
+                      'browser_vault_no_passwords_title',
+                      'Нет сохранённых паролей',
+                    ),
               subtitle: q.isNotEmpty
-                  ? 'Попробуйте изменить запрос поиска.'
-                  : 'Добавьте пароль вручную или сохраните его при входе на сайт.',
-              actionLabel: q.isNotEmpty ? 'Сбросить поиск' : 'Добавить пароль',
+                  ? context.trOr(
+                      'browser_search_empty_subtitle',
+                      'Попробуйте изменить запрос поиска.',
+                    )
+                  : context.trOr(
+                      'browser_vault_no_passwords_subtitle',
+                      'Добавьте пароль вручную или сохраните его при входе на сайт.',
+                    ),
+              actionLabel: q.isNotEmpty
+                  ? context.trOr('browser_search_reset', 'Сбросить поиск')
+                  : context.trOr(
+                      'browser_vault_add_password_btn',
+                      'Добавить пароль',
+                    ),
               actionIcon: q.isNotEmpty ? null : Icons.add_rounded,
               onAction: q.isNotEmpty
                   ? _clearSearch
@@ -1375,7 +2629,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               showShadow: false,
               backgroundColor: cardFill,
               dividerColor: dividerTint,
-              header: 'Сохранённые аккаунты',
+              header: context.trOr(
+                'browser_vault_saved_accounts_header',
+                'Сохранённые аккаунты',
+              ),
               headerTrailing: Text(
                 '${filtered.length}',
                 style: TextStyle(
@@ -1412,7 +2669,12 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                           ? cred.displayHost
                           : cred.origin;
                       final String subtitleLabel = [
-                        cred.username.isNotEmpty ? cred.username : 'Без логина',
+                        cred.username.isNotEmpty
+                            ? cred.username
+                            : context.trOr(
+                                'browser_vault_no_username',
+                                'Без логина',
+                              ),
                         if (cred.isHttpAuth) 'HTTP Auth',
                       ].join(' • ');
                       return TheavListRow(
@@ -1470,7 +2732,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                                       alpha: style.isDark ? 0.18 : 0.11,
                                     ),
                                     foregroundColor: palette.primary,
-                                    label: 'Автозаполнить',
+                                    label: context.trOr(
+                                      'browser_vault_autofill_btn',
+                                      'Автозаполнить',
+                                    ),
                                     height: 28.0,
                                     horizontalPadding: 9.0,
                                     fontSize: 11.5,
@@ -1522,6 +2787,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
 
   Widget _buildAutofillTab(BuildContext context, TheavSurfaceStyle style) {
     final settings = BrowserSiteSettingsService.instance;
+    final vault = BrowserVaultService.instance;
     final pal = style.palette;
     final double hPad = widget.isModalSheet ? 0.0 : 16.0;
     final Color cardFill = _cardFill(style);
@@ -1548,14 +2814,22 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             showShadow: false,
             backgroundColor: cardFill,
             dividerColor: dividerTint,
-            header: 'Пароли и система',
+            header: context.trOr(
+              'browser_autofill_passwords_and_system_header',
+              'Пароли и система',
+            ),
             children: [
               TheavListRow(
                 padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
                 minHeight: 54.0,
-                title: 'Предлагать сохранение паролей',
-                subtitle:
-                    'Показывать карточку сохранения после входа на сайте',
+                title: context.trOr(
+                  'browser_setting_save_passwords_title',
+                  'Предлагать сохранение паролей',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_save_passwords_subtitle',
+                  'Показывать карточку сохранения после входа на сайте',
+                ),
                 trailing: AdaptiveSwitch(
                   key: const ValueKey('browser_setting_save_passwords_switch'),
                   value: settings.savePasswordsEnabled,
@@ -1566,9 +2840,14 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               TheavListRow(
                 padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
                 minHeight: 54.0,
-                title: 'Системное автозаполнение ОС',
-                subtitle:
-                    'Совместимость с Android Autofill и связкой ключей iOS',
+                title: context.trOr(
+                  'browser_setting_os_autofill_title',
+                  'Системное автозаполнение ОС',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_os_autofill_subtitle',
+                  'Совместимость с Android Autofill и связкой ключей iOS',
+                ),
                 trailing: AdaptiveSwitch(
                   key: const ValueKey('browser_setting_os_autofill_switch'),
                   value: settings.osAutofillEnabled,
@@ -1578,8 +2857,87 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
               TheavListRow(
                 padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
                 minHeight: 54.0,
-                title: 'Автозаполнение контактов',
-                subtitle: 'Предлагать имя, email и телефон в веб-формах',
+                title: context.trOr(
+                  'browser_setting_require_vault_auth_title',
+                  'Запрашивать PIN или биометрию',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_require_vault_auth_subtitle',
+                  'Защищать доступ к паролям и банковским картам',
+                ),
+                trailing: AdaptiveSwitch(
+                  key: const ValueKey(
+                    'browser_setting_require_vault_auth_switch',
+                  ),
+                  value: settings.requireAuthForVaultAccess,
+                  onChanged: (v) => unawaited(_toggleRequireVaultAuth(v)),
+                ),
+              ),
+              TheavListRow(
+                key: const ValueKey('browser_setting_vault_pin_tile'),
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: context.trOr(
+                  'browser_setting_vault_pin_title',
+                  'PIN-код сейфа браузера',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_vault_pin_subtitle',
+                  'Отдельный 4-значный PIN-код защиты хранилища',
+                ),
+                valueText: _hasVaultPin
+                    ? context.trOr('browser_vault_pin_set', 'Установлен')
+                    : context.trOr('browser_vault_pin_not_set', 'Не задан'),
+                showChevron: true,
+                onTap: () => unawaited(_onTapVaultPinTile()),
+              ),
+              TheavListRow(
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: context.trOr(
+                  'browser_setting_card_autofill_title',
+                  'Автозаполнение банковских карт',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_card_autofill_subtitle',
+                  'Предлагать сохранённые карты при оплате на сайтах',
+                ),
+                trailing: AdaptiveSwitch(
+                  key: const ValueKey('browser_setting_card_autofill_switch'),
+                  value: settings.cardAutofillEnabled,
+                  onChanged: (v) =>
+                      unawaited(settings.setCardAutofillEnabled(v)),
+                ),
+              ),
+              TheavListRow(
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: context.trOr(
+                  'browser_setting_otp_autofill_title',
+                  'Автоподстановка одноразовых кодов (OTP)',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_otp_autofill_subtitle',
+                  'Предлагать коды подтверждения в полях ввода',
+                ),
+                trailing: AdaptiveSwitch(
+                  key: const ValueKey('browser_setting_otp_autofill_switch'),
+                  value: settings.otpAutofillEnabled,
+                  onChanged: (v) =>
+                      unawaited(settings.setOtpAutofillEnabled(v)),
+                ),
+              ),
+              TheavListRow(
+                padding: const EdgeInsets.fromLTRB(16, 11, 14, 11),
+                minHeight: 54.0,
+                title: context.trOr(
+                  'browser_setting_contact_autofill_title',
+                  'Автозаполнение контактов',
+                ),
+                subtitle: context.trOr(
+                  'browser_setting_contact_autofill_subtitle',
+                  'Предлагать имя, email и телефон в веб-формах',
+                ),
                 trailing: AdaptiveSwitch(
                   key: const ValueKey('browser_setting_contact_autofill_switch'),
                   value: _contactAutofillCardLoaded
@@ -1612,12 +2970,345 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
           TheavInsetGroup(
             margin: EdgeInsets.zero,
             borderRadius: 20.0,
+            dividerIndent: 64.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: context.trOr(
+              'browser_vault_cards_header',
+              'Банковские карты',
+            ),
+            headerTrailing: _buildSafariPillButton(
+              buttonKey: const ValueKey('browser_vault_add_card_btn'),
+              backgroundColor: pal.primary.withValues(
+                alpha: style.isDark ? 0.18 : 0.11,
+              ),
+              foregroundColor: pal.primary,
+              icon: Icons.add_rounded,
+              label: context.trOr('common_add', 'Добавить'),
+              height: 28.0,
+              horizontalPadding: 10.0,
+              fontSize: 12.0,
+              onTap: () => unawaited(_openAddOrEditCardDialog()),
+            ),
+            footer: context.trOr(
+              'browser_vault_card_cvv_never_stored',
+              'CVV/CVC не сохраняется в целях безопасности.',
+            ),
+            children: [
+              if (vault.cardHints.isEmpty)
+                TheavListRow(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                  minHeight: 54.0,
+                  leading: Icon(
+                    Icons.credit_card_outlined,
+                    size: 20,
+                    color: pal.subtext,
+                  ),
+                  title: context.trOr(
+                    'browser_vault_cards_empty',
+                    'Нет сохранённых банковских карт',
+                  ),
+                  subtitle: context.trOr(
+                    'browser_vault_cards_empty_sub',
+                    'Нажмите «Добавить», чтобы сохранить карту',
+                  ),
+                  showChevron: true,
+                  onTap: () => unawaited(_openAddOrEditCardDialog()),
+                )
+              else
+                for (final cardHint in vault.cardHints)
+                  () {
+                    final String cardTitle =
+                        '${cardHint.brand.displayName} •••• ${cardHint.last4}';
+                    final String cardSubtitle =
+                        '${cardHint.holderName.isNotEmpty ? '${cardHint.holderName} • ' : ''}'
+                        '${cardHint.formattedExpiry}'
+                        '${cardHint.nickname.isNotEmpty ? ' • ${cardHint.nickname}' : ''}';
+                    return TheavListRow(
+                      key: ValueKey('browser_vault_card_tile_${cardHint.id}'),
+                      padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+                      minHeight: 56.0,
+                      leading: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: pal.primary.withValues(
+                            alpha: style.isDark ? 0.20 : 0.12,
+                          ),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.credit_card_rounded,
+                          size: 19,
+                          color: pal.primary,
+                        ),
+                      ),
+                      titleWidget: Text(
+                        cardTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: pal.onSurface,
+                          fontSize: 14.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                        ),
+                      ),
+                      subtitle: cardSubtitle,
+                      trailing: widget.onSelectCardForAutofill != null
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _buildSafariPillButton(
+                                  buttonKey: ValueKey(
+                                    'browser_vault_autofill_card_btn_${cardHint.id}',
+                                  ),
+                                  backgroundColor: pal.primary.withValues(
+                                    alpha: style.isDark ? 0.18 : 0.11,
+                                  ),
+                                  foregroundColor: pal.primary,
+                                  label: context.trOr(
+                                    'browser_vault_autofill_btn',
+                                    'Автозаполнить',
+                                  ),
+                                  height: 28.0,
+                                  horizontalPadding: 9.0,
+                                  fontSize: 11.5,
+                                  onTap: () =>
+                                      _triggerCardAutofillSelection(cardHint),
+                                ),
+                                const SizedBox(width: 4),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => unawaited(
+                                    _openCardDetailSheet(cardHint),
+                                  ),
+                                  child: SizedBox(
+                                    width: 28,
+                                    height: 28,
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.chevron_right_rounded,
+                                        size: 19,
+                                        color:
+                                            pal.subtext.withValues(alpha: 0.72),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Icon(
+                              Icons.chevron_right_rounded,
+                              size: 19,
+                              color: pal.subtext.withValues(alpha: 0.72),
+                            ),
+                      onTap: widget.onSelectCardForAutofill != null
+                          ? () => _triggerCardAutofillSelection(cardHint)
+                          : () => unawaited(_openCardDetailSheet(cardHint)),
+                    );
+                  }(),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
+            dividerIndent: 64.0,
+            showBorder: false,
+            showShadow: false,
+            backgroundColor: cardFill,
+            dividerColor: dividerTint,
+            header: context.trOr(
+              'browser_vault_addresses_header',
+              'Почтовые адреса',
+            ),
+            headerTrailing: _buildSafariPillButton(
+              buttonKey: const ValueKey('browser_vault_add_address_btn'),
+              backgroundColor: pal.primary.withValues(
+                alpha: style.isDark ? 0.18 : 0.11,
+              ),
+              foregroundColor: pal.primary,
+              icon: Icons.add_rounded,
+              label: context.trOr('common_add', 'Добавить'),
+              height: 28.0,
+              horizontalPadding: 10.0,
+              fontSize: 12.0,
+              onTap: () => unawaited(_openAddOrEditAddressDialog()),
+            ),
+            children: [
+              if (vault.addresses.isEmpty)
+                TheavListRow(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                  minHeight: 54.0,
+                  leading: Icon(
+                    Icons.location_on_outlined,
+                    size: 20,
+                    color: pal.subtext,
+                  ),
+                  title: context.trOr(
+                    'browser_vault_addresses_empty',
+                    'Нет сохранённых адресов',
+                  ),
+                  subtitle: context.trOr(
+                    'browser_vault_addresses_empty_sub',
+                    'Добавьте адрес для быстрого заполнения форм',
+                  ),
+                  showChevron: true,
+                  onTap: () => unawaited(_openAddOrEditAddressDialog()),
+                )
+              else
+                for (final addr in vault.addresses)
+                  () {
+                    final String addrTitle = addr.displayTitle.isNotEmpty
+                        ? addr.displayTitle
+                        : context.trOr(
+                            'browser_vault_address_untitled',
+                            'Адрес',
+                          );
+                    final String addrSub = addr.summarySubtitle.isNotEmpty
+                        ? addr.summarySubtitle
+                        : context.trOr(
+                            'browser_vault_address_empty_summary',
+                            'Нажмите для редактирования',
+                          );
+                    return TheavListRow(
+                      key: ValueKey('browser_vault_address_tile_${addr.id}'),
+                      padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
+                      minHeight: 56.0,
+                      leading: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: pal.primary.withValues(
+                            alpha: style.isDark ? 0.20 : 0.12,
+                          ),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.location_on_outlined,
+                          size: 19,
+                          color: pal.primary,
+                        ),
+                      ),
+                      titleWidget: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              addrTitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: pal.onSurface,
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w600,
+                                height: 1.25,
+                              ),
+                            ),
+                          ),
+                          if (addr.isDefault) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: pal.primary.withValues(
+                                  alpha: style.isDark ? 0.20 : 0.12,
+                                ),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                context.trOr(
+                                  'browser_vault_address_default_badge',
+                                  'По умолчанию',
+                                ),
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: pal.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      subtitle: addrSub,
+                      trailing: widget.onSelectAddressForAutofill != null
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _buildSafariPillButton(
+                                  buttonKey: ValueKey(
+                                    'browser_vault_autofill_address_btn_${addr.id}',
+                                  ),
+                                  backgroundColor: pal.primary.withValues(
+                                    alpha: style.isDark ? 0.18 : 0.11,
+                                  ),
+                                  foregroundColor: pal.primary,
+                                  label: context.trOr(
+                                    'browser_vault_autofill_btn',
+                                    'Автозаполнить',
+                                  ),
+                                  height: 28.0,
+                                  horizontalPadding: 9.0,
+                                  fontSize: 11.5,
+                                  onTap: () =>
+                                      _triggerAddressAutofillSelection(addr),
+                                ),
+                                const SizedBox(width: 4),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => unawaited(
+                                    _openAddOrEditAddressDialog(existing: addr),
+                                  ),
+                                  child: SizedBox(
+                                    width: 28,
+                                    height: 28,
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.chevron_right_rounded,
+                                        size: 19,
+                                        color:
+                                            pal.subtext.withValues(alpha: 0.72),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : Icon(
+                              Icons.chevron_right_rounded,
+                              size: 19,
+                              color: pal.subtext.withValues(alpha: 0.72),
+                            ),
+                      onTap: widget.onSelectAddressForAutofill != null
+                          ? () => _triggerAddressAutofillSelection(addr)
+                          : () => unawaited(
+                                _openAddOrEditAddressDialog(existing: addr),
+                              ),
+                    );
+                  }(),
+            ],
+          ),
+          const SizedBox(height: 12),
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            borderRadius: 20.0,
             dividerIndent: 44.0,
             showBorder: false,
             showShadow: false,
             backgroundColor: cardFill,
             dividerColor: dividerTint,
-            header: 'Карточка контакта',
+            header: context.trOr(
+              'browser_vault_contact_card_header',
+              'Карточка контакта',
+            ),
             children: [
               _buildSheetFieldRow(
                 fieldKey: const ValueKey('browser_contact_name_input'),
@@ -1625,7 +3316,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 icon: Icons.badge_outlined,
                 controller: _nameCtrl,
                 focusNode: _nameFocusNode,
-                hintText: 'Имя и фамилия',
+                hintText: context.trOr(
+                  'browser_vault_contact_name_hint',
+                  'Имя и фамилия',
+                ),
               ),
               _buildSheetFieldRow(
                 fieldKey: const ValueKey('browser_contact_email_input'),
@@ -1642,7 +3336,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                 icon: Icons.phone_outlined,
                 controller: _phoneCtrl,
                 focusNode: _phoneFocusNode,
-                hintText: 'Телефон',
+                hintText: context.trOr(
+                  'browser_vault_contact_phone_hint',
+                  'Телефон',
+                ),
                 keyboardType: TextInputType.phone,
               ),
             ],
@@ -1658,7 +3355,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   ),
                   foregroundColor: pal.primary,
                   icon: Icons.person_rounded,
-                  label: 'Из профиля',
+                  label: context.trOr(
+                    'browser_vault_from_profile_btn',
+                    'Из профиля',
+                  ),
                   height: 38.0,
                   horizontalPadding: 10.0,
                   fontSize: 13.5,
@@ -1732,8 +3432,14 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                                     Flexible(
                                       child: Text(
                                         contactSaved
-                                            ? 'Сохранено'
-                                            : 'Сохранить',
+                                            ? context.trOr(
+                                                'browser_saved',
+                                                'Сохранено',
+                                              )
+                                            : context.trOr(
+                                                'common_save',
+                                                'Сохранить',
+                                              ),
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
@@ -1819,25 +3525,48 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             showShadow: false,
             backgroundColor: cardFill,
             dividerColor: dividerTint,
-            header: 'Политика cookie',
-            footer:
-                'Режим «Без сторонних cookie» усиливает приватность, но может нарушать OAuth-вход на некоторых сайтах.',
+            header: context.trOr(
+              'browser_cookie_policy_header',
+              'Политика cookie',
+            ),
+            footer: context.trOr(
+              'browser_cookie_policy_footer',
+              'Режим «Без сторонних cookie» усиливает приватность, но может нарушать OAuth-вход на некоторых сайтах.',
+            ),
             children: [
               for (final option in [
                 (
                   policy: BrowserCookiePolicy.allowAll,
-                  title: 'Разрешить все cookie',
-                  sub: 'Рекомендуется для стабильной работы сайтов и входа',
+                  title: context.trOr(
+                    'browser_cookie_allow_all_title',
+                    'Разрешить все cookie',
+                  ),
+                  sub: context.trOr(
+                    'browser_cookie_allow_all_sub',
+                    'Рекомендуется для стабильной работы сайтов и входа',
+                  ),
                 ),
                 (
                   policy: BrowserCookiePolicy.blockThirdParty,
-                  title: 'Блокировать сторонние cookie',
-                  sub: 'Запрещает межсайтовое отслеживание',
+                  title: context.trOr(
+                    'browser_cookie_block_third_party_title',
+                    'Блокировать сторонние cookie',
+                  ),
+                  sub: context.trOr(
+                    'browser_cookie_block_third_party_sub',
+                    'Запрещает межсайтовое отслеживание',
+                  ),
                 ),
                 (
                   policy: BrowserCookiePolicy.blockAll,
-                  title: 'Блокировать все cookie',
-                  sub: 'Сайты не смогут сохранять сессии входа',
+                  title: context.trOr(
+                    'browser_cookie_block_all_title',
+                    'Блокировать все cookie',
+                  ),
+                  sub: context.trOr(
+                    'browser_cookie_block_all_sub',
+                    'Сайты не смогут сохранять сессии входа',
+                  ),
                 ),
               ])
                 TheavListRow(
@@ -1865,7 +3594,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
             showShadow: false,
             backgroundColor: cardFill,
             dividerColor: dividerTint,
-            header: 'Настройки и данные сайтов',
+            header: context.trOr(
+              'browser_sites_settings_header',
+              'Настройки и данные сайтов',
+            ),
             headerTrailing: Text(
               '${filteredHosts.length}',
               style: TextStyle(
@@ -1880,8 +3612,14 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   padding: const EdgeInsets.all(16),
                   child: Text(
                     q.isNotEmpty
-                        ? 'Сайты по запросу не найдены'
-                        : 'Нет сохранённых данных или индивидуальных настроек сайтов',
+                        ? context.trOr(
+                            'browser_sites_search_empty',
+                            'Сайты по запросу не найдены',
+                          )
+                        : context.trOr(
+                            'browser_sites_empty',
+                            'Нет сохранённых данных или индивидуальных настроек сайтов',
+                          ),
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: pal.subtext),
                   ),
@@ -1904,14 +3642,23 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                           pref?.displayHost.isNotEmpty == true
                               ? pref!.displayHost
                               : host;
+                      final double? textZoom = pref?.textZoom;
                       final tags = <String>[
-                        if (pref?.desktopMode == true) 'ПК-версия',
+                        if (pref?.desktopMode == true)
+                          ctx.trOr('browser_site_tag_desktop', 'ПК-версия'),
                         if (pref?.cameraPolicy == SitePermissionDecision.allow)
-                          'Камера',
+                          ctx.trOr('browser_site_tag_camera', 'Камера'),
                         if (pref?.microphonePolicy ==
                             SitePermissionDecision.allow)
-                          'Микрофон',
-                        if (pref?.muteJsDialogs == true) 'Без JS-окон',
+                          ctx.trOr('browser_site_tag_microphone', 'Микрофон'),
+                        if (pref?.muteJsDialogs == true)
+                          ctx.trOr('browser_site_tag_mute_js', 'Без JS-окон'),
+                        if (textZoom != null)
+                          ctx.trOr(
+                            'browser_site_tag_zoom',
+                            'Масштаб {percent}%',
+                            {'percent': '${(textZoom * 100).round()}'},
+                          ),
                       ];
                       return TheavListRow(
                         padding: const EdgeInsets.fromLTRB(12, 9, 10, 9),
@@ -1934,7 +3681,10 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                         subtitleWidget: Text(
                           tags.isNotEmpty
                               ? tags.join(' • ')
-                              : 'Cookie и кэш сайта',
+                              : ctx.trOr(
+                                  'browser_site_cookies_and_cache',
+                                  'Cookie и кэш сайта',
+                                ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -1948,12 +3698,17 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                             alpha: style.isDark ? 0.08 : 0.055,
                           ),
                           foregroundColor: pal.primary,
-                          label: 'Очистить',
+                          label: ctx.trOr('browser_clear_action', 'Очистить'),
                           height: 28.0,
                           horizontalPadding: 10.0,
                           fontSize: 12.0,
                           onTap: () async {
                             HapticUtils.selection();
+                            final clearedHostMsg = ctx.trOr(
+                              'browser_site_data_cleared_toast',
+                              'Данные {host} очищены',
+                              {'host': host},
+                            );
                             if (siteOrigins.isEmpty) {
                               await dataSvc.clearSiteData('https://$host/');
                             } else {
@@ -1970,7 +3725,7 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                             if (context.mounted) {
                               GlassToastService().show(
                                 context,
-                                'Данные $host очищены',
+                                clearedHostMsg,
                                 icon: Icons.cleaning_services_rounded,
                               );
                             }
@@ -2001,14 +3756,20 @@ class _BrowserVaultHubContentState extends State<_BrowserVaultHubContent> {
                   color: pal.error,
                 ),
                 titleWidget: Text(
-                  'Очистить данные браузера...',
+                  context.trOr(
+                    'browser_clear_data_granular_title',
+                    'Очистить данные браузера...',
+                  ),
                   style: TextStyle(
                     color: pal.error,
                     fontSize: 14.5,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                subtitle: 'Выборочная очистка истории, cookie и настроек сайтов',
+                subtitle: context.trOr(
+                  'browser_clear_data_granular_subtitle',
+                  'Выборочная очистка истории, cookie и настроек сайтов',
+                ),
                 trailing: Icon(
                   Icons.chevron_right_rounded,
                   size: 19,

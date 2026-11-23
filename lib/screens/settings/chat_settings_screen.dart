@@ -111,6 +111,11 @@ class ChatSettingsScreen extends StatelessWidget {
 
   Future<void> _exportTheme(BuildContext context, TheavTheme themeToExport) async {
     final l10n = context.l10n;
+    final shareText = context.trOr(
+      'theme_share_file_text',
+      'Тема Theaver: {name}',
+      {'name': themeToExport.name},
+    );
     try {
       final bytes = await TheavThemeService().exportThemePackage(themeToExport);
       final cleanName = TheavThemeService.sanitizeFileName(themeToExport.name);
@@ -130,7 +135,7 @@ class ChatSettingsScreen extends StatelessWidget {
 
       await Share.shareXFiles(
         [exportFile],
-        text: 'Тема Theaver: ${themeToExport.name}',
+        text: shareText,
       );
     } catch (e) {
       if (context.mounted) {
@@ -905,9 +910,12 @@ class ChatSettingsScreen extends StatelessWidget {
                     style: const TextStyle(color: Colors.grey),
                   ),
                   subtitle: Text(
-                    l10n.locale.languageCode == 'en'
-                        ? 'In-app WebView browser is unavailable on this platform — links open in your system browser'
-                        : 'Встроенный браузер недоступен на этой платформе — ссылки открываются в системном браузере',
+                    context.trOr(
+                      'settings_in_app_browser_unsupported',
+                      l10n.locale.languageCode == 'en'
+                          ? 'In-app WebView browser is unavailable on this platform — links open in your system browser'
+                          : 'Встроенный браузер недоступен на этой платформе — ссылки открываются в системном браузере',
+                    ),
                     style: const TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                   trailing: const AdaptiveSwitch(

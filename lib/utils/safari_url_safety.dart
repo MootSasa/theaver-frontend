@@ -1,3 +1,5 @@
+import '../l10n/app_localizations.dart';
+
 /// Connection security state resolved for the active page or link.
 enum SafariConnectionSecurityLevel {
   secureHttps,
@@ -227,7 +229,13 @@ abstract final class SafariUrlSafetyAnalyzer {
     final uri = Uri.tryParse(clean);
     final String scheme = uri?.scheme.toLowerCase() ?? '';
     final String asciiHost = (uri?.host ?? '').trim().toLowerCase();
-    final String unicodeHost = decodePunycodeHost(asciiHost);
+    String hostForDecode = asciiHost;
+    if (hostForDecode.contains('%')) {
+      try {
+        hostForDecode = Uri.decodeComponent(hostForDecode).toLowerCase();
+      } catch (_) {}
+    }
+    final String unicodeHost = decodePunycodeHost(hostForDecode);
     final bool hasUnicodeNonAscii =
         unicodeHost.runes.any((r) => r > 0x7F);
     final bool isInternationalized =
@@ -360,10 +368,19 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.blocked,
         scheme: scheme,
-        title: 'Переход заблокирован',
-        message:
-            'Небезопасная схема «$scheme:» заблокирована встроенным браузером.',
-        confirmLabel: 'Понятно',
+        title: AppLocalizations.trStatic(
+          'browser_ext_blocked_title',
+          'Переход заблокирован',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_blocked_message',
+          'Небезопасная схема «{scheme}:» заблокирована встроенным браузером.',
+          {'scheme': scheme},
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_got_it',
+          'Понятно',
+        ),
       );
     }
 
@@ -381,10 +398,19 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.blobDownload,
         scheme: scheme,
-        title: 'Открыть или скачать файл?',
-        message:
-            'Страница сформировала локальный ресурс ($scheme:) для просмотра или загрузки.',
-        confirmLabel: 'Открыть',
+        title: AppLocalizations.trStatic(
+          'browser_ext_blob_title',
+          'Открыть или скачать файл?',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_blob_message',
+          'Страница сформировала локальный ресурс ({scheme}:) для просмотра или загрузки.',
+          {'scheme': scheme},
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_open_action',
+          'Открыть',
+        ),
       );
     }
 
@@ -393,9 +419,19 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.tel,
         scheme: scheme,
-        title: 'Позвонить по номеру?',
-        message: 'Эта страница хочет совершить вызов на номер $target.',
-        confirmLabel: 'Позвонить',
+        title: AppLocalizations.trStatic(
+          'browser_ext_tel_title',
+          'Позвонить по номеру?',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_tel_message',
+          'Эта страница хочет совершить вызов на номер {target}.',
+          {'target': target},
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_ext_tel_confirm',
+          'Позвонить',
+        ),
       );
     }
 
@@ -404,9 +440,19 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.mailto,
         scheme: scheme,
-        title: 'Написать письмо?',
-        message: 'Открыть почтовое приложение для адреса $target?',
-        confirmLabel: 'Открыть',
+        title: AppLocalizations.trStatic(
+          'browser_ext_mailto_title',
+          'Написать письмо?',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_mailto_message',
+          'Открыть почтовое приложение для адреса {target}?',
+          {'target': target},
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_open_action',
+          'Открыть',
+        ),
       );
     }
 
@@ -415,9 +461,19 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.sms,
         scheme: scheme,
-        title: 'Отправить сообщение?',
-        message: 'Открыть приложение SMS для номера $target?',
-        confirmLabel: 'Открыть',
+        title: AppLocalizations.trStatic(
+          'browser_ext_sms_title',
+          'Отправить сообщение?',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_sms_message',
+          'Открыть приложение SMS для номера {target}?',
+          {'target': target},
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_open_action',
+          'Открыть',
+        ),
       );
     }
 
@@ -425,10 +481,19 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.telegram,
         scheme: scheme,
-        title: 'Открыть в другом приложении?',
-        message:
-            'Эта страница хочет перейти во внешнее приложение ($scheme://).',
-        confirmLabel: 'Открыть',
+        title: AppLocalizations.trStatic(
+          'browser_ext_other_app_title',
+          'Открыть в другом приложении?',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_tg_message',
+          'Эта страница хочет перейти во внешнее приложение ({scheme}://).',
+          {'scheme': scheme},
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_open_action',
+          'Открыть',
+        ),
       );
     }
 
@@ -436,19 +501,37 @@ abstract final class SafariUrlSafetyAnalyzer {
       return SafariExternalSchemeInfo(
         kind: ExternalSchemeKind.appIntent,
         scheme: scheme,
-        title: 'Открыть внешнее приложение?',
-        message:
-            'Сайт запрашивает переход в стороннее приложение или магазин приложений.',
-        confirmLabel: 'Открыть',
+        title: AppLocalizations.trStatic(
+          'browser_ext_intent_title',
+          'Открыть внешнее приложение?',
+        ),
+        message: AppLocalizations.trStatic(
+          'browser_ext_intent_message',
+          'Сайт запрашивает переход в стороннее приложение или магазин приложений.',
+        ),
+        confirmLabel: AppLocalizations.trStatic(
+          'browser_open_action',
+          'Открыть',
+        ),
       );
     }
 
     return SafariExternalSchemeInfo(
       kind: ExternalSchemeKind.customApp,
       scheme: scheme,
-      title: 'Открыть в другом приложении?',
-      message: 'Эта страница хочет открыть приложение «$scheme».',
-      confirmLabel: 'Открыть',
+      title: AppLocalizations.trStatic(
+        'browser_ext_other_app_title',
+        'Открыть в другом приложении?',
+      ),
+      message: AppLocalizations.trStatic(
+        'browser_ext_custom_message',
+        'Эта страница хочет открыть приложение «{scheme}».',
+        {'scheme': scheme},
+      ),
+      confirmLabel: AppLocalizations.trStatic(
+        'browser_open_action',
+        'Открыть',
+      ),
     );
   }
 

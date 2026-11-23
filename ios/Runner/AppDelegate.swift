@@ -2,11 +2,62 @@ import Flutter
 import UIKit
 import AVFoundation
 import MediaPlayer
+import ObjectiveC
 import UserNotifications
 import WebKit
 
+private final class WebViewPullToRefreshHandler: NSObject {
+  weak var webView: WKWebView?
+  let refreshControl = UIRefreshControl()
+  private var endTimer: Timer?
+  private var loadingObserver: NSKeyValueObservation?
+
+  init(webView: WKWebView) {
+    self.webView = webView
+    super.init()
+    refreshControl.addTarget(self, action: #selector(handleRefresh), for: .valueChanged)
+    loadingObserver = webView.observe(\.isLoading, options: [.new]) { [weak self] _, change in
+      if change.newValue == false {
+        DispatchQueue.main.async {
+          self?.stopRefreshing()
+        }
+      }
+    }
+  }
+
+  @objc private func handleRefresh() {
+    guard let wv = webView else {
+      stopRefreshing()
+      return
+    }
+    wv.reload()
+    endTimer?.invalidate()
+    endTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+      DispatchQueue.main.async {
+        self?.stopRefreshing()
+      }
+    }
+  }
+
+  func stopRefreshing() {
+    endTimer?.invalidate()
+    endTimer = nil
+    if refreshControl.isRefreshing {
+      refreshControl.endRefreshing()
+    }
+  }
+
+  deinit {
+    endTimer?.invalidate()
+    loadingObserver?.invalidate()
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, FlutterStreamHandler {
+  private static let pullToRefreshAssocKey = UnsafeRawPointer(
+    UnsafeMutablePointer<UInt8>.allocate(capacity: 1)
+  )
   private var proximityEventSink: FlutterEventSink?
   private var mediaSessionChannel: FlutterMethodChannel?
   private var remoteCommandsConfigured = false
@@ -611,6 +662,44 @@ import WebKit
     return result
   }
 
+  private func applyPullToRefresh(enabled: Bool, to webView: WKWebView) {
+    let existing = objc_getAssociatedObject(
+      webView,
+      AppDelegate.pullToRefreshAssocKey
+    ) as? WebViewPullToRefreshHandler
+
+    if enabled {
+      let handler: WebViewPullToRefreshHandler
+      if let existing = existing {
+        handler = existing
+      } else {
+        handler = WebViewPullToRefreshHandler(webView: webView)
+        objc_setAssociatedObject(
+          webView,
+          AppDelegate.pullToRefreshAssocKey,
+          handler,
+          .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
+      }
+      webView.scrollView.bounces = true
+      webView.scrollView.alwaysBounceVertical = true
+      if webView.scrollView.refreshControl !== handler.refreshControl {
+        webView.scrollView.refreshControl = handler.refreshControl
+      }
+    } else if let existing = existing {
+      existing.stopRefreshing()
+      if webView.scrollView.refreshControl === existing.refreshControl {
+        webView.scrollView.refreshControl = nil
+      }
+      objc_setAssociatedObject(
+        webView,
+        AppDelegate.pullToRefreshAssocKey,
+        nil,
+        .OBJC_ASSOCIATION_ASSIGN
+      )
+    }
+  }
+
   private func setupWebViewSnapshotChannel(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(
       name: "app.theaver.messenger/webview_snapshot",
@@ -712,14 +801,25 @@ import WebKit
 
       case "configureWebViewPolicies":
         let args = call.arguments as? [String: Any]
+        let urlArg = args?["url"] as? String
         let blockAllCookies = (args?["blockAllCookies"] as? Bool) ?? false
         let acceptThirdPartyCookies = (args?["acceptThirdPartyCookies"] as? Bool) ?? true
+        let enablePullToRefresh = (args?["enablePullToRefresh"] as? Bool) ?? false
         DispatchQueue.main.async {
           guard let self = self else {
             result(true)
             return
           }
           let webViews = self.allMountedWebViews()
+          let ptrTargets: [WKWebView]
+          if let targetWv = self.findTargetWebView(targetUrl: urlArg) {
+            ptrTargets = [targetWv]
+          } else {
+            ptrTargets = webViews
+          }
+          for wv in ptrTargets {
+            self.applyPullToRefresh(enabled: enablePullToRefresh, to: wv)
+          }
           let ruleStore: WKContentRuleListStore? = WKContentRuleListStore.default()
           let blockAllId = "theaver_block_cookies"
           let blockThirdPartyId = "theaver_block_third_party_cookies"
