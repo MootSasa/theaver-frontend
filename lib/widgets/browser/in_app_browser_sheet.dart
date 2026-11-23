@@ -1979,6 +1979,9 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
 
   void _handleHeaderDragUpdate(DragUpdateDetails details) {
     _dragAccumulated += details.delta.dy;
+    if (_session.browserChromeCollapsed) {
+      return;
+    }
     final double current = _dragOffsetNotifier.value;
     final double nextOffset = (current + details.delta.dy).clamp(0.0, 260.0);
     if ((nextOffset - current).abs() > 0.1) {
@@ -2025,6 +2028,23 @@ class _InAppBrowserSheetState extends State<InAppBrowserSheet>
     final double dy = _dragAccumulated;
     final double vy = details.primaryVelocity ?? 0.0;
     _dragAccumulated = 0.0;
+    if (_session.browserChromeCollapsed) {
+      _resetDragOffset();
+      if (dy >= 10 || vy >= 180) {
+        _expandBrowserChrome();
+      }
+      return;
+    }
+    if ((dy <= -14 || vy <= -220) && _dragOffsetNotifier.value <= 4.0) {
+      _resetDragOffset();
+      if (!_session.browserForceExpanded && !_session.isReaderModeActive) {
+        _closeMenu();
+        _closeSiteInfoPopover();
+        HapticUtils.selection();
+        unawaited(_session.setBrowserChromeCollapsed(true));
+      }
+      return;
+    }
     if (dy >= 90 || vy >= 450) {
       unawaited(
         _minimizeToDock(

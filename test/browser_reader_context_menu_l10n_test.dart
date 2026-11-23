@@ -573,4 +573,117 @@ void main() {
       expect(find.text('PIN-код сейфа браузера'), findsOneWidget);
     });
   });
+
+  group('Full-Screen Ad Overlay Safe Insets & Manual Header Swipe Collapse', () {
+    test('buildBrowserSafeInsetsScript includes full-bleed ad iframe, nested close control, and manualCollapsed guards', () {
+      final js = MiniAppSession.buildBrowserSafeInsetsScript(
+        topPx: 82,
+        compactTopPx: 62,
+        bottomPx: 80,
+        compactBottomPx: 16,
+        systemTopPx: 24,
+        systemBottomPx: 16,
+        flutterViewportHeight: 800,
+      );
+      expect(js, contains('findFullBleedIframeChain'));
+      expect(js, contains('applyTrackedIframeOverlay'));
+      expect(js, contains('top-iframe'));
+      expect(js, contains('adjustSheetTopControls'));
+      expect(js, contains('manualCollapsed'));
+      expect(js, contains("attributeFilter: ['class', 'style', 'open', 'hidden']"));
+    });
+
+    testWidgets('Swiping up on center or right header capsule collapses header at scrollY=0 and swiping down expands it back', (tester) async {
+      final session = MiniAppSession(
+        launchData: const MiniAppLaunchData(
+          url: 'https://promo.example.org/landing',
+          initData: '',
+        ),
+        isBrowser: true,
+      )..pageTitle = 'Landing Page With Promo Banner';
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<LiquidGlassProvider>.value(
+          value: _TestLiquidGlassProvider(GlassMode.full),
+          child: MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(
+                size: Size(400, 800),
+                padding: EdgeInsets.only(top: 24, bottom: 16),
+              ),
+              child: InAppBrowserSheet(session: session),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(session.browserChromeCollapsed, isFalse);
+      _expectNoTranslucentOpacityAboveGlass(tester);
+
+      // 1. Swipe UP on the center address capsule -> collapses into compact pill
+      await tester.drag(
+        find.byKey(const ValueKey('webview_header_center_pill')),
+        const Offset(0, -40),
+      );
+      await tester.pumpAndSettle();
+
+      expect(session.browserChromeCollapsed, isTrue);
+      expect(
+        tester
+            .widget<IgnorePointer>(
+              find.byKey(const ValueKey('webview_header_left_ignore')),
+            )
+            .ignoring,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<IgnorePointer>(
+              find.byKey(const ValueKey('webview_header_right_ignore')),
+            )
+            .ignoring,
+        isTrue,
+      );
+      expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+      _expectNoTranslucentOpacityAboveGlass(tester);
+
+      // 2. Swipe DOWN gently on the compact center pill -> expands 3 capsules without minimizing sheet
+      await tester.drag(
+        find.byKey(const ValueKey('webview_header_center_pill')),
+        const Offset(0, 32),
+      );
+      await tester.pumpAndSettle();
+
+      expect(session.browserChromeCollapsed, isFalse);
+      expect(
+        tester
+            .widget<IgnorePointer>(
+              find.byKey(const ValueKey('webview_header_right_ignore')),
+            )
+            .ignoring,
+        isFalse,
+      );
+      expect(find.byKey(const ValueKey('in_app_browser_sheet')), findsOneWidget);
+      _expectNoTranslucentOpacityAboveGlass(tester);
+
+      // 3. Swipe UP directly on the right [— | ⋮] capsule (where ad [×] often sits underneath) -> also collapses!
+      await tester.drag(
+        find.byKey(const ValueKey('webview_right_pill_collapsed')),
+        const Offset(0, -40),
+      );
+      await tester.pumpAndSettle();
+
+      expect(session.browserChromeCollapsed, isTrue);
+      expect(
+        tester
+            .widget<IgnorePointer>(
+              find.byKey(const ValueKey('webview_header_right_ignore')),
+            )
+            .ignoring,
+        isTrue,
+      );
+      _expectNoTranslucentOpacityAboveGlass(tester);
+    });
+  });
 }

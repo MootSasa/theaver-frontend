@@ -1621,6 +1621,7 @@ class MiniAppSession {
     if (!collapseState) {
       collapseState = window.__theaverCollapseState = {
         collapsed: false,
+        manualCollapsed: false,
         docLastTop: Math.max(0, window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0),
         accDy: 0,
         scrollerTops: typeof WeakMap === 'function' ? new WeakMap() : null
@@ -1791,12 +1792,16 @@ class MiniAppSession {
       return false;
     }
 
-    function applyPinnedOffset(el, cs, pos, origTopRaw, origTopNum, effH, activeTop) {
+    function applyPinnedOffset(el, cs, pos, origTopRaw, origTopNum, effH, activeTop, isCompactControl) {
       var hiding = isPinnedElementHiding(el, cs, pos, effH);
       var wasInit = el.dataset.theaverHideInit === '1';
       var prevHiding = el.dataset.theaverIsHiding === '1';
       var prevTopOffset = el.dataset.theaverPrevTopOffset;
-      var activeTopStr = String(activeTop);
+      var shiftPx = activeTop;
+      if (isCompactControl && origTopNum !== null && origTopNum > 12) {
+        shiftPx = Math.max(0, Math.round(activeTop + 12 - origTopNum));
+      }
+      var activeTopStr = String(shiftPx);
       el.dataset.theaverHideInit = '1';
       el.dataset.theaverIsHiding = hiding ? '1' : '0';
       el.dataset.theaverPrevTopOffset = activeTopStr;
@@ -1841,11 +1846,11 @@ class MiniAppSession {
       }
 
       if (pos === 'fixed' && origTopRaw !== 'auto-top') {
-        setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + activeTop + 'px'));
+        setImp(el, 'translate', hiding ? '0px 0px' : ('0px ' + shiftPx + 'px'));
       } else {
-        var nextTopVal = origTopRaw === 'auto-top' ? activeTop : Math.round((origTopNum || 0) + activeTop);
+        var nextTopVal = origTopRaw === 'auto-top' ? shiftPx : Math.round((origTopNum || 0) + shiftPx);
         setImp(el, 'top', nextTopVal + 'px');
-        setImp(el, 'translate', hiding ? ('0px ' + (-activeTop) + 'px') : '0px 0px');
+        setImp(el, 'translate', hiding ? ('0px ' + (-shiftPx) + 'px') : '0px 0px');
       }
     }
 
@@ -2412,20 +2417,205 @@ class MiniAppSession {
       return visibleFlow;
     }
 
-    function hasTrackedTopAncestor(el) {
+    function hasTrackedTopAncestor(el, isFixedEl) {
       var cur = el ? (el.parentElement || (el.getRootNode && el.getRootNode().host) || null) : null;
       while (cur && cur.nodeType === 1 && cur !== document.body && cur !== document.documentElement) {
-        if (
-          cur.dataset &&
-          (cur.dataset.theaverSafeRole === 'top-pinned' ||
-            cur.dataset.theaverSafeRole === 'top-sheet' ||
-            cur.dataset.theaverPrimaryScroller === '1')
-        ) {
-          return true;
+        if (cur.dataset) {
+          var role = cur.dataset.theaverSafeRole;
+          if (role === 'top-pinned' || role === 'top-iframe') {
+            return true;
+          }
+          if (!isFixedEl && (role === 'top-sheet' || cur.dataset.theaverPrimaryScroller === '1')) {
+            return true;
+          }
         }
         cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
       }
       return false;
+    }
+
+    function restoreInlineStyleProp(el, prop, savedVal, savedPrio) {
+      if (!el || !el.style) return;
+      if (savedVal) {
+        el.style.setProperty(prop, savedVal, savedPrio || '');
+      } else {
+        el.style.removeProperty(prop);
+      }
+    }
+
+    function isNativeFullscreenNode(node) {
+      var fs = document.fullscreenElement || document.webkitFullscreenElement || null;
+      if (!fs || !node) return false;
+      return (
+        fs === node ||
+        (typeof fs.contains === 'function' && fs.contains(node)) ||
+        (typeof node.contains === 'function' && node.contains(fs))
+      );
+    }
+
+    function findFullBleedIframeChain(rootEl, vw, vh, activeTop, activeBottom) {
+      if (!rootEl || !rootEl.tagName || isNativeFullscreenNode(rootEl)) return null;
+      var rootRect = rootEl.getBoundingClientRect();
+      var minFrameH = Math.min(vh * 0.56, Math.max(120, (vh - activeTop - activeBottom) * 0.72));
+      if (rootEl.tagName === 'IFRAME') {
+        var rEff = getEffectiveSize(rootEl, rootRect);
+        if (rEff.w >= vw * 0.78 && rEff.h >= minFrameH) {
+          return { root: rootEl, chain: [] };
+        }
+        return null;
+      }
+      if (!rootEl.children || rootEl.children.length === 0) return null;
+      var queue = [];
+      for (var i = 0; i < rootEl.children.length; i++) {
+        queue.push({ node: rootEl.children[i], path: [rootEl.children[i]], depth: 1 });
+      }
+      var inspected = 0;
+      while (queue.length > 0 && inspected < 36) {
+        var item = queue.shift();
+        var cur = item.node;
+        if (!cur || !cur.tagName) continue;
+        inspected++;
+        var tag = cur.tagName;
+        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'SVG' || tag === 'PATH') continue;
+        var cCs = window.getComputedStyle(cur);
+        if (cCs.display === 'none') continue;
+        if (tag === 'IFRAME') {
+          var iRect = cur.getBoundingClientRect();
+          var iEff = getEffectiveSize(cur, iRect);
+          if (
+            iEff.w >= vw * 0.78 &&
+            iEff.h >= minFrameH &&
+            (iRect.top - rootRect.top) <= 72
+          ) {
+            return { root: rootEl, chain: item.path };
+          }
+          continue;
+        }
+        if (item.depth < 4 && cur.children && cur.children.length > 0) {
+          for (var j = 0; j < cur.children.length; j++) {
+            var sub = cur.children[j];
+            if (!sub || !sub.tagName) continue;
+            var nextPath = item.path.slice();
+            nextPath.push(sub);
+            queue.push({ node: sub, path: nextPath, depth: item.depth + 1 });
+          }
+        }
+      }
+      return null;
+    }
+
+    function clearTrackedIframeOverlay(rootEl) {
+      if (!rootEl || !rootEl.dataset) return;
+      if (rootEl.dataset.theaverIframeOrigRecorded === '1') {
+        restoreInlineStyleProp(
+          rootEl,
+          'top',
+          rootEl.dataset.theaverIframeOrigInlineTop || '',
+          rootEl.dataset.theaverIframeOrigInlineTopPrio || ''
+        );
+        restoreInlineStyleProp(
+          rootEl,
+          'height',
+          rootEl.dataset.theaverIframeOrigInlineHeight || '',
+          rootEl.dataset.theaverIframeOrigInlineHeightPrio || ''
+        );
+        restoreInlineStyleProp(
+          rootEl,
+          'max-height',
+          rootEl.dataset.theaverIframeOrigInlineMaxHeight || '',
+          rootEl.dataset.theaverIframeOrigInlineMaxHeightPrio || ''
+        );
+        if (rootEl.dataset.theaverIframeAppliedBottom === '1') {
+          restoreInlineStyleProp(
+            rootEl,
+            'bottom',
+            rootEl.dataset.theaverIframeOrigInlineBottom || '',
+            rootEl.dataset.theaverIframeOrigInlineBottomPrio || ''
+          );
+          delete rootEl.dataset.theaverIframeAppliedBottom;
+        }
+      }
+      if (rootEl.querySelectorAll) {
+        var subNodes = rootEl.querySelectorAll('[data-theaver-iframe-child="1"]');
+        for (var si = 0; si < subNodes.length; si++) {
+          var sNode = subNodes[si];
+          if (!sNode || !sNode.dataset) continue;
+          restoreInlineStyleProp(
+            sNode,
+            'height',
+            sNode.dataset.theaverIframeChildOrigH || '',
+            sNode.dataset.theaverIframeChildOrigHPrio || ''
+          );
+          restoreInlineStyleProp(
+            sNode,
+            'max-height',
+            sNode.dataset.theaverIframeChildOrigMaxH || '',
+            sNode.dataset.theaverIframeChildOrigMaxHPrio || ''
+          );
+          delete sNode.dataset.theaverIframeChild;
+          delete sNode.dataset.theaverIframeChildShrunk;
+        }
+      }
+      delete rootEl.dataset.theaverSafeRole;
+    }
+
+    function applyTrackedIframeOverlay(entry, origTopNum, origBottomRaw, activeTop, activeBottom, vh) {
+      var rootEl = entry && entry.root;
+      if (!rootEl || !rootEl.dataset || !rootEl.style) return;
+      if (rootEl.dataset.theaverIframeOrigRecorded !== '1') {
+        rootEl.dataset.theaverIframeOrigRecorded = '1';
+        rootEl.dataset.theaverIframeOrigInlineTop = rootEl.style.getPropertyValue('top') || '';
+        rootEl.dataset.theaverIframeOrigInlineTopPrio = rootEl.style.getPropertyPriority('top') || '';
+        rootEl.dataset.theaverIframeOrigInlineHeight = rootEl.style.getPropertyValue('height') || '';
+        rootEl.dataset.theaverIframeOrigInlineHeightPrio = rootEl.style.getPropertyPriority('height') || '';
+        rootEl.dataset.theaverIframeOrigInlineMaxHeight = rootEl.style.getPropertyValue('max-height') || '';
+        rootEl.dataset.theaverIframeOrigInlineMaxHeightPrio = rootEl.style.getPropertyPriority('max-height') || '';
+        rootEl.dataset.theaverIframeOrigInlineBottom = rootEl.style.getPropertyValue('bottom') || '';
+        rootEl.dataset.theaverIframeOrigInlineBottomPrio = rootEl.style.getPropertyPriority('bottom') || '';
+        rootEl.dataset.theaverIframeBaseTop = String(Math.max(0, origTopNum || 0));
+        rootEl.dataset.theaverIframeBaseBottom = origBottomRaw || 'auto';
+      }
+      rootEl.dataset.theaverSafeRole = 'top-iframe';
+      var baseTop = Math.max(0, parseFloat(rootEl.dataset.theaverIframeBaseTop) || 0);
+      var nextTop = Math.round(baseTop + activeTop);
+      var safeBottom = Math.max(0, Math.round(activeBottom));
+      var totalInset = nextTop + safeBottom;
+      setImp(rootEl, 'top', nextTop + 'px');
+      setImp(rootEl, 'max-height', 'calc(100vh - ' + totalInset + 'px)');
+      setImp(rootEl, 'height', 'calc(100vh - ' + totalInset + 'px)');
+      var baseBottomRaw = rootEl.dataset.theaverIframeBaseBottom || 'auto';
+      if (baseBottomRaw !== 'auto') {
+        var baseBot = Math.max(0, parseFloat(baseBottomRaw) || 0);
+        rootEl.dataset.theaverIframeAppliedBottom = '1';
+        setImp(rootEl, 'bottom', Math.round(baseBot + safeBottom) + 'px');
+      }
+      var chain = entry.chain || [];
+      for (var ci = 0; ci < chain.length; ci++) {
+        var cNode = chain[ci];
+        if (!cNode || !cNode.dataset || !cNode.style) continue;
+        if (cNode.dataset.theaverIframeChildOrigRecorded !== '1') {
+          cNode.dataset.theaverIframeChildOrigRecorded = '1';
+          cNode.dataset.theaverIframeChildOrigH = cNode.style.getPropertyValue('height') || '';
+          cNode.dataset.theaverIframeChildOrigHPrio = cNode.style.getPropertyPriority('height') || '';
+          cNode.dataset.theaverIframeChildOrigMaxH = cNode.style.getPropertyValue('max-height') || '';
+          cNode.dataset.theaverIframeChildOrigMaxHPrio = cNode.style.getPropertyPriority('max-height') || '';
+        }
+        var cCs = window.getComputedStyle(cNode);
+        var inlineStyleStr = (cNode.getAttribute && cNode.getAttribute('style')) || '';
+        var cHeightPx = parseFloat(cCs.height) || 0;
+        if (
+          cNode.tagName === 'IFRAME' ||
+          cNode.dataset.theaverIframeChildShrunk === '1' ||
+          cHeightPx >= vh * 0.70 ||
+          inlineStyleStr.indexOf('100vh') !== -1 ||
+          inlineStyleStr.indexOf('100dvh') !== -1
+        ) {
+          cNode.dataset.theaverIframeChild = '1';
+          cNode.dataset.theaverIframeChildShrunk = '1';
+          setImp(cNode, 'max-height', '100%');
+          setImp(cNode, 'height', '100%');
+        }
+      }
     }
 
     function clearTrackedPinnedElement(el) {
@@ -2437,9 +2627,24 @@ class MiniAppSession {
       }
       el.style.removeProperty('translate');
       delete el.dataset.theaverSafeRole;
+      delete el.dataset.theaverCompactControl;
       delete el.dataset.theaverHideInit;
       delete el.dataset.theaverIsHiding;
       delete el.dataset.theaverPrevTopOffset;
+    }
+
+    function clearSheetAbsControl(kEl) {
+      if (!kEl || !kEl.dataset) return;
+      if (kEl.dataset.theaverSheetAbsChild === '1') {
+        if (kEl.dataset.theaverOrigAbsTop === 'auto') {
+          kEl.style.removeProperty('top');
+        } else {
+          var origCTop = parseFloat(kEl.dataset.theaverOrigAbsTop) || 0;
+          setImp(kEl, 'top', Math.round(origCTop) + 'px');
+        }
+        delete kEl.dataset.theaverSheetAbsChild;
+        delete kEl.dataset.theaverAppliedAbsDelta;
+      }
     }
 
     function clearTrackedSheetElement(sheetEl) {
@@ -2454,16 +2659,86 @@ class MiniAppSession {
         setImp(sheetEl, 'padding-bottom', Math.round(origPb) + 'px');
         delete sheetEl.dataset.theaverAppliedSheetPb;
       }
-      var kids = sheetEl.children || [];
-      for (var ci = 0; ci < kids.length; ci++) {
-        var kEl = kids[ci];
-        if (kEl && kEl.dataset && kEl.dataset.theaverSheetAbsChild === '1') {
-          var origCTop = parseFloat(kEl.dataset.theaverOrigAbsTop) || 0;
-          setImp(kEl, 'top', Math.round(origCTop) + 'px');
-          delete kEl.dataset.theaverSheetAbsChild;
+      if (sheetEl.querySelectorAll) {
+        var absControls = sheetEl.querySelectorAll('[data-theaver-sheet-abs-child="1"]');
+        for (var ci = 0; ci < absControls.length; ci++) {
+          clearSheetAbsControl(absControls[ci]);
+        }
+      } else {
+        var kids = sheetEl.children || [];
+        for (var ki = 0; ki < kids.length; ki++) {
+          clearSheetAbsControl(kids[ki]);
         }
       }
       delete sheetEl.dataset.theaverSafeRole;
+    }
+
+    function adjustSheetTopControls(sheetEl, activeTop) {
+      if (!sheetEl || !sheetEl.children) return;
+      var queue = [];
+      for (var i = 0; i < sheetEl.children.length; i++) {
+        queue.push({ node: sheetEl.children[i], depth: 1 });
+      }
+      var visited = 0;
+      while (queue.length > 0 && visited < 48) {
+        var cur = queue.shift();
+        var cEl = cur.node;
+        if (!cEl || !cEl.tagName || !cEl.dataset) continue;
+        visited++;
+        var tag = cEl.tagName;
+        if (
+          tag === 'SCRIPT' ||
+          tag === 'STYLE' ||
+          tag === 'SVG' ||
+          tag === 'PATH' ||
+          tag === 'IMG' ||
+          tag === 'VIDEO' ||
+          tag === 'CANVAS' ||
+          tag === 'PICTURE'
+        ) {
+          continue;
+        }
+        var cCs = window.getComputedStyle(cEl);
+        if (cCs.display === 'none') continue;
+        if (usesEnvTopVar(cEl)) continue;
+
+        if (cCs.position === 'absolute') {
+          var prevDelta = parseFloat(cEl.dataset.theaverAppliedAbsDelta) || 0;
+          var cRect = cEl.getBoundingClientRect();
+          var cSz = getEffectiveSize(cEl, cRect);
+          var unshiftedScreenTop = cRect.top - prevDelta;
+          var eligibleControl =
+            cSz.w >= 16 &&
+            cSz.h >= 16 &&
+            cSz.h <= 84 &&
+            !(cCs.top === 'auto' && cCs.bottom !== 'auto');
+
+          if (eligibleControl && unshiftedScreenTop >= -4 && unshiftedScreenTop < activeTop - 1) {
+            if (cEl.dataset.theaverOrigAbsRecorded !== '1') {
+              var parsedTop = parseNum(cCs.top);
+              cEl.dataset.theaverOrigAbsRecorded = '1';
+              cEl.dataset.theaverOrigAbsTop = parsedTop !== null ? String(parsedTop) : 'auto';
+            }
+            var baseCssTop = cEl.dataset.theaverOrigAbsTop === 'auto'
+              ? 0
+              : (parseFloat(cEl.dataset.theaverOrigAbsTop) || 0);
+            var desiredScreenTop = activeTop + Math.max(0, Math.min(12, unshiftedScreenTop));
+            var nextDelta = Math.max(0, Math.round(desiredScreenTop - unshiftedScreenTop));
+            cEl.dataset.theaverSheetAbsChild = '1';
+            cEl.dataset.theaverAppliedAbsDelta = String(nextDelta);
+            setImp(cEl, 'top', Math.round(baseCssTop + nextDelta) + 'px');
+            continue;
+          } else if (cEl.dataset.theaverSheetAbsChild === '1') {
+            clearSheetAbsControl(cEl);
+          }
+        }
+
+        if (cur.depth < 4 && cEl.children && cEl.children.length > 0) {
+          for (var j = 0; j < cEl.children.length; j++) {
+            queue.push({ node: cEl.children[j], depth: cur.depth + 1 });
+          }
+        }
+      }
     }
 
     function applyTopSheetInset(sheetEl, activeTop, activeBottom) {
@@ -2489,26 +2764,7 @@ class MiniAppSession {
         sheetEl.dataset.theaverAppliedSheetPb = '1';
         setImp(sheetEl, 'padding-bottom', Math.round(origPb + activeBottom) + 'px');
       }
-      var kids = sheetEl.children || [];
-      for (var ci = 0; ci < kids.length; ci++) {
-        var cEl = kids[ci];
-        if (!cEl || !cEl.tagName) continue;
-        var cCs = window.getComputedStyle(cEl);
-        if (cCs.display === 'none' || cCs.position !== 'absolute') continue;
-        if (usesEnvTopVar(cEl)) continue;
-        if (cEl.dataset.theaverOrigAbsRecorded !== '1') {
-          var cTop = parseNum(cCs.top);
-          if (cTop === null || cTop < -2 || cTop > 36) continue;
-          var cRect = cEl.getBoundingClientRect();
-          var cSz = getEffectiveSize(cEl, cRect);
-          if (cSz.w <= 0 || cSz.h <= 0 || cSz.w > 96 || cSz.h > 64) continue;
-          cEl.dataset.theaverOrigAbsRecorded = '1';
-          cEl.dataset.theaverOrigAbsTop = String(cTop);
-        }
-        cEl.dataset.theaverSheetAbsChild = '1';
-        var baseAbsTop = parseFloat(cEl.dataset.theaverOrigAbsTop) || 0;
-        setImp(cEl, 'top', Math.round(baseAbsTop + activeTop) + 'px');
-      }
+      adjustSheetTopControls(sheetEl, activeTop);
     }
 
     function collectSheetPanels(rootEl, vw, vh) {
@@ -2606,6 +2862,7 @@ class MiniAppSession {
         if (rawForceExpanded !== undefined) window.__theaverForceExpanded = !!rawForceExpanded;
         if (window.__theaverForceExpanded && collapseState) {
           collapseState.collapsed = false;
+          collapseState.manualCollapsed = false;
           collapseState.accDy = 0;
         }
 
@@ -2745,6 +3002,10 @@ class MiniAppSession {
           for (var rp = 0; rp < prevPinnedList.length; rp++) {
             clearTrackedPinnedElement(prevPinnedList[rp]);
           }
+          var prevIframeList = window.__theaverTrackedTopIframes || [];
+          for (var ri = 0; ri < prevIframeList.length; ri++) {
+            clearTrackedIframeOverlay(prevIframeList[ri]);
+          }
           if (document.querySelectorAll) {
             var leftoverPinned = document.querySelectorAll('[data-theaver-safe-role="top-pinned"]');
             for (var lp = 0; lp < leftoverPinned.length; lp++) {
@@ -2754,41 +3015,62 @@ class MiniAppSession {
             for (var ls = 0; ls < leftoverSheets.length; ls++) {
               clearTrackedSheetElement(leftoverSheets[ls]);
             }
+            var leftoverIframes = document.querySelectorAll('[data-theaver-safe-role="top-iframe"]');
+            for (var liIdx = 0; liIdx < leftoverIframes.length; liIdx++) {
+              clearTrackedIframeOverlay(leftoverIframes[liIdx]);
+            }
           }
           window.__theaverTrackedTopPinned = [];
           window.__theaverTrackedTopSheets = [];
+          window.__theaverTrackedTopIframes = [];
         } else {
           var trackedPinned = [];
           var trackedSheets = [];
+          var trackedIframes = [];
           for (var i = 0; i < all.length; i++) {
             var el = all[i];
             if (!el || !el.tagName) continue;
             var tName = el.tagName;
             if (tName === 'CANVAS' || tName === 'VIDEO' || tName === 'IMG' || tName === 'PICTURE') continue;
+            if (el.dataset && el.dataset.theaverPrimaryScroller === '1') continue;
+            if (isNativeFullscreenNode(el)) continue;
             var cs = window.getComputedStyle(el);
             if (cs.display === 'none') continue;
             var pos = cs.position;
-            if (pos !== 'fixed' && pos !== 'sticky') continue;
+            var zNum = parseInt(cs.zIndex, 10);
+            var isLockedAbsOverlay =
+              isLockedViewport &&
+              pos === 'absolute' &&
+              el.parentElement === body &&
+              !isNaN(zNum) &&
+              zNum >= 10;
+            if (pos !== 'fixed' && pos !== 'sticky' && !isLockedAbsOverlay) continue;
             var opVal = parseFloat(cs.opacity);
             if (!isNaN(opVal) && opVal === 0 && cs.pointerEvents === 'none') continue;
-            if (cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
-            var zNum = parseInt(cs.zIndex, 10);
+            if (tName !== 'IFRAME' && cs.pointerEvents === 'none' && (!el.children || el.children.length === 0)) continue;
             if (!isNaN(zNum) && zNum < 0) continue;
-            if (usesEnvTopVar(el) || hasTrackedTopAncestor(el)) continue;
+            if (usesEnvTopVar(el) || hasTrackedTopAncestor(el, pos === 'fixed')) continue;
 
             var rect = el.getBoundingClientRect();
             var eff = getEffectiveSize(el, rect);
-            if (eff.w < 24 || eff.h < 20) continue;
+            if (eff.w < 16 || eff.h < 16) continue;
+
+            var isCompactTopCandidate =
+              pos === 'fixed' &&
+              eff.w <= Math.min(260, vw * 0.72) &&
+              eff.h <= 80 &&
+              cs.bottom === 'auto';
 
             if (el.dataset.theaverOrigRecorded !== '1') {
               var inlineTopNum = parseNum(el.style.top || '');
               if (inlineTopNum !== null && inlineTopNum < -12) continue;
 
+              var maxOrigTop = isCompactTopCandidate ? 56 : 20;
               var origTopStr = 'auto';
               if (cs.top !== 'auto') {
                 var topVal = parseNum(cs.top);
                 if (topVal !== null) origTopStr = String(topVal);
-              } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= 20) {
+              } else if (pos === 'fixed' && cs.bottom === 'auto' && rect.top >= -2 && rect.top <= maxOrigTop) {
                 origTopStr = 'auto-top';
               }
 
@@ -2799,12 +3081,15 @@ class MiniAppSession {
               }
 
               var tNum0 = origTopStr === 'auto' || origTopStr === 'auto-top' ? null : parseNum(origTopStr);
-              if (origTopStr !== 'auto-top' && (tNum0 === null || tNum0 < -2 || tNum0 > 20)) continue;
+              if (origTopStr !== 'auto-top' && (tNum0 === null || tNum0 < -2 || tNum0 > maxOrigTop)) continue;
 
               el.dataset.theaverOrigRecorded = '1';
               el.dataset.theaverOrigTop = origTopStr;
               el.dataset.theaverOrigBottom = origBottomStr;
               el.dataset.theaverPos = pos;
+              if (isCompactTopCandidate) {
+                el.dataset.theaverCompactControl = '1';
+              }
             }
 
             var recPos = el.dataset.theaverPos || pos;
@@ -2812,13 +3097,32 @@ class MiniAppSession {
             var recBottomRaw = el.dataset.theaverOrigBottom || 'auto';
             var recTopNum = recTopRaw === 'auto' || recTopRaw === 'auto-top' ? null : parseNum(recTopRaw);
             var recBotNum = recBottomRaw === 'auto' ? null : parseNum(recBottomRaw);
+            var isCompactCtrl = el.dataset.theaverCompactControl === '1' || isCompactTopCandidate;
 
-            if (recBotNum === null && eff.h < vh * 0.55 && trackedPinned.length < 10) {
+            if ((recPos === 'fixed' || isLockedAbsOverlay) && trackedIframes.length < 4) {
+              var iframeEntry = findFullBleedIframeChain(el, vw, vh, m.activeTop, m.activeBottom);
+              if (iframeEntry) {
+                applyTrackedIframeOverlay(
+                  iframeEntry,
+                  recTopNum,
+                  recBottomRaw,
+                  m.activeTop,
+                  m.activeBottom,
+                  vh
+                );
+                trackedIframes.push(el);
+                continue;
+              }
+            }
+
+            if (!isCompactCtrl && (eff.w < 24 || eff.h < 20)) continue;
+
+            if (recBotNum === null && eff.h < vh * 0.55 && trackedPinned.length < 16) {
               el.dataset.theaverSafeRole = 'top-pinned';
               trackedPinned.push(el);
-              applyPinnedOffset(el, cs, recPos, recTopRaw, recTopNum, eff.h, m.activeTop);
+              applyPinnedOffset(el, cs, recPos, recTopRaw, recTopNum, eff.h, m.activeTop, isCompactCtrl);
             } else if (
-              recPos === 'fixed' &&
+              (recPos === 'fixed' || isLockedAbsOverlay) &&
               (recBotNum !== null || eff.h >= vh * 0.55) &&
               eff.w >= 140 &&
               el.children &&
@@ -2835,6 +3139,7 @@ class MiniAppSession {
                     applyTopSheetInset(innerPanels[ip], m.activeTop, m.activeBottom);
                     trackedSheets.push(innerPanels[ip]);
                   }
+                  adjustSheetTopControls(el, m.activeTop);
                 } else if (trackedSheets.length < 6) {
                   applyTopSheetInset(el, m.activeTop, m.activeBottom);
                   trackedSheets.push(el);
@@ -2847,6 +3152,7 @@ class MiniAppSession {
           }
           window.__theaverTrackedTopPinned = trackedPinned;
           window.__theaverTrackedTopSheets = trackedSheets;
+          window.__theaverTrackedTopIframes = trackedIframes;
         }
 
         return emitPageMeta(m);
@@ -2872,6 +3178,9 @@ class MiniAppSession {
         var sheetNodes = document && document.querySelectorAll
           ? document.querySelectorAll('[data-theaver-safe-role="top-sheet"]')
           : (window.__theaverTrackedTopSheets || []);
+        var iframeNodes = document && document.querySelectorAll
+          ? document.querySelectorAll('[data-theaver-safe-role="top-iframe"]')
+          : (window.__theaverTrackedTopIframes || []);
 
         if (!hasTopInset) {
           for (var cp = 0; cp < pinnedNodes.length; cp++) {
@@ -2880,8 +3189,12 @@ class MiniAppSession {
           for (var csIdx = 0; csIdx < sheetNodes.length; csIdx++) {
             clearTrackedSheetElement(sheetNodes[csIdx]);
           }
+          for (var ciIdx = 0; ciIdx < iframeNodes.length; ciIdx++) {
+            clearTrackedIframeOverlay(iframeNodes[ciIdx]);
+          }
           window.__theaverTrackedTopPinned = [];
           window.__theaverTrackedTopSheets = [];
+          window.__theaverTrackedTopIframes = [];
           return;
         }
 
@@ -2895,7 +3208,8 @@ class MiniAppSession {
           var origTopNum = origTopRaw === 'auto' || origTopRaw === 'auto-top' ? null : parseNum(origTopRaw);
           var eff = getEffectiveSize(pEl, pEl.getBoundingClientRect());
           if (eff.h > 0) {
-            applyPinnedOffset(pEl, cs, pos, origTopRaw, origTopNum, eff.h, m.activeTop);
+            var isCompactCtrl = pEl.dataset.theaverCompactControl === '1';
+            applyPinnedOffset(pEl, cs, pos, origTopRaw, origTopNum, eff.h, m.activeTop, isCompactCtrl);
           }
         }
 
@@ -2903,6 +3217,22 @@ class MiniAppSession {
           var sEl = sheetNodes[si];
           if (!sEl || !sEl.isConnected) continue;
           applyTopSheetInset(sEl, m.activeTop, m.activeBottom);
+        }
+
+        for (var ii = 0; ii < iframeNodes.length; ii++) {
+          var iEl = iframeNodes[ii];
+          if (!iEl || !iEl.isConnected) continue;
+          if (isNativeFullscreenNode(iEl)) {
+            clearTrackedIframeOverlay(iEl);
+            continue;
+          }
+          var iEntry = findFullBleedIframeChain(iEl, m.vw, m.vh, m.activeTop, m.activeBottom);
+          if (iEntry) {
+            var iOrigTopRaw = iEl.dataset.theaverOrigTop || '0';
+            var iOrigTopNum = iOrigTopRaw === 'auto' || iOrigTopRaw === 'auto-top' ? 0 : parseNum(iOrigTopRaw);
+            var iOrigBotRaw = iEl.dataset.theaverOrigBottom || 'auto';
+            applyTrackedIframeOverlay(iEntry, iOrigTopNum, iOrigBotRaw, m.activeTop, m.activeBottom, m.vh);
+          }
         }
       } catch (e) {
       } finally {
@@ -2933,8 +3263,10 @@ class MiniAppSession {
     }
 
     window.__theaverSetCollapsedFromHost = function(flag) {
+      var wantCollapsed = !!flag && !window.__theaverForceExpanded;
+      collapseState.manualCollapsed = wantCollapsed;
       collapseState.accDy = 0;
-      return setCollapsed(!!flag);
+      return setCollapsed(wantCollapsed);
     };
 
     function onScrollCollapseCheck(ev) {
@@ -2975,13 +3307,27 @@ class MiniAppSession {
 
       if (maxScroll > 0 && curTop > maxScroll + 2) return;
 
-      if (window.__theaverForceExpanded || curTop <= 20) {
+      var dy = curTop - prevTop;
+      if (window.__theaverForceExpanded) {
+        collapseState.manualCollapsed = false;
+        collapseState.accDy = 0;
+        setCollapsed(false);
+        return;
+      }
+      if (curTop <= 20) {
+        if (collapseState.manualCollapsed) {
+          if (prevTop > 20 && dy < -1.5) {
+            collapseState.manualCollapsed = false;
+            collapseState.accDy = 0;
+            setCollapsed(false);
+          }
+          return;
+        }
         collapseState.accDy = 0;
         setCollapsed(false);
         return;
       }
 
-      var dy = curTop - prevTop;
       if (Math.abs(dy) < 1.5) return;
       if ((dy > 0 && collapseState.accDy < 0) || (dy < 0 && collapseState.accDy > 0)) {
         collapseState.accDy = 0;
@@ -2992,6 +3338,7 @@ class MiniAppSession {
         collapseState.accDy = 0;
         setCollapsed(true);
       } else if (collapseState.collapsed && collapseState.accDy <= -18) {
+        collapseState.manualCollapsed = false;
         collapseState.accDy = 0;
         setCollapsed(false);
       }
@@ -3048,7 +3395,8 @@ class MiniAppSession {
           if (
             cur.dataset &&
             (cur.dataset.theaverSafeRole === 'top-pinned' ||
-              cur.dataset.theaverSafeRole === 'top-sheet')
+              cur.dataset.theaverSafeRole === 'top-sheet' ||
+              cur.dataset.theaverSafeRole === 'top-iframe')
           ) {
             return true;
           }
@@ -3082,7 +3430,7 @@ class MiniAppSession {
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ['class', 'style']
+          attributeFilter: ['class', 'style', 'open', 'hidden']
         });
       }
 
@@ -8388,24 +8736,35 @@ class WebViewFloatingHeader extends StatelessWidget {
       ),
     );
 
-    final Widget collapsedBox = SizedBox(
-      key: const ValueKey('webview_right_pill_collapsed'),
-      width: collapsedRightWidth,
-      height: 44.0,
-      child: OverflowBox(
-        minWidth: collapsedRightWidth,
-        maxWidth: collapsedRightWidth,
-        minHeight: 44.0,
-        maxHeight: 44.0,
-        alignment: Alignment.centerRight,
-        child: Material(
-          type: MaterialType.transparency,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: trailingActions,
+    final Widget collapsedBox = GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onVerticalDragStart:
+          (anyHeaderOverlayOpen || effectiveCompact) ? null : onVerticalDragStart,
+      onVerticalDragUpdate:
+          (anyHeaderOverlayOpen || effectiveCompact) ? null : onVerticalDragUpdate,
+      onVerticalDragEnd:
+          (anyHeaderOverlayOpen || effectiveCompact) ? null : onVerticalDragEnd,
+      onVerticalDragCancel:
+          (anyHeaderOverlayOpen || effectiveCompact) ? null : onVerticalDragCancel,
+      child: SizedBox(
+        key: const ValueKey('webview_right_pill_collapsed'),
+        width: collapsedRightWidth,
+        height: 44.0,
+        child: OverflowBox(
+          minWidth: collapsedRightWidth,
+          maxWidth: collapsedRightWidth,
+          minHeight: 44.0,
+          maxHeight: 44.0,
+          alignment: Alignment.centerRight,
+          child: Material(
+            type: MaterialType.transparency,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: trailingActions,
+              ),
             ),
           ),
         ),
@@ -8624,6 +8983,14 @@ class WebViewFloatingHeader extends StatelessWidget {
                 behavior: HitTestBehavior.opaque,
                 onTap: onExpandCompact ?? onCenterTap,
                 onLongPress: onCenterLongPress,
+                onVerticalDragStart:
+                    anyHeaderOverlayOpen ? null : onVerticalDragStart,
+                onVerticalDragUpdate:
+                    anyHeaderOverlayOpen ? null : onVerticalDragUpdate,
+                onVerticalDragEnd:
+                    anyHeaderOverlayOpen ? null : onVerticalDragEnd,
+                onVerticalDragCancel:
+                    anyHeaderOverlayOpen ? null : onVerticalDragCancel,
                 child: Material(
                   type: MaterialType.transparency,
                   child: _buildPillBody(
@@ -8833,7 +9200,18 @@ class WebViewFloatingHeader extends StatelessWidget {
                   borderRadius: 22,
                   colorOverride: capsuleColorOverride,
                   visible: leftSideVisible,
-                  child: leadingBox,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onVerticalDragStart:
+                        anyHeaderOverlayOpen ? null : onVerticalDragStart,
+                    onVerticalDragUpdate:
+                        anyHeaderOverlayOpen ? null : onVerticalDragUpdate,
+                    onVerticalDragEnd:
+                        anyHeaderOverlayOpen ? null : onVerticalDragEnd,
+                    onVerticalDragCancel:
+                        anyHeaderOverlayOpen ? null : onVerticalDragCancel,
+                    child: leadingBox,
+                  ),
                 ),
               ),
             ),
@@ -8921,21 +9299,13 @@ class WebViewFloatingHeader extends StatelessWidget {
                     onLongPress:
                         centerPopoverExpanded ? null : onCenterLongPress,
                     onVerticalDragStart:
-                        (anyHeaderOverlayOpen || effectiveCompact)
-                            ? null
-                            : onVerticalDragStart,
+                        anyHeaderOverlayOpen ? null : onVerticalDragStart,
                     onVerticalDragUpdate:
-                        (anyHeaderOverlayOpen || effectiveCompact)
-                            ? null
-                            : onVerticalDragUpdate,
+                        anyHeaderOverlayOpen ? null : onVerticalDragUpdate,
                     onVerticalDragEnd:
-                        (anyHeaderOverlayOpen || effectiveCompact)
-                            ? null
-                            : onVerticalDragEnd,
+                        anyHeaderOverlayOpen ? null : onVerticalDragEnd,
                     onVerticalDragCancel:
-                        (anyHeaderOverlayOpen || effectiveCompact)
-                            ? null
-                            : onVerticalDragCancel,
+                        anyHeaderOverlayOpen ? null : onVerticalDragCancel,
                     child: WebViewFloatingCapsule(
                       height: null,
                       borderRadius: centerPopoverExpanded ? 26.0 : pillRadius,
@@ -11419,14 +11789,15 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   void _handleHeaderDragStart(DragStartDetails _) {
-    if (!_session.allowVerticalSwipe) return;
     _dragResetController.stop();
     _dragAccumulated = 0.0;
   }
 
   void _handleHeaderDragUpdate(DragUpdateDetails details) {
-    if (!_session.allowVerticalSwipe) return;
     _dragAccumulated += details.delta.dy;
+    if (_session.browserChromeCollapsed || !_session.allowVerticalSwipe) {
+      return;
+    }
     final double current = _dragOffsetNotifier.value;
     final double nextOffset = (current + details.delta.dy).clamp(0.0, 260.0);
     if ((nextOffset - current).abs() > 0.1) {
@@ -11466,10 +11837,33 @@ class _MiniAppWebViewSheetState extends State<MiniAppWebViewSheet>
   }
 
   void _handleHeaderDragEnd(DragEndDetails details) {
-    if (!_session.allowVerticalSwipe) return;
     final double dy = _dragAccumulated;
     final double vy = details.primaryVelocity ?? 0.0;
     _dragAccumulated = 0.0;
+
+    if (_session.browserChromeCollapsed) {
+      _resetDragOffset();
+      if (dy >= 10 || vy >= 180) {
+        HapticUtils.selection();
+        unawaited(_session.setBrowserChromeCollapsed(false));
+      }
+      return;
+    }
+
+    if ((dy <= -14 || vy <= -220) && _dragOffsetNotifier.value <= 4.0) {
+      _resetDragOffset();
+      if (!_session.browserForceExpanded) {
+        _closeMenu();
+        HapticUtils.selection();
+        unawaited(_session.setBrowserChromeCollapsed(true));
+      }
+      return;
+    }
+
+    if (!_session.allowVerticalSwipe) {
+      _resetDragOffset();
+      return;
+    }
 
     if (dy >= 90 || vy >= 620) {
       unawaited(
