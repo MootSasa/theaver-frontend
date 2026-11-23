@@ -363,7 +363,7 @@ void main() {
       expect(rightEnd.avatarCenter.dy, closeTo(24.0, 0.01));
     });
 
-    test('clips floating Dynamic Island top edge and lazy-activates scalar field only within 52dp', () {
+    test('clips floating Dynamic Island top edge, keeps photo full-color until p > 0.72, and lazy-activates scalar field within 24dp', () {
       const island = DisplayCutoutSpec(
         kind: CutoutAnchorKind.dynamicIsland,
         gravity: CutoutHorizontalGravity.center,
@@ -373,26 +373,77 @@ void main() {
       );
 
       final early = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 8.0,
+        scrollOffset: 35.0, // p ≈ 0.226 <= 0.45
         screenWidth: 393.0,
         statusBarHeight: 54.0,
         topOffset: 100.0,
         cutout: island,
       );
       expect(early.cutoutClipTopY, closeTo(11.0, 0.01));
-      expect(early.edgeGapDp, greaterThan(52.0));
+      expect(early.edgeGapDp, greaterThan(24.0));
       expect(early.isScalarFieldActive, isFalse);
+      expect(early.avatarBlurSigma, equals(0.0));
+      expect(early.avatarRgbScale, equals(1.0));
 
-      final mid = ProfileAvatarMetaballGeometry.compute(
-        scrollOffset: 95.0,
+      final preContact = ProfileAvatarMetaballGeometry.compute(
+        scrollOffset: 105.0, // p ≈ 0.677 <= 0.72: approaching cutout, still 100% colored!
         screenWidth: 393.0,
         statusBarHeight: 54.0,
         topOffset: 100.0,
         cutout: island,
       );
-      expect(mid.edgeGapDp, lessThanOrEqualTo(52.0));
-      expect(mid.isScalarFieldActive, isTrue);
-      expect(mid.avatarCenter.dx, closeTo(196.5, 0.01));
+      expect(preContact.edgeGapDp, lessThanOrEqualTo(24.0));
+      expect(preContact.isScalarFieldActive, isTrue);
+      expect(preContact.avatarRgbScale, equals(1.0));
+      expect(preContact.avatarAlpha, equals(1.0));
+      expect(preContact.avatarBlurSigma, lessThanOrEqualTo(4.5));
+      expect(preContact.avatarCenter.dx, closeTo(196.5, 0.01));
+
+      final absorbing = ProfileAvatarMetaballGeometry.compute(
+        scrollOffset: 140.0, // p ≈ 0.903: inside cutout, darkening into #000
+        screenWidth: 393.0,
+        statusBarHeight: 54.0,
+        topOffset: 100.0,
+        cutout: island,
+      );
+      expect(absorbing.avatarRgbScale, lessThan(0.55));
+    });
+
+    test('normalizes Android vertical OEM slot (top = 0, height > width) to bottom circular camera and scales referenceWidthDp', () {
+      final normalized = DisplayCutoutSpec.fromChannelMap(
+        const <Object?, Object?>{
+          'hasCutout': true,
+          'kind': 'punchHole',
+          'gravity': 'center',
+          'left': 184.0,
+          'top': 0.0,
+          'width': 24.0,
+          'height': 32.0,
+          'cornerRadius': 12.0,
+          'isOval': false,
+          'referenceWidthDp': 392.0,
+        },
+        windowWidth: 392.0,
+      );
+      expect(normalized.bounds, const Rect.fromLTWH(184.0, 8.0, 24.0, 24.0));
+      expect(normalized.bounds.center, const Offset(196.0, 20.0));
+
+      final scaled = DisplayCutoutSpec.fromChannelMap(
+        const <Object?, Object?>{
+          'hasCutout': true,
+          'kind': 'punchHole',
+          'gravity': 'center',
+          'left': 180.0,
+          'top': 10.0,
+          'width': 24.0,
+          'height': 24.0,
+          'cornerRadius': 12.0,
+          'isOval': false,
+          'referenceWidthDp': 384.0,
+        },
+        windowWidth: 412.0,
+      );
+      expect(scaled.bounds.center.dx, closeTo(192.0 * (412.0 / 384.0), 0.05));
     });
   });
 
@@ -602,10 +653,10 @@ void main() {
           });
         }
 
-        // 2. Scroll to 95dp (p ≈ 0.61): GPU metaball scalar field + darkening active; Hero tag disabled (> 0.55).
+        // 2. Scroll to 120dp (p ≈ 0.774): GPU metaball scalar field + absorption darkening active; Hero tag disabled (> 0.55).
         final scrollableFinder = find.byType(Scrollable).first;
         final scrollableState = tester.state<ScrollableState>(scrollableFinder);
-        scrollableState.position.jumpTo(95.0);
+        scrollableState.position.jumpTo(120.0);
         await tester.pump();
 
         expect(

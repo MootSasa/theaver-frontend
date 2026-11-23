@@ -106,10 +106,18 @@ class DisplayCutoutSpec {
       return DisplayCutoutSpec.none;
     }
 
-    final left = (raw['left'] as num?)?.toDouble() ?? 0.0;
-    final top = (raw['top'] as num?)?.toDouble() ?? 0.0;
-    final width = (raw['width'] as num?)?.toDouble() ?? 0.0;
-    final height = (raw['height'] as num?)?.toDouble() ?? 0.0;
+    final refWidth = (raw['referenceWidthDp'] as num?)?.toDouble();
+    final coordScale = (refWidth != null &&
+            refWidth > 0.0 &&
+            windowWidth > 0.0 &&
+            (refWidth - windowWidth).abs() > 0.25)
+        ? (windowWidth / refWidth)
+        : 1.0;
+
+    final left = ((raw['left'] as num?)?.toDouble() ?? 0.0) * coordScale;
+    var top = ((raw['top'] as num?)?.toDouble() ?? 0.0) * coordScale;
+    final width = ((raw['width'] as num?)?.toDouble() ?? 0.0) * coordScale;
+    var height = ((raw['height'] as num?)?.toDouble() ?? 0.0) * coordScale;
     if (width <= 0.0 || height <= 0.0) {
       return DisplayCutoutSpec.none;
     }
@@ -125,6 +133,16 @@ class DisplayCutoutSpec {
       return DisplayCutoutSpec.none;
     }
 
+    final rawIsOval = (raw['isOval'] as bool?) ?? (width > height * 1.15);
+    if (kind == CutoutAnchorKind.punchHole &&
+        !rawIsOval &&
+        width <= 42.0 &&
+        top <= 3.0 &&
+        height > width * 1.04) {
+      top = (top + height) - width;
+      height = width;
+    }
+
     final bounds = Rect.fromLTWH(left, top, width, height);
     final gravityRaw = raw['gravity'] as String?;
     final CutoutHorizontalGravity gravity = switch (gravityRaw) {
@@ -134,14 +152,15 @@ class DisplayCutoutSpec {
       _ => _inferGravity(bounds.center.dx, windowWidth),
     };
 
-    final isOval = (raw['isOval'] as bool?) ?? (width > height * 1.15);
+    final isOval = rawIsOval;
     final defaultRadius = (kind == CutoutAnchorKind.punchHole ||
             kind == CutoutAnchorKind.dynamicIsland ||
             isOval)
         ? math.min(width, height) * 0.5
         : math.min(width * 0.25, height * 0.55);
+    final rawCornerRadius = (raw['cornerRadius'] as num?)?.toDouble();
     final cornerRadius =
-        ((raw['cornerRadius'] as num?)?.toDouble() ?? defaultRadius)
+        (rawCornerRadius != null ? rawCornerRadius * coordScale : defaultRadius)
             .clamp(0.0, math.max(width, height) * 0.5);
 
     List<Offset>? polygon;
@@ -152,7 +171,7 @@ class DisplayCutoutSpec {
         final px = (rawPoly[i] as num?)?.toDouble();
         final py = (rawPoly[i + 1] as num?)?.toDouble();
         if (px != null && py != null) {
-          pts.add(Offset(px, py));
+          pts.add(Offset(px * coordScale, py * coordScale));
         }
       }
       if (pts.length >= 6) {
@@ -299,7 +318,14 @@ class DisplayCutoutService extends ChangeNotifier {
           f.bounds.width > 0.0 &&
           f.bounds.height > 0.0 &&
           f.bounds.top < kMaxTopZoneDp) {
-        topRects.add(f.bounds);
+        var r = f.bounds;
+        if (!isIOSPlatform &&
+            r.width <= 42.0 &&
+            r.top <= 3.0 &&
+            r.height > r.width * 1.04) {
+          r = Rect.fromLTWH(r.left, r.bottom - r.width, r.width, r.width);
+        }
+        topRects.add(r);
       }
     }
     if (topRects.isEmpty) {

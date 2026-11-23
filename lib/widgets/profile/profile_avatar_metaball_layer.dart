@@ -19,7 +19,7 @@ class ProfileAvatarMetaballGeometry {
   static const double decorationOuterMultiplier = 1.24;
   static const double decorationFullContractScale = 0.81;
   static const double decorationUnmountProgress = 0.36;
-  static const double scalarFieldActivationGapDp = 52.0;
+  static const double scalarFieldActivationGapDp = 24.0;
   static const double blackKingBarHeight = 32.0;
 
   final double progress;
@@ -91,16 +91,17 @@ class ProfileAvatarMetaballGeometry {
     switch (cutout.kind) {
       case CutoutAnchorKind.punchHole:
         p2 = cutout.bounds.center;
-        d2 = (0.55 * cutout.bounds.height).clamp(10.0, 22.0);
+        final minDim = math.min(cutout.bounds.width, cutout.bounds.height);
+        d2 = (0.55 * minDim).clamp(10.0, 18.0);
       case CutoutAnchorKind.dynamicIsland:
         p2 = Offset(halfW, cutout.bounds.center.dy);
-        d2 = 20.0;
+        d2 = 18.0;
       case CutoutAnchorKind.topNotch:
-        p2 = Offset(halfW, math.max(6.0, cutout.bounds.bottom - 12.0));
-        d2 = 20.0;
+        p2 = Offset(halfW, math.max(6.0, cutout.bounds.bottom - 10.0));
+        d2 = 18.0;
       case CutoutAnchorKind.none:
         p2 = Offset(halfW, -18.0);
-        d2 = 24.0;
+        d2 = 22.0;
     }
 
     final bool isCorner = cutout.isCorner;
@@ -118,8 +119,10 @@ class ProfileAvatarMetaballGeometry {
       p1 = Offset((p0.dx + p2.dx) * 0.5, (p0.dy + p2.dy) * 0.5);
     }
 
-    final tPos = Curves.easeInOut.transform(p);
-    final tSize = Curves.easeOutCubic.transform(p);
+    // Follow scroll 1:1 on vertical trajectory (matching Telegram's SettingsActivity/ProfileActivity)
+    // and gentle sine easing on corner Bezier arcs, with linear diameter scaling.
+    final tPos = isCorner ? Curves.easeInOutSine.transform(p) : p;
+    final tSize = p;
 
     final Offset currentCenter;
     if (isCorner) {
@@ -178,34 +181,36 @@ class ProfileAvatarMetaballGeometry {
     final cutoutClipTopY =
         (cutout.hasCutout && cutout.bounds.top > 1.0) ? cutout.bounds.top : 0.0;
 
+    // Compact logical-dp Gaussian sigma (matching Telegram's ~15px = ~5dp radius)
+    // so the cutout anchor stays strictly inside the physical camera hole without
+    // shifting its center or edges when the neck forms.
     final scalarBlurSigma = switch (cutout.kind) {
-      CutoutAnchorKind.punchHole => (math.min(
-                    cutout.bounds.width,
-                    cutout.bounds.height,
-                  ) *
-                  0.42 +
-              1.5)
-          .clamp(8.5, 11.5),
-      _ => 11.5,
+      CutoutAnchorKind.punchHole => 5.0,
+      _ => 6.0,
     };
 
-    final scalarFieldOpacity = p <= 0.90
+    final scalarFieldOpacity = p <= 0.93
         ? 1.0
-        : (1.0 - Curves.easeInCubic.transform(((p - 0.90) / 0.096).clamp(0.0, 1.0)));
+        : (1.0 -
+            Curves.easeInCubic.transform(((p - 0.93) / 0.066).clamp(0.0, 1.0)));
 
     final isScalarFieldActive = p > 0.002 &&
         p < 0.998 &&
         dGap <= scalarFieldActivationGapDp &&
         scalarFieldOpacity > 0.002;
 
-    final avatarBlurProgress = ((p - 0.18) / 0.52).clamp(0.0, 1.0);
+    // Keep photo 100% sharp through the first 45% of scroll, then apply subtle
+    // optical softness (up to 4.5dp) as it nears the camera cutout.
+    final avatarBlurProgress = ((p - 0.45) / 0.45).clamp(0.0, 1.0);
     final avatarBlurSigma =
-        10.0 * Curves.easeInOut.transform(avatarBlurProgress);
+        4.5 * Curves.easeInQuad.transform(avatarBlurProgress);
 
-    final darkenProgress = ((p - 0.35) / 0.43).clamp(0.0, 1.0);
+    // Keep full natural photo colors all the way to cutout contact (p <= 0.72),
+    // darkening into #000000 only during final absorption inside the cutout (0.72..0.95).
+    final darkenProgress = ((p - 0.72) / 0.23).clamp(0.0, 1.0);
     final avatarRgbScale = 1.0 - Curves.easeInCubic.transform(darkenProgress);
 
-    final fadeProgress = ((p - 0.55) / 0.40).clamp(0.0, 1.0);
+    final fadeProgress = ((p - 0.88) / 0.105).clamp(0.0, 1.0);
     final avatarAlpha = 1.0 - Curves.easeInOutCubic.transform(fadeProgress);
 
     // Custom avatar decoration frame ("absorb into droplet" on scroll up, "bloom" on scroll down).
@@ -306,6 +311,8 @@ class ProfileAvatarMetaballLayer extends StatefulWidget {
 
 class _ProfileAvatarMetaballLayerState
     extends State<ProfileAvatarMetaballLayer> {
+  static const double _kStaticTopBufferPad = 40.0;
+
   static const ColorFilter _kMetaballThresholdColorFilter =
       ColorFilter.matrix(<double>[
     0.0, 0.0, 0.0, 0.0, 0.0,
@@ -490,12 +497,12 @@ class _ProfileAvatarMetaballLayerState
           // Full GPU liquid metaball path (0.002 < p < 0.998).
           final children = <Widget>[];
 
-          // Sublayer 1: Black scalar field (anchor + opposing tension beaks + droplet) -> Blur -> Alpha threshold.
+          // Sublayer 1: Static-origin black scalar field (cutout + opposing beaks + droplet) -> Blur -> Alpha threshold.
           if (geom.isScalarFieldActive) {
             children.add(_buildScalarFieldSublayer(cutout, geom));
           }
 
-          // Sublayer 2: Single ExpandableAvatar instance -> Scale -> Blur -> RGB darken & alpha fade -> Floating top clip.
+          // Sublayer 2: Single ExpandableAvatar instance -> Scale -> Gentle blur -> Late cutout-absorption darken -> Top clip.
           if (geom.avatarAlpha > 0.002) {
             final avatarBoxLeft = geom.avatarCenter.dx - baseD * 0.5;
             final avatarBoxTop = geom.avatarCenter.dy - baseD * 0.5;
@@ -534,7 +541,7 @@ class _ProfileAvatarMetaballLayerState
               avatarNode = ClipRect(
                 clipper: _LocalTopEdgeClipper(
                   minLocalY: geom.cutoutClipTopY - avatarBoxTop,
-                  overhang: 36.0,
+                  overhang: 24.0,
                 ),
                 child: avatarNode,
               );
@@ -595,27 +602,11 @@ class _ProfileAvatarMetaballLayerState
     DisplayCutoutSpec cutout,
     ProfileAvatarMetaballGeometry geom,
   ) {
-    final avatarR = geom.avatarDiameter * 0.5;
-    final avatarRect = Rect.fromCircle(
-      center: geom.avatarCenter,
-      radius: avatarR,
-    );
-
-    final Rect anchorRect = cutout.hasCutout
-        ? cutout.bounds
-        : Rect.fromLTWH(
-            math.max(0.0, geom.avatarCenter.dx - 90.0),
-            -ProfileAvatarMetaballGeometry.blackKingBarHeight,
-            math.min(widget.screenWidth, 180.0),
-            ProfileAvatarMetaballGeometry.blackKingBarHeight,
-          );
-
-    const double blurPad = 36.0;
-    final unionRect = anchorRect.expandToInclude(avatarRect).inflate(blurPad);
-    final boxLeft = unionRect.left;
-    final boxTop = unionRect.top;
-    final boxWidth = math.max(1.0, unionRect.width);
-    final boxHeight = math.max(1.0, unionRect.height);
+    // Use a constant-origin top viewport band so the offscreen blur/color-matrix
+    // texture never changes its origin or subpixel alignment during scroll.
+    final bandWidth = math.max(1.0, widget.screenWidth);
+    final bandVisibleHeight = math.max(widget.topOffset + 135.0, 220.0);
+    final totalHeight = bandVisibleHeight + _kStaticTopBufferPad;
 
     Widget fieldWidget = ColorFiltered(
       colorFilter: _kMetaballThresholdColorFilter,
@@ -626,10 +617,10 @@ class _ProfileAvatarMetaballLayerState
           tileMode: TileMode.decal,
         ),
         child: CustomPaint(
-          size: Size(boxWidth, boxHeight),
+          size: Size(bandWidth, totalHeight),
           painter: _MetaballScalarFieldPainter(
-            localOrigin: Offset(boxLeft, boxTop),
-            screenWidth: widget.screenWidth,
+            topBufferPad: _kStaticTopBufferPad,
+            screenWidth: bandWidth,
             cutout: cutout,
             geometry: geom,
           ),
@@ -646,17 +637,17 @@ class _ProfileAvatarMetaballLayerState
 
     fieldWidget = ClipRect(
       clipper: _LocalTopEdgeClipper(
-        minLocalY: geom.cutoutClipTopY - boxTop,
+        minLocalY: _kStaticTopBufferPad + geom.cutoutClipTopY,
         overhang: 0.0,
       ),
       child: fieldWidget,
     );
 
     return Positioned(
-      left: boxLeft,
-      top: boxTop,
-      width: boxWidth,
-      height: boxHeight,
+      left: 0.0,
+      top: -_kStaticTopBufferPad,
+      width: bandWidth,
+      height: totalHeight,
       child: IgnorePointer(
         child: RepaintBoundary(
           child: fieldWidget,
@@ -693,13 +684,13 @@ class _LocalTopEdgeClipper extends CustomClipper<Rect> {
 }
 
 class _MetaballScalarFieldPainter extends CustomPainter {
-  final Offset localOrigin;
+  final double topBufferPad;
   final double screenWidth;
   final DisplayCutoutSpec cutout;
   final ProfileAvatarMetaballGeometry geometry;
 
   const _MetaballScalarFieldPainter({
-    required this.localOrigin,
+    required this.topBufferPad,
     required this.screenWidth,
     required this.cutout,
     required this.geometry,
@@ -713,31 +704,32 @@ class _MetaballScalarFieldPainter extends CustomPainter {
       ..isAntiAlias = true;
 
     canvas.save();
-    canvas.translate(-localOrigin.dx, -localOrigin.dy);
+    canvas.translate(0.0, topBufferPad);
 
-    final sigma = geometry.scalarBlurSigma;
-    final p = geometry.progress;
     final avatarCenter = geometry.avatarCenter;
     final avatarR = geometry.avatarDiameter * 0.5;
     final u = geometry.suctionDirection;
     final n = Offset(-u.dy, u.dx);
 
-    // Proximity weight [0..1] driving opposing surface-tension beaks.
-    final tProx =
-        (1.0 - (geometry.edgeGapDp / 48.0)).clamp(0.0, 1.0);
-    final bridgeWeight = Curves.easeOutQuad.transform(tProx);
-    final beakReach = 22.0 * bridgeWeight;
+    // Bell-shaped tension weight: ramps up only within 20dp of contact and
+    // retracts smoothly back to 0 once the droplet passes inside the cutout.
+    final approach = ((20.0 - geometry.edgeGapDp) / 18.0).clamp(0.0, 1.0);
+    final retract = ((geometry.edgeGapDp + 16.0) / 15.0).clamp(0.0, 1.0);
+    final bridgeWeight = Curves.easeOutQuad.transform(approach) *
+        Curves.easeInOut.transform(retract);
+    final cutoutBeakReach = 7.0 * bridgeWeight;
+    final avatarBeakReach = 5.0 * bridgeWeight;
 
-    // 1. Draw the physical cutout anchor (or top offscreen BLACK_KING_BAR).
+    // 1. Draw the physical cutout anchor strictly inside hardware bounds
+    // (slightly deflated so zero black halo ever appears around the real camera,
+    // and its top/side edges stay 100% stationary).
     Offset anchorSurfacePoint;
     double anchorBeakHalfWidth;
 
     if (cutout.hasCutout) {
       final bounds = cutout.bounds;
       final rMin = math.min(bounds.width, bounds.height) * 0.5;
-      final anchorInflate =
-          (sigma * sigma / (2.35 * math.max(rMin, 6.0))).clamp(0.8, 3.4);
-      final inflatedBounds = bounds.inflate(anchorInflate);
+      final deflate = rMin > 4.0 ? 0.6 : 0.0;
 
       final poly = cutout.polygonDp;
       if (poly != null && poly.length >= 6 && !cutout.isOval) {
@@ -747,13 +739,27 @@ class _MetaballScalarFieldPainter extends CustomPainter {
         }
         path.close();
         canvas.drawPath(path, blackPaint);
+      } else if (cutout.kind == CutoutAnchorKind.topNotch &&
+          bounds.top <= 1.0) {
+        final notchSeed = Rect.fromLTRB(
+          bounds.left + deflate,
+          -16.0,
+          bounds.right - deflate,
+          bounds.bottom - deflate,
+        );
+        final radius = math.max(0.0, cutout.cornerRadius - deflate);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(notchSeed, Radius.circular(radius)),
+          blackPaint,
+        );
       } else {
-        final radius = (cutout.cornerRadius + anchorInflate).clamp(
+        final seedBounds = bounds.deflate(deflate);
+        final radius = (cutout.cornerRadius - deflate).clamp(
           0.0,
-          math.min(inflatedBounds.width, inflatedBounds.height) * 0.5,
+          math.min(seedBounds.width, seedBounds.height) * 0.5,
         );
         canvas.drawRRect(
-          RRect.fromRectAndRadius(inflatedBounds, Radius.circular(radius)),
+          RRect.fromRectAndRadius(seedBounds, Radius.circular(radius)),
           blackPaint,
         );
       }
@@ -761,50 +767,41 @@ class _MetaballScalarFieldPainter extends CustomPainter {
       if (cutout.kind == CutoutAnchorKind.topNotch) {
         anchorSurfacePoint = Offset(
           geometry.anchorNeckOrigin.dx,
-          bounds.bottom,
+          bounds.bottom - deflate,
         );
-        anchorBeakHalfWidth =
-            math.min(bounds.width * 0.35, 8.0 + beakReach * 0.65);
+        anchorBeakHalfWidth = math.min(bounds.width * 0.22, 4.5);
       } else {
-        final a = math.max(1.0, bounds.width * 0.5);
-        final b = math.max(1.0, bounds.height * 0.5);
+        final a = math.max(1.0, bounds.width * 0.5 - deflate);
+        final b = math.max(1.0, bounds.height * 0.5 - deflate);
         final denom = math.sqrt(
           (b * u.dx) * (b * u.dx) + (a * u.dy) * (a * u.dy),
         );
         final supportR = denom > 0.001 ? (a * b / denom) : b;
         anchorSurfacePoint = bounds.center - u * supportR;
-        anchorBeakHalfWidth = math.min(
-          math.min(a, 24.0),
-          6.0 + beakReach * 0.60,
-        );
+        anchorBeakHalfWidth = math.min(rMin * 0.42, 3.8);
       }
     } else {
       final barRect = Rect.fromLTWH(
         -36.0,
         -ProfileAvatarMetaballGeometry.blackKingBarHeight,
         screenWidth + 72.0,
-        ProfileAvatarMetaballGeometry.blackKingBarHeight,
+        ProfileAvatarMetaballGeometry.blackKingBarHeight - 0.5,
       );
       canvas.drawRect(barRect, blackPaint);
-      anchorSurfacePoint = Offset(avatarCenter.dx, 0.0);
-      anchorBeakHalfWidth = math.min(26.0, 9.0 + beakReach * 0.75);
+      anchorSurfacePoint = Offset(avatarCenter.dx, -0.5);
+      anchorBeakHalfWidth = 5.0;
     }
 
-    // 2. Draw the avatar black droplet seed (kept 1dp inside the crisp photo
-    // circle prior to p = 0.32 so bright avatars never show a dark rim, then
-    // curvature-compensated as the photo darkens into the black droplet).
-    final curvatureComp =
-        (sigma * sigma / (2.35 * math.max(avatarR, 6.0))).clamp(0.5, 3.2);
-    final compBlend = ((p - 0.32) / 0.35).clamp(0.0, 1.0);
-    final seedAvatarR =
-        (avatarR - 1.0 + (1.0 + curvatureComp) * compBlend).clamp(3.0, avatarR + 3.4);
+    // 2. Draw the avatar black droplet seed strictly inside the photo circle
+    // (-1.2dp) so bright avatars never show a dark rim before absorption.
+    final seedAvatarR = math.max(2.5, avatarR - 1.2);
     canvas.drawCircle(avatarCenter, seedAvatarR, blackPaint);
 
-    // 3. Draw opposing tension beaks strictly along unit vector u.
-    if (beakReach > 0.4) {
-      final avatarChordCenter = avatarCenter + u * (seedAvatarR * 0.62);
-      final avatarChordHalfW = seedAvatarR * 0.72;
-      final avatarTip = avatarCenter + u * (seedAvatarR + beakReach * 0.55);
+    // 3. Draw narrow opposing tension beaks strictly along unit vector u.
+    if (bridgeWeight > 0.02) {
+      final avatarChordCenter = avatarCenter + u * (seedAvatarR * 0.68);
+      final avatarChordHalfW = seedAvatarR * 0.62;
+      final avatarTip = avatarCenter + u * (seedAvatarR + avatarBeakReach);
 
       final avatarBeak = Path()
         ..moveTo(
@@ -819,8 +816,8 @@ class _MetaballScalarFieldPainter extends CustomPainter {
         ..close();
       canvas.drawPath(avatarBeak, blackPaint);
 
-      final anchorBaseCenter = anchorSurfacePoint + u * 4.5;
-      final anchorTip = anchorSurfacePoint - u * (beakReach * 0.85);
+      final anchorBaseCenter = anchorSurfacePoint + u * 3.0;
+      final anchorTip = anchorSurfacePoint - u * cutoutBeakReach;
       final anchorBeak = Path()
         ..moveTo(
           anchorBaseCenter.dx - n.dx * anchorBeakHalfWidth,
@@ -840,7 +837,7 @@ class _MetaballScalarFieldPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _MetaballScalarFieldPainter oldDelegate) {
-    return oldDelegate.localOrigin != localOrigin ||
+    return oldDelegate.topBufferPad != topBufferPad ||
         oldDelegate.screenWidth != screenWidth ||
         oldDelegate.cutout != cutout ||
         (oldDelegate.geometry.progress - geometry.progress).abs() > 0.0005 ||

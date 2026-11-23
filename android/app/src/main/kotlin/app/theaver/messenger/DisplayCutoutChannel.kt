@@ -83,10 +83,13 @@ object DisplayCutoutChannel {
         }
 
         // Cluster nearby top cutout rects (gap <= 28dp) into one unified oval bounding box.
+        // Normalize OEM vertical inset slots (top ~ 0, height > width for <= 42dp punch-holes)
+        // to the circular camera lens at the bottom of the slot, matching Telegram's NotchInfoUtils.
         val maxClusterGapPx = 28f * density
         val clusters = mutableListOf<RectF>()
         for (r: Rect in topRects) {
             val rf = RectF(r)
+            normalizeTallPunchHoleSlot(rf, density)
             val last = clusters.lastOrNull()
             if (last != null && rf.left - last.right <= maxClusterGapPx) {
                 last.union(rf)
@@ -146,7 +149,10 @@ object DisplayCutoutChannel {
             pathHasCurves = pathHasCurves || specInfo.hasCurves
         }
 
-        val finalRectPx = exactRectPx ?: windowClusterRect
+        val finalRectPx = RectF(exactRectPx ?: windowClusterRect)
+        if (!mergedMultipleSensors) {
+            normalizeTallPunchHoleSlot(finalRectPx, density)
+        }
         val screenWidthDp = screenWidthPx / density
         val leftDp = (finalRectPx.left / density).coerceAtLeast(0f)
         val topDp = (finalRectPx.top / density).coerceAtLeast(0f)
@@ -196,8 +202,17 @@ object DisplayCutoutChannel {
             "height" to heightDp.toDouble(),
             "cornerRadius" to cornerRadiusDp.toDouble(),
             "isOval" to isOvalOrPill,
+            "referenceWidthDp" to screenWidthDp.toDouble(),
             "polygonDp" to contourPointsDp
         )
+    }
+
+    private fun normalizeTallPunchHoleSlot(rf: RectF, density: Float) {
+        val w = rf.width()
+        val h = rf.height()
+        if (w > 0f && w <= 42f * density && rf.top <= 3f * density && h > w * 1.04f) {
+            rf.top = rf.bottom - w
+        }
     }
 
     private data class ContourScanResult(

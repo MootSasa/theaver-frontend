@@ -1204,7 +1204,8 @@ private final class WebViewPullToRefreshHandler: NSObject {
           "width": finalWidth,
           "height": finalHeight,
           "cornerRadius": radius,
-          "isOval": kind == "dynamicIsland"
+          "isOval": kind == "dynamicIsland",
+          "referenceWidthDp": screenW
         ])
       }
     }
