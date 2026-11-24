@@ -595,9 +595,12 @@ def build_release_documents(version, channel, fragments, categorized_commits, re
         "",
         "---",
         "",
-        "Verify downloads using `SHA256SUMS.txt` and the public keys in "
-        "[`signing/`](https://github.com/MootSasa/theaver-frontend/tree/main/signing) "
-        "([verification guide](https://theaver.app/docs/guide/verify-downloads)).",
+        "Verify downloads using `SHA256SUMS.txt` and public keys "
+        "([Linux GPG](https://theaver.app/signing/theaver-release-public.asc), "
+        "[Windows Root CA](https://theaver.app/signing/theaver-windows-root.cer), "
+        "[verification guide](https://theaver.app/docs/guide/verify-downloads)).\n\n"
+        "Проверка подлинности: сверьте `SHA256SUMS.txt` и цифровые подписи "
+        "([инструкция на русском](https://theaver.app/ru/docs/guide/verify-downloads)).",
     ]
     if tech_sections:
         gh_parts.extend(
@@ -703,9 +706,9 @@ def main():
         parsed, errors = validate_all_fragments(".")
         if errors:
             for err in errors:
-                print(f"❌ {err}", file=sys.stderr)
+                print(f"[ERROR] {err}", file=sys.stderr)
             sys.exit(1)
-        print(f"✅ Validated {len(parsed)} changelog fragment(s).")
+        print(f"[OK] Validated {len(parsed)} changelog fragment(s).")
         sys.exit(0)
 
     ref_type = os.environ.get("GITHUB_REF_TYPE", "")

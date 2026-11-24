@@ -50,7 +50,7 @@ concurrency:
 
 jobs:
   prepare-release:
-    name: 🏷️ Calculate Semver & Changelog
+    name: Calculate Semver & Changelog
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.calc.outputs.version }}
@@ -99,7 +99,7 @@ jobs:
           retention-days: 7
 
   build-android:
-    name: 🤖 Build Android APKs
+    name: Build Android APKs
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -134,7 +134,7 @@ jobs:
             mkdir -p ~/.android
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > android/app/debug.keystore
-            echo "✅ Restored consistent Android debug keystore"
+            echo "[OK] Restored consistent Android debug keystore"
           fi
           if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_STORE_PASSWORD" ]; then
             echo "$RELEASE_KEYSTORE_B64" | base64 -d > android/app/release-keystore.jks
@@ -142,7 +142,7 @@ jobs:
               "$RELEASE_STORE_PASSWORD" \
               "${RELEASE_KEY_PASSWORD:-$RELEASE_STORE_PASSWORD}" \
               "${RELEASE_KEY_ALIAS:-theaver}" > android/key.properties
-            echo "✅ Restored production Android release keystore & key.properties"
+            echo "[OK] Restored production Android release keystore & key.properties"
           fi
 
       - name: Set up Java 17
@@ -204,9 +204,9 @@ jobs:
           fi
           
           if [ -x "$SDK_DIR/cmake/3.22.1/bin/cmake" ]; then
-            echo "✅ Android CMake 3.22.1 ready: $($SDK_DIR/cmake/3.22.1/bin/cmake --version | head -n 1)"
+            echo "[OK] Android CMake 3.22.1 ready: $($SDK_DIR/cmake/3.22.1/bin/cmake --version | head -n 1)"
           else
-            echo "❌ Failed to setup CMake 3.22.1"
+            echo "[ERROR] Failed to setup CMake 3.22.1"
             exit 1
           fi
 
@@ -258,7 +258,7 @@ jobs:
           retention-days: 7
 
   build-windows:
-    name: 🪟 Build Windows x64
+    name: Build Windows x64
     needs: prepare-release
     runs-on: windows-latest
     steps:
@@ -359,7 +359,7 @@ jobs:
 
 
   build-linux:
-    name: 🐧 Build Linux x64
+    name: Build Linux x64
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -440,7 +440,7 @@ jobs:
           retention-days: 7
 
   build-macos:
-    name: 🍏 Build macOS Apps
+    name: Build macOS Apps
     needs: prepare-release
     runs-on: macos-latest
     steps:
@@ -533,7 +533,7 @@ jobs:
           retention-days: 7
 
   build-ios:
-    name: 📱 Build iOS IPA
+    name: Build iOS IPA
     needs: prepare-release
     runs-on: macos-latest
     steps:
@@ -562,7 +562,7 @@ jobs:
           mkdir -p dist/ios
 
           if [ -n "$IOS_P12_BASE64" ] && [ -n "$IOS_MOBILEPROVISION_BASE64" ]; then
-            echo "🔑 Apple signing credentials detected. Setting up temporary keychain..."
+            echo "[INFO] Apple signing credentials detected. Setting up temporary keychain..."
             export CERTIFICATE_PATH="$RUNNER_TEMP/build_cert.p12"
             export PP_PATH="$RUNNER_TEMP/build_pp.mobileprovision"
             KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
@@ -590,12 +590,12 @@ jobs:
             cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
 
             # 4. Build iOS Release Application
-            echo "📱 Building iOS application (v$VER #$BUILD)..."
+            echo "Building iOS application (v$VER #$BUILD)..."
             BDATE="$(date +'%d.%m.%Y')"
             DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=${GITHUB_SHA:0:8}"
             flutter pub get
             flutter build ios --release --build-name="$VER" --build-number="$BUILD" $DEFINES || {
-              echo "⚠️ Signed build failed, trying with --no-codesign..."
+              echo "[WARN] Signed build failed, trying with --no-codesign..."
               flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD" $DEFINES
             }
 
@@ -607,7 +607,7 @@ jobs:
               rm -rf Payload
             fi
           else
-            echo "ℹ️ No Apple signing secrets provided. Building unsigned IPA for sideloading..."
+            echo "[INFO] No Apple signing secrets provided. Building unsigned IPA for sideloading..."
             BDATE="$(date +'%d.%m.%Y')"
             DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=${GITHUB_SHA:0:8}"
             flutter pub get
@@ -632,7 +632,7 @@ jobs:
           retention-days: 7
 
   build-web:
-    name: 🌐 Build Web SPA Bundle
+    name: Build Web SPA Bundle
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -669,7 +669,7 @@ jobs:
           GIT_COMMIT="${GITHUB_SHA:0:8}"
           DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=$GIT_COMMIT"
 
-          echo "🌐 Building Flutter Web bundle (v$VER #$BUILD, channel: $CH)..."
+          echo "Building Flutter Web bundle (v$VER #$BUILD, channel: $CH)..."
           flutter build web --release --no-web-resources-cdn $DEFINES
 
           rm -f build/web/assets/assets/fonts/AppleColorEmoji*
@@ -691,7 +691,7 @@ jobs:
           retention-days: 7
 
   publish-and-deploy:
-    name: 🚀 Deploy to Storage & Create GitHub Release
+    name: Deploy to Storage & Create GitHub Release
     needs:
       - prepare-release
       - build-android
@@ -781,7 +781,7 @@ jobs:
           find dist/ -type f -exec ls -lh {} + 2>/dev/null || true
           COUNT=$(find dist/ -type f 2>/dev/null | wc -l)
           if [ "$COUNT" -eq 0 ]; then
-            echo "❌ No binary artifacts were successfully built and downloaded. Aborting release."
+            echo "[ERROR] No binary artifacts were successfully built and downloaded. Aborting release."
             exit 1
           fi
 

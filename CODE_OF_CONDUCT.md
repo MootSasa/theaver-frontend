@@ -1,39 +1,45 @@
-# Contributor Covenant Code of Conduct
+[English](#english) | [Русский](#русский)
 
-## Our Pledge
+# Code of Conduct / Кодекс поведения
 
-We as members, contributors, and leaders pledge to make participation in our community a harassment-free experience for everyone, regardless of age, body size, visible or invisible disability, ethnicity, sex characteristics, gender identity and expression, level of experience, education, socio-economic status, nationality, personal appearance, race, caste, color, religion, or sexual identity and orientation.
+## English
 
-## Our Standards
+### Our Pledge
 
-Examples of behavior that contributes to a positive environment include:
+We pledge to keep participation in this project harassment-free for everyone, regardless of age, body size, disability, ethnicity, sex characteristics, gender identity and expression, experience level, education, socio-economic status, nationality, appearance, race, religion, or sexual orientation.
 
-- Demonstrating empathy and kindness toward other people
-- Being respectful of differing opinions, viewpoints, and experiences
-- Giving and gracefully accepting constructive feedback
-- Accepting responsibility and apologizing to those affected by our mistakes, and learning from the experience
-- Focusing on what is best not just for us as individuals, but for the overall community
+### Expected and Unacceptable Behavior
 
-Examples of unacceptable behavior include:
+Participants are expected to show respect for different viewpoints, give and accept constructive feedback, acknowledge mistakes, and keep discussions focused on improving the software.
 
-- The use of sexualized language or imagery, and sexual attention or advances of any kind
-- Trolling, insulting or derogatory comments, and personal or political attacks
-- Public or private harassment
-- Publishing others' private information, such as a physical or email address, without their explicit permission
-- Other conduct which could reasonably be considered inappropriate in a professional setting
+Unacceptable behavior includes sexualized language or advances, trolling or personal attacks, public or private harassment, publishing another person's private contact details without permission, and other conduct inappropriate in a technical project space.
 
-## Enforcement Responsibilities
+### Enforcement
 
-Project maintainers are responsible for clarifying and enforcing our standards of acceptable behavior and will take appropriate and fair corrective action in response to any behavior that they deem inappropriate, threatening, offensive, or harmful.
+Project maintainers review reported incidents within spaces tied to `MootSasa/theaver-frontend` and take fair corrective action when necessary.
 
-## Scope
+Report abusive or harassing behavior to [support@theaver.app](mailto:support@theaver.app).
 
-This Code of Conduct applies within all project spaces, and also applies when an individual is officially representing the project or its community in public spaces.
+Adapted from the [Contributor Covenant](https://www.contributor-covenant.org/version/2/1/code_of_conduct/), version 2.1.
 
-## Enforcement
+---
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainer at [support@theaver.app](mailto:support@theaver.app). All complaints will be reviewed and investigated promptly and fairly.
+## Русский
 
-## Attribution
+### Наше обязательство
 
-This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1, available at https://www.contributor-covenant.org/version/2/1/code_of_conduct.html.
+Мы стремимся поддерживать доброжелательную и свободную от травли среду для всех участников сообщества независимо от возраста, внешности, физических особенностей, этнической принадлежности, пола и гендерной идентичности, уровня опыта, образования, гражданства, вероисповедания и сексуальной ориентации.
+
+### Правила поведения
+
+От участников ожидается уважение к разным точкам зрения, корректная критика кода и конструктивное восприятие обратной связи.
+
+Недопустимы оскорбления и личные нападки, троллинг, сексуализированные комментарии или навязчивые ухаживания, публикация чужих личных данных без согласия владельца, а также любые формы преследования.
+
+### Применение правил
+
+Сопровождающие проекта рассматривают обращения о нарушениях на площадках `MootSasa/theaver-frontend` и принимают соразмерные меры для защиты участников.
+
+Сообщить о неприемлемом поведении можно на почту [support@theaver.app](mailto:support@theaver.app).
+
+Адаптировано на основе [Contributor Covenant](https://www.contributor-covenant.org/ru/version/2/1/code_of_conduct/), версия 2.1.

@@ -1,18 +1,19 @@
-name: Bug Report
-description: Report a crash, UI glitch, sync problem, or unexpected behavior in Theaver.
+name: Bug Report / Сообщить об ошибке
+description: Report a crash, UI issue, sync error, or unexpected behavior in Theaver. / Сообщить о сбое, ошибке интерфейса или синхронизации.
 title: "[Bug]: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting an issue. Please avoid posting private tokens, passwords, or personal email addresses.
+        Please avoid posting tokens, passwords, or private account data.
+        Не прикладывайте токены, пароли и личные данные аккаунта.
 
   - type: dropdown
     id: platform
     attributes:
-      label: Platform
-      description: Which platform are you running Theaver on?
+      label: Platform / Платформа
+      description: Which OS are you running Theaver on? / На какой ОС воспроизводится проблема?
       options:
         - Android
         - iOS
@@ -26,7 +27,7 @@ body:
   - type: dropdown
     id: channel
     attributes:
-      label: Release Channel
+      label: Release Channel / Канал сборки
       options:
         - beta
         - stable
@@ -38,8 +39,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: App Version & Build
-      description: Found in Settings -> About Theaver (for example, 1.20.3-beta.429).
+      label: App Version & Build / Версия и сборка
+      description: Settings -> About Theaver (for example, 1.20.3-beta.429). / Настройки -> О приложении.
       placeholder: "1.20.3-beta.429"
     validations:
       required: true
@@ -47,35 +48,35 @@ body:
   - type: textarea
     id: description
     attributes:
-      label: What happened?
-      description: Describe what went wrong cleanly and concisely.
+      label: What happened? / Что произошло?
+      description: Describe the issue clearly and concisely. / Кратко опишите проблему.
     validations:
       required: true
 
   - type: textarea
     id: steps
     attributes:
-      label: Steps to Reproduce
-      description: How can someone else reproduce this?
+      label: Steps to Reproduce / Шаги воспроизведения
+      description: How can someone else reproduce it? / Как повторить ошибку?
       placeholder: |
-        1. Open...
-        2. Tap...
-        3. Observe...
+        1. Open... / Открыть...
+        2. Tap... / Нажать...
+        3. Observe... / Результат...
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Expected Behavior
+      label: Expected Behavior / Ожидаемое поведение
     validations:
       required: false
 
   - type: textarea
     id: logs
     attributes:
-      label: Screenshots or Relevant Logs
-      description: Paste any non-sensitive log snippets or attach screenshots here.
+      label: Logs or Screenshots / Логи или скриншоты
+      description: Attach screenshots or paste non-sensitive log lines. / Прикрепите скриншоты или фрагмент лога без токенов.
       render: text
     validations:
       required: false

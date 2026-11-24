@@ -1,12 +1,12 @@
 # Changelog
 
-User-facing release history for **Theaver**. Full release packages and checksums are published on [GitHub Releases](https://github.com/MootSasa/theaver-frontend/releases) and [`theaver.app/changelog`](https://theaver.app/changelog).
+User-facing release history for **Theaver** ([EN Changelog](https://theaver.app/changelog) | [RU История обновлений](https://theaver.app/ru/changelog) | [GitHub Releases](https://github.com/MootSasa/theaver-frontend/releases)).
 
-New changes are authored as bilingual fragments under [`changelogs/fragments/`](./changelogs/README.md) and compiled automatically during release builds.
+New entries are added as bilingual fragment files in [`changelogs/fragments/`](./changelogs/README.md) and assembled automatically during release builds.
 
 ---
 
-## [1.20.3-beta.429] — 2026-11-09
+## [1.20.3-beta.429] (2026-11-09)
 
 ### English
 - **Improved:** Opening chats and profile panels transitions smoothly without dropped frames.
@@ -20,11 +20,11 @@ New changes are authored as bilingual fragments under [`changelogs/fragments/`](
 
 ---
 
-## [1.20.0-beta.423] — 2026-11-09
+## [1.20.0-beta.423] (2026-11-09)
 
 ### English
 - **Added:** Upgraded Mini Apps to v8.0 with ETag caching, safe HUD insets, and faster launch events.
-- **Added:** Added automated Authenticode signing for Windows installers and GPG signatures for Linux archives.
+- **Added:** Automated Authenticode signing for Windows installers and GPG signatures for Linux archives.
 - **Improved:** Tightened validation checks across Bot API calls and Walt (`THV`) ledger transfers.
 
 ### Русский
@@ -34,12 +34,12 @@ New changes are authored as bilingual fragments under [`changelogs/fragments/`](
 
 ---
 
-## [1.19.0-beta.421] — 2026-11-08
+## [1.19.0-beta.421] (2026-11-08)
 
 ### English
 - **Added:** Added a dedicated Emoji & Sticker side panel for wide desktop windows.
 - **Added:** Built a justified GIF grid with press-and-hold preview and full-resolution sending.
-- **Added:** Added direct Telegram sticker pack import with live progress inside the app.
+- **Added:** Direct Telegram sticker pack import with live progress inside the app.
 - **Improved:** Off-screen animated stickers and GIFs now pause automatically, keeping scrolling smooth on high-refresh-rate displays.
 
 ### Русский
@@ -50,11 +50,11 @@ New changes are authored as bilingual fragments under [`changelogs/fragments/`](
 
 ---
 
-## [1.18.0-beta.400] — 2026-11-07
+## [1.18.0-beta.400] (2026-11-07)
 
 ### English
 - **Added:** Added voice calls, 1080p60 screen sharing, and voice channels inside communities.
-- **Added:** Added call summary cards in chat history along with per-chat notification settings.
+- **Added:** Call summary cards in chat history along with per-chat notification settings.
 
 ### Русский
 - **Новое:** Запустили аудио- и видеозвонки, показ экрана 1080p60 и голосовые комнаты в сообществах.

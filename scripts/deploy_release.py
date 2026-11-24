@@ -223,7 +223,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
             _discard_active_conn()
             last_res, last_status = res, status
             print(
-                f"[Deploy] ⚠️ Attempt {attempt}/{max_retries} for {file_name} returned HTTP {status}: {res}",
+                f"[Deploy] [WARN] Attempt {attempt}/{max_retries} for {file_name} returned HTTP {status}: {res}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -234,7 +234,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
             last_res = {"error": str(e)}
             last_status = 500
             print(
-                f"[Deploy] ⚡ Attempt {attempt}/{max_retries} for {file_name}: {e} -> switching SNAT port...",
+                f"[Deploy] [RETRY] Attempt {attempt}/{max_retries} for {file_name}: {e} -> switching SNAT port...",
                 file=sys.stderr,
                 flush=True,
             )
@@ -244,7 +244,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
             last_res = {"error": str(e)}
             last_status = 500
             print(
-                f"[Deploy] ⚠️ Attempt {attempt}/{max_retries} for {file_name} failed with exception: {e}",
+                f"[Deploy] [WARN] Attempt {attempt}/{max_retries} for {file_name} failed with exception: {e}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -374,7 +374,7 @@ def main():
 
             upload_res, status = post_multipart(upload_endpoint, file_path, fields, headers)
             if status != 200 or not upload_res.get("success"):
-                print(f"[Deploy] ❌ Failed to upload {fname}: {upload_res}", file=sys.stderr, flush=True)
+                print(f"[Deploy] [ERROR] Failed to upload {fname}: {upload_res}", file=sys.stderr, flush=True)
                 fail_count += 1
                 continue
 
@@ -384,7 +384,7 @@ def main():
             sha256 = upload_res.get("sha256") or ""
             size_bytes = upload_res.get("size_bytes") or upload_res.get("file_size_bytes") or fsize
 
-            print(f"[Deploy] ✅ Uploaded successfully: {download_url}", flush=True)
+            print(f"[Deploy] [OK] Uploaded successfully: {download_url}", flush=True)
             print(f"[Deploy] Metadata: Platform={platform}, Arch={arch}, Channel={args.channel}, Size={size_bytes}", flush=True)
 
             # 2. Register release in DB (defer push/WS dispatch until all ABIs are registered)
@@ -406,11 +406,11 @@ def main():
 
             ver_res, ver_status = post_json(version_endpoint, version_payload, headers)
             if ver_status != 200 or not ver_res.get("success"):
-                print(f"[Deploy] ❌ Failed to register {platform}/{arch}/{args.channel} in database: {ver_res}", file=sys.stderr, flush=True)
+                print(f"[Deploy] [ERROR] Failed to register {platform}/{arch}/{args.channel} in database: {ver_res}", file=sys.stderr, flush=True)
                 fail_count += 1
                 continue
 
-            print(f"[Deploy] ✅ Registered in database successfully!", flush=True)
+            print(f"[Deploy] [OK] Registered in database successfully!", flush=True)
             success_count += 1
             notifiable_targets.add((platform, args.channel))
 
@@ -422,14 +422,14 @@ def main():
                     n_res, n_status = post_json(notify_endpoint, {"platform": plat, "channel": ch}, headers)
                     if n_status == 200 and n_res.get("success"):
                         print(
-                            f"[Deploy] 🔔 Notified {plat}/{ch}: targeted={n_res.get('targeted_devices', 0)}, "
+                            f"[Deploy] [NOTIFY] Notified {plat}/{ch}: targeted={n_res.get('targeted_devices', 0)}, "
                             f"push_sent={n_res.get('push_sent', 0)}, ws_sent={n_res.get('ws_sent', 0)}",
                             flush=True,
                         )
                     else:
-                        print(f"[Deploy] ⚠️ Notification dispatch warning ({plat}/{ch}, status={n_status}): {n_res}", flush=True)
+                        print(f"[Deploy] [WARN] Notification dispatch warning ({plat}/{ch}, status={n_status}): {n_res}", flush=True)
                 except Exception as exc:
-                    print(f"[Deploy] ⚠️ Notification dispatch failed ({plat}/{ch}): {exc}", flush=True)
+                    print(f"[Deploy] [WARN] Notification dispatch failed ({plat}/{ch}): {exc}", flush=True)
     finally:
         _cleanup_all_conns()
 
