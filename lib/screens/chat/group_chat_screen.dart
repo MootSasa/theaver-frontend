@@ -438,7 +438,101 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   String _formatDateLabel(DateTime dt) =>
       DateTimeUtils.formatDateSeparator(dt, context: context);
 
+  void _dedupeMessagesInPlace() {
+    if (_messages.length < 2) return;
+    final seenById = <String, int>{};
+    final seenByLocalId = <String, int>{};
+    for (int i = 0; i < _messages.length; i++) {
+      final m = _messages[i];
+      final id = m.id;
+      final lid =
+          (m.localId != null && m.localId!.isNotEmpty) ? m.localId : null;
+
+      int? dupIdx = seenById[id];
+      if (dupIdx == null && lid != null) {
+        dupIdx = seenByLocalId[lid];
+      }
+      if (dupIdx != null && dupIdx != i) {
+        final existing = _messages[dupIdx];
+        final bool incomingIsServer = int.tryParse(id) != null;
+        final bool existingIsServer = int.tryParse(existing.id) != null;
+        final Message winnerBase =
+            (incomingIsServer && !existingIsServer) ? m : existing;
+        final Message loser = identical(winnerBase, m) ? existing : m;
+        final String? mergedLocalId =
+            (winnerBase.localId != null && winnerBase.localId!.isNotEmpty)
+                ? winnerBase.localId
+                : loser.localId;
+        final int mergedStatus =
+            (winnerBase.sendStatus == 1 || loser.sendStatus == 1)
+                ? 1
+                : (winnerBase.sendStatus == 0 || loser.sendStatus == 0
+                    ? 0
+                    : 2);
+        if (mergedLocalId != null &&
+            mergedLocalId != winnerBase.id &&
+            _messageKeys.containsKey(mergedLocalId)) {
+          final promoted = _messageKeys.remove(mergedLocalId)!;
+          _messageKeys.putIfAbsent(winnerBase.id, () => promoted);
+        }
+        _messages[dupIdx] = winnerBase.copyWith(
+          localId: mergedLocalId,
+          sendStatus: mergedStatus,
+          replyInfo: winnerBase.replyInfo ?? loser.replyInfo,
+          isOwn: winnerBase.isOwn || loser.isOwn,
+        );
+        _messages.removeAt(i);
+        i--;
+        seenById[_messages[dupIdx].id] = dupIdx;
+        if (mergedLocalId != null) {
+          seenByLocalId[mergedLocalId] = dupIdx;
+        }
+        continue;
+      }
+      seenById[id] = i;
+      if (lid != null) {
+        seenByLocalId[lid] = i;
+      }
+    }
+  }
+
+  void _mergeConfirmedPendingMessage({
+    required String? pendingLocalId,
+    required String serverId,
+    required Message Function(Message existing) buildMerged,
+  }) {
+    final hasLocal = pendingLocalId != null && pendingLocalId.isNotEmpty;
+    final idx =
+        hasLocal ? _messages.indexWhere((m) => m.localId == pendingLocalId) : -1;
+    final alreadyById = serverId.isNotEmpty
+        ? _messages.indexWhere((m) => m.id == serverId)
+        : -1;
+    if (idx != -1) {
+      final merged = buildMerged(_messages[idx]);
+      if (alreadyById != -1 && alreadyById != idx) {
+        final existingServer = _messages[alreadyById];
+        if (hasLocal &&
+            pendingLocalId != serverId &&
+            _messageKeys.containsKey(pendingLocalId)) {
+          final promoted = _messageKeys.remove(pendingLocalId)!;
+          _messageKeys.putIfAbsent(serverId, () => promoted);
+        }
+        _messages[alreadyById] = merged.copyWith(
+          replyInfo: merged.replyInfo ?? existingServer.replyInfo,
+          isOwn: merged.isOwn || existingServer.isOwn,
+        );
+        _messages.removeAt(idx);
+      } else {
+        _messages[idx] = merged;
+      }
+    } else if (alreadyById != -1) {
+      _messages[alreadyById] = buildMerged(_messages[alreadyById]);
+    }
+    _updateFeedItems();
+  }
+
   void _updateFeedItems() {
+    _dedupeMessagesInPlace();
     _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
     if (_showUnreadDivider && _firstUnreadMessageId != null) {
       _firstUnreadFeedIndex = _feedItems.indexWhere((item) =>
@@ -3675,7 +3769,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             if (res['success'] == true && res['message'] is Message) {
               _maybeStartLocalSlowmode();
               final sent = res['message'] as Message;
-              _messages.insert(0, sent);
+              final existingIdx = _messages.indexWhere((m) => m.id == sent.id);
+              if (existingIdx != -1) {
+                _messages[existingIdx] = sent;
+              } else {
+                _messages.insert(0, sent);
+              }
               _updateFeedItems();
               await AppDatabase().saveMessage(_messageToCompanion(sent));
             } else {
@@ -3951,32 +4050,38 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               }
               if (mounted) {
                 setState(() {
-                  final idx =
-                      _messages.indexWhere((m) => m.localId == pendingLocalId);
-                  if (idx != -1) {
-                    if (sentMessage is Message) {
-                      final existing = _messages[idx];
-                      _messages[idx] = sentMessage.copyWith(
-                        localId: pendingLocalId,
-                        sendStatus: 1, // sent
-                        replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
-                        isQuote: sentMessage.isQuote || existing.isQuote || replyIsQuote,
-                        quoteText: sentMessage.quoteText ?? existing.quoteText ?? replyQuoteText,
-                        quoteOffset: sentMessage.quoteOffset != 0
-                            ? sentMessage.quoteOffset
-                            : (existing.quoteOffset != 0 ? existing.quoteOffset : replyQuoteOffset),
-                        quoteLength: sentMessage.quoteLength != 0
-                            ? sentMessage.quoteLength
-                            : (existing.quoteLength != 0 ? existing.quoteLength : replyQuoteLength),
-                      );
-                    } else {
-                      _messages[idx] = _messages[idx].copyWith(
+                  _mergeConfirmedPendingMessage(
+                    pendingLocalId: pendingLocalId,
+                    serverId: serverId,
+                    buildMerged: (existing) {
+                      if (sentMessage is Message) {
+                        return sentMessage.copyWith(
+                          localId: pendingLocalId,
+                          sendStatus: 1, // sent
+                          replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
+                          isQuote:
+                              sentMessage.isQuote || existing.isQuote || replyIsQuote,
+                          quoteText: sentMessage.quoteText ??
+                              existing.quoteText ??
+                              replyQuoteText,
+                          quoteOffset: sentMessage.quoteOffset != 0
+                              ? sentMessage.quoteOffset
+                              : (existing.quoteOffset != 0
+                                  ? existing.quoteOffset
+                                  : replyQuoteOffset),
+                          quoteLength: sentMessage.quoteLength != 0
+                              ? sentMessage.quoteLength
+                              : (existing.quoteLength != 0
+                                  ? existing.quoteLength
+                                  : replyQuoteLength),
+                        );
+                      }
+                      return existing.copyWith(
                         id: serverId,
                         sendStatus: 1, // sent
                       );
-                    }
-                    _updateFeedItems();
-                  }
+                    },
+                  );
                 });
               }
             }
@@ -8405,27 +8510,28 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               remoteFileUrl: uploadResult.url);
           if (mounted) {
             setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                if (sentMessage is Message) {
-                  _messages[idx] = sentMessage.copyWith(
-                    localId: pendingLocalId,
-                    replyInfo: _messages[idx].replyInfo,
-                    waveform: sentMessage.waveform ?? _messages[idx].waveform,
-                    duration: sentMessage.duration ?? effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                } else {
-                  _messages[idx] = _messages[idx].copyWith(
+              _mergeConfirmedPendingMessage(
+                pendingLocalId: pendingLocalId,
+                serverId: serverId,
+                buildMerged: (existing) {
+                  if (sentMessage is Message) {
+                    return sentMessage.copyWith(
+                      localId: pendingLocalId,
+                      sendStatus: 1,
+                      replyInfo: existing.replyInfo ?? sentMessage.replyInfo,
+                      waveform: sentMessage.waveform ?? existing.waveform,
+                      duration: sentMessage.duration ?? effectiveDuration,
+                      fileUrl: uploadResult.url,
+                    );
+                  }
+                  return existing.copyWith(
                     id: serverId,
                     sendStatus: 1,
                     duration: effectiveDuration,
                     fileUrl: uploadResult.url,
                   );
-                }
-                _updateFeedItems();
-              }
+                },
+              );
             });
           }
         }
@@ -8649,29 +8755,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               remoteFileUrl: uploadResult.url);
           if (mounted) {
             setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                if (sentMessage is Message) {
-                  _messages[idx] = sentMessage.copyWith(
-                    localId: pendingLocalId,
-                    replyInfo: _messages[idx].replyInfo,
-                    sendStatus: 1,
-                    isRound: true,
-                    duration: sentMessage.duration ?? effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                } else {
-                  _messages[idx] = _messages[idx].copyWith(
+              _mergeConfirmedPendingMessage(
+                pendingLocalId: pendingLocalId,
+                serverId: serverId,
+                buildMerged: (existing) {
+                  if (sentMessage is Message) {
+                    return sentMessage.copyWith(
+                      localId: pendingLocalId,
+                      replyInfo: existing.replyInfo ?? sentMessage.replyInfo,
+                      sendStatus: 1,
+                      isRound: true,
+                      duration: sentMessage.duration ?? effectiveDuration,
+                      fileUrl: uploadResult.url,
+                    );
+                  }
+                  return existing.copyWith(
                     id: serverId,
                     sendStatus: 1,
                     isRound: true,
                     duration: effectiveDuration,
                     fileUrl: uploadResult.url,
                   );
-                }
-                _updateFeedItems();
-              }
+                },
+              );
             });
           }
         }

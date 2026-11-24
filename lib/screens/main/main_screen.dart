@@ -4324,7 +4324,12 @@ class _MainScreenState extends State<MainScreen>
                             selectedIndex: _currentIndex,
                             unreadCount: totalUnread,
                             onTabSelected: (index) {
+                              if (_isSelectMode) return;
                               _onTabTapped(index);
+                            },
+                            onTabReselected: (index) {
+                              if (_isSelectMode) return;
+                              _onTabReselected(index);
                             },
                             onAddTap: _toggleCreateMenu,
                             bottomPadding: 12,

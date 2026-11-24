@@ -81,6 +81,39 @@ class PostCommentsScreen extends StatefulWidget {
     this.reactionSettings,
   }) : super(key: key);
 
+  /// In a comment thread view, top-level comments reference the mirrored
+  /// discussion root post via [Message.replyToMessageId] so they display with
+  /// a reply header in the linked group. Inside [PostCommentsScreen] itself
+  /// the root post is already pinned above the thread, so strip that root-post
+  /// reply metadata while keeping replies to other comments intact.
+  static Message stripRootPostReplyForThreadView(
+    Message comment, {
+    String? rootMessageId,
+    String? rootPostId,
+  }) {
+    final String? replyId = () {
+      final direct = comment.replyToMessageId?.trim();
+      if (direct != null && direct.isNotEmpty) return direct;
+      final infoId = comment.replyInfo?.messageId.trim();
+      if (infoId != null && infoId.isNotEmpty) return infoId;
+      return null;
+    }();
+    if (replyId == null) return comment;
+
+    final candidates = <String>{
+      if (rootMessageId != null && rootMessageId.trim().isNotEmpty)
+        rootMessageId.trim(),
+      if (comment.threadRootMessageId != null &&
+          comment.threadRootMessageId!.trim().isNotEmpty)
+        comment.threadRootMessageId!.trim(),
+      if (rootPostId != null && rootPostId.trim().isNotEmpty) rootPostId.trim(),
+    };
+    if (candidates.contains(replyId)) {
+      return comment.copyWith(clearReply: true);
+    }
+    return comment;
+  }
+
   @override
   State<PostCommentsScreen> createState() => _PostCommentsScreenState();
 }
@@ -634,26 +667,153 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     return (reactionsMap, mySet);
   }
 
+  void _promoteCommentKey({String? fromLocalId, required String toId}) {
+    if (fromLocalId != null &&
+        fromLocalId.isNotEmpty &&
+        fromLocalId != toId &&
+        _commentKeys.containsKey(fromLocalId)) {
+      final promoted = _commentKeys.remove(fromLocalId)!;
+      _commentKeys.putIfAbsent(toId, () => promoted);
+    }
+  }
+
+  void _dedupeCommentsInPlace() {
+    if (_comments.length < 2) return;
+    final seenById = <String, int>{};
+    final seenByLocalId = <String, int>{};
+    for (int i = 0; i < _comments.length; i++) {
+      final c = _comments[i];
+      final id = c.id;
+      final lid =
+          (c.localId != null && c.localId!.isNotEmpty) ? c.localId : null;
+      int? dupIdx = seenById[id];
+      if (dupIdx == null && lid != null) {
+        dupIdx = seenByLocalId[lid];
+      }
+      if (dupIdx != null && dupIdx != i) {
+        final existing = _comments[dupIdx];
+        final bool incomingIsServer = int.tryParse(id) != null;
+        final bool existingIsServer = int.tryParse(existing.id) != null;
+        final Message winnerBase =
+            (incomingIsServer && !existingIsServer) ? c : existing;
+        final Message loser = identical(winnerBase, c) ? existing : c;
+        final String? mergedLocalId =
+            (winnerBase.localId != null && winnerBase.localId!.isNotEmpty)
+                ? winnerBase.localId
+                : loser.localId;
+        final int mergedStatus =
+            (winnerBase.sendStatus == 1 || loser.sendStatus == 1)
+                ? 1
+                : (winnerBase.sendStatus == 0 || loser.sendStatus == 0
+                    ? 0
+                    : 2);
+        _promoteCommentKey(fromLocalId: mergedLocalId, toId: winnerBase.id);
+        _comments[dupIdx] = winnerBase.copyWith(
+          localId: mergedLocalId,
+          sendStatus: mergedStatus,
+          replyInfo: winnerBase.replyInfo ?? loser.replyInfo,
+          isOwn: winnerBase.isOwn || loser.isOwn,
+        );
+        _comments.removeAt(i);
+        i--;
+        seenById[_comments[dupIdx].id] = dupIdx;
+        if (mergedLocalId != null) {
+          seenByLocalId[mergedLocalId] = dupIdx;
+        }
+        continue;
+      }
+      seenById[id] = i;
+      if (lid != null) {
+        seenByLocalId[lid] = i;
+      }
+    }
+  }
+
   bool _upsertComment(Message incoming) {
-    final idx = _comments.indexWhere(
-      (c) =>
-          c.id == incoming.id ||
-          (incoming.localId != null &&
-              incoming.localId!.isNotEmpty &&
-              c.localId == incoming.localId),
-    );
+    final idIdx = _comments.indexWhere((c) => c.id == incoming.id);
+    final lidIdx = (incoming.localId != null && incoming.localId!.isNotEmpty)
+        ? _comments.indexWhere((c) => c.localId == incoming.localId)
+        : -1;
+
+    if (idIdx != -1 && lidIdx != -1 && idIdx != lidIdx) {
+      final serverCopy = _comments[idIdx];
+      final pendingCopy = _comments[lidIdx];
+      _promoteCommentKey(fromLocalId: pendingCopy.localId, toId: incoming.id);
+      _comments[idIdx] = incoming.copyWith(
+        localId: pendingCopy.localId ?? serverCopy.localId ?? incoming.localId,
+        sendStatus: 1,
+        replyInfo: incoming.replyInfo ??
+            serverCopy.replyInfo ??
+            pendingCopy.replyInfo,
+        isOwn: incoming.isOwn || serverCopy.isOwn || pendingCopy.isOwn,
+      );
+      _comments.removeAt(lidIdx);
+      _dedupeCommentsInPlace();
+      _sortCommentsAscending();
+      return false;
+    }
+
+    final idx = idIdx != -1 ? idIdx : lidIdx;
     if (idx != -1) {
       final existing = _comments[idx];
+      _promoteCommentKey(fromLocalId: existing.localId, toId: incoming.id);
       _comments[idx] = incoming.copyWith(
         localId: existing.localId ?? incoming.localId,
         sendStatus: 1,
         replyInfo: incoming.replyInfo ?? existing.replyInfo,
+        isOwn: incoming.isOwn || existing.isOwn,
       );
+      _dedupeCommentsInPlace();
+      _sortCommentsAscending();
       return false;
     }
     _comments.add(incoming);
+    _dedupeCommentsInPlace();
     _sortCommentsAscending();
     return true;
+  }
+
+  void _confirmSentComment(Message sent, {String? localId}) {
+    if (sent.threadRootMessageId != null &&
+        sent.threadRootMessageId!.isNotEmpty) {
+      _rootMessageId ??= sent.threadRootMessageId;
+    }
+    if (sent.chatId.isNotEmpty && _linkedChatId == null) {
+      _linkedChatId = sent.chatId;
+    }
+    final normalized = sent.copyWith(
+      localId: (localId != null && localId.isNotEmpty) ? localId : sent.localId,
+      sendStatus: 1,
+      isOwn: true,
+    );
+    _upsertComment(normalized);
+    _commentsCount = math.max(_commentsCount, _comments.length);
+    _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+  }
+
+  void _scrollToComment(String replyToId) {
+    final keyCtx = _commentKeys[replyToId]?.currentContext;
+    if (keyCtx != null) {
+      Scrollable.ensureVisible(
+        keyCtx,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        alignment: 0.4,
+      );
+      return;
+    }
+    final idx = _comments.indexWhere((c) => c.id == replyToId);
+    if (idx != -1 && _scrollController.hasClients) {
+      final targetOffset = ((idx + 1) * 76.0).clamp(
+        0.0,
+        _scrollController.position.maxScrollExtent,
+      );
+      _scrollController.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    }
   }
 
   void _sortCommentsAscending() {
@@ -989,6 +1149,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             channelId: widget.channelId,
             messageId: widget.postMessage.id,
             content: itemText,
+            localId: localId,
             replyToMessageId: replyTo?.id,
             isQuote: i == 0 && capturedIsQuote,
             quoteText: i == 0 ? capturedQuoteText : null,
@@ -1008,31 +1169,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           if (!mounted) return;
           if (sent != null) {
             setState(() {
-              if (sent.threadRootMessageId != null &&
-                  sent.threadRootMessageId!.isNotEmpty) {
-                _rootMessageId ??= sent.threadRootMessageId;
-              }
-              if (sent.chatId.isNotEmpty && _linkedChatId == null) {
-                _linkedChatId = sent.chatId;
-              }
-              final idx = _comments.indexWhere((c) => c.localId == localId);
-              if (idx != -1) {
-                final alreadyById =
-                    _comments.indexWhere((c) => c.id == sent.id);
-                if (alreadyById != -1 && alreadyById != idx) {
-                  _comments.removeAt(idx);
-                } else {
-                  _comments[idx] = sent.copyWith(
-                    localId: localId,
-                    sendStatus: 1,
-                    isOwn: true,
-                  );
-                }
-              } else {
-                _upsertComment(sent.copyWith(isOwn: true));
-              }
-              _commentsCount = math.max(_commentsCount, _comments.length);
-              _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+              _confirmSentComment(sent, localId: localId);
             });
             _bindLinkedGroupSubscription();
           } else {
@@ -1104,6 +1241,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         channelId: widget.channelId,
         messageId: widget.postMessage.id,
         content: text,
+        localId: localId,
         replyToMessageId: replyTo?.id,
         isQuote: capturedIsQuote,
         quoteText: capturedQuoteText,
@@ -1120,30 +1258,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       if (!mounted) return;
       if (sent != null) {
         setState(() {
-          if (sent.threadRootMessageId != null &&
-              sent.threadRootMessageId!.isNotEmpty) {
-            _rootMessageId ??= sent.threadRootMessageId;
-          }
-          if (sent.chatId.isNotEmpty && _linkedChatId == null) {
-            _linkedChatId = sent.chatId;
-          }
-          final idx = _comments.indexWhere((c) => c.localId == localId);
-          if (idx != -1) {
-            final alreadyById = _comments.indexWhere((c) => c.id == sent.id);
-            if (alreadyById != -1 && alreadyById != idx) {
-              _comments.removeAt(idx);
-            } else {
-              _comments[idx] = sent.copyWith(
-                localId: localId,
-                sendStatus: 1,
-                isOwn: true,
-              );
-            }
-          } else {
-            _upsertComment(sent.copyWith(isOwn: true));
-          }
-          _commentsCount = math.max(_commentsCount, _comments.length);
-          _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+          _confirmSentComment(sent, localId: localId);
         });
         _bindLinkedGroupSubscription();
       } else {
@@ -1175,10 +1290,12 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final replyTo = _replyToComment;
     _cancelReply();
     final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
+    final localId = 'local_comment_${DateTime.now().microsecondsSinceEpoch}';
     final sent = await ChatService.sendPostComment(
       channelId: widget.channelId,
       messageId: widget.postMessage.id,
       content: fallback,
+      localId: localId,
       replyToMessageId: replyTo?.id,
       fileUrl: item.fileUrl,
       fileName: 'sticker.${item.format}',
@@ -1189,10 +1306,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     );
     if (sent != null && mounted) {
       setState(() {
-        _upsertComment(sent.copyWith(isOwn: true));
-        _commentsCount = math.max(_commentsCount, _comments.length);
-        _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+        _confirmSentComment(sent, localId: localId);
       });
+      _bindLinkedGroupSubscription();
       _scrollToBottom();
     }
   }
@@ -1201,10 +1317,12 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     if (!_canComment) return;
     final replyTo = _replyToComment;
     _cancelReply();
+    final localId = 'local_comment_${DateTime.now().microsecondsSinceEpoch}';
     final sent = await ChatService.sendPostComment(
       channelId: widget.channelId,
       messageId: widget.postMessage.id,
       content: 'GIF',
+      localId: localId,
       replyToMessageId: replyTo?.id,
       fileUrl: gif.url,
       fileName: 'animation.gif',
@@ -1215,10 +1333,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     );
     if (sent != null && mounted) {
       setState(() {
-        _upsertComment(sent.copyWith(isOwn: true));
-        _commentsCount = math.max(_commentsCount, _comments.length);
-        _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+        _confirmSentComment(sent, localId: localId);
       });
+      _bindLinkedGroupSubscription();
       _scrollToBottom();
     }
   }
@@ -2456,7 +2573,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       return const SizedBox.shrink();
     }
     final comment = _comments[index];
+    _promoteCommentKey(fromLocalId: comment.localId, toId: comment.id);
     final key = _commentKeys.putIfAbsent(comment.id, () => GlobalKey());
+    final displayComment = PostCommentsScreen.stripRootPostReplyForThreadView(
+      comment,
+      rootMessageId: _rootMessageId,
+      rootPostId: _rootPost.id,
+    );
     final bool isMe = _isOwnComment(comment);
     final Message? olderNeighbor = index > 0 ? _comments[index - 1] : null;
     final Message? newerNeighbor = index + 1 < _comments.length
@@ -2558,7 +2681,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
 
     Widget rowWidget = MessageBubble(
       key: key,
-      message: comment,
+      message: displayComment,
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
       senderName: (isMe || showAvatarGutter || comment.messageType == 'system')
@@ -2575,6 +2698,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       hasProtectedContent: _hasProtectedContent,
       reactions: comment.reactions.isNotEmpty ? comment.reactions : null,
       myReactions: comment.myReactions.isNotEmpty ? comment.myReactions : null,
+      onReplyTap: (replyToId, _) => _scrollToComment(replyToId),
       onReactionTap: (emoji) {
         if (_isSelectionMode) {
           setState(() {

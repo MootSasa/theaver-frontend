@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
@@ -11,6 +13,7 @@ import '../../services/groups_channels_parity_service.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../common/peer_badges_widget.dart';
 import '../design_system/theav_design_system.dart';
 import '../user/avatar_with_status.dart';
@@ -65,9 +68,11 @@ final ValueNotifier<Set<String>> _openSendAsPopupChatIds =
     ValueNotifier<Set<String>>(<String>{});
 final ValueNotifier<Set<int>> _openSendAsPopupAnchorHashes =
     ValueNotifier<Set<int>>(<int>{});
+final Map<String, int> _openSendAsPopupChatCounts = <String, int>{};
 final Map<String, BuildContext> _registeredSendAsAnchors =
     <String, BuildContext>{};
 BuildContext? _lastTappedSendAsAnchor;
+VoidCallback? _activeSenderSelectDismiss;
 
 /// Inline `36x36` circular "Send As" button rendered inside the left edge of
 /// [LiquidGlassInputField], matching Telegram Android's `SenderSelectView`:
@@ -186,6 +191,11 @@ class _InlineSendAsSelectorButtonState extends State<InlineSendAsSelectorButton>
       _registeredSendAsAnchors[widget.chatId!] = context;
     }
 
+    if (_localPopupOpen && _activeSenderSelectDismiss != null) {
+      _activeSenderSelectDismiss!();
+      return;
+    }
+
     if (widget.onOpenPopup != null) {
       widget.onOpenPopup!(context);
       return;
@@ -236,94 +246,96 @@ class _InlineSendAsSelectorButtonState extends State<InlineSendAsSelectorButton>
         widget.onTap != null ||
         (widget.chatId != null && widget.chatId!.isNotEmpty);
 
-    return KeyedSubtree(
-      key: const ValueKey('send_as_inline_avatar_button'),
-      child: Tooltip(
-        message: tooltipText,
-        child: GestureDetector(
-          onTap: hasAction ? _handleTap : null,
-          behavior: HitTestBehavior.opaque,
-          child: SizedBox(
-            width: widget.size,
-            height: widget.size,
-            child: AnimatedBuilder(
-              animation: _morphController,
-              builder: (context, _) {
-                final rawT = _morphController.value;
-                final bool isOpening =
-                    _morphController.status != AnimationStatus.reverse;
-                final double progress = (isOpening
-                        ? Curves.easeOutBack.transform(rawT)
-                        : Curves.easeInCubic.transform(rawT))
-                    .clamp(0.0, 1.15);
-                final double clampedT = rawT.clamp(0.0, 1.0);
-                final double avatarScale =
-                    (1.0 - clampedT * 0.65).clamp(0.0, 1.0);
-                final double avatarOpacity =
-                    (1.0 - clampedT * 1.25).clamp(0.0, 1.0);
-                final double closeScale = progress.clamp(0.0, 1.12);
-                final double closeOpacity =
-                    (clampedT * 1.35).clamp(0.0, 1.0);
+    return TextFieldTapRegion(
+      child: KeyedSubtree(
+        key: const ValueKey('send_as_inline_avatar_button'),
+        child: Tooltip(
+          message: tooltipText,
+          child: GestureDetector(
+            onTap: hasAction ? _handleTap : null,
+            behavior: HitTestBehavior.opaque,
+            child: SizedBox(
+              width: widget.size,
+              height: widget.size,
+              child: AnimatedBuilder(
+                animation: _morphController,
+                builder: (context, _) {
+                  final rawT = _morphController.value;
+                  final bool isOpening =
+                      _morphController.status != AnimationStatus.reverse;
+                  final double progress = (isOpening
+                          ? Curves.easeOutBack.transform(rawT)
+                          : Curves.easeInCubic.transform(rawT))
+                      .clamp(0.0, 1.15);
+                  final double clampedT = rawT.clamp(0.0, 1.0);
+                  final double avatarScale =
+                      (1.0 - clampedT * 0.65).clamp(0.0, 1.0);
+                  final double avatarOpacity =
+                      (1.0 - clampedT * 1.25).clamp(0.0, 1.0);
+                  final double closeScale = progress.clamp(0.0, 1.12);
+                  final double closeOpacity =
+                      (clampedT * 1.35).clamp(0.0, 1.0);
 
-                return Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    if (avatarOpacity > 0.001)
-                      Opacity(
-                        opacity: avatarOpacity,
-                        child: Transform.scale(
-                          scale: avatarScale,
-                          child: Container(
-                            width: widget.size,
-                            height: widget.size,
-                            padding: const EdgeInsets.all(1.2),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: (active.isChannel || active.isGroupAnon)
-                                    ? palette.chatSendButton
-                                    : palette.divider,
-                                width: (active.isChannel || active.isGroupAnon)
-                                    ? 1.4
-                                    : 0.8,
+                  return Stack(
+                    alignment: Alignment.center,
+                    clipBehavior: Clip.none,
+                    children: [
+                      if (avatarOpacity > 0.001)
+                        Opacity(
+                          opacity: avatarOpacity,
+                          child: Transform.scale(
+                            scale: avatarScale,
+                            child: Container(
+                              width: widget.size,
+                              height: widget.size,
+                              padding: const EdgeInsets.all(1.2),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: (active.isChannel || active.isGroupAnon)
+                                      ? palette.chatSendButton
+                                      : palette.divider,
+                                  width: (active.isChannel || active.isGroupAnon)
+                                      ? 1.4
+                                      : 0.8,
+                                ),
                               ),
-                            ),
-                            child: AvatarWithStatus(
-                              avatarUrl: active.avatarUrl,
-                              name: active.name.isNotEmpty ? active.name : '?',
-                              radius: (widget.size - 3.0) / 2,
-                              isOnline: false,
-                              showDecoration: false,
-                              animateDecoration: false,
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (closeOpacity > 0.001)
-                      Opacity(
-                        opacity: closeOpacity,
-                        child: Transform.scale(
-                          scale: closeScale,
-                          child: Container(
-                            width: widget.size,
-                            height: widget.size,
-                            decoration: BoxDecoration(
-                              color: palette.chatSendButton,
-                              shape: BoxShape.circle,
-                            ),
-                            child: CustomPaint(
-                              painter: _SenderSelectCloseCrossPainter(
-                                color: Colors.white,
-                                progress: clampedT,
+                              child: AvatarWithStatus(
+                                avatarUrl: active.avatarUrl,
+                                name: active.name.isNotEmpty ? active.name : '?',
+                                radius: (widget.size - 3.0) / 2,
+                                isOnline: false,
+                                showDecoration: false,
+                                animateDecoration: false,
                               ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
-                );
-              },
+                      if (closeOpacity > 0.001)
+                        Opacity(
+                          opacity: closeOpacity,
+                          child: Transform.scale(
+                            scale: closeScale,
+                            child: Container(
+                              width: widget.size,
+                              height: widget.size,
+                              decoration: BoxDecoration(
+                                color: palette.chatSendButton,
+                                shape: BoxShape.circle,
+                              ),
+                              child: CustomPaint(
+                                painter: _SenderSelectCloseCrossPainter(
+                                  color: Colors.white,
+                                  progress: clampedT,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -418,8 +430,9 @@ class SendAsPeerSelectorPill extends StatelessWidget {
 }
 
 /// Opens a Telegram-Android-style (`SenderSelectPopup`) anchored floating menu
-/// positioned right above the bottom-left of the input bar, using glass-safe
-/// [LiquidGlassLens] (`LiquidGlassBatch.exclude` + pure `Transform.scale`,
+/// positioned right above the bottom-left of the input bar via a non-route
+/// [OverlayEntry] (preserving the active [FocusNode] and soft keyboard) using
+/// glass-safe [LiquidGlassLens] (`LiquidGlassBatch.exclude` + pure `Transform.scale`,
 /// ZERO `Opacity`, `FadeTransition`, or `ClipRRect` around the glass lens) in
 /// Glass mode, or a frosted/elevated card in Material mode.
 Future<SendAsPeer?> showSenderSelectPopup(
@@ -433,17 +446,24 @@ Future<SendAsPeer?> showSenderSelectPopup(
   if (peers.isEmpty) return null;
   if (!anchorContext.mounted) return null;
 
-  final navigator = Navigator.of(anchorContext);
-  final overlayBox = navigator.overlay?.context.findRenderObject() as RenderBox?;
+  if (_activeSenderSelectDismiss != null) {
+    _activeSenderSelectDismiss!();
+  }
+
+  final OverlayState? overlay = Overlay.maybeOf(anchorContext, rootOverlay: true) ??
+      Navigator.maybeOf(anchorContext, rootNavigator: true)?.overlay;
+  if (overlay == null) return null;
+
+  final overlayBox = overlay.context.findRenderObject() as RenderBox?;
   final anchorBox = anchorContext.findRenderObject() as RenderBox?;
 
-  Rect? anchorRect;
+  Rect? initialAnchorRect;
   if (anchorBox != null &&
       anchorBox.hasSize &&
       overlayBox != null &&
       overlayBox.hasSize) {
     final topLeft = anchorBox.localToGlobal(Offset.zero, ancestor: overlayBox);
-    anchorRect = topLeft & anchorBox.size;
+    initialAnchorRect = topLeft & anchorBox.size;
   }
 
   final SendAsPeer? resolvedCurrent = currentPeer ??
@@ -463,40 +483,86 @@ Future<SendAsPeer?> showSenderSelectPopup(
 
   final CapturedThemes capturedThemes = InheritedTheme.capture(
     from: anchorContext,
-    to: navigator.context,
+    to: overlay.context,
   );
-  final String barrierLabel = Localizations.of<MaterialLocalizations>(
-        anchorContext,
-        MaterialLocalizations,
-      )?.modalBarrierDismissLabel ??
-      'Dismiss';
+  final ModalRoute<dynamic>? hostRoute = ModalRoute.of(anchorContext);
 
   final int anchorHash = identityHashCode(anchorContext);
-  _openSendAsPopupChatIds.value = <String>{
-    ..._openSendAsPopupChatIds.value,
-    if (chatId.isNotEmpty) chatId,
-  };
+  if (chatId.isNotEmpty) {
+    _openSendAsPopupChatCounts[chatId] =
+        (_openSendAsPopupChatCounts[chatId] ?? 0) + 1;
+    _openSendAsPopupChatIds.value = <String>{
+      ..._openSendAsPopupChatIds.value,
+      chatId,
+    };
+  }
   _openSendAsPopupAnchorHashes.value = <int>{
     ..._openSendAsPopupAnchorHashes.value,
     anchorHash,
   };
 
-  SendAsPeer? picked;
-  try {
-    picked = await navigator.push<SendAsPeer>(
-      _SenderSelectPopupRoute<SendAsPeer>(
-        anchorRect: anchorRect,
+  final completer = Completer<SendAsPeer?>();
+  final GlobalKey<_SenderSelectOverlayHostState> hostKey =
+      GlobalKey<_SenderSelectOverlayHostState>();
+  late final OverlayEntry entry;
+  late final VoidCallback dismissClosure;
+
+  void removeEntryAndComplete(SendAsPeer? result) {
+    if (identical(_activeSenderSelectDismiss, dismissClosure)) {
+      _activeSenderSelectDismiss = null;
+    }
+    try {
+      entry.remove();
+    } catch (_) {}
+    if (!completer.isCompleted) {
+      completer.complete(result);
+    }
+  }
+
+  entry = OverlayEntry(
+    builder: (overlayBuildContext) => capturedThemes.wrap(
+      _SenderSelectOverlayHost(
+        key: hostKey,
+        anchorContext: anchorContext,
+        overlayBox: overlayBox,
+        initialAnchorRect: initialAnchorRect,
+        hostRoute: hostRoute,
         peers: peers,
         currentPeer: resolvedCurrent,
-        capturedThemes: capturedThemes,
-        barrierLabel: barrierLabel,
+        onFinished: removeEntryAndComplete,
       ),
-    );
+    ),
+  );
+
+  dismissClosure = () {
+    final hostState = hostKey.currentState;
+    if (hostState != null) {
+      hostState.dismiss(null);
+    } else {
+      removeEntryAndComplete(null);
+    }
+  };
+  _activeSenderSelectDismiss = dismissClosure;
+
+  overlay.insert(entry);
+
+  SendAsPeer? picked;
+  try {
+    picked = await completer.future;
   } finally {
+    if (identical(_activeSenderSelectDismiss, dismissClosure)) {
+      _activeSenderSelectDismiss = null;
+    }
     if (chatId.isNotEmpty) {
-      final nextChats = Set<String>.from(_openSendAsPopupChatIds.value)
-        ..remove(chatId);
-      _openSendAsPopupChatIds.value = nextChats;
+      final remaining = (_openSendAsPopupChatCounts[chatId] ?? 1) - 1;
+      if (remaining <= 0) {
+        _openSendAsPopupChatCounts.remove(chatId);
+        final nextChats = Set<String>.from(_openSendAsPopupChatIds.value)
+          ..remove(chatId);
+        _openSendAsPopupChatIds.value = nextChats;
+      } else {
+        _openSendAsPopupChatCounts[chatId] = remaining;
+      }
     }
     final nextAnchors = Set<int>.from(_openSendAsPopupAnchorHashes.value)
       ..remove(anchorHash);
@@ -522,46 +588,163 @@ Future<SendAsPeer?> showSenderSelectPopup(
   return picked;
 }
 
-class _SenderSelectPopupRoute<T> extends PopupRoute<T> {
-  final Rect? anchorRect;
+class _SenderSelectPopEntry extends PopEntry<Object?> {
+  _SenderSelectPopEntry({required this.onDismiss});
+
+  final VoidCallback onDismiss;
+
+  @override
+  final ValueNotifier<bool> canPopNotifier = ValueNotifier<bool>(false);
+
+  @override
+  void onPopInvokedWithResult(bool didPop, Object? result) {
+    if (!didPop) {
+      onDismiss();
+    }
+  }
+
+  void dispose() {
+    canPopNotifier.dispose();
+  }
+}
+
+class _SenderSelectOverlayHost extends StatefulWidget {
+  final BuildContext anchorContext;
+  final RenderBox? overlayBox;
+  final Rect? initialAnchorRect;
+  final ModalRoute<dynamic>? hostRoute;
   final List<SendAsPeer> peers;
   final SendAsPeer? currentPeer;
-  final CapturedThemes capturedThemes;
-  @override
-  final String barrierLabel;
+  final ValueChanged<SendAsPeer?> onFinished;
 
-  _SenderSelectPopupRoute({
-    required this.anchorRect,
+  const _SenderSelectOverlayHost({
+    super.key,
+    required this.anchorContext,
+    required this.overlayBox,
+    required this.initialAnchorRect,
+    required this.hostRoute,
     required this.peers,
     required this.currentPeer,
-    required this.capturedThemes,
-    required this.barrierLabel,
+    required this.onFinished,
   });
 
   @override
-  bool get barrierDismissible => true;
+  State<_SenderSelectOverlayHost> createState() =>
+      _SenderSelectOverlayHostState();
+}
+
+class _SenderSelectOverlayHostState extends State<_SenderSelectOverlayHost>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final _SenderSelectPopEntry _popEntry;
+  bool _dismissStarted = false;
+  bool _finishedCalled = false;
+  Rect? _anchorRect;
 
   @override
-  Color? get barrierColor => Colors.transparent;
+  void initState() {
+    super.initState();
+    _anchorRect = widget.initialAnchorRect;
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 210),
+      reverseDuration: const Duration(milliseconds: 150),
+    )..forward();
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    _popEntry = _SenderSelectPopEntry(onDismiss: () => dismiss(null));
+    widget.hostRoute?.registerPopEntry(_popEntry);
+  }
 
   @override
-  Duration get transitionDuration => const Duration(milliseconds: 210);
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    try {
+      widget.hostRoute?.unregisterPopEntry(_popEntry);
+    } catch (_) {}
+    _popEntry.dispose();
+    _controller.dispose();
+    if (!_finishedCalled) {
+      _finishedCalled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onFinished(null);
+      });
+    }
+    super.dispose();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape) {
+      dismiss(null);
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> dismiss(SendAsPeer? picked) async {
+    if (_dismissStarted) return;
+    _dismissStarted = true;
+    try {
+      widget.hostRoute?.unregisterPopEntry(_popEntry);
+    } catch (_) {}
+    final bool disableAnim =
+        mounted && (MediaQuery.maybeDisableAnimationsOf(context) ?? false);
+    if (!disableAnim && mounted && _controller.value > 0.0) {
+      try {
+        await _controller.reverse();
+      } catch (_) {}
+    }
+    if (!_finishedCalled) {
+      _finishedCalled = true;
+      widget.onFinished(picked);
+    }
+  }
+
+  Rect? _resolveLiveAnchorRect() {
+    final RenderBox? overlayBox =
+        (context.findRenderObject() as RenderBox?) ?? widget.overlayBox;
+    if (widget.anchorContext.mounted && overlayBox != null && overlayBox.attached && overlayBox.hasSize) {
+      final anchorObj = widget.anchorContext.findRenderObject();
+      if (anchorObj is RenderBox && anchorObj.attached && anchorObj.hasSize) {
+        try {
+          final topLeft =
+              anchorObj.localToGlobal(Offset.zero, ancestor: overlayBox);
+          return topLeft & anchorObj.size;
+        } catch (_) {}
+      }
+    }
+    return _anchorRect;
+  }
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 150);
+  Widget build(BuildContext context) {
+    // Subscribe to viewport metrics so the popup tracks soft keyboard animations cleanly.
+    MediaQuery.viewInsetsOf(context);
+    final Rect? liveRect = _resolveLiveAnchorRect();
+    if (liveRect != null && liveRect != _anchorRect) {
+      _anchorRect = liveRect;
+    }
 
-  @override
-  Widget buildPage(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-  ) {
-    return capturedThemes.wrap(
-      _SenderSelectPopupLayout(
-        anchorRect: anchorRect,
-        peers: peers,
-        currentPeer: currentPeer,
-        animation: animation,
+    return SwipeBackBlocker(
+      child: TextFieldTapRegion(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => dismiss(null),
+                child: const SizedBox.expand(),
+              ),
+            ),
+            _SenderSelectPopupLayout(
+              anchorRect: _anchorRect,
+              peers: widget.peers,
+              currentPeer: widget.currentPeer,
+              animation: _controller,
+              onPeerSelected: (peer) => dismiss(peer),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -572,12 +755,14 @@ class _SenderSelectPopupLayout extends StatelessWidget {
   final List<SendAsPeer> peers;
   final SendAsPeer? currentPeer;
   final Animation<double> animation;
+  final ValueChanged<SendAsPeer> onPeerSelected;
 
   const _SenderSelectPopupLayout({
     required this.anchorRect,
     required this.peers,
     required this.currentPeer,
     required this.animation,
+    required this.onPeerSelected,
   });
 
   bool _isPeerSelected(SendAsPeer peer) {
@@ -695,7 +880,7 @@ class _SenderSelectPopupLayout extends StatelessWidget {
                               subtitle: _subtitleForPeer(context, peer),
                               onTap: () {
                                 HapticUtils.selection();
-                                Navigator.of(context).pop(peer);
+                                onPeerSelected(peer);
                               },
                             ),
                         ],
@@ -837,6 +1022,7 @@ class _SenderSelectPeerRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.theav;
     return InkWell(
+      canRequestFocus: false,
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7.5),

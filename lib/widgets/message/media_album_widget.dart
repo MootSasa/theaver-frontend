@@ -196,7 +196,7 @@ class MediaAlbumWidget extends StatelessWidget {
             album.items.any((it) => it.id == highlightItemId));
 
     final Widget? resolvedHeaderWidget =
-        headerWidget ?? (!isMe ? senderHeaderWidget : null);
+        headerWidget ?? senderHeaderWidget;
     final bool showSender = !isChannelCard &&
         (resolvedHeaderWidget != null ||
             (!isMe && senderName != null && senderName!.isNotEmpty));

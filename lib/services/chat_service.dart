@@ -3183,6 +3183,7 @@ class Message {
     String? senderChatName,
     String? senderChatAvatarUrl,
     bool? isOwn,
+    bool clearReply = false,
   }) {
     return Message(
       id: id ?? this.id,
@@ -3196,16 +3197,17 @@ class Message {
       senderAvatarUrl: senderAvatarUrl ?? this.senderAvatarUrl,
       fileUrl: fileUrl ?? this.fileUrl,
       fileName: fileName ?? this.fileName,
-      replyToMessageId: replyToMessageId ?? this.replyToMessageId,
+      replyToMessageId:
+          clearReply ? null : (replyToMessageId ?? this.replyToMessageId),
       isRead: isRead ?? this.isRead,
       readAt: readAt ?? this.readAt,
       listenedAt: listenedAt ?? this.listenedAt,
       isListened: isListened ?? this.isListened,
-      isQuote: isQuote ?? this.isQuote,
-      quoteText: quoteText ?? this.quoteText,
-      quoteOffset: quoteOffset ?? this.quoteOffset,
-      quoteLength: quoteLength ?? this.quoteLength,
-      replyInfo: replyInfo ?? this.replyInfo,
+      isQuote: clearReply ? false : (isQuote ?? this.isQuote),
+      quoteText: clearReply ? null : (quoteText ?? this.quoteText),
+      quoteOffset: clearReply ? 0 : (quoteOffset ?? this.quoteOffset),
+      quoteLength: clearReply ? 0 : (quoteLength ?? this.quoteLength),
+      replyInfo: clearReply ? null : (replyInfo ?? this.replyInfo),
       localId: localId ?? this.localId,
       sendStatus: sendStatus ?? this.sendStatus,
       senderNameColorId: senderNameColorId ?? this.senderNameColorId,
@@ -3243,9 +3245,11 @@ class Message {
       isViewOnce: isViewOnce ?? this.isViewOnce,
       viewedAt: viewedAt ?? this.viewedAt,
       isBurned: isBurned ?? this.isBurned,
-      replyToChatId: replyToChatId ?? this.replyToChatId,
-      replyToChatName: replyToChatName ?? this.replyToChatName,
-      replyToChatType: replyToChatType ?? this.replyToChatType,
+      replyToChatId: clearReply ? null : (replyToChatId ?? this.replyToChatId),
+      replyToChatName:
+          clearReply ? null : (replyToChatName ?? this.replyToChatName),
+      replyToChatType:
+          clearReply ? null : (replyToChatType ?? this.replyToChatType),
       effectId: effectId ?? this.effectId,
       savedTags: savedTags ?? this.savedTags,
       topicId: topicId ?? this.topicId,
@@ -6511,6 +6515,7 @@ class ChatService {
     required String channelId,
     required String messageId,
     required String content,
+    String? localId,
     String? replyToMessageId,
     bool isQuote = false,
     String? quoteText,
@@ -6531,9 +6536,14 @@ class ChatService {
       final headers = await _authHeaders();
       if (headers == null) return null;
 
+      final trimmedLocalId = localId?.trim();
       final body = <String, dynamic>{
         'content': content,
         'message_type': messageType,
+        if (trimmedLocalId != null && trimmedLocalId.isNotEmpty) ...{
+          'local_id': trimmedLocalId,
+          'client_message_id': trimmedLocalId,
+        },
         if (replyToMessageId != null && replyToMessageId.isNotEmpty)
           'reply_to_message_id': replyToMessageId,
         if (isQuote) 'is_quote': true,
@@ -6571,8 +6581,11 @@ class ChatService {
         final rawMsg = data['comment'] ?? data['message'];
         if (rawMsg is Map) {
           final parsed = Message.fromJson(Map<String, dynamic>.from(rawMsg));
+          final normalized = (trimmedLocalId != null && trimmedLocalId.isNotEmpty)
+              ? parsed.copyWith(localId: trimmedLocalId)
+              : parsed;
           try {
-            await AppDatabase().saveMessage(parsed.toCompanion());
+            await AppDatabase().saveMessage(normalized.toCompanion());
             if (data['comments_count'] != null) {
               await AppDatabase().updatePostCommentsMeta(
                 messageId: messageId,
@@ -6580,7 +6593,7 @@ class ChatService {
               );
             }
           } catch (_) {}
-          return parsed;
+          return normalized;
         }
       }
       return null;

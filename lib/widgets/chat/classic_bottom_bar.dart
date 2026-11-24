@@ -31,6 +31,7 @@ class ClassicBottomBar extends StatefulWidget {
     Key? key,
     required this.selectedIndex,
     required this.onTabSelected,
+    this.onTabReselected,
     this.onAddTap,
     this.spacing = 10,
     this.horizontalPadding = 16,
@@ -44,6 +45,9 @@ class ClassicBottomBar extends StatefulWidget {
 
   /// Коллбэк при выборе вкладки
   final ValueChanged<int> onTabSelected;
+
+  /// Коллбэк при повторном нажатии на уже выбранную вкладку
+  final ValueChanged<int>? onTabReselected;
 
   /// Коллбэк при нажатии кнопки "+" (добавить)
   final VoidCallback? onAddTap;
@@ -144,8 +148,14 @@ class _ClassicBottomBarState extends State<ClassicBottomBar> {
                     selected: widget.selectedIndex == i,
                     badgeCount: i == 1 ? widget.unreadCount : 0,
                     onTap: () {
-                      HapticUtils.selection();
-                      widget.onTabSelected(i);
+                      if (widget.selectedIndex == i &&
+                          widget.onTabReselected != null) {
+                        HapticUtils.tap();
+                        widget.onTabReselected!(i);
+                      } else {
+                        HapticUtils.selection();
+                        widget.onTabSelected(i);
+                      }
                     },
                     isDark: isDark,
                     theme: theme,
