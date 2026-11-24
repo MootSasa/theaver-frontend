@@ -6,6 +6,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../utils/swipe_back_route.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 import '../../../widgets/user/avatar_with_status.dart';
@@ -268,6 +269,7 @@ class _ChannelDiscussionSettingsScreenState
   }
 
   void _popWithResult() {
+    if (!Navigator.of(context).canPop()) return;
     Navigator.pop(context, {
       'linked_chat_id': _linkedChatId ?? '',
       'linked_chat': _linkedChat,
@@ -280,12 +282,14 @@ class _ChannelDiscussionSettingsScreenState
     final availableGroups =
         _adminGroups.where((g) => g.id != _linkedChatId).toList();
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _popWithResult();
-      },
-      child: SettingsFloatingScaffold(
+    return SwipeBackPopScope(
+      onSwipeBackPop: _popWithResult,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _popWithResult();
+        },
+        child: SettingsFloatingScaffold(
         title: 'Обсуждение',
         backgroundColor: palette.background,
         onBack: _popWithResult,
@@ -430,6 +434,7 @@ class _ChannelDiscussionSettingsScreenState
               ),
           ],
         ),
+      ),
       ),
     );
   }

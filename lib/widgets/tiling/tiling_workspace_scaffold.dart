@@ -352,6 +352,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     ChatTileDescriptor descriptor, {
     bool hasTopNeighbor = false,
     bool hasBottomNeighbor = false,
+    bool enableMultiPaneSwipeClose = true,
   }) {
     final subtreeKey = _chatTileSubtreeKeys.putIfAbsent(
       descriptor.tileId,
@@ -378,24 +379,29 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           isChatTile: true,
           hasTopNeighbor: hasTopNeighbor,
           hasBottomNeighbor: hasBottomNeighbor,
-          child: HeroControllerScope(
-            controller: heroController,
-            child: Navigator(
-              key: descriptor.navigatorKey,
-              observers: [backObserver],
-              onGenerateRoute: (settings) {
-                final sub = _onGenerateSubRoute(settings);
-                if (sub != null) return sub;
-                final route = MaterialPageRoute(
-                  builder: (_) => KeyedSubtree(
-                    key: descriptor.contentKey,
-                    child: _buildChatRootScreen(descriptor),
-                  ),
-                  settings: settings,
-                );
-                descriptor.rootRoute = route;
-                return route;
-              },
+          child: _MultiPaneChatTileSwipeCloser(
+            descriptor: descriptor,
+            controller: _controller,
+            enabled: enableMultiPaneSwipeClose,
+            child: HeroControllerScope(
+              controller: heroController,
+              child: Navigator(
+                key: descriptor.navigatorKey,
+                observers: [backObserver],
+                onGenerateRoute: (settings) {
+                  final sub = _onGenerateSubRoute(settings);
+                  if (sub != null) return sub;
+                  final route = MaterialPageRoute(
+                    builder: (_) => KeyedSubtree(
+                      key: descriptor.contentKey,
+                      child: _buildChatRootScreen(descriptor),
+                    ),
+                    settings: settings,
+                  );
+                  descriptor.rootRoute = route;
+                  return route;
+                },
+              ),
             ),
           ),
         ),
@@ -542,6 +548,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     final chatRootRoute = activeChat.rootRoute;
     if (chatRootRoute != null) {
       if (!chatRootRoute.isCurrent) return false;
+      if (!SwipeBackPopScope.isEnabledForRoute(chatRootRoute)) return false;
       final secAnim = chatRootRoute.secondaryAnimation;
       if (secAnim != null &&
           (secAnim.status != AnimationStatus.dismissed ||
@@ -560,8 +567,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     final activeChat = _controller.focusedChatTile;
     final showChat = _controller.singlePaneShowingChat && activeChat != null;
     final leftMainTile = _buildLeftMainTile();
-    final chatTileWidget =
-        activeChat != null ? _buildChatTileWidget(activeChat) : null;
+    final chatTileWidget = activeChat != null
+        ? _buildChatTileWidget(activeChat, enableMultiPaneSwipeClose: false)
+        : null;
 
     return AnimatedBuilder(
       animation: _singlePaneChatController,
@@ -575,20 +583,23 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           fit: StackFit.expand,
           clipBehavior: Clip.none,
           children: [
-            Offstage(
-              offstage: hideMain,
-              child: TickerMode(
-                enabled: !hideMain && t < 0.02,
-                child: FractionalTranslation(
-                  translation: Offset(-0.28 * t, 0.0),
-                  child: RepaintBoundary(child: leftMainTile),
+            IgnorePointer(
+              ignoring: showChat || t > 0.02,
+              child: ExcludeSemantics(
+                excluding: hideMain,
+                child: TickerMode(
+                  enabled: !hideMain && t < 0.02,
+                  child: FractionalTranslation(
+                    translation: Offset(hideMain ? -1.05 : -0.28 * t, 0.0),
+                    child: RepaintBoundary(child: leftMainTile),
+                  ),
                 ),
               ),
             ),
             if (t > 0.001 && !hideMain)
               IgnorePointer(
                 child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.35 * t),
+                  color: Colors.black.withValues(alpha: 0.28 * t),
                 ),
               ),
             if (activeChat != null && chatTileWidget != null)
@@ -642,7 +653,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                           },
                           onDismissed: () {
                             _isSinglePaneInteractiveDrag = false;
-                            _controller.recordBackTransition();
+                            _controller.recordInteractiveSwipePopCompleted();
                             _controller.closeChatTile(activeChat.tileId);
                           },
                           child: RepaintBoundary(child: chatTileWidget),
@@ -1302,18 +1313,161 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   ),
                 ),
               )
-            : Container(
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? Colors.black.withValues(alpha: 0.42)
-                      : Colors.white.withValues(alpha: 0.78),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: isDark ? Colors.white12 : Colors.black12,
+              : Container(
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.black.withValues(alpha: 0.42)
+                        : Colors.white.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: isDark ? Colors.white12 : Colors.black12,
+                    ),
                   ),
+                  child: badgeContent,
                 ),
-                child: badgeContent,
+      ),
+    );
+  }
+}
+
+class _MultiPaneChatTileSwipeCloser extends StatefulWidget {
+  final ChatTileDescriptor descriptor;
+  final TilingLayoutController controller;
+  final bool enabled;
+  final Widget child;
+
+  const _MultiPaneChatTileSwipeCloser({
+    required this.descriptor,
+    required this.controller,
+    required this.enabled,
+    required this.child,
+  });
+
+  @override
+  State<_MultiPaneChatTileSwipeCloser> createState() =>
+      _MultiPaneChatTileSwipeCloserState();
+}
+
+class _MultiPaneChatTileSwipeCloserState
+    extends State<_MultiPaneChatTileSwipeCloser>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _closeController;
+  late String _lastChatSig;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastChatSig =
+        '${widget.descriptor.chatId}_${widget.descriptor.revision}';
+    _closeController = AnimationController(
+      vsync: this,
+      value: 1.0,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _MultiPaneChatTileSwipeCloser oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextSig =
+        '${widget.descriptor.chatId}_${widget.descriptor.revision}';
+    if (nextSig != _lastChatSig) {
+      _lastChatSig = nextSig;
+      _closeController.value = 1.0;
+    } else if (!widget.enabled && _closeController.value < 1.0) {
+      _closeController.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _closeController.dispose();
+    super.dispose();
+  }
+
+  bool _canSwipeCloseTile() {
+    if (!mounted || !widget.enabled) return false;
+    if (widget.controller.isDragging ||
+        widget.controller.isResizingDivider ||
+        widget.controller.isPopTransitionActive) {
+      return false;
+    }
+    final chatNav = widget.descriptor.navigatorKey.currentState;
+    if (chatNav != null && (chatNav.canPop() || chatNav.userGestureInProgress)) {
+      return false;
+    }
+    final chatRootRoute = widget.descriptor.rootRoute;
+    if (chatRootRoute != null) {
+      if (!chatRootRoute.isCurrent) return false;
+      if (!SwipeBackPopScope.isEnabledForRoute(chatRootRoute)) return false;
+      final secAnim = chatRootRoute.secondaryAnimation;
+      if (secAnim != null &&
+          (secAnim.status != AnimationStatus.dismissed ||
+              secAnim.value > 0.001)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _closeController,
+      builder: (context, child) {
+        final double t =
+            widget.enabled ? _closeController.value.clamp(0.0, 1.0) : 1.0;
+        return Stack(
+          fit: StackFit.expand,
+          clipBehavior: Clip.none,
+          children: [
+            if (t < 0.999)
+              ColoredBox(
+                color: Theme.of(context)
+                    .scaffoldBackgroundColor
+                    .withValues(alpha: 0.65),
               ),
+            FractionalTranslation(
+              translation: Offset(1.0 - t, 0.0),
+              child: Stack(
+                fit: StackFit.expand,
+                clipBehavior: Clip.none,
+                children: [
+                  if (t > 0.002 && t < 0.998)
+                    Positioned(
+                      left: -16.0,
+                      top: 0.0,
+                      bottom: 0.0,
+                      width: 16.0,
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withValues(alpha: 0.14 * t),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  child!,
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+      child: InteractiveSwipeBackGestureDetector(
+        animationController: _closeController,
+        canSwipeBack: _canSwipeCloseTile,
+        onDismissed: () {
+          widget.controller.recordInteractiveSwipePopCompleted();
+          widget.controller.closeChatTile(widget.descriptor.tileId);
+        },
+        child: widget.child,
       ),
     );
   }

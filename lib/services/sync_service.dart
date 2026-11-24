@@ -340,11 +340,29 @@ class SyncService {
     if (payload['can_comment'] == true) {
       mediaPayloadMap['can_comment'] = true;
     }
+    if (payload['is_own'] == true || payload['is_own'] == 1) {
+      mediaPayloadMap['is_own'] = true;
+    }
     if (payload['channel_post_id'] != null &&
         payload['channel_post_id'].toString().isNotEmpty) {
       mediaPayloadMap['channel_post_id'] =
           payload['channel_post_id'].toString();
     }
+    String? nonEmptyStr(dynamic v) {
+      final s = v?.toString().trim();
+      return (s == null || s.isEmpty) ? null : s;
+    }
+    final int? parsedTopicId = (payload['topic_id'] as num?)?.toInt() ??
+        int.tryParse(payload['topic_id']?.toString() ?? '');
+    final int parsedForwardsCount =
+        (payload['forwards_count'] as num?)?.toInt() ??
+            int.tryParse(payload['forwards_count']?.toString() ?? '') ??
+            0;
+    final String? parsedSenderChatId = nonEmptyStr(payload['sender_chat_id']);
+    final String? parsedSenderChatName =
+        nonEmptyStr(payload['sender_chat_name']);
+    final String? parsedSenderChatAvatarUrl =
+        nonEmptyStr(payload['sender_chat_avatar_url']);
     final String? mediaPayloadStr =
         mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
     final recentRepliersList =
@@ -437,9 +455,11 @@ class SyncService {
       postAuthorId: Value(payload['post_author_id']?.toString()),
       senderRole: Value(payload['sender_role']?.toString()),
       senderAdminTitle: Value(payload['sender_admin_title']?.toString()),
-      isFromAnonymousAdmin:
-          Value(payload['is_from_anonymous_admin'] == true),
-      isSilent: Value(payload['is_silent'] == true),
+      isFromAnonymousAdmin: Value(
+        payload['is_from_anonymous_admin'] == true ||
+            payload['is_from_anonymous_admin'] == 1,
+      ),
+      isSilent: Value(payload['is_silent'] == true || payload['is_silent'] == 1),
       commentsCount: Value((payload['comments_count'] as num?)?.toInt() ?? 0),
       recentRepliersJson: Value(recentRepliersStr),
       threadRootMessageId: Value(isThreadComment ? rawThreadRootId : null),
@@ -464,6 +484,11 @@ class SyncService {
       replyToChatName: Value(payload['reply_to_chat_name']?.toString()),
       replyToChatType: Value(payload['reply_to_chat_type']?.toString()),
       effectId: Value(payload['effect_id']?.toString()),
+      topicId: Value(parsedTopicId),
+      forwardsCount: Value(parsedForwardsCount),
+      senderChatId: Value(parsedSenderChatId),
+      senderChatName: Value(parsedSenderChatName),
+      senderChatAvatarUrl: Value(parsedSenderChatAvatarUrl),
       savedTagsJson: payload['saved_tags'] is List
           ? Value(jsonEncode(payload['saved_tags']))
           : const Value.absent(),
@@ -871,6 +896,15 @@ class SyncService {
     String? effectId,
     bool isViewOnce = false,
     int ttlSeconds = 0,
+    String? senderName,
+    String? senderAvatarUrl,
+    bool isFromAnonymousAdmin = false,
+    int? topicId,
+    int forwardsCount = 0,
+    String? senderChatId,
+    String? senderChatName,
+    String? senderChatAvatarUrl,
+    bool isOwn = true,
   }) async {
     final localId = _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
@@ -890,6 +924,28 @@ class SyncService {
                 : (linkPreviewOptions is Map
                     ? jsonEncode(linkPreviewOptions)
                     : (linkPreviewOptions is String ? linkPreviewOptions : null)));
+    final Map<String, dynamic> pendingMediaMap = <String, dynamic>{};
+    if (mediaPayload is Map) {
+      pendingMediaMap.addAll(Map<String, dynamic>.from(mediaPayload));
+    } else if (mediaPayload is String && mediaPayload.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(mediaPayload);
+        if (decoded is Map) {
+          pendingMediaMap.addAll(Map<String, dynamic>.from(decoded));
+        }
+      } catch (_) {}
+    }
+    if (waveform != null && waveform.isNotEmpty) {
+      pendingMediaMap.putIfAbsent('waveform', () => waveform);
+    }
+    if (duration != null && duration > 0) {
+      pendingMediaMap.putIfAbsent('duration', () => duration);
+    }
+    if (isOwn) {
+      pendingMediaMap['is_own'] = true;
+    }
+    final String? mediaPayloadStr =
+        pendingMediaMap.isNotEmpty ? jsonEncode(pendingMediaMap) : null;
     if (linkPreviewOptionsStr == null && mediaPayload != null) {
       linkPreviewOptionsStr = mediaPayload is String
           ? mediaPayload
@@ -917,12 +973,16 @@ class SyncService {
       isRead: const Value(true), // Свои сообщения всегда "прочитаны"
       isEdited: const Value(false),
       sendStatus: Value(MessageSendStatus.sending.index),
+      senderName: Value(senderName),
+      senderAvatarUrl: Value(senderAvatarUrl),
       createdAt: Value(now),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
+      mediaPayload: Value(mediaPayloadStr),
       invertMedia: Value(invertMedia),
       isRound: Value(isRound),
       groupedId: Value(groupedId),
+      isFromAnonymousAdmin: Value(isFromAnonymousAdmin),
       isSilent: Value(isSilent),
       threadRootMessageId: Value(threadRootMessageId),
       hasMediaSpoiler: Value(hasMediaSpoiler),
@@ -933,6 +993,11 @@ class SyncService {
       replyToChatName: Value(replyToChatName),
       replyToChatType: Value(replyToChatType),
       effectId: Value(effectId),
+      topicId: Value(topicId),
+      forwardsCount: Value(forwardsCount),
+      senderChatId: Value(senderChatId),
+      senderChatName: Value(senderChatName),
+      senderChatAvatarUrl: Value(senderChatAvatarUrl),
     ));
 
     // Return the saved message as DbMessage
@@ -957,8 +1022,8 @@ class SyncService {
       isRead: true,
       isEdited: false,
       sendStatus: MessageSendStatus.sending.index,
-      senderName: null,
-      senderAvatarUrl: null,
+      senderName: senderName,
+      senderAvatarUrl: senderAvatarUrl,
       createdAt: now,
       isForward: false,
       forwardFromId: null,
@@ -967,6 +1032,7 @@ class SyncService {
       entities: entitiesStr,
       reactions: null,
       linkPreviewOptions: linkPreviewOptionsStr,
+      mediaPayload: mediaPayloadStr,
       invertMedia: invertMedia,
       isRound: isRound,
       viewsCount: 0,
@@ -974,7 +1040,7 @@ class SyncService {
       postAuthorId: null,
       senderRole: null,
       senderAdminTitle: null,
-      isFromAnonymousAdmin: false,
+      isFromAnonymousAdmin: isFromAnonymousAdmin,
       isSilent: isSilent,
       commentsCount: 0,
       recentRepliersJson: null,
@@ -990,11 +1056,11 @@ class SyncService {
       replyToChatType: replyToChatType,
       effectId: effectId,
       savedTagsJson: null,
-      topicId: null,
-      forwardsCount: 0,
-      senderChatId: null,
-      senderChatName: null,
-      senderChatAvatarUrl: null,
+      topicId: topicId,
+      forwardsCount: forwardsCount,
+      senderChatId: senderChatId,
+      senderChatName: senderChatName,
+      senderChatAvatarUrl: senderChatAvatarUrl,
     );
   }
 

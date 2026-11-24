@@ -2,22 +2,392 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
+import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../common/peer_badges_widget.dart';
 import '../design_system/theav_design_system.dart';
 import '../user/avatar_with_status.dart';
 
-/// Compact circular avatar pill in chat/comment composers allowing admins who
-/// own channels to toggle posting as themselves or as an administered channel.
+String _trSendAs(BuildContext context, String key, String fallback) {
+  final loc = AppLocalizations.of(context);
+  if (loc != null) {
+    if (loc.hasKey(key)) {
+      return loc.translate(key);
+    }
+    final translated = loc.translate(key);
+    if (translated.isNotEmpty && translated != key) {
+      return translated;
+    }
+  }
+  return fallback;
+}
+
+String _formatThousands(int n) {
+  final raw = n.abs().toString();
+  final buf = StringBuffer();
+  for (int i = 0; i < raw.length; i++) {
+    if (i > 0 && (raw.length - i) % 3 == 0) {
+      buf.write(' ');
+    }
+    buf.write(raw[i]);
+  }
+  return n < 0 ? '-$buf' : buf.toString();
+}
+
+String _formatSendAsSubscribers(BuildContext context, int count) {
+  final lang = Localizations.maybeLocaleOf(context)?.languageCode ?? 'ru';
+  final formatted = _formatThousands(count);
+  if (lang == 'ru') {
+    final mod100 = count.abs() % 100;
+    final mod10 = count.abs() % 10;
+    if (mod100 >= 11 && mod100 <= 19) {
+      return '$formatted подписчиков';
+    }
+    if (mod10 == 1) {
+      return '$formatted подписчик';
+    }
+    if (mod10 >= 2 && mod10 <= 4) {
+      return '$formatted подписчика';
+    }
+    return '$formatted подписчиков';
+  }
+  return count == 1 ? '1 subscriber' : '$formatted subscribers';
+}
+
+final ValueNotifier<Set<String>> _openSendAsPopupChatIds =
+    ValueNotifier<Set<String>>(<String>{});
+final ValueNotifier<Set<int>> _openSendAsPopupAnchorHashes =
+    ValueNotifier<Set<int>>(<int>{});
+final Map<String, BuildContext> _registeredSendAsAnchors =
+    <String, BuildContext>{};
+BuildContext? _lastTappedSendAsAnchor;
+
+/// Inline `36x36` circular "Send As" button rendered inside the left edge of
+/// [LiquidGlassInputField], matching Telegram Android's `SenderSelectView`:
+/// spring-morphs (`menuProgress: 0.0 <-> 1.0`) between the active [SendAsPeer]
+/// circular avatar and a solid primary accent circle with a crisp white `×`
+/// close cross while the floating [showSenderSelectPopup] menu is open.
+class InlineSendAsSelectorButton extends StatefulWidget {
+  final List<SendAsPeer> peers;
+  final SendAsPeer? selectedPeer;
+  final bool isPopupOpen;
+  final VoidCallback? onTap;
+  final ValueChanged<BuildContext>? onOpenPopup;
+  final String? chatId;
+  final ValueChanged<SendAsPeer>? onPeerSelected;
+  final double size;
+
+  const InlineSendAsSelectorButton({
+    super.key,
+    required this.peers,
+    this.selectedPeer,
+    this.isPopupOpen = false,
+    this.onTap,
+    this.onOpenPopup,
+    this.chatId,
+    this.onPeerSelected,
+    this.size = 36.0,
+  });
+
+  @override
+  State<InlineSendAsSelectorButton> createState() =>
+      _InlineSendAsSelectorButtonState();
+}
+
+class _InlineSendAsSelectorButtonState extends State<InlineSendAsSelectorButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _morphController;
+  bool _localPopupOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _morphController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+      reverseDuration: const Duration(milliseconds: 160),
+      value: widget.isPopupOpen ? 1.0 : 0.0,
+    );
+    _openSendAsPopupChatIds.addListener(_syncOpenState);
+    _openSendAsPopupAnchorHashes.addListener(_syncOpenState);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (widget.chatId != null && widget.chatId!.isNotEmpty) {
+      _registeredSendAsAnchors[widget.chatId!] = context;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant InlineSendAsSelectorButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.chatId != widget.chatId) {
+      if (oldWidget.chatId != null &&
+          _registeredSendAsAnchors[oldWidget.chatId!] == context) {
+        _registeredSendAsAnchors.remove(oldWidget.chatId!);
+      }
+      if (widget.chatId != null && widget.chatId!.isNotEmpty) {
+        _registeredSendAsAnchors[widget.chatId!] = context;
+      }
+    }
+    _syncOpenState();
+  }
+
+  void _syncOpenState() {
+    if (!mounted) return;
+    final bool byChat = widget.chatId != null &&
+        widget.chatId!.isNotEmpty &&
+        _openSendAsPopupChatIds.value.contains(widget.chatId!);
+    final bool byAnchor =
+        _openSendAsPopupAnchorHashes.value.contains(identityHashCode(context));
+    final bool effectiveOpen =
+        widget.isPopupOpen || _localPopupOpen || byChat || byAnchor;
+    if (effectiveOpen) {
+      if (_morphController.status != AnimationStatus.forward &&
+          _morphController.value < 1.0) {
+        _morphController.forward();
+      }
+    } else {
+      if (_morphController.status != AnimationStatus.reverse &&
+          _morphController.value > 0.0) {
+        _morphController.reverse();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _openSendAsPopupChatIds.removeListener(_syncOpenState);
+    _openSendAsPopupAnchorHashes.removeListener(_syncOpenState);
+    if (widget.chatId != null &&
+        _registeredSendAsAnchors[widget.chatId!] == context) {
+      _registeredSendAsAnchors.remove(widget.chatId!);
+    }
+    if (_lastTappedSendAsAnchor == context) {
+      _lastTappedSendAsAnchor = null;
+    }
+    _morphController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleTap() async {
+    HapticUtils.selection();
+    _lastTappedSendAsAnchor = context;
+    if (widget.chatId != null && widget.chatId!.isNotEmpty) {
+      _registeredSendAsAnchors[widget.chatId!] = context;
+    }
+
+    if (widget.onOpenPopup != null) {
+      widget.onOpenPopup!(context);
+      return;
+    }
+    if (widget.onTap != null) {
+      widget.onTap!();
+      return;
+    }
+    if (widget.chatId != null && widget.chatId!.isNotEmpty) {
+      setState(() => _localPopupOpen = true);
+      _syncOpenState();
+      try {
+        final active = widget.selectedPeer ??
+            (widget.peers.isNotEmpty ? widget.peers.first : null);
+        final picked = await showSenderSelectPopup(
+          context,
+          chatId: widget.chatId!,
+          peers: widget.peers,
+          currentPeer: active,
+        );
+        if (picked != null && mounted) {
+          widget.onPeerSelected?.call(picked);
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _localPopupOpen = false);
+          _syncOpenState();
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.peers.length <= 1) return const SizedBox.shrink();
+    final palette = context.theav;
+    final active = widget.selectedPeer ?? widget.peers.first;
+    final String tooltipText;
+    if (active.isChannel) {
+      tooltipText = 'От имени канала: ${active.name}';
+    } else if (active.isGroupAnon) {
+      tooltipText = 'От имени группы: ${active.name}';
+    } else {
+      tooltipText = 'От своего имени: ${active.name}';
+    }
+
+    final bool hasAction = widget.onOpenPopup != null ||
+        widget.onTap != null ||
+        (widget.chatId != null && widget.chatId!.isNotEmpty);
+
+    return KeyedSubtree(
+      key: const ValueKey('send_as_inline_avatar_button'),
+      child: Tooltip(
+        message: tooltipText,
+        child: GestureDetector(
+          onTap: hasAction ? _handleTap : null,
+          behavior: HitTestBehavior.opaque,
+          child: SizedBox(
+            width: widget.size,
+            height: widget.size,
+            child: AnimatedBuilder(
+              animation: _morphController,
+              builder: (context, _) {
+                final rawT = _morphController.value;
+                final bool isOpening =
+                    _morphController.status != AnimationStatus.reverse;
+                final double progress = (isOpening
+                        ? Curves.easeOutBack.transform(rawT)
+                        : Curves.easeInCubic.transform(rawT))
+                    .clamp(0.0, 1.15);
+                final double clampedT = rawT.clamp(0.0, 1.0);
+                final double avatarScale =
+                    (1.0 - clampedT * 0.65).clamp(0.0, 1.0);
+                final double avatarOpacity =
+                    (1.0 - clampedT * 1.25).clamp(0.0, 1.0);
+                final double closeScale = progress.clamp(0.0, 1.12);
+                final double closeOpacity =
+                    (clampedT * 1.35).clamp(0.0, 1.0);
+
+                return Stack(
+                  alignment: Alignment.center,
+                  clipBehavior: Clip.none,
+                  children: [
+                    if (avatarOpacity > 0.001)
+                      Opacity(
+                        opacity: avatarOpacity,
+                        child: Transform.scale(
+                          scale: avatarScale,
+                          child: Container(
+                            width: widget.size,
+                            height: widget.size,
+                            padding: const EdgeInsets.all(1.2),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: (active.isChannel || active.isGroupAnon)
+                                    ? palette.chatSendButton
+                                    : palette.divider,
+                                width: (active.isChannel || active.isGroupAnon)
+                                    ? 1.4
+                                    : 0.8,
+                              ),
+                            ),
+                            child: AvatarWithStatus(
+                              avatarUrl: active.avatarUrl,
+                              name: active.name.isNotEmpty ? active.name : '?',
+                              radius: (widget.size - 3.0) / 2,
+                              isOnline: false,
+                              showDecoration: false,
+                              animateDecoration: false,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (closeOpacity > 0.001)
+                      Opacity(
+                        opacity: closeOpacity,
+                        child: Transform.scale(
+                          scale: closeScale,
+                          child: Container(
+                            width: widget.size,
+                            height: widget.size,
+                            decoration: BoxDecoration(
+                              color: palette.chatSendButton,
+                              shape: BoxShape.circle,
+                            ),
+                            child: CustomPaint(
+                              painter: _SenderSelectCloseCrossPainter(
+                                color: Colors.white,
+                                progress: clampedT,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SenderSelectCloseCrossPainter extends CustomPainter {
+  final Color color;
+  final double progress;
+
+  const _SenderSelectCloseCrossPainter({
+    required this.color,
+    required this.progress,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final halfSpan = size.shortestSide * 0.175;
+    final angle = (1.0 - progress) * (-math.pi / 4);
+
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round
+      ..isAntiAlias = true;
+
+    canvas.drawLine(
+      Offset(-halfSpan, -halfSpan),
+      Offset(halfSpan, halfSpan),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(halfSpan, -halfSpan),
+      Offset(-halfSpan, halfSpan),
+      paint,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _SenderSelectCloseCrossPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        (oldDelegate.progress - progress).abs() > 0.001;
+  }
+}
+
+/// Backward-compatible alias/wrapper around [InlineSendAsSelectorButton] (`36x36`)
+/// so existing callers in chat/comment screens work seamlessly.
 class SendAsPeerSelectorPill extends StatelessWidget {
   final List<SendAsPeer> peers;
   final SendAsPeer? selectedPeer;
   final VoidCallback? onTap;
+  final ValueChanged<BuildContext>? onOpenPopup;
+  final bool isPopupOpen;
+  final String? chatId;
+  final ValueChanged<SendAsPeer>? onPeerSelected;
   final double size;
 
   const SendAsPeerSelectorPill({
@@ -25,76 +395,554 @@ class SendAsPeerSelectorPill extends StatelessWidget {
     required this.peers,
     this.selectedPeer,
     this.onTap,
-    this.size = 34.0,
+    this.onOpenPopup,
+    this.isPopupOpen = false,
+    this.chatId,
+    this.onPeerSelected,
+    this.size = 36.0,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (peers.length <= 1) return const SizedBox.shrink();
-    final palette = context.theav;
-    final active = selectedPeer ?? peers.first;
-    final tooltipText = active.isChannel
-        ? 'От имени канала: ${active.name}'
-        : 'От своего имени: ${active.name}';
+    return InlineSendAsSelectorButton(
+      peers: peers,
+      selectedPeer: selectedPeer,
+      isPopupOpen: isPopupOpen,
+      onTap: onTap,
+      onOpenPopup: onOpenPopup,
+      chatId: chatId,
+      onPeerSelected: onPeerSelected,
+      size: size,
+    );
+  }
+}
 
-    return Tooltip(
-      message: tooltipText,
-      child: GestureDetector(
-        onTap: onTap == null
-            ? null
-            : () {
-                HapticUtils.selection();
-                onTap!();
-              },
-        behavior: HitTestBehavior.opaque,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              width: size,
-              height: size,
-              padding: const EdgeInsets.all(1.5),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: active.isChannel
-                      ? palette.primary
-                      : palette.divider,
-                  width: active.isChannel ? 1.5 : 0.8,
+/// Opens a Telegram-Android-style (`SenderSelectPopup`) anchored floating menu
+/// positioned right above the bottom-left of the input bar, using glass-safe
+/// [LiquidGlassLens] (`LiquidGlassBatch.exclude` + pure `Transform.scale`,
+/// ZERO `Opacity`, `FadeTransition`, or `ClipRRect` around the glass lens) in
+/// Glass mode, or a frosted/elevated card in Material mode.
+Future<SendAsPeer?> showSenderSelectPopup(
+  BuildContext anchorContext, {
+  required String chatId,
+  required List<SendAsPeer> peers,
+  SendAsPeer? currentPeer,
+  String? selectedSendAsChatId,
+  String? selectedSendAsMode,
+}) async {
+  if (peers.isEmpty) return null;
+  if (!anchorContext.mounted) return null;
+
+  final navigator = Navigator.of(anchorContext);
+  final overlayBox = navigator.overlay?.context.findRenderObject() as RenderBox?;
+  final anchorBox = anchorContext.findRenderObject() as RenderBox?;
+
+  Rect? anchorRect;
+  if (anchorBox != null &&
+      anchorBox.hasSize &&
+      overlayBox != null &&
+      overlayBox.hasSize) {
+    final topLeft = anchorBox.localToGlobal(Offset.zero, ancestor: overlayBox);
+    anchorRect = topLeft & anchorBox.size;
+  }
+
+  final SendAsPeer? resolvedCurrent = currentPeer ??
+      peers.cast<SendAsPeer?>().firstWhere(
+            (p) =>
+                p != null &&
+                p.matchesSelection(
+                  selectedSendAsMode: selectedSendAsMode,
+                  selectedSendAsChatId: selectedSendAsChatId,
                 ),
-              ),
-              child: AvatarWithStatus(
-                avatarUrl: active.avatarUrl,
-                name: active.name.isNotEmpty ? active.name : '?',
-                radius: (size - 4) / 2,
-                isOnline: false,
-                showDecoration: false,
-                animateDecoration: false,
+            orElse: () =>
+                peers.cast<SendAsPeer?>().firstWhere(
+                      (p) => p != null && p.isSelected,
+                      orElse: () => peers.first,
+                    ),
+          );
+
+  final CapturedThemes capturedThemes = InheritedTheme.capture(
+    from: anchorContext,
+    to: navigator.context,
+  );
+  final String barrierLabel = Localizations.of<MaterialLocalizations>(
+        anchorContext,
+        MaterialLocalizations,
+      )?.modalBarrierDismissLabel ??
+      'Dismiss';
+
+  final int anchorHash = identityHashCode(anchorContext);
+  _openSendAsPopupChatIds.value = <String>{
+    ..._openSendAsPopupChatIds.value,
+    if (chatId.isNotEmpty) chatId,
+  };
+  _openSendAsPopupAnchorHashes.value = <int>{
+    ..._openSendAsPopupAnchorHashes.value,
+    anchorHash,
+  };
+
+  SendAsPeer? picked;
+  try {
+    picked = await navigator.push<SendAsPeer>(
+      _SenderSelectPopupRoute<SendAsPeer>(
+        anchorRect: anchorRect,
+        peers: peers,
+        currentPeer: resolvedCurrent,
+        capturedThemes: capturedThemes,
+        barrierLabel: barrierLabel,
+      ),
+    );
+  } finally {
+    if (chatId.isNotEmpty) {
+      final nextChats = Set<String>.from(_openSendAsPopupChatIds.value)
+        ..remove(chatId);
+      _openSendAsPopupChatIds.value = nextChats;
+    }
+    final nextAnchors = Set<int>.from(_openSendAsPopupAnchorHashes.value)
+      ..remove(anchorHash);
+    _openSendAsPopupAnchorHashes.value = nextAnchors;
+  }
+
+  if (picked == null) return null;
+  final nextSendAsId = picked.isChannel ? (picked.chatId ?? picked.id) : null;
+  final ok = await GroupsChannelsParityService.setSendAsPeer(
+    chatId,
+    nextSendAsId,
+    sendAsMode: picked.peerType,
+  );
+  if (!ok) {
+    if (anchorContext.mounted) {
+      GlassToastService().showError(
+        anchorContext,
+        'Не удалось изменить профиль отправки',
+      );
+    }
+    return null;
+  }
+  return picked;
+}
+
+class _SenderSelectPopupRoute<T> extends PopupRoute<T> {
+  final Rect? anchorRect;
+  final List<SendAsPeer> peers;
+  final SendAsPeer? currentPeer;
+  final CapturedThemes capturedThemes;
+  @override
+  final String barrierLabel;
+
+  _SenderSelectPopupRoute({
+    required this.anchorRect,
+    required this.peers,
+    required this.currentPeer,
+    required this.capturedThemes,
+    required this.barrierLabel,
+  });
+
+  @override
+  bool get barrierDismissible => true;
+
+  @override
+  Color? get barrierColor => Colors.transparent;
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 210);
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 150);
+
+  @override
+  Widget buildPage(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+  ) {
+    return capturedThemes.wrap(
+      _SenderSelectPopupLayout(
+        anchorRect: anchorRect,
+        peers: peers,
+        currentPeer: currentPeer,
+        animation: animation,
+      ),
+    );
+  }
+}
+
+class _SenderSelectPopupLayout extends StatelessWidget {
+  final Rect? anchorRect;
+  final List<SendAsPeer> peers;
+  final SendAsPeer? currentPeer;
+  final Animation<double> animation;
+
+  const _SenderSelectPopupLayout({
+    required this.anchorRect,
+    required this.peers,
+    required this.currentPeer,
+    required this.animation,
+  });
+
+  bool _isPeerSelected(SendAsPeer peer) {
+    final cur = currentPeer;
+    if (cur == null) return peer.isSelected;
+    if (cur.peerType != peer.peerType) return false;
+    if (peer.isChannel) {
+      return (peer.chatId ?? peer.id) == (cur.chatId ?? cur.id);
+    }
+    return true;
+  }
+
+  String _subtitleForPeer(BuildContext context, SendAsPeer peer) {
+    if (peer.isUser) {
+      return _trSendAs(context, 'send_as_personal_account', 'Личный аккаунт');
+    }
+    if (peer.isGroupAnon) {
+      return _trSendAs(
+        context,
+        'send_as_anonymous_admin',
+        'Анонимный администратор',
+      );
+    }
+    final subs = peer.subscriberCount;
+    if (subs != null && subs > 0) {
+      return _formatSendAsSubscribers(context, subs);
+    }
+    if (peer.username.isNotEmpty) {
+      return '@${peer.username}';
+    }
+    return _trSendAs(context, 'send_as_public_channel', 'Публичный канал');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final mq = MediaQuery.of(context);
+        final double screenW = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : mq.size.width;
+        final double screenH = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : mq.size.height;
+
+        final double maxPopupWidth =
+            math.max(180.0, math.min(320.0, screenW * 0.78));
+        final double minPopupWidth = math.min(260.0, maxPopupWidth);
+
+        // Anchor right above the bottom-left of the input bar.
+        double left = 10.0;
+        double bottomOffset = mq.viewInsets.bottom + mq.padding.bottom + 62.0;
+        final Rect? rect = anchorRect;
+        if (rect != null && rect.height <= 120.0) {
+          left = (rect.left - 4.0)
+              .clamp(8.0, math.max(8.0, screenW - maxPopupWidth - 8.0));
+          bottomOffset = (screenH - rect.top + 10.0).clamp(
+            mq.viewInsets.bottom + 12.0,
+            math.max(mq.viewInsets.bottom + 12.0, screenH - mq.padding.top - 140.0),
+          );
+        }
+
+        final double availAbove =
+            screenH - bottomOffset - mq.padding.top - 12.0;
+        final double maxPopupHeight =
+            math.min(380.0, math.max(160.0, availAbove));
+
+        final style = TheavSurfaceStyle.of(context);
+        final palette = style.palette;
+        final bool isGlass = style.isGlass && style.glassProvider != null;
+
+        final Widget innerBody = ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: Material(
+            type: MaterialType.transparency,
+            child: ScrollConfiguration(
+              behavior:
+                  const MaterialScrollBehavior().copyWith(overscroll: false),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 13, 16, 6),
+                    child: Text(
+                      _trSendAs(
+                        context,
+                        'send_message_as_title',
+                        'Отправить сообщение от имени...',
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.primary,
+                        fontSize: 14.0,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.1,
+                      ),
+                    ),
+                  ),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (final peer in peers)
+                            _SenderSelectPeerRow(
+                              key: ValueKey(
+                                'sender_select_peer_${peer.peerType}_${peer.chatId ?? peer.id}',
+                              ),
+                              peer: peer,
+                              selected: _isPeerSelected(peer),
+                              subtitle: _subtitleForPeer(context, peer),
+                              onTap: () {
+                                HapticUtils.selection();
+                                Navigator.of(context).pop(peer);
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+          ),
+        );
+
+        Widget surface;
+        if (isGlass) {
+          final glassStyle = style.glassProvider!.createStyle(
+            context: context,
+            cornerRadius: 20.0,
+            refractionIndex: 1.10,
+            refractionWidth: 18.0,
+            borderWidth: 1.1,
+            color: style.hudFill.withValues(
+              alpha: style.isDark ? 0.76 : 0.84,
+            ),
+          );
+          surface = LiquidGlassBatch.exclude(
+            child: LiquidGlassLens(
+              style: glassStyle,
+              child: innerBody,
+            ),
+          );
+        } else {
+          final blurFilter = style.getMaterialHudBlurFilter(sigma: 12.0);
+          final Color cardBg = blurFilter != null
+              ? BlurUtils.resolveMaterialHudColor(
+                  style.overlayFill,
+                  isDark: style.isDark,
+                  blurEnabled: true,
+                  darkAlpha: 0.88,
+                  lightAlpha: 0.92,
+                )
+              : style.overlayFill;
+          Widget materialBox = DecoratedBox(
+            decoration: BoxDecoration(
+              color: cardBg,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: style.hudBorder,
+                width: blurFilter != null ? 0.6 : 0.5,
+              ),
+              boxShadow: style.floatingShadow,
+            ),
+            child: innerBody,
+          );
+          if (blurFilter != null) {
+            materialBox = ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: BackdropFilter.grouped(
+                filter: blurFilter,
+                child: materialBox,
+              ),
+            );
+          }
+          surface = materialBox;
+        }
+
+        final bool disableAnim =
+            MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+        return Stack(
+          key: const ValueKey('sender_select_popup_overlay'),
+          children: [
             Positioned(
-              right: -2,
-              bottom: -2,
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  color: palette.surface,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: palette.divider, width: 0.5),
+              left: left,
+              bottom: bottomOffset,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minWidth: minPopupWidth,
+                  maxWidth: maxPopupWidth,
+                  maxHeight: maxPopupHeight,
                 ),
-                alignment: Alignment.center,
-                child: active.isChannel
-                    ? iconoir.Megaphone(
-                        width: 8,
-                        height: 8,
-                        color: palette.primary,
-                      )
-                    : iconoir.NavArrowDown(
-                        width: 9,
-                        height: 9,
-                        color: palette.subtext,
+                child: disableAnim
+                    ? surface
+                    : AnimatedBuilder(
+                        animation: animation,
+                        child: surface,
+                        builder: (context, popupChild) {
+                          final raw = animation.value;
+                          if (raw <= 0.001) {
+                            return const SizedBox.shrink();
+                          }
+                          final bool reversing =
+                              animation.status == AnimationStatus.reverse;
+                          final double scale = reversing
+                              ? Curves.easeInCubic.transform(raw.clamp(0.0, 1.0))
+                              : Curves.easeOutBack
+                                  .transform(raw.clamp(0.0, 1.0));
+                          final Widget scaled = Transform.scale(
+                            scale: math.max(0.01, scale),
+                            alignment: Alignment.bottomLeft,
+                            child: popupChild,
+                          );
+                          // NEVER wrap LiquidGlassLens in Opacity or FadeTransition!
+                          if (isGlass) {
+                            return scaled;
+                          }
+                          final double op = Curves.easeOutCubic
+                              .transform(raw.clamp(0.0, 1.0))
+                              .clamp(0.0, 1.0);
+                          return Opacity(
+                            opacity: op,
+                            child: scaled,
+                          );
+                        },
                       ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SenderSelectPeerRow extends StatelessWidget {
+  final SendAsPeer peer;
+  final bool selected;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _SenderSelectPeerRow({
+    super.key,
+    required this.peer,
+    required this.selected,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.theav;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7.5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 42,
+              height: 42,
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    width: 42,
+                    height: 42,
+                    padding: EdgeInsets.all(selected ? 2.5 : 1.0),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: selected ? palette.primary : Colors.transparent,
+                        width: selected ? 2.0 : 0.0,
+                      ),
+                    ),
+                    child: AvatarWithStatus(
+                      avatarUrl: peer.avatarUrl,
+                      name: peer.name.isNotEmpty ? peer.name : '?',
+                      radius: selected ? 16.5 : 20.0,
+                      isOnline: false,
+                      showDecoration: false,
+                      animateDecoration: false,
+                    ),
+                  ),
+                  Positioned(
+                    right: -1,
+                    bottom: -1,
+                    child: AnimatedScale(
+                      scale: selected ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutBack,
+                      child: Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: palette.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: palette.surface,
+                            width: 1.5,
+                          ),
+                        ),
+                        alignment: Alignment.center,
+                        child: iconoir.Check(
+                          width: 10,
+                          height: 10,
+                          color: palette.onPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          peer.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: palette.onSurface,
+                            fontSize: 15.0,
+                            fontWeight:
+                                selected ? FontWeight.w600 : FontWeight.w500,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                      if (peer.isVerified) ...[
+                        const SizedBox(width: 4),
+                        const PeerBadgesRow(isVerified: true, iconSize: 14),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? palette.primary : palette.subtext,
+                      fontSize: 12.5,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -104,89 +952,33 @@ class SendAsPeerSelectorPill extends StatelessWidget {
   }
 }
 
-/// Opens a Telegram-style sheet to pick the posting identity ("Send As")
-/// for a group or channel comment thread, persisting selection on the server.
+/// Opens a Telegram-style anchored popup (delegating to [showSenderSelectPopup]
+/// using the active inline button anchor when available) to pick the posting
+/// identity ("Send As") for a group or channel comment thread.
 Future<SendAsPeer?> showSendAsPeerSheet({
   required BuildContext context,
   required String chatId,
   required List<SendAsPeer> peers,
   String? selectedSendAsChatId,
-}) async {
-  if (peers.isEmpty) return null;
-  final palette = context.theav;
-  final currentId = selectedSendAsChatId ?? '';
-
-  final picked = await showTheavModalSheet<SendAsPeer>(
-    context: context,
-    title: 'Отправлять сообщения как...',
-    builder: (ctx) => SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-      child: TheavInsetGroup(
-        footer:
-            'Выбранный профиль будет использоваться для ваших сообщений в этом чате.',
-        children: [
-          for (final peer in peers)
-            TheavListRow(
-              leading: AvatarWithStatus(
-                avatarUrl: peer.avatarUrl,
-                name: peer.name,
-                radius: 20,
-                isOnline: false,
-                showDecoration: false,
-              ),
-              titleWidget: Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      peer.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: palette.onSurface,
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  if (peer.isVerified) ...[
-                    const SizedBox(width: 5),
-                    const PeerBadgesRow(isVerified: true, iconSize: 14),
-                  ],
-                ],
-              ),
-              subtitle: peer.isChannel
-                  ? (peer.username.isNotEmpty
-                      ? 'Канал · @${peer.username}'
-                      : 'Публикации от имени канала')
-                  : 'Личный аккаунт',
-              trailing: TheavCheckCircle(
-                selected: peer.isChannel
-                    ? currentId == (peer.chatId ?? peer.id)
-                    : currentId.isEmpty,
-              ),
-              onTap: () => Navigator.pop(ctx, peer),
-            ),
-        ],
-      ),
-    ),
-  );
-
-  if (picked == null) return null;
-  final nextSendAsId = picked.isChannel ? (picked.chatId ?? picked.id) : null;
-  final ok = await GroupsChannelsParityService.setSendAsPeer(
-    chatId,
-    nextSendAsId,
-  );
-  if (!ok) {
-    if (context.mounted) {
-      GlassToastService().showError(
-        context,
-        'Не удалось изменить профиль отправки',
-      );
-    }
-    return null;
+  String? selectedSendAsMode,
+  SendAsPeer? currentPeer,
+}) {
+  BuildContext effectiveAnchor = context;
+  final registered = _registeredSendAsAnchors[chatId];
+  if (registered != null && registered.mounted) {
+    effectiveAnchor = registered;
+  } else if (_lastTappedSendAsAnchor != null &&
+      _lastTappedSendAsAnchor!.mounted) {
+    effectiveAnchor = _lastTappedSendAsAnchor!;
   }
-  return picked;
+  return showSenderSelectPopup(
+    effectiveAnchor,
+    chatId: chatId,
+    peers: peers,
+    currentPeer: currentPeer,
+    selectedSendAsChatId: selectedSendAsChatId,
+    selectedSendAsMode: selectedSendAsMode,
+  );
 }
 
 /// Stacked circular `@` (unread mentions/replies) and `♡` (unread reactions)
@@ -410,14 +1202,18 @@ class ForumTopicChipStrip extends StatelessWidget {
                       ),
                     ),
                   const SizedBox(width: 6),
-                  Text(
-                    topic.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                      color: selected ? palette.primary : palette.onSurface,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: Text(
+                      topic.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
+                        color: selected ? palette.primary : palette.onSurface,
+                      ),
                     ),
                   ),
                   if (topic.unreadCount > 0) ...[

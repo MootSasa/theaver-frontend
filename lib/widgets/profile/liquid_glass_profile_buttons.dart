@@ -189,9 +189,16 @@ class LiquidGlassProfileButtons extends StatelessWidget {
           final availWidth = constraints.maxWidth.isFinite
               ? constraints.maxWidth
               : MediaQuery.of(context).size.width - 32.0;
-          final spacing = count >= 5 ? 10.0 : 14.0;
-          final rawSize = (availWidth - (count - 1) * spacing) / count;
-          final btnSize = math.min(58.0, math.max(44.0, rawSize));
+          final double spacing = availWidth < 280.0
+              ? 6.0
+              : (availWidth < 292.0 || count >= 5 ? 10.0 : 14.0);
+          final double rawSize =
+              (availWidth - (count - 1) * spacing) / count;
+          final double minBtnSize = availWidth < 292.0 ? 36.0 : 44.0;
+          final double btnSize = math.max(
+            math.min(minBtnSize, math.max(24.0, rawSize)),
+            math.min(58.0, rawSize),
+          );
           final baseCurrentSize = btnSize * flightScale;
           final int primaryIndex = count ~/ 2;
 
@@ -321,7 +328,7 @@ class _RoundActionButton extends StatelessWidget {
         : (isDark
             ? Colors.white.withValues(alpha: 0.92)
             : const Color(0xFF1C1C1E));
-    final iconSize = (restSize * 0.42).clamp(20.0, 24.0);
+    final iconSize = (restSize * 0.42).clamp(15.0, 24.0);
 
     Widget iconChild;
     if (iconOpacity <= 0.001) {

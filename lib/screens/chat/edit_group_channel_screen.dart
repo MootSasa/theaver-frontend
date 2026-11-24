@@ -114,6 +114,11 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   String? _usernameServerError;
   bool _isSaving = false;
   bool _subSettingsChanged = false;
+  bool _nameEditedByUser = false;
+  bool _descriptionEditedByUser = false;
+  bool _usernameEditedByUser = false;
+  bool _publicEditedByUser = false;
+  bool _isApplyingServerSettings = false;
 
   @override
   void initState() {
@@ -144,6 +149,10 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     _myRole = widget.canEditAdminSettings ? 'admin' : 'member';
 
     _usernameController.addListener(() {
+      if (!_isApplyingServerSettings) {
+        _usernameEditedByUser = true;
+      }
+      if (!mounted) return;
       if (_usernameServerError != null) {
         setState(() => _usernameServerError = null);
       } else {
@@ -151,7 +160,15 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
       }
     });
     _nameController.addListener(() {
+      if (!_isApplyingServerSettings) {
+        _nameEditedByUser = true;
+      }
       if (mounted) setState(() {});
+    });
+    _descriptionController.addListener(() {
+      if (!_isApplyingServerSettings) {
+        _descriptionEditedByUser = true;
+      }
     });
 
     unawaited(_loadChatSettings());
@@ -170,26 +187,36 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
 
       final res = results[0] as Map<String, dynamic>;
       final members = results[1] as List<ChatParticipant>;
+      final currentUserId = AccountManager().currentAccount?.userId;
 
       setState(() {
         if (members.isNotEmpty) {
           _members = members;
         }
         if (res['success'] == true) {
-          if (res['name'] != null && res['name'].toString().isNotEmpty) {
-            _nameController.text = res['name'].toString();
-          }
-          if (res['description'] != null) {
-            _descriptionController.text = res['description'].toString();
-          }
-          if (res['username'] != null) {
-            _usernameController.text = res['username'].toString();
+          _isApplyingServerSettings = true;
+          try {
+            if (!_nameEditedByUser &&
+                res['name'] != null &&
+                res['name'].toString().isNotEmpty) {
+              _nameController.text = res['name'].toString();
+            }
+            if (!_descriptionEditedByUser && res['description'] != null) {
+              _descriptionController.text = res['description'].toString();
+            }
+            if (!_usernameEditedByUser && res['username'] != null) {
+              _usernameController.text = res['username'].toString();
+            }
+          } finally {
+            _isApplyingServerSettings = false;
           }
           final srvAvatar = res['avatar_url']?.toString();
           if (srvAvatar != null && srvAvatar.isNotEmpty) {
             _avatarUrl = srvAvatar;
           }
-          if (res['is_public'] is bool) {
+          if (!_publicEditedByUser &&
+              !_usernameEditedByUser &&
+              res['is_public'] is bool) {
             _isPublic = res['is_public'] as bool;
           }
           final histRaw = res['history_for_new_members'] ?? res['history_for_new'];
@@ -250,6 +277,17 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           final adminPerms = AdminRights.tryParse(res['my_admin_permissions']);
           if (adminPerms != null) {
             _myAdminPermissions = adminPerms;
+          }
+        }
+        if (currentUserId != null && _members.isNotEmpty) {
+          final me = _members.where((m) => m.id == currentUserId).firstOrNull;
+          if (me != null) {
+            if (me.role == 'owner' || me.role == 'admin') {
+              _myRole = me.role;
+            }
+            if (_myAdminPermissions == null && me.adminPermissions != null) {
+              _myAdminPermissions = me.adminPermissions;
+            }
           }
         }
       });
@@ -478,10 +516,11 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   }
 
   void _handleBack() {
+    if (!Navigator.of(context).canPop()) return;
     if (_subSettingsChanged) {
       Navigator.pop<Map<String, dynamic>>(context, _buildResultMap());
     } else {
-      Navigator.maybePop(context);
+      Navigator.pop(context);
     }
   }
 
@@ -525,7 +564,8 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         ),
       ),
     );
-    if (res != null && mounted) {
+    if (!mounted || res == null) return;
+    if (res['saved'] == true) {
       setState(() {
         if (res['default_permissions'] is GroupDefaultPermissions) {
           _defaultPermissions =
@@ -543,6 +583,14 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         }
         _subSettingsChanged = true;
       });
+    } else if (res['members_changed'] == true) {
+      final updatedMembers = await ChatService.getGroupMembers(widget.chatId);
+      if (mounted) {
+        setState(() {
+          _members = updatedMembers;
+          _subSettingsChanged = true;
+        });
+      }
     }
   }
 
@@ -578,8 +626,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
       ),
     );
     if (updatedPrimary != null &&
-        updatedPrimary.isNotEmpty &&
-        updatedPrimary != _inviteLink &&
+        updatedPrimary != (_inviteLink ?? '') &&
         mounted) {
       setState(() {
         _inviteLink = updatedPrimary;
@@ -643,8 +690,18 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
 
     final palette = context.theav;
     final currentUserId = AccountManager().currentAccount?.userId;
-    final canAddAdmins =
-        _myRole == 'owner' || (_myAdminPermissions?.canAddAdmins ?? false);
+    final meInList = currentUserId != null
+        ? _members.where((m) => m.id == currentUserId).firstOrNull
+        : null;
+    final effectiveCallerRole =
+        (meInList?.role == 'owner' || _myRole == 'owner')
+            ? 'owner'
+            : (meInList?.role ?? _myRole);
+    final AdminRights? effectiveCallerPerms = effectiveCallerRole == 'owner'
+        ? const AdminRights.all()
+        : (_myAdminPermissions ?? meInList?.adminPermissions);
+    final canAddAdmins = effectiveCallerRole == 'owner' ||
+        (effectiveCallerPerms?.canAddAdmins ?? false);
 
     final admins = _members
         .where((m) => m.role == 'owner' || m.role == 'admin')
@@ -680,11 +737,8 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                           : (admin.role == 'owner'
                               ? 'Владелец'
                               : 'Администратор'),
-                      showChevron:
-                          admin.role != 'owner' || admin.id == currentUserId,
-                      onTap: (admin.role != 'owner' || admin.id == currentUserId)
-                          ? () => Navigator.pop(ctx, admin)
-                          : null,
+                      showChevron: true,
+                      onTap: () => Navigator.pop(ctx, admin),
                     ),
                 ],
               ),
@@ -720,6 +774,12 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     );
 
     if (picked != null && mounted) {
+      final callerCanEdit = AdminRightsScreen.canCallerEditTarget(
+        target: picked,
+        callerUserId: currentUserId,
+        callerRole: effectiveCallerRole,
+        callerPermissions: effectiveCallerPerms,
+      );
       final changed = await Navigator.push<bool>(
         context,
         SwipeBackPageRoute(
@@ -727,7 +787,9 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
             chatId: widget.chatId,
             chatType: widget.isChannel ? 'channel' : 'group',
             participant: picked,
-            isOwnerCaller: _myRole == 'owner',
+            isOwnerCaller: effectiveCallerRole == 'owner',
+            callerCanEdit: callerCanEdit,
+            callerPermissions: effectiveCallerPerms,
           ),
         ),
       );
@@ -887,12 +949,14 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     final validAvatar = getValidAvatarUrl(_avatarUrl);
     final slowBadge = _slowModeBadge(_slowModeInterval);
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _handleBack();
-      },
-      child: SettingsFloatingScaffold(
+    return SwipeBackPopScope(
+      onSwipeBackPop: _handleBack,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _handleBack();
+        },
+        child: SettingsFloatingScaffold(
         title: widget.isChannel
             ? _tr('edit_channel_title', 'Изменить канал')
             : _tr('edit_group_title', 'Изменить группу'),
@@ -1029,12 +1093,18 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
                       value: _isPublic,
                       onChanged: (v) {
                         HapticUtils.selection();
-                        setState(() => _isPublic = v);
+                        setState(() {
+                          _publicEditedByUser = true;
+                          _isPublic = v;
+                        });
                       },
                     ),
                     onTap: () {
                       HapticUtils.selection();
-                      setState(() => _isPublic = !_isPublic);
+                      setState(() {
+                        _publicEditedByUser = true;
+                        _isPublic = !_isPublic;
+                      });
                     },
                   ),
                   if (_isPublic)
@@ -1346,6 +1416,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
             ],
           ],
         ),
+      ),
       ),
     );
   }

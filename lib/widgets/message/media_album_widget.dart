@@ -20,6 +20,7 @@ import 'message_bubble.dart';
 import 'message_interactive_state.dart';
 import 'message_status_widget.dart';
 import 'text_message_widget.dart';
+import '../chat/reactions_panel.dart';
 import '../tiling/tile_viewport_scope.dart';
 
 /// Widget rendering a Telegram-style collage bubble for 2–10 media items.
@@ -30,6 +31,11 @@ class MediaAlbumWidget extends StatelessWidget {
   final String? chatType;
   final String? senderName;
   final Widget? senderHeaderWidget;
+  final Widget? headerWidget;
+  final Widget? replyOrForwardWidget;
+  final Map<String, int>? reactions;
+  final Set<String>? myReactions;
+  final ValueChanged<String>? onReactionTap;
   final bool hasAvatarGutter;
   final String Function(String)? formatTime;
   final Function(String url, String name, String type)? onFileTap;
@@ -57,6 +63,11 @@ class MediaAlbumWidget extends StatelessWidget {
     this.chatType,
     this.senderName,
     this.senderHeaderWidget,
+    this.headerWidget,
+    this.replyOrForwardWidget,
+    this.reactions,
+    this.myReactions,
+    this.onReactionTap,
     this.hasAvatarGutter = false,
     this.formatTime,
     this.onFileTap,
@@ -86,6 +97,11 @@ class MediaAlbumWidget extends StatelessWidget {
       chatType: chatType,
       senderName: senderName,
       senderHeaderWidget: senderHeaderWidget,
+      headerWidget: headerWidget,
+      replyOrForwardWidget: replyOrForwardWidget,
+      reactions: reactions,
+      myReactions: myReactions,
+      onReactionTap: onReactionTap,
       hasAvatarGutter: hasAvatarGutter,
       formatTime: formatTime,
       onFileTap: onFileTap,
@@ -179,11 +195,16 @@ class MediaAlbumWidget extends StatelessWidget {
         (highlightItemId != null &&
             album.items.any((it) => it.id == highlightItemId));
 
+    final Widget? resolvedHeaderWidget =
+        headerWidget ?? (!isMe ? senderHeaderWidget : null);
     final bool showSender = !isChannelCard &&
-        !isMe &&
-        ((senderHeaderWidget != null) ||
-            (senderName != null && senderName!.isNotEmpty));
-    final bool hasTextBubble = !isChannelCard && (album.hasCaption || showSender);
+        (resolvedHeaderWidget != null ||
+            (!isMe && senderName != null && senderName!.isNotEmpty));
+    final bool showReplyOrForward =
+        !isChannelCard && replyOrForwardWidget != null;
+    final bool hasTopBubbleSection = showSender || showReplyOrForward;
+    final bool hasTextBubble =
+        !isChannelCard && (album.hasCaption || hasTopBubbleSection);
     final Color bubbleColor = hasTextBubble
         ? (shouldHighlightAlbum
             ? (isMe
@@ -220,7 +241,7 @@ class MediaAlbumWidget extends StatelessWidget {
                 hasTail: showTail,
               ));
 
-    final bool applyTopTileCorners = isChannelCard || !showSender;
+    final bool applyTopTileCorners = isChannelCard || !hasTopBubbleSection;
     final bool applyBottomTileCorners = isChannelCard || !album.hasCaption;
 
     final Widget albumBox = MetaData(
@@ -238,8 +259,13 @@ class MediaAlbumWidget extends StatelessWidget {
           children: [
             if (showSender)
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
-                child: senderHeaderWidget ??
+                padding: EdgeInsets.fromLTRB(
+                  10,
+                  6,
+                  10,
+                  showReplyOrForward ? 2 : 4,
+                ),
+                child: resolvedHeaderWidget ??
                     Text(
                       senderName!,
                       style: TextStyle(
@@ -250,6 +276,16 @@ class MediaAlbumWidget extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
+              ),
+            if (showReplyOrForward)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  8,
+                  showSender ? 2 : 6,
+                  8,
+                  6,
+                ),
+                child: replyOrForwardWidget!,
               ),
             // 1. Mosaic Collage Container
             SizedBox(
@@ -418,9 +454,42 @@ class MediaAlbumWidget extends StatelessWidget {
       );
     }
 
+    final Map<String, int> effectiveReactions =
+        reactions ?? primaryMsg.reactions;
+    final Set<String> effectiveMyReactions =
+        myReactions ?? primaryMsg.myReactions;
+    final bool hasAlbumReactions = effectiveReactions.isNotEmpty;
+
+    final Widget albumWithReactions = hasAlbumReactions
+        ? Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment:
+                isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+            children: [
+              albumContent,
+              Padding(
+                padding: EdgeInsets.only(
+                  top: 2.0,
+                  bottom: 2.0,
+                  left: hasAvatarGutter ? 4.0 : 12.0,
+                  right: 12.0,
+                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: albumWidth),
+                  child: MessageReactionsRow(
+                    reactions: effectiveReactions,
+                    myReactions: effectiveMyReactions,
+                    onTap: onReactionTap,
+                  ),
+                ),
+              ),
+            ],
+          )
+        : albumContent;
+
     final Widget alignedAlbum = Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: albumContent,
+      child: albumWithReactions,
     );
 
     final Color rowHighlightColor = themeExt?.palette.messageSelectionOverlay ??

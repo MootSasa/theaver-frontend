@@ -88,6 +88,7 @@ import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import '../../services/bot_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/dm_parity_service.dart';
+import '../../widgets/chat/dm_parity_sheets.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_instant_cache.dart';
 import '../../widgets/chat/contact_picker_sheet.dart';
@@ -178,6 +179,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   ReactionSettings? _reactionSettings;
   bool _hasActiveCall = false;
   bool _isSilentBroadcast = false;
+  bool? _savedSilentBroadcastPref;
   bool _seededFromChatDetails = false;
   List<BotInfo> _inlineDirectoryBots = const [];
   String? _activeMentionQuery;
@@ -273,6 +275,30 @@ class _ChannelScreenState extends State<ChannelScreen>
         ? item.album.primaryMessage
         : (item as FeedSingleItem).message;
     return _dateSeparatorKeyFor(day, msg);
+  }
+
+  bool _isOwnChannelPost(Message m) {
+    if (m.isOwn) return true;
+    final uid = _currentUserId;
+    if (uid == null || uid.isEmpty) return false;
+    return m.senderId == uid || m.postAuthorId == uid;
+  }
+
+  bool _canEditChannelPost(Message m) =>
+      _canEditMessages || (_canPostInChannel && _isOwnChannelPost(m));
+
+  bool _canDeleteChannelPosts(Iterable<Message> msgs) =>
+      _canDeleteMessages ||
+      (_canPostInChannel && msgs.isNotEmpty && msgs.every(_isOwnChannelPost));
+
+  bool get _canDeleteSelectedChannelPosts {
+    if (_selectedMessageIds.isEmpty) return false;
+    if (_canDeleteMessages) return true;
+    if (!_canPostInChannel) return false;
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    return selected.isNotEmpty && selected.every(_isOwnChannelPost);
   }
 
   void _updateFeedItems() {
@@ -395,7 +421,35 @@ class _ChannelScreenState extends State<ChannelScreen>
         (_isAdmin && (chat.myAdminPermissions?.canPinMessages ?? true));
     if (!_canPostInChannel) {
       _isSilentBroadcast = false;
+    } else if (_savedSilentBroadcastPref != null) {
+      _isSilentBroadcast = _savedSilentBroadcastPref!;
     }
+  }
+
+  String get _silentBroadcastPrefKey =>
+      'channel_silent_broadcast_${widget.channelId}';
+
+  Future<void> _loadSilentBroadcastPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool(_silentBroadcastPrefKey);
+      if (saved == null || !mounted) return;
+      _savedSilentBroadcastPref = saved;
+      if (_canPostInChannel && _isSilentBroadcast != saved) {
+        setState(() => _isSilentBroadcast = saved);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _setSilentBroadcast(bool silent) async {
+    _savedSilentBroadcastPref = silent;
+    if (mounted) {
+      setState(() => _isSilentBroadcast = silent);
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_silentBroadcastPrefKey, silent);
+    } catch (_) {}
   }
 
   void _enqueuePostViews(Iterable<String> messageIds) {
@@ -567,6 +621,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           chatType: 'channel',
         ) ||
         ProfileInstantCache.instance.isChatMutedSync(widget.channelId);
+    unawaited(_loadSilentBroadcastPreference());
     _keyboardHeight =
         instant?.keyboardHeight ?? ChatInstantCache.instance.globalKeyboardHeight;
     if (instant?.inputHeight != null) {
@@ -2114,6 +2169,15 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   Future<void> _refreshChannelDetails() async {
+    if (mounted) {
+      final syncedMuted = NotificationSettingsProvider().isChatMuted(
+        widget.channelId,
+        chatType: 'channel',
+      );
+      if (_isMuted != syncedMuted) {
+        setState(() => _isMuted = syncedMuted);
+      }
+    }
     try {
       final chatResult = await ChatService.getChat(widget.channelId);
       if (chatResult['success'] == true && mounted) {
@@ -3110,6 +3174,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         messageIds: staged.messages.map((m) => m.id).toList(),
         hideSender: staged.hideSender,
         hideCaption: staged.hideCaption,
+        isSilent: effectiveSilent,
       );
       if (fwdRes['success'] == true) {
         _triggerSilentSync();
@@ -3404,6 +3469,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         entities: effectiveEntities,
         linkPreviewOptions: effectiveLinkPreview,
         invertMedia: effectiveInvert,
+        isSilent: effectiveSilent,
       );
     } catch (e) {
       debugPrint('SyncService createPendingMessage error: $e');
@@ -3616,6 +3682,7 @@ class _ChannelScreenState extends State<ChannelScreen>
             builder: (_) => PollCreateScreen(
               chatId: widget.channelId,
               isChannel: true,
+              isSilent: _isSilentBroadcast,
             ),
           ),
         );
@@ -4427,9 +4494,16 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     final safeBottom = MediaQuery.paddingOf(context).bottom;
     final canCompose = _canPostInChannel || _isAdmin;
+    final String heroTag = 'chat_avatar_${widget.channelId}';
 
     return ChatScaffold(
-      canPop: !isKeyboardVisible && !_showEmojiPanel && !_isSelectionMode,
+      swipeBackBlocked:
+          _isSelectionMode || _isVoiceRecording || _isVideoRecording,
+      canPop: !isKeyboardVisible &&
+          !_showEmojiPanel &&
+          !_isSelectionMode &&
+          !_isVoiceRecording &&
+          !_isVideoRecording,
       onPopInvoked: (didPop, _) {
         if (!didPop) {
           if (_isSelectionMode) {
@@ -4438,6 +4512,11 @@ class _ChannelScreenState extends State<ChannelScreen>
             _closeEmojiPanel();
           } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
+          } else if (_isVideoRecording) {
+            _onVideoRecordingCancelled();
+          } else if (_isVoiceRecording) {
+            _voiceRecorderService.cancelRecording();
+            setState(() => _isVoiceRecording = false);
           }
         }
       },
@@ -4449,7 +4528,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         statusText: subscriberText,
         isChannel: true, // Calls hidden in channel
         isMuted: _isMuted,
-        heroTag: displayName,
+        heroTag: heroTag,
         isSelectionMode: _isSelectionMode,
         selectedCount: _selectedMessageIds.length,
         hasProtectedContent: _hasProtectedContent,
@@ -4472,13 +4551,15 @@ class _ChannelScreenState extends State<ChannelScreen>
               }
             : null,
         onForwardSelected: _forwardSelectedMessages,
-        onDeleteSelected: _canDeleteMessages ? _deleteSelectedMessages : null,
+        onDeleteSelected: _canDeleteSelectedChannelPosts
+            ? _deleteSelectedMessages
+            : null,
         profileScreenBuilder: (_) => ProfileScreen(
           entityType: ProfileEntityType.channel,
           chatId: widget.channelId,
           initialName: displayName,
           initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
-          heroTag: displayName,
+          heroTag: heroTag,
           onUpdate: _refreshChannelDetails,
           onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
         ),
@@ -4492,12 +4573,21 @@ class _ChannelScreenState extends State<ChannelScreen>
                 chatId: widget.channelId,
                 initialName: displayName,
                 initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
-                heroTag: displayName,
+                heroTag: heroTag,
                 onUpdate: _refreshChannelDetails,
                 onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
               ),
             ),
-          );
+          ).then((_) {
+            if (!mounted) return;
+            setState(() {
+              _isMuted = NotificationSettingsProvider().isChatMuted(
+                widget.channelId,
+                chatType: 'channel',
+              );
+            });
+            unawaited(_refreshChannelDetails());
+          });
         },
         onViewProfile: () {
           Navigator.push(
@@ -4508,12 +4598,21 @@ class _ChannelScreenState extends State<ChannelScreen>
                 chatId: widget.channelId,
                 initialName: displayName,
                 initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
-                heroTag: displayName,
+                heroTag: heroTag,
                 onUpdate: _refreshChannelDetails,
                 onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
               ),
             ),
-          );
+          ).then((_) {
+            if (!mounted) return;
+            setState(() {
+              _isMuted = NotificationSettingsProvider().isChatMuted(
+                widget.channelId,
+                chatType: 'channel',
+              );
+            });
+            unawaited(_refreshChannelDetails());
+          });
         },
         onSearch: () {
           ChatActionsHelper.openSearch(
@@ -4546,7 +4645,14 @@ class _ChannelScreenState extends State<ChannelScreen>
                 );
               }
             : null,
-        onReport: () {},
+        onReport: () {
+          unawaited(
+            showAbuseReportSheet(
+              context,
+              chatId: widget.channelId,
+            ),
+          );
+        },
         extraMenuItems: [
           if (_isAdmin)
             FloatingChatMenuItem(
@@ -5073,21 +5179,47 @@ class _ChannelScreenState extends State<ChannelScreen>
       isSelectionMode: _isSelectionMode,
       highlightItemId: _highlightMessageId,
       formatTime: _formatTime,
-      onReactionTap: (emoji) => _toggleReaction(message.id, emoji),
-      onShareTap: () => _forwardMessagesToPickedChat(
-        album != null
-            ? album.items.map((m) => m.id).toList()
-            : [message.id],
-      ),
-      onCommentsTap: () => _openPostComments(message),
+      onReactionTap: (emoji) {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _toggleReaction(message.id, emoji);
+      },
+      onShareTap: () {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _forwardMessagesToPickedChat(
+          album != null
+              ? album.items.map((m) => m.id).toList()
+              : [message.id],
+        );
+      },
+      onCommentsTap: () {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _openPostComments(message);
+      },
       onAuthorTap:
           _isSelectionMode ? null : () => _openAuthorProfile(message),
-      onReplyTap: (replyToId, chatId) => _handleReplyTap(
-        replyToId,
-        chatId,
-        fromMessageId: message.id,
-      ),
-      onFileTap: _openFile,
+      onReplyTap: _isSelectionMode
+          ? (_, __) => _toggleFeedSelection(message, album)
+          : (replyToId, chatId) => _handleReplyTap(
+                replyToId,
+                chatId,
+                fromMessageId: message.id,
+              ),
+      onFileTap: (url, name, type) {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _openFile(url, name, type);
+      },
       onRetry: (msg) => _retryMessage(msg),
       hasProtectedContent: _hasProtectedContent,
       onInsertInlineQuery: _canPostInChannel ? _insertInlineQueryText : null,
@@ -5097,6 +5229,10 @@ class _ChannelScreenState extends State<ChannelScreen>
         setState(() => _translationsByMsgId.remove(message.id));
       },
       onHashtagTap: (_) {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
         ChatActionsHelper.openSearch(
           context: context,
           chatId: widget.channelId,
@@ -5108,7 +5244,13 @@ class _ChannelScreenState extends State<ChannelScreen>
       },
       onBodyTap: _isSelectionMode
           ? null
-          : () => _showContextMenu(message, isMe, key, enableBlur: true),
+          : () => _showContextMenu(
+                message,
+                isMe,
+                key,
+                album: album,
+                enableBlur: true,
+              ),
       onDoubleTap: _isSelectionMode
           ? null
           : () => _toggleReaction(message.id, '❤️'),
@@ -5141,7 +5283,13 @@ class _ChannelScreenState extends State<ChannelScreen>
             return;
           }
           if (!isDesktop) {
-            _showContextMenu(message, isMe, key, enableBlur: true);
+            _showContextMenu(
+              message,
+              isMe,
+              key,
+              album: album,
+              enableBlur: true,
+            );
           }
         },
         onDoubleTap: _isSelectionMode
@@ -5153,6 +5301,10 @@ class _ChannelScreenState extends State<ChannelScreen>
                 _enterFeedSelection(message, album);
               },
         onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleFeedSelection(message, album);
+            return;
+          }
           final bool clickedOnBubble = MessageBubble.isGlobalPointInsideBubble(
             key.currentContext,
             details.globalPosition,
@@ -5161,6 +5313,7 @@ class _ChannelScreenState extends State<ChannelScreen>
             message,
             isMe,
             key,
+            album: album,
             forceOpen: true,
             enableBlur: clickedOnBubble,
           );
@@ -5210,18 +5363,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
-  void _confirmDeleteMessage(Message message) {
-    _deleteMessagesWithSheet([message]);
-  }
-
   Future<void> _deleteMessagesWithSheet(List<Message> targets) async {
     if (targets.isEmpty) return;
+    final canRevokeTargets = _canDeleteChannelPosts(targets);
     final res = await showTelegramDeleteMessagesSheet(
       context: context,
       messageCount: targets.length,
       chatType: 'channel',
-      canRevoke: _canDeleteMessages,
-      defaultRevoke: _canDeleteMessages,
+      canRevoke: canRevokeTargets,
+      defaultRevoke: canRevokeTargets,
     );
     if (res == null || !res.confirmed || !mounted) return;
 
@@ -5361,6 +5511,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         messageIds: updated.messages.map((m) => m.id).toList(),
         hideSender: updated.hideSender,
         hideCaption: updated.hideCaption,
+        isSilent: _isSilentBroadcast,
       );
       if (!mounted) return;
       if (fwdRes['success'] == true) {
@@ -5452,16 +5603,37 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
+  MediaAlbum? _resolveAlbumForMessage(Message message) {
+    final gId = message.groupedId;
+    if (gId == null || gId.isEmpty) return null;
+    for (final item in _feedItems) {
+      if (item is FeedAlbumItem &&
+          (item.album.groupedId == gId ||
+              item.album.items.any((ai) => ai.id == message.id))) {
+        return item.album;
+      }
+    }
+    return null;
+  }
+
   void _showContextMenu(
     Message message,
     bool isMe,
     GlobalKey key, {
+    MediaAlbum? album,
     bool forceOpen = false,
     bool enableBlur = true,
     Offset? initialDragStartGlobalPosition,
     Offset? initialDragCurrentGlobalPosition,
   }) {
     _dismissKeyboardAndEmoji();
+    final MediaAlbum? resolvedAlbum = album ?? _resolveAlbumForMessage(message);
+    final List<String> targetIds = resolvedAlbum != null
+        ? resolvedAlbum.items.map((m) => m.id).toList()
+        : [message.id];
+    final List<Message> targetMessages = resolvedAlbum != null
+        ? _messages.where((m) => targetIds.contains(m.id)).toList()
+        : [message];
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
     final bool isPoll = message.messageType == 'poll';
@@ -5495,11 +5667,14 @@ class _ChannelScreenState extends State<ChannelScreen>
           ? (selectedText, offset, length) =>
               _startQuote(message, selectedText, offset, length)
           : null,
-      onSelect: () => _enterSelectionMode(message),
+      onSelect: () => _enterFeedSelection(message, resolvedAlbum),
       onPin: _canPinMessages ? () => _togglePinMessage(message) : null,
       isPinned: _pinnedMessage?.id == message.id,
-      onForward: () => _forwardMessagesToPickedChat([message.id]),
-      onEdit: (_canEditMessages && !isVideoNote && !isVoiceNote && !isPoll)
+      onForward: () => _forwardMessagesToPickedChat(targetIds),
+      onEdit: (_canEditChannelPost(message) &&
+              !isVideoNote &&
+              !isVoiceNote &&
+              !isPoll)
           ? () {
               setState(() {
                 _replyToMessage = null;
@@ -5532,7 +5707,12 @@ class _ChannelScreenState extends State<ChannelScreen>
       onReplyInAnotherChat: !_hasProtectedContent
           ? () => unawaited(_replyInAnotherChat(message))
           : null,
-      onDelete: _canDeleteMessages ? (msg) => _confirmDeleteMessage(msg) : null,
+      onDelete: _canDeleteChannelPosts(
+              targetMessages.isNotEmpty ? targetMessages : [message])
+          ? (_) => _deleteMessagesWithSheet(
+                targetMessages.isNotEmpty ? targetMessages : [message],
+              )
+          : null,
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
     );
@@ -5668,14 +5848,6 @@ class _ChannelScreenState extends State<ChannelScreen>
         'Ответ в другой чат пока поддержан только для личных чатов',
       );
     }
-  }
-
-  void _enterSelectionMode(Message message) {
-    _dismissKeyboardAndEmoji();
-    HapticUtils.selection();
-    setState(() {
-      _selectedMessageIds.add(message.id);
-    });
   }
 
   void _clearSelection() {
@@ -6002,7 +6174,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       linkedChatAvatar: _linkedChat?.avatarUrl,
       isSilentBroadcast: _isSilentBroadcast,
       onToggleSilentBroadcast: (silent) {
-        setState(() => _isSilentBroadcast = silent);
+        unawaited(_setSilentBroadcast(silent));
       },
       onMuteChanged: (newMuted) {
         setState(() => _isMuted = newMuted);
@@ -6123,6 +6295,7 @@ class _ChannelScreenState extends State<ChannelScreen>
                   chatId: widget.channelId,
                   result: item,
                   replyToMessageId: _replyToMessage?.id,
+                  isSilent: _isSilentBroadcast,
                 );
                 if (!ctx.mounted) return;
                 if (ok) {
@@ -6403,6 +6576,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           replyToMessageType: replyTo?.messageType ?? 'text',
           waveform: result.waveform,
           duration: result.duration.inSeconds,
+          isSilent: _isSilentBroadcast,
         );
       } catch (e) {
         debugPrint('SyncService createPendingMessage voice error in channel: $e');
@@ -6414,6 +6588,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         var message = Message.fromDbMessage(pendingMsg).copyWith(
           waveform: result.waveform,
           duration: result.duration.inSeconds,
+          isSilent: _isSilentBroadcast,
         );
         if (replyTo != null) {
           final isReplyToMe = replyTo.senderId == _currentUserId;
@@ -6598,6 +6773,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           replyToSenderName: replyTo?.senderName,
           replyToContent: replyTo?.content,
           replyToMessageType: replyTo?.messageType ?? 'text',
+          isSilent: _isSilentBroadcast,
         );
       } catch (e) {
         debugPrint('SyncService createPendingMessage video error in channel: $e');

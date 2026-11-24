@@ -1522,10 +1522,9 @@ class MessageBubble extends StatelessWidget {
 
     Widget? senderNameWidget;
     const double senderNameWidthEstimate = 0.0;
-    final bool hasSenderInBubble = !isMe &&
-        ((senderHeaderWidget != null) ||
-            (senderName != null && senderName!.isNotEmpty));
-    if (!isMe && senderHeaderWidget != null) {
+    final bool hasSenderInBubble = (senderHeaderWidget != null) ||
+        (!isMe && senderName != null && senderName!.isNotEmpty);
+    if (senderHeaderWidget != null) {
       senderNameWidget = Padding(
         padding: const EdgeInsets.only(bottom: 4.0),
         child: senderHeaderWidget!,

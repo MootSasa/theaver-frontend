@@ -16,6 +16,9 @@ class PollCreateScreen extends StatefulWidget {
   final bool isChannel;
   final int? topicId;
   final String? sendAsChatId;
+  final String? sendAsMode;
+  final bool sendAsAnonymous;
+  final bool isSilent;
 
   const PollCreateScreen({
     super.key,
@@ -23,6 +26,9 @@ class PollCreateScreen extends StatefulWidget {
     this.isChannel = false,
     this.topicId,
     this.sendAsChatId,
+    this.sendAsMode,
+    this.sendAsAnonymous = false,
+    this.isSilent = false,
   });
 
   @override
@@ -135,9 +141,19 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
             'correct_option_id': mappedCorrectOptionId,
           if (_isQuiz && _explanationController.text.trim().isNotEmpty)
             'explanation': _explanationController.text.trim(),
-          if (widget.topicId != null) 'topic_id': widget.topicId,
-          if (widget.sendAsChatId != null && widget.sendAsChatId!.isNotEmpty)
-            'send_as_chat_id': widget.sendAsChatId,
+          'is_silent': widget.isSilent,
+          'send_as_mode': (widget.sendAsMode != null &&
+                  widget.sendAsMode!.trim().isNotEmpty)
+              ? widget.sendAsMode!.trim()
+              : (widget.sendAsAnonymous
+                  ? 'group'
+                  : ((widget.sendAsChatId != null &&
+                          widget.sendAsChatId!.trim().isNotEmpty)
+                      ? 'channel'
+                      : 'user')),
+          'send_as_anonymous': widget.sendAsAnonymous,
+          'send_as_chat_id': widget.sendAsChatId ?? '',
+          'topic_id': widget.topicId,
         },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );

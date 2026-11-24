@@ -89,6 +89,11 @@ class LiquidGlassInputField extends StatefulWidget {
   final VoidCallback? onToggleReplyKeyboard;
   final int slowmodeRemainingSeconds;
   final VoidCallback? onSendLongPress;
+  final Widget? leadingIdentityWidget;
+  final bool showSilentBroadcastToggle;
+  final bool isSilentBroadcast;
+  final VoidCallback? onToggleSilentBroadcast;
+  final bool isEditing;
 
   const LiquidGlassInputField({
     Key? key,
@@ -127,6 +132,11 @@ class LiquidGlassInputField extends StatefulWidget {
     this.onToggleReplyKeyboard,
     this.slowmodeRemainingSeconds = 0,
     this.onSendLongPress,
+    this.leadingIdentityWidget,
+    this.showSilentBroadcastToggle = false,
+    this.isSilentBroadcast = false,
+    this.onToggleSilentBroadcast,
+    this.isEditing = false,
   }) : super(key: key);
 
   @override
@@ -601,12 +611,30 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final themeExt = theme.extension<TheavThemeExtension>();
     final rightButtonBg = themeExt?.palette.chatSendButton ?? theme.colorScheme.primary;
     final iconColor = themeExt?.palette.chatInputButtons ?? theme.colorScheme.onSurface.withValues(alpha: 0.5);
+    final bool showLeadingIdentity =
+        widget.leadingIdentityWidget != null && !widget.isEditing;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerLeft,
+          child: showLeadingIdentity
+              ? Padding(
+                  key: const ValueKey('input_pill_leading_identity'),
+                  padding: const EdgeInsets.only(left: 6, top: 6, bottom: 6),
+                  child: widget.leadingIdentityWidget!,
+                )
+              : const SizedBox.shrink(),
+        ),
         Padding(
-          padding: const EdgeInsets.only(left: 6, bottom: 6, top: 6),
+          padding: EdgeInsets.only(
+            left: showLeadingIdentity ? 2 : 6,
+            bottom: 6,
+            top: 6,
+          ),
           child: widget.onEmoji != null
               ? GestureDetector(
                   onTap: widget.onEmoji,
@@ -748,7 +776,8 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 : const SizedBox.shrink(key: ValueKey('bot_cmd_empty')),
           ),
         ),
-        if (widget.onEmoji != null ||
+        if (showLeadingIdentity ||
+            widget.onEmoji != null ||
             widget.showBotCommandsButton ||
             (widget.botMenuWebAppLabel != null &&
                 widget.botMenuWebAppLabel!.isNotEmpty))
@@ -799,7 +828,80 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 : const SizedBox.shrink(key: ValueKey('reply_kb_empty')),
           ),
         ),
-        if (widget.onAttach != null) const SizedBox(width: 4),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: widget.controller,
+          builder: (context, value, _) {
+            final bool showSilentBell = widget.showSilentBroadcastToggle &&
+                !widget.isEditing &&
+                !widget.hasAttachments &&
+                value.text.trim().isEmpty;
+            final bool disableAnim =
+                MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+            return AnimatedSize(
+              duration: disableAnim
+                  ? Duration.zero
+                  : const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              child: AnimatedSwitcher(
+                duration: disableAnim
+                    ? Duration.zero
+                    : const Duration(milliseconds: 150),
+                switchInCurve: Curves.easeOutBack,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) => ScaleTransition(
+                  scale: animation,
+                  child: child,
+                ),
+                child: showSilentBell
+                    ? Padding(
+                        key: const ValueKey('input_pill_silent_bell_slot'),
+                        padding:
+                            const EdgeInsets.only(left: 2, top: 6, bottom: 6),
+                        child: Semantics(
+                          button: true,
+                          toggled: widget.isSilentBroadcast,
+                          label: widget.isSilentBroadcast
+                              ? 'Беззвучная публикация включена'
+                              : 'Беззвучная публикация выключена',
+                          child: Tooltip(
+                            message: widget.isSilentBroadcast
+                                ? 'Без звука'
+                                : 'Со звуком',
+                            child: GestureDetector(
+                              key: const ValueKey(
+                                'input_pill_silent_bell_button',
+                              ),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () {
+                                if (widget.onToggleSilentBroadcast != null) {
+                                  HapticUtils.selection();
+                                  widget.onToggleSilentBroadcast!();
+                                }
+                              },
+                              child: SizedBox(
+                                width: 36,
+                                height: _kActionButtonSize,
+                                child: Center(
+                                  child: _CrossOutBellIcon(
+                                    isSilent: widget.isSilentBroadcast,
+                                    activeColor: rightButtonBg,
+                                    inactiveColor: iconColor,
+                                    size: 22.0,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(
+                        key: ValueKey('input_pill_silent_bell_empty'),
+                      ),
+              ),
+            );
+          },
+        ),
+        if (widget.onAttach != null) const SizedBox(width: 2),
         Padding(
           padding: const EdgeInsets.only(bottom: 6, top: 6),
           child: widget.onAttach != null
@@ -2245,5 +2347,133 @@ class TextFormattingUtils {
     );
   }
 }
+
+/// Telegram-style animated silent broadcast bell icon (`CrossOutDrawable` parity).
+/// Animates `crossOutProgress` (`0.0 -> 1.0`) over `200ms` with a crisp mask gap
+/// parallel to the diagonal strike-through.
+class _CrossOutBellIcon extends StatelessWidget {
+  final bool isSilent;
+  final Color activeColor;
+  final Color inactiveColor;
+  final double size;
+
+  const _CrossOutBellIcon({
+    required this.isSilent,
+    required this.activeColor,
+    required this.inactiveColor,
+    this.size = 22.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool disableAnim =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final double target = isSilent ? 1.0 : 0.0;
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: target, end: target),
+      duration:
+          disableAnim ? Duration.zero : const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+      builder: (context, progress, _) {
+        final Color resolvedColor =
+            Color.lerp(inactiveColor, activeColor, progress) ?? inactiveColor;
+        return CustomPaint(
+          key: ValueKey<String>(
+            isSilent ? 'silent_bell_off' : 'silent_bell_on',
+          ),
+          size: Size.square(size),
+          painter: _CrossOutBellPainter(
+            color: resolvedColor,
+            crossOutProgress: progress,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CrossOutBellPainter extends CustomPainter {
+  final Color color;
+  final double crossOutProgress;
+
+  const _CrossOutBellPainter({
+    required this.color,
+    required this.crossOutProgress,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+    final double strokeWidth = math.max(1.6, w * 0.082);
+
+    final Paint strokePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+
+    final Path bellPath = Path()
+      // Top finial / stem
+      ..moveTo(w * 0.50, h * 0.11)
+      ..lineTo(w * 0.50, h * 0.18)
+      // Bell body + flared skirt
+      ..moveTo(w * 0.27, h * 0.44)
+      ..cubicTo(w * 0.27, h * 0.27, w * 0.37, h * 0.18, w * 0.50, h * 0.18)
+      ..cubicTo(w * 0.63, h * 0.18, w * 0.73, h * 0.27, w * 0.73, h * 0.44)
+      ..cubicTo(w * 0.73, h * 0.58, w * 0.79, h * 0.66, w * 0.82, h * 0.70)
+      ..lineTo(w * 0.18, h * 0.70)
+      ..cubicTo(w * 0.21, h * 0.66, w * 0.27, h * 0.58, w * 0.27, h * 0.44)
+      ..close();
+
+    final Path clapperPath = Path()
+      ..addArc(
+        Rect.fromCenter(
+          center: Offset(w * 0.50, h * 0.75),
+          width: w * 0.22,
+          height: h * 0.18,
+        ),
+        0.15,
+        math.pi - 0.30,
+      );
+
+    final double p = crossOutProgress.clamp(0.0, 1.0);
+    if (p <= 0.001) {
+      canvas.drawPath(bellPath, strokePaint);
+      canvas.drawPath(clapperPath, strokePaint);
+      return;
+    }
+
+    final Offset start = Offset(w * 0.16, h * 0.16);
+    final Offset fullEnd = Offset(w * 0.84, h * 0.84);
+    final Offset end = Offset.lerp(start, fullEnd, p)!;
+
+    canvas.saveLayer(Offset.zero & size, Paint());
+    canvas.drawPath(bellPath, strokePaint);
+    canvas.drawPath(clapperPath, strokePaint);
+
+    // Mask gap cutout parallel to the diagonal strike-through
+    final Paint clearPaint = Paint()
+      ..blendMode = BlendMode.clear
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth * 2.35
+      ..strokeCap = StrokeCap.round
+      ..isAntiAlias = true;
+    final Offset gapShift = Offset(strokeWidth * 0.45, -strokeWidth * 0.45);
+    canvas.drawLine(start + gapShift, end + gapShift, clearPaint);
+
+    canvas.drawLine(start, end, strokePaint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CrossOutBellPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        oldDelegate.crossOutProgress != crossOutProgress;
+  }
+}
+
 
 

@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
@@ -572,136 +571,6 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
   }
 
-  Widget _buildSilentBroadcastButton(
-    BuildContext context,
-    bool glassEnabled,
-    bool isLite,
-    LiquidGlassProvider? glassProvider,
-  ) {
-    final theme = Theme.of(context);
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final isDark = theme.brightness == Brightness.dark;
-    final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    final Color activeColor =
-        themeExt?.palette.primary ?? theme.colorScheme.primary;
-    final Color inactiveColor =
-        theme.colorScheme.onSurface.withValues(alpha: isDark ? 0.8 : 0.75);
-
-    final Widget iconSwitcher = AnimatedSwitcher(
-      duration:
-          disableAnimations ? Duration.zero : const Duration(milliseconds: 200),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      child: widget.isSilentBroadcast
-          ? iconoir.BellOff(
-              key: const ValueKey('silent_bell_off'),
-              width: 20,
-              height: 20,
-              color: activeColor,
-            )
-          : iconoir.Bell(
-              key: const ValueKey('silent_bell_on'),
-              width: 20,
-              height: 20,
-              color: inactiveColor,
-            ),
-    );
-
-    final Widget innerTap = Material(
-      type: MaterialType.transparency,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(22),
-        onTap: () =>
-            widget.onToggleSilentBroadcast?.call(!widget.isSilentBroadcast),
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: Center(child: iconSwitcher),
-        ),
-      ),
-    );
-
-    final Widget capsule;
-    if (glassEnabled && glassProvider != null) {
-      final style = glassProvider.createStyle(
-        context: context,
-        cornerRadius: 22,
-        refractionIndex: 1.1,
-        refractionWidth: 20,
-        isLiteOverride: isLite,
-      );
-      capsule = LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: widget.isSilentBroadcast
-              ? BoxDecoration(
-                  color: activeColor.withValues(alpha: 0.14),
-                  shape: BoxShape.circle,
-                )
-              : null,
-          child: innerTap,
-        ),
-      );
-    } else {
-      final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
-      final rawBg = themeExt?.palette.explicitChatInputBackground ??
-          themeExt?.palette.surface ??
-          (isDark ? const Color(0xFF1C1C1E) : Colors.white);
-      final resolvedRaw = widget.isSilentBroadcast
-          ? Color.alphaBlend(
-              activeColor.withValues(alpha: isDark ? 0.22 : 0.14),
-              rawBg,
-            )
-          : rawBg;
-      final bg = BlurUtils.resolveMaterialHudColor(
-        resolvedRaw,
-        isDark: isDark,
-        blurEnabled: blurEnabled,
-      );
-      final Widget circle = Container(
-        decoration: BoxDecoration(
-          color: bg,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: widget.isSilentBroadcast
-                ? activeColor.withValues(alpha: 0.45)
-                : (isDark ? Colors.white12 : Colors.black12),
-            width: blurEnabled ? 0.6 : 0.5,
-          ),
-        ),
-        child: innerTap,
-      );
-      capsule = ClipRRect(
-        borderRadius: BorderRadius.circular(22),
-        child: blurEnabled
-            ? BackdropFilter.grouped(
-                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
-                child: circle,
-              )
-            : circle,
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(right: 8, bottom: 10),
-      child: Semantics(
-        button: true,
-        toggled: widget.isSilentBroadcast,
-        label: widget.isSilentBroadcast
-            ? 'Беззвучная отправка включена'
-            : 'Беззвучная отправка выключена',
-        child: Tooltip(
-          message: widget.isSilentBroadcast ? 'Без звука' : 'Со звуком',
-          child: SizedBox(
-            width: 44,
-            height: 44,
-            child: capsule,
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final glassProvider = LiquidGlassProvider.maybeOf(context);
@@ -869,10 +738,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   backgroundColor: Colors.grey[300],
                 ),
 
-        // 5b. Anonymous admin banner («От имени группы»)
+        // 5b. Anonymous admin banner («От имени группы») — hidden when inline Send-As selector handles persona
         _GlassSafeAnimatedSection(
-          visible: widget.isAnonymousAdmin,
-          child: widget.isAnonymousAdmin
+          visible: widget.isAnonymousAdmin && widget.sendAsLeadingWidget == null,
+          child: (widget.isAnonymousAdmin && widget.sendAsLeadingWidget == null)
               ? _buildAnonymousAdminBanner(context, glassEnabled, isLite)
               : null,
         ),
@@ -889,11 +758,6 @@ class _ChatInputBarState extends State<ChatInputBar> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            if (widget.sendAsLeadingWidget != null)
-              Padding(
-                padding: const EdgeInsets.only(right: 8, bottom: 7),
-                child: widget.sendAsLeadingWidget!,
-              ),
             Expanded(
               child: LiquidGlassInputField(
                 enabled: glassEnabled,
@@ -902,12 +766,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 focusNode: widget.focusNode,
                 hintText: widget.hintText ??
                     (widget.attachedFiles.isNotEmpty
-                        ? (AppLocalizations.of(context)
-                                ?.translate('chat_add_caption') ??
-                            'Add a caption...')
-                        : (AppLocalizations.of(context)
-                                ?.translate('chat_type_message') ??
-                            'Сообщение')),
+                        ? context.trOr('chat_add_caption', 'Добавить подпись...')
+                        : (widget.isAnonymousAdmin
+                            ? context.trOr(
+                                'send_as_anonymous_hint',
+                                'Написать анонимно...',
+                              )
+                            : context.trOr('chat_type_message', 'Сообщение'))),
                 onChanged: widget.onChanged,
                 onSend: widget.isSending ? null : _handleSend,
                 onSendLongPress: widget.isSending ? null : widget.onSendLongPress,
@@ -944,6 +809,15 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 isReplyKeyboardOpen: widget.isReplyKeyboardOpen,
                 onToggleReplyKeyboard: widget.onToggleReplyKeyboard,
                 slowmodeRemainingSeconds: widget.slowmodeRemainingSeconds,
+                leadingIdentityWidget: widget.sendAsLeadingWidget,
+                showSilentBroadcastToggle: widget.showSilentBroadcastToggle,
+                isSilentBroadcast: widget.isSilentBroadcast,
+                onToggleSilentBroadcast: widget.onToggleSilentBroadcast != null
+                    ? () => widget.onToggleSilentBroadcast!(
+                          !widget.isSilentBroadcast,
+                        )
+                    : null,
+                isEditing: widget.isEditing,
               ),
             ),
             if (widget.scheduledCount > 0 && widget.onOpenScheduled != null)
@@ -961,13 +835,6 @@ class _ChatInputBarState extends State<ChatInputBar> {
                         : context.theav.onSurface,
                   ),
                 ),
-              ),
-            if (widget.showSilentBroadcastToggle)
-              _buildSilentBroadcastButton(
-                context,
-                glassEnabled,
-                isLite,
-                glassProvider,
               ),
             if (widget.trailing != null) widget.trailing!,
           ],

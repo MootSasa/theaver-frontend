@@ -15,6 +15,18 @@ import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import 'group_chat_screen.dart';
 
+/// Result returned when [ForumTopicsScreen] is opened from [GroupChatScreen]
+/// so topic/flat switching happens in-place without stacking duplicate chat routes.
+class ForumTopicSelectionResult {
+  final ForumTopic? topic;
+  final bool viewFlatMessages;
+
+  const ForumTopicSelectionResult({
+    this.topic,
+    this.viewFlatMessages = false,
+  });
+}
+
 /// Forum Topics list screen for Forum Supergroups (`is_forum == true`), supporting
 /// search, live updates, topic creation/editing/pin/close/hide/delete, and
 /// "View as Messages" toggle into the flat group stream.
@@ -25,6 +37,7 @@ class ForumTopicsScreen extends StatefulWidget {
   final String? myRole;
   final AdminRights? myAdminPermissions;
   final GroupDefaultPermissions? defaultPermissions;
+  final bool openedFromGroupChat;
 
   const ForumTopicsScreen({
     super.key,
@@ -34,6 +47,7 @@ class ForumTopicsScreen extends StatefulWidget {
     this.myRole,
     this.myAdminPermissions,
     this.defaultPermissions,
+    this.openedFromGroupChat = false,
   });
 
   @override
@@ -183,6 +197,13 @@ class _ForumTopicsScreenState extends State<ForumTopicsScreen> {
 
   void _openFlatMessages() {
     HapticUtils.tap();
+    if (widget.openedFromGroupChat) {
+      Navigator.pop(
+        context,
+        const ForumTopicSelectionResult(viewFlatMessages: true),
+      );
+      return;
+    }
     Navigator.push(
       context,
       SwipeBackPageRoute(
@@ -193,11 +214,20 @@ class _ForumTopicsScreenState extends State<ForumTopicsScreen> {
           initialIsForum: true,
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) unawaited(_loadTopics(silent: true));
+    });
   }
 
   void _openTopic(ForumTopic topic) {
     HapticUtils.tap();
+    if (widget.openedFromGroupChat) {
+      Navigator.pop(
+        context,
+        ForumTopicSelectionResult(topic: topic),
+      );
+      return;
+    }
     Navigator.push(
       context,
       SwipeBackPageRoute(
@@ -209,7 +239,9 @@ class _ForumTopicsScreenState extends State<ForumTopicsScreen> {
           initialIsForum: true,
         ),
       ),
-    ).then((_) => _loadTopics(silent: true));
+    ).then((_) {
+      if (mounted) unawaited(_loadTopics(silent: true));
+    });
   }
 
   Future<void> _openCreateOrEditTopicSheet({ForumTopic? existing}) async {

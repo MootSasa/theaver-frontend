@@ -33,6 +33,7 @@ import 'notifications/message_notification_presenter.dart';
 import 'notifications/notification_channels.dart';
 import 'notifications/notification_decider.dart';
 import 'notifications/notification_dedup_store.dart';
+import 'notifications/notification_images.dart' show downloadOrGetCachedAvatar;
 import 'notifications/notification_payload.dart';
 import 'push_service_detector.dart';
 import 'settings_service.dart';
@@ -381,10 +382,21 @@ class NotificationService with WidgetsBindingObserver {
     _localNotificationsReady = true;
 
     if (!kIsWeb && Platform.isAndroid) {
-      await _localNotifications
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-          ?.requestNotificationsPermission();
+      final androidPlugin = _localNotifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      await androidPlugin?.requestNotificationsPermission();
       await NotificationChannels.ensureBaseChannels(_localNotifications);
+      await androidPlugin?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          'theaver_silent_messages',
+          'Беззвучные публикации',
+          description: 'Сообщения и публикации, отправленные без звука',
+          importance: Importance.low,
+          playSound: false,
+          enableVibration: false,
+        ),
+      );
     } else if (!kIsWeb && Platform.isIOS) {
       await _localNotifications
           .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
@@ -662,7 +674,10 @@ class NotificationService with WidgetsBindingObserver {
 
   Future<void> _onChatMessage(ChatMessageNotification m, NotificationSource source) async {
     final currentUserId = await AuthService.getUserId();
-    final isOwn = m.senderId.isNotEmpty && currentUserId != null && m.senderId == currentUserId;
+    final isOwn = m.isOwn ||
+        (m.senderId.isNotEmpty &&
+            currentUserId != null &&
+            m.senderId == currentUserId);
     final chatType = m.isChannel ? 'channel' : (m.isGroup ? 'group' : 'private');
 
     final ctx = NotificationContext(
@@ -706,9 +721,13 @@ class NotificationService with WidgetsBindingObserver {
       chatType: chatType,
     );
     final showPreview = effective?.previewEnabled ?? true;
-    final soundEnabled = effective?.soundEnabled ?? true;
+    final bool effectiveSoundEnabled =
+        m.isSilent ? false : (effective?.soundEnabled ?? true);
+    final bool effectiveVibrationEnabled = m.isSilent
+        ? false
+        : (effective?.vibration != VibrationPattern.none);
 
-    if (!isRepeat) {
+    if (!isRepeat && !m.isSilent) {
       _scheduleRepeatNotification(m);
     }
 
@@ -728,11 +747,63 @@ class NotificationService with WidgetsBindingObserver {
     }
 
     if (_usesLocalNotifier) {
-      await _showDesktopMessage(m, showPreview: showPreview, soundEnabled: soundEnabled);
+      await _showDesktopMessage(
+        m,
+        showPreview: showPreview,
+        soundEnabled: effectiveSoundEnabled,
+      );
       return;
     }
 
     if (_isAndroid) {
+      if (m.isSilent) {
+        if (!_localNotificationsReady) return;
+        try {
+          final String title =
+              m.chatName.isNotEmpty ? m.chatName : 'Theaver';
+          final String body = showPreview
+              ? (m.isGroup && m.senderName.isNotEmpty
+                  ? '${m.senderName}: ${m.text}'
+                  : m.text)
+              : 'Новое сообщение';
+          final String? avatarPath =
+              await downloadOrGetCachedAvatar(m.avatarUrl);
+          await _localNotifications.show(
+            0,
+            title,
+            body,
+            NotificationDetails(
+              android: AndroidNotificationDetails(
+                'theaver_silent_messages',
+                'Беззвучные публикации',
+                channelDescription:
+                    'Сообщения и публикации, отправленные без звука',
+                importance: Importance.low,
+                priority: Priority.low,
+                icon: '@drawable/ic_notification',
+                largeIcon: avatarPath != null
+                    ? FilePathAndroidBitmap(avatarPath)
+                    : null,
+                category: AndroidNotificationCategory.message,
+                groupKey: MessageNotificationPresenter.groupKey,
+                tag: MessageNotificationPresenter.tagFor(m.chatId),
+                autoCancel: true,
+                playSound: false,
+                enableVibration: false,
+                silent: true,
+                when: DateTime.now().millisecondsSinceEpoch,
+                showWhen: true,
+                visibility: NotificationVisibility.private,
+              ),
+            ),
+            payload: jsonEncode(m.toTapPayload()),
+          );
+        } catch (e) {
+          debugPrint('NotificationService: silent Android notification failed: $e');
+        }
+        return;
+      }
+
       try {
         await _nativeNotifications.invokeMethod('showChatNotification', <String, dynamic>{
           'type': 'new_message',
@@ -748,7 +819,7 @@ class NotificationService with WidgetsBindingObserver {
           if (m.messageId != null) 'id': m.messageId,
           if (m.avatarUrl != null) 'avatar_url': m.avatarUrl,
           if (m.senderAvatarUrl != null) 'sender_avatar_url': m.senderAvatarUrl,
-          if (!soundEnabled) 'sound': 'none',
+          if (!effectiveSoundEnabled) 'sound': 'none',
         });
       } catch (e) {
         debugPrint('NotificationService: native chat notification failed: $e');
@@ -761,9 +832,11 @@ class NotificationService with WidgetsBindingObserver {
       m,
       options: MessagePresentationOptions(
         showPreview: showPreview,
-        soundEnabled: soundEnabled,
-        vibrationEnabled: effective?.vibration != VibrationPattern.none,
-        vibrationPattern: _vibrationPattern(effective?.vibration),
+        soundEnabled: effectiveSoundEnabled,
+        vibrationEnabled: effectiveVibrationEnabled,
+        vibrationPattern: effectiveVibrationEnabled
+            ? _vibrationPattern(effective?.vibration)
+            : null,
       ),
     );
   }

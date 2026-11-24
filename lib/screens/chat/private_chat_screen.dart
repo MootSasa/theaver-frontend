@@ -4645,6 +4645,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
         return ChatScaffold(
           customBackground: buildChatAppearanceBackgroundWidget(_chatAppearance),
+          swipeBackBlocked: _isSelectionMode ||
+              _isVoiceRecording ||
+              _isVideoRecording,
           canPop: !_isSelectionMode &&
               !_showEmojiPanel &&
               !isKeyboardVisible &&

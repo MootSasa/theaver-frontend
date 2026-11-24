@@ -7,6 +7,7 @@ import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
 import '../../utils/blur_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../theme/baked_chat_wallpaper.dart';
 import '../theme/motion_wallpaper_wrapper.dart';
 import '../tiling/tile_viewport_scope.dart';
@@ -26,6 +27,7 @@ class ChatScaffold extends StatelessWidget {
   final Color? backgroundColor;
   final bool? canPop;
   final void Function(bool didPop, dynamic result)? onPopInvoked;
+  final bool swipeBackBlocked;
   final bool enableStatusBarBlur;
   final bool enableBottomScrollEdge;
   final double? bottomScrollEdgeHeight;
@@ -40,6 +42,7 @@ class ChatScaffold extends StatelessWidget {
     this.backgroundColor,
     this.canPop,
     this.onPopInvoked,
+    this.swipeBackBlocked = false,
     this.enableStatusBarBlur = true,
     this.enableBottomScrollEdge = true,
     this.bottomScrollEdgeHeight,
@@ -104,22 +107,26 @@ class ChatScaffold extends StatelessWidget {
         ? BackdropGroup(child: stackContent)
         : stackContent;
 
-    return PopScope(
-      canPop: defaultCanPop,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) {
-          if (isKeyboardVisible) {
-            FocusScope.of(context).unfocus();
+    return SwipeBackPopScope(
+      swipeBackEnabled: !swipeBackBlocked,
+      child: PopScope(
+        canPop: defaultCanPop,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) {
+            if (isKeyboardVisible) {
+              FocusScope.of(context).unfocus();
+            }
+            if (onPopInvoked != null) {
+              onPopInvoked!(didPop, result);
+            }
           }
-          if (onPopInvoked != null) {
-            onPopInvoked!(didPop, result);
-          }
-        }
-      },
-      child: Scaffold(
-        resizeToAvoidBottomInset: false,
-        backgroundColor: backgroundColor ?? Theme.of(context).scaffoldBackgroundColor,
-        body: groupedStack,
+        },
+        child: Scaffold(
+          resizeToAvoidBottomInset: false,
+          backgroundColor:
+              backgroundColor ?? Theme.of(context).scaffoldBackgroundColor,
+          body: groupedStack,
+        ),
       ),
     );
   }

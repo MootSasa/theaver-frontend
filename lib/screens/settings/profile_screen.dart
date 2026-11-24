@@ -38,6 +38,8 @@ import '../../models/profile_customization.dart';
 import '../../services/profile_instant_cache.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/settings_service.dart';
 import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/avatar_crop_utils.dart';
@@ -192,6 +194,8 @@ class ProfileScreenState extends State<ProfileScreen>
   AdminRights? _myAdminPermissions;
   int _memberCount = 0;
   String _myRole = 'member';
+  bool _isChatMember = true;
+  bool get _isMember => _isChatMember && _myRole != 'guest';
   List<ProfileMemberItem> _members = [];
   List<ChatParticipant> _participants = [];
   bool _isForum = false;
@@ -536,6 +540,7 @@ class ProfileScreenState extends State<ProfileScreen>
           _slowModeInterval = snap.slowModeInterval;
           _memberCount = snap.memberCount;
           _myRole = snap.myRole;
+          _isChatMember = snap.myRole != 'guest';
           if (snap.avatarUrl != null && snap.avatarUrl!.isNotEmpty) {
             _avatarUrl = snap.avatarUrl;
             if (!_avatarUrls.contains(snap.avatarUrl!)) {
@@ -953,8 +958,29 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _loadMuteAndBlockState() async {
     try {
       if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
+        final cid = _resolvedChatId!;
         final prefs = await SharedPreferences.getInstance();
-        final muted = prefs.getBool('muted_chat_$_resolvedChatId') ?? false;
+        bool muted;
+        if (prefs.containsKey('muted_chat_$cid')) {
+          muted = prefs.getBool('muted_chat_$cid') ?? false;
+        } else {
+          NotificationSettingsProvider? notifProvider;
+          if (mounted) {
+            try {
+              notifProvider = Provider.of<NotificationSettingsProvider?>(
+                context,
+                listen: false,
+              );
+            } catch (_) {}
+          }
+          muted = notifProvider?.isChatMuted(
+                cid,
+                chatType: _isChannel
+                    ? 'channel'
+                    : (_isGroup ? 'group' : 'private'),
+              ) ??
+              false;
+        }
         if (mounted && _isMuted != muted) {
           setState(() => _isMuted = muted);
         }
@@ -1202,6 +1228,7 @@ class ProfileScreenState extends State<ProfileScreen>
           if (details.myRole != null && details.myRole!.isNotEmpty) {
             _myRole = details.myRole!;
           }
+          _isChatMember = details.isMember && _myRole != 'guest';
           final srvAvatar = details.avatarUrl;
           if (srvAvatar != null && srvAvatar.isNotEmpty) {
             _avatarUrl = srvAvatar;
@@ -1268,6 +1295,12 @@ class ProfileScreenState extends State<ProfileScreen>
           if (settingsData['my_role'] != null &&
               settingsData['my_role'].toString().isNotEmpty) {
             _myRole = settingsData['my_role'].toString();
+          }
+          if (settingsData['is_member'] is bool) {
+            _isChatMember =
+                (settingsData['is_member'] as bool) && _myRole != 'guest';
+          } else if (_myRole == 'guest') {
+            _isChatMember = false;
           }
           final settingsCount =
               (settingsData['subscriber_count'] as num?)?.toInt() ??
@@ -2112,13 +2145,31 @@ class ProfileScreenState extends State<ProfileScreen>
         chatId: cid,
         currentMuted: _isMuted,
         onMuteChanged: (val) async {
-          if (mounted) setState(() => _isMuted = val);
+          if (mounted) {
+            setState(() => _isMuted = val);
+            try {
+              final notifProvider = Provider.of<NotificationSettingsProvider?>(
+                context,
+                listen: false,
+              );
+              if (notifProvider != null) {
+                unawaited(
+                  notifProvider.setMuteState(
+                    cid,
+                    val ? MuteState.muted : MuteState.notMuted,
+                  ),
+                );
+              }
+            } catch (_) {}
+          }
           final prefs = await SharedPreferences.getInstance();
           await prefs.setBool('muted_chat_$cid', val);
+          widget.onUpdate?.call();
         },
       );
     } else {
       setState(() => _isMuted = !_isMuted);
+      widget.onUpdate?.call();
     }
   }
 
@@ -2149,6 +2200,12 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _handleClearHistory() async {
+    if (_isChannel &&
+        !(_myRole == 'owner' ||
+            (_myRole == 'admin' &&
+                (_myAdminPermissions?.canDeleteMessages ?? false)))) {
+      return;
+    }
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
     await ChatActionsHelper.showClearHistoryDialog(
@@ -2678,7 +2735,8 @@ class ProfileScreenState extends State<ProfileScreen>
         ),
       ),
     );
-    if (res != null && mounted) {
+    if (!mounted || res == null) return;
+    if (res['saved'] == true) {
       setState(() {
         if (res['default_permissions'] is GroupDefaultPermissions) {
           _defaultPermissions =
@@ -2695,6 +2753,9 @@ class ProfileScreenState extends State<ProfileScreen>
               res['has_aggressive_anti_spam_enabled'] as bool;
         }
       });
+      unawaited(_loadGroupOrChannelProfile());
+      widget.onUpdate?.call();
+    } else if (res['members_changed'] == true) {
       unawaited(_loadGroupOrChannelProfile());
     }
   }
@@ -2732,9 +2793,10 @@ class ProfileScreenState extends State<ProfileScreen>
         ),
       ),
     );
-    if (updatedPrimary != null && updatedPrimary.isNotEmpty && mounted) {
+    if (updatedPrimary != null && updatedPrimary != _inviteLink && mounted) {
       setState(() => _inviteLink = updatedPrimary);
       unawaited(_loadGroupOrChannelProfile());
+      widget.onUpdate?.call();
     }
   }
 
@@ -2919,6 +2981,15 @@ class ProfileScreenState extends State<ProfileScreen>
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
     HapticUtils.tap();
+    final currentUid = _accountManager.currentAccount?.userId;
+    final callerPerms =
+        _myRole == 'owner' ? const AdminRights.all() : _myAdminPermissions;
+    final callerCanEdit = AdminRightsScreen.canCallerEditTarget(
+      target: participant,
+      callerUserId: currentUid,
+      callerRole: _myRole,
+      callerPermissions: callerPerms,
+    );
     final changed = await Navigator.push<bool>(
       context,
       SwipeBackPageRoute(
@@ -2927,6 +2998,8 @@ class ProfileScreenState extends State<ProfileScreen>
           chatType: _isChannel ? 'channel' : 'group',
           participant: participant,
           isOwnerCaller: _myRole == 'owner',
+          callerCanEdit: callerCanEdit,
+          callerPermissions: callerPerms,
         ),
       ),
     );
@@ -3872,9 +3945,15 @@ class ProfileScreenState extends State<ProfileScreen>
   }) {
     final currentUid = _accountManager.currentAccount?.userId;
     final isSelf = member.id == currentUid;
+    final callerPerms =
+        _myRole == 'owner' ? const AdminRights.all() : _myAdminPermissions;
     final canManageAdmins = _canManageAdminRights &&
-        ((member.role != 'owner' && !isSelf) ||
-            (member.role == 'owner' && isSelf));
+        AdminRightsScreen.canCallerEditTarget(
+          target: member,
+          callerUserId: currentUid,
+          callerRole: _myRole,
+          callerPermissions: callerPerms,
+        );
     final canModerate = _canRestrictOrBanMembers &&
         !isSelf &&
         member.role != 'owner' &&
@@ -3946,42 +4025,64 @@ class ProfileScreenState extends State<ProfileScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          memberName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w600,
-                            color: textColor,
-                          ),
-                        ),
-                      ),
-                      if (isRestricted) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1.5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text(
-                            'ограничен',
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.deepOrange,
+                  LayoutBuilder(
+                    builder: (context, innerConstraints) {
+                      final showRestrictedBadge =
+                          isRestricted && innerConstraints.maxWidth >= 68;
+                      final maxRestrictedWidth = showRestrictedBadge
+                          ? math.min(
+                              84.0,
+                              (innerConstraints.maxWidth - 6.0) * 0.48,
+                            )
+                          : 0.0;
+                      return Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              memberName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w600,
+                                color: textColor,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ],
+                          if (showRestrictedBadge) ...[
+                            const SizedBox(width: 6),
+                            Flexible(
+                              flex: 0,
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: maxRestrictedWidth,
+                                ),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 1.5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.withValues(alpha: 0.16),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Text(
+                                    'ограничен',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.deepOrange,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -3998,24 +4099,36 @@ class ProfileScreenState extends State<ProfileScreen>
             ),
             if (roleBadge != null) ...[
               const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: (member.role == 'owner' || member.adminTitle.isNotEmpty
-                          ? accentColor
-                          : subColor)
-                      .withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  roleBadge,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    color:
-                        member.role == 'owner' || member.adminTitle.isNotEmpty
+              Flexible(
+                flex: 0,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 108),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color:
+                          (member.role == 'owner' || member.adminTitle.isNotEmpty
+                                  ? accentColor
+                                  : subColor)
+                              .withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      roleBadge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: member.role == 'owner' ||
+                                member.adminTitle.isNotEmpty
                             ? accentColor
                             : subColor,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -6881,6 +6994,12 @@ class ProfileScreenState extends State<ProfileScreen>
     }
 
     // Group or Channel
+    final canClearHistory = _isMember &&
+        (!_isChannel ||
+            _myRole == 'owner' ||
+            (_myRole == 'admin' &&
+                (_myAdminPermissions?.canDeleteMessages ?? false)));
+
     return [
       if (_canEditGroupOrChannel)
         _MorphMenuItemData(
@@ -6903,21 +7022,23 @@ class ProfileScreenState extends State<ProfileScreen>
         iconBuilder: (color, size) =>
             iconoir.Link(color: color, width: size, height: size),
       ),
-      _MorphMenuItemData(
-        id: 'clear_history',
-        label: _tr(l10n, 'chat_menu_clear_history', 'Очистить историю'),
-        iconBuilder: (color, size) =>
-            iconoir.Erase(color: color, width: size, height: size),
-      ),
-      _MorphMenuItemData(
-        id: 'leave_chat',
-        label: _isChannel
-            ? _tr(l10n, 'profile_menu_leave_channel', 'Покинуть канал')
-            : _tr(l10n, 'chat_menu_leave', 'Покинуть группу'),
-        isDestructive: true,
-        iconBuilder: (color, size) =>
-            iconoir.LogOut(color: color, width: size, height: size),
-      ),
+      if (canClearHistory)
+        _MorphMenuItemData(
+          id: 'clear_history',
+          label: _tr(l10n, 'chat_menu_clear_history', 'Очистить историю'),
+          iconBuilder: (color, size) =>
+              iconoir.Erase(color: color, width: size, height: size),
+        ),
+      if (_isMember)
+        _MorphMenuItemData(
+          id: 'leave_chat',
+          label: _isChannel
+              ? _tr(l10n, 'profile_menu_leave_channel', 'Покинуть канал')
+              : _tr(l10n, 'chat_menu_leave', 'Покинуть группу'),
+          isDestructive: true,
+          iconBuilder: (color, size) =>
+              iconoir.LogOut(color: color, width: size, height: size),
+        ),
     ];
   }
 

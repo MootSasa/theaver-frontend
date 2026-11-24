@@ -10,6 +10,7 @@ import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../services/websocket_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../utils/swipe_back_route.dart';
 import '../../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
@@ -70,11 +71,11 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     setState(() => _joinRequests = requests);
   }
 
-  Future<void> _loadLinks() async {
+  Future<void> _loadLinks({bool allowSettingsFallback = true}) async {
     try {
       final results = await Future.wait([
         ChatService.getInviteLinks(widget.chatId),
-        if (_primaryLink.isEmpty)
+        if (_primaryLink.isEmpty && allowSettingsFallback)
           ChatService.getGroupSettings(widget.chatId)
         else
           Future.value(const <String, dynamic>{}),
@@ -87,7 +88,9 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
       final fetchedRequests = results[2] as List<ChatJoinRequest>;
 
       var resolvedPrimary = _primaryLink;
-      if (resolvedPrimary.isEmpty && settingsRes['success'] == true) {
+      if (resolvedPrimary.isEmpty &&
+          allowSettingsFallback &&
+          settingsRes['success'] == true) {
         resolvedPrimary =
             (settingsRes['invite_link'] ?? '').toString().trim();
       }
@@ -370,8 +373,12 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     if (!mounted) return;
     setState(() => _isBusy = false);
     if (ok) {
+      final wasPrimary = _primaryLink == item.link;
+      if (wasPrimary) {
+        _primaryLink = '';
+      }
       GlassToastService().show(context, 'Ссылка отозвана');
-      await _loadLinks();
+      await _loadLinks(allowSettingsFallback: !wasPrimary);
     } else {
       GlassToastService().showError(context, 'Не удалось отозвать ссылку');
     }
@@ -388,11 +395,12 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     if (!mounted) return;
     setState(() => _isBusy = false);
     if (ok) {
-      if (_primaryLink == item.link) {
+      final wasPrimary = _primaryLink == item.link;
+      if (wasPrimary) {
         _primaryLink = '';
       }
       GlassToastService().show(context, 'Ссылка удалена');
-      await _loadLinks();
+      await _loadLinks(allowSettingsFallback: !wasPrimary);
     } else {
       GlassToastService().showError(context, 'Не удалось удалить ссылку');
     }
@@ -427,21 +435,28 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     return parts.join(' • ');
   }
 
+  void _popWithPrimaryLink() {
+    if (!Navigator.of(context).canPop()) return;
+    Navigator.pop(context, _primaryLink);
+  }
+
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
     final activeAdditional = _activeAdditionalLinks;
     final inactive = _inactiveLinks;
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) Navigator.pop(context, _primaryLink);
-      },
-      child: SettingsFloatingScaffold(
-        title: 'Пригласительные ссылки',
-        backgroundColor: palette.background,
-        onBack: () => Navigator.pop(context, _primaryLink),
+    return SwipeBackPopScope(
+      onSwipeBackPop: _popWithPrimaryLink,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _popWithPrimaryLink();
+        },
+        child: SettingsFloatingScaffold(
+          title: 'Пригласительные ссылки',
+          backgroundColor: palette.background,
+          onBack: _popWithPrimaryLink,
         body: ListView(
           padding: EdgeInsets.fromLTRB(
             0,
@@ -570,6 +585,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
             ],
           ],
         ),
+      ),
       ),
     );
   }

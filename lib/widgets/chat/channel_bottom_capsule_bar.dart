@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../services/chat_actions_helper.dart';
@@ -287,10 +288,21 @@ class _ChannelBottomCapsuleBarState extends State<ChannelBottomCapsuleBar> {
         : const Duration(milliseconds: 220);
 
     if (isPostingAdmin) {
+      final String dynamicBroadcastHint = _effectiveSilent
+          ? _trChannel(
+              context,
+              'channel_silent_broadcast_hint',
+              'Беззвучная публикация',
+            )
+          : _trChannel(
+              context,
+              'channel_broadcast_hint',
+              'Публикация',
+            );
       return ChatInputBar(
         controller: _effectiveController,
         focusNode: widget.focusNode,
-        hintText: widget.hintText ?? 'Написать публикацию...',
+        hintText: widget.attachedFiles.isNotEmpty ? widget.hintText : dynamicBroadcastHint,
         isEditing: widget.isEditing,
         onCancelEditing: widget.onCancelEditing,
         replyToMessage: widget.replyToMessage,
@@ -557,3 +569,14 @@ class _ChannelBottomCapsuleBarState extends State<ChannelBottomCapsuleBar> {
     );
   }
 }
+
+String _trChannel(BuildContext context, String key, String fallback) {
+  final loc = AppLocalizations.of(context);
+  if (loc != null) {
+    if (loc.hasKey(key)) return loc.translate(key);
+    final t = loc.translate(key);
+    if (t.isNotEmpty && t != key) return t;
+  }
+  return fallback;
+}
+

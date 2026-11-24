@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -12,15 +14,23 @@ import '../user/emoji_status_badge.dart';
 import 'message_bubble.dart';
 
 /// Whether two adjacent messages belong to the same continuous sender visual cluster
-/// (non-system, matching sender / anonymous admin persona & admin title, same local
-/// calendar day, within 5 minutes).
+/// (non-system, matching sender / anonymous admin / send-as channel persona & admin title,
+/// same local calendar day, within 5 minutes).
 bool areMessagesInSameSenderCluster(Message a, Message b) {
   if (a.messageType == 'system' || b.messageType == 'system') return false;
+  final senderChatA = (a.senderChatId ?? '').trim();
+  final senderChatB = (b.senderChatId ?? '').trim();
+  if (senderChatA != senderChatB) return false;
   if (a.isFromAnonymousAdmin != b.isFromAnonymousAdmin) return false;
   if ((a.senderAdminTitle ?? '').trim() != (b.senderAdminTitle ?? '').trim()) {
     return false;
   }
-  if (a.isFromAnonymousAdmin) {
+  if (senderChatA.isNotEmpty) {
+    // Both messages are sent on behalf of the exact same channel (senderChatA == senderChatB).
+    if ((a.senderChatName ?? '').trim() != (b.senderChatName ?? '').trim()) {
+      return false;
+    }
+  } else if (a.isFromAnonymousAdmin) {
     // Anonymous admin messages may carry senderId == "0" or "" when masked;
     // keep distinct if non-empty IDs or masked sender names differ.
     if (a.senderId != b.senderId) return false;
@@ -104,60 +114,104 @@ class SenderHeaderRow extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTapSender,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final double availW =
+              constraints.maxWidth.isFinite ? constraints.maxWidth : 260.0;
+          final bool canShowRank = rankLabel != null && availW >= 72.0;
+          final double maxRankW =
+              math.min(92.0, math.max(0.0, availW * 0.42));
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, innerConstraints) {
+                    final double innerW = innerConstraints.maxWidth.isFinite
+                        ? innerConstraints.maxWidth
+                        : 180.0;
+                    final bool showEmojiStatus =
+                        status != null && innerW >= 54.0;
+                    final bool hasAnyBadge =
+                        isBot || isVerified || badge != null;
+                    final bool showBadges = hasAnyBadge && innerW >= 44.0;
+
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            senderName,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: nameColor,
+                            ),
+                          ),
+                        ),
+                        if (showEmojiStatus) ...[
+                          const SizedBox(width: 4),
+                          EmojiStatusBadge(
+                            status: status,
+                            size: 15,
+                            animate: false,
+                            interactive: true,
+                            fallbackColor: nameColor,
+                          ),
+                        ],
+                        if (showBadges)
+                          Flexible(
+                            flex: 0,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: math.max(16.0, innerW * 0.48),
+                              ),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: PeerBadgesRow(
+                                  isBot: isBot,
+                                  isVerified: isVerified,
+                                  badge: badge,
+                                  interactiveBadge: true,
+                                  verifiedIconSize: 14,
+                                  accentColor: nameColor,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              if (canShowRank) ...[
+                const SizedBox(width: 6),
                 Flexible(
-                  child: Text(
-                    senderName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      color: nameColor,
+                  flex: 0,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: maxRankW),
+                    child: Text(
+                      rankLabel,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: effectiveRankColor,
+                      ),
                     ),
                   ),
                 ),
-                if (status != null) ...[
-                  const SizedBox(width: 4),
-                  EmojiStatusBadge(
-                    status: status,
-                    size: 15,
-                    animate: false,
-                    interactive: true,
-                    fallbackColor: nameColor,
-                  ),
-                ],
-                PeerBadgesRow(
-                  isBot: isBot,
-                  isVerified: isVerified,
-                  badge: badge,
-                  interactiveBadge: true,
-                  verifiedIconSize: 14,
-                  accentColor: nameColor,
-                ),
               ],
-            ),
-          ),
-          if (rankLabel != null) ...[
-            const SizedBox(width: 8),
-            Text(
-              rankLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
-                color: effectiveRankColor,
-              ),
-            ),
-          ],
-        ],
+            ],
+          );
+        },
       ),
     );
   }

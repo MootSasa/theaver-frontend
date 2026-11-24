@@ -34,12 +34,14 @@ class AnimatedRollingCountText extends StatefulWidget {
   final int count;
   final bool compact;
   final TextStyle? style;
+  final Alignment alignment;
 
   const AnimatedRollingCountText({
     super.key,
     required this.count,
     this.compact = false,
     this.style,
+    this.alignment = Alignment.center,
   });
 
   @override
@@ -85,9 +87,20 @@ class _AnimatedRollingCountTextState extends State<AnimatedRollingCountText> {
         switchOutCurve: Curves.easeInCubic,
         layoutBuilder: (currentChild, previousChildren) {
           return Stack(
-            alignment: Alignment.center,
+            alignment: widget.alignment,
+            clipBehavior: Clip.hardEdge,
             children: [
-              ...previousChildren,
+              for (final prev in previousChildren)
+                Positioned.fill(
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: widget.alignment,
+                      minWidth: 0.0,
+                      maxWidth: double.infinity,
+                      child: prev,
+                    ),
+                  ),
+                ),
               if (currentChild != null) currentChild,
             ],
           );
@@ -1043,10 +1056,12 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
         height: _ctrlSize,
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: capsuleHorizontalPadding),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
               if (showPin)
                 _QuickActionButton(
                   width: iconBtnWidth,
@@ -1121,7 +1136,8 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
                     color: textColor,
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
         ),
       );
@@ -1330,7 +1346,7 @@ class ChatMessageSelectionHeader extends StatelessWidget {
       if (onReply != null)
         _SelectionHeaderActionSpec(
           key: const ValueKey<String>('msg_sel_action_reply'),
-          tooltip: _tr(context, 'reply', 'Ответить'),
+          tooltip: _tr(context, 'chat_action_reply', 'Ответить'),
           onTap: onReply!,
           icon: iconoir.Reply(
             width: 20,
@@ -1341,7 +1357,7 @@ class ChatMessageSelectionHeader extends StatelessWidget {
       if (effectiveCopy != null)
         _SelectionHeaderActionSpec(
           key: const ValueKey<String>('msg_sel_action_copy'),
-          tooltip: _tr(context, 'copy', 'Копировать'),
+          tooltip: _tr(context, 'chat_action_copy', 'Копировать'),
           onTap: effectiveCopy,
           icon: iconoir.Copy(
             width: 20,
@@ -1363,7 +1379,7 @@ class ChatMessageSelectionHeader extends StatelessWidget {
       if (effectiveForward != null)
         _SelectionHeaderActionSpec(
           key: const ValueKey<String>('msg_sel_action_forward'),
-          tooltip: _tr(context, 'forward', 'Переслать'),
+          tooltip: _tr(context, 'chat_action_forward', 'Переслать'),
           onTap: effectiveForward,
           icon: iconoir.ForwardMessage(
             width: 20,
@@ -1391,11 +1407,22 @@ class ChatMessageSelectionHeader extends StatelessWidget {
             ? constraints.maxWidth
             : fallbackWidth;
 
+        final bool isNarrow = maxWidth < 300.0;
+        final double actionBtnWidth = isNarrow ? 34.0 : _actionBtnWidth;
+        final double rightHorizPadding = isNarrow ? 3.0 : 6.0;
+        final double rightTotalPadding = rightHorizPadding * 2.0;
+
         final rightCapsuleWidth = actions.isEmpty
-            ? barHeight
-            : math.max(barHeight, actions.length * _actionBtnWidth + 12.0);
-        final remainingForLeft = math.max(88.0, maxWidth - rightCapsuleWidth - 10.0);
+            ? 0.0
+            : math.min(
+                maxWidth,
+                math.max(barHeight, actions.length * actionBtnWidth + rightTotalPadding),
+              );
+        final remainingForLeft = actions.isEmpty
+            ? maxWidth
+            : math.max(0.0, maxWidth - rightCapsuleWidth - 8.0);
         final bool useCompactLeft = remainingForLeft < 152.0;
+        final bool ultraTightLeft = remainingForLeft < 84.0;
 
         return SizedBox(
           height: barHeight,
@@ -1403,87 +1430,110 @@ class ChatMessageSelectionHeader extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: remainingForLeft),
-                child: SizedBox(
-                  key: const ValueKey<String>('chat_message_selection_left_island'),
-                  height: barHeight,
-                  child: TheavFloatingSurface(
-                    borderRadius: barHeight / 2,
-                    child: Material(
-                      type: MaterialType.transparency,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(barHeight / 2),
-                        onTap: () {
-                          HapticUtils.tap();
-                          onCancel();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 12, right: 16),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              iconoir.Xmark(
-                                width: 20,
-                                height: 20,
-                                color: primaryFg,
-                              ),
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: AnimatedRollingCountText(
-                                  count: selectedCount,
-                                  compact: useCompactLeft,
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: -0.2,
-                                    color: primaryFg,
+              if (remainingForLeft > 0.0)
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: remainingForLeft),
+                  child: SizedBox(
+                    key: const ValueKey<String>('chat_message_selection_left_island'),
+                    height: barHeight,
+                    child: TheavFloatingSurface(
+                      borderRadius: barHeight / 2,
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(barHeight / 2),
+                          onTap: () {
+                            HapticUtils.tap();
+                            onCancel();
+                          },
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              left: ultraTightLeft ? 9.0 : 12.0,
+                              right: ultraTightLeft ? 10.0 : 16.0,
+                            ),
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: math.max(
+                                    24.0,
+                                    remainingForLeft - (ultraTightLeft ? 19.0 : 28.0),
                                   ),
                                 ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    iconoir.Xmark(
+                                      width: ultraTightLeft ? 18 : 20,
+                                      height: ultraTightLeft ? 18 : 20,
+                                      color: primaryFg,
+                                    ),
+                                    SizedBox(width: ultraTightLeft ? 5 : 8),
+                                    Flexible(
+                                      child: AnimatedRollingCountText(
+                                        count: selectedCount,
+                                        compact: useCompactLeft,
+                                        alignment: Alignment.centerLeft,
+                                        style: TextStyle(
+                                          fontSize: ultraTightLeft ? 14 : 15,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: -0.2,
+                                          color: primaryFg,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ],
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
               if (actions.isNotEmpty)
-                SizedBox(
-                  key: const ValueKey<String>('chat_message_selection_right_island'),
-                  height: barHeight,
-                  child: TheavFloatingSurface(
-                    borderRadius: barHeight / 2,
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (final action in actions)
-                          Tooltip(
-                            message: action.tooltip,
-                            child: Semantics(
-                              button: true,
-                              label: action.tooltip,
-                              child: Material(
-                                key: action.key,
-                                type: MaterialType.transparency,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(barHeight / 2),
-                                  onTap: () {
-                                    HapticUtils.tap();
-                                    action.onTap();
-                                  },
-                                  child: SizedBox(
-                                    width: _actionBtnWidth,
-                                    height: barHeight,
-                                    child: Center(child: action.icon),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: rightCapsuleWidth),
+                  child: SizedBox(
+                    key: const ValueKey<String>('chat_message_selection_right_island'),
+                    height: barHeight,
+                    child: TheavFloatingSurface(
+                      borderRadius: barHeight / 2,
+                      padding: EdgeInsets.symmetric(horizontal: rightHorizPadding),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (final action in actions)
+                              Tooltip(
+                                message: action.tooltip,
+                                child: Semantics(
+                                  button: true,
+                                  label: action.tooltip,
+                                  child: Material(
+                                    key: action.key,
+                                    type: MaterialType.transparency,
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(barHeight / 2),
+                                      onTap: () {
+                                        HapticUtils.tap();
+                                        action.onTap();
+                                      },
+                                      child: SizedBox(
+                                        width: actionBtnWidth,
+                                        height: barHeight,
+                                        child: Center(child: action.icon),
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
-                      ],
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),

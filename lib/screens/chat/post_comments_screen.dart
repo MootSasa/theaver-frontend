@@ -8,13 +8,18 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
+import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/media_album.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/auth_service.dart';
-import '../../services/chat_actions_helper.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
@@ -41,9 +46,12 @@ import '../../widgets/chat/forward_chat_picker_sheet.dart';
 import '../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
+import '../../widgets/chat/telegram_delete_messages_sheet.dart';
 import '../../widgets/chat/unread_separator.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import '../../widgets/message/group_message_avatar_row.dart';
+import '../../widgets/message/media_album_viewer.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../settings/profile_screen.dart';
 import 'channel_screen.dart';
@@ -139,8 +147,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
 
   // Wave 3B parity state
   bool _canComment = true;
+  bool _canDeleteOthers = false;
+  bool _hasProtectedContent = false;
+  String? _linkedGroupName;
+  String? _linkedGroupAvatar;
   List<SendAsPeer> _sendAsPeers = [];
   String? _selectedSendAsChatId;
+  String _selectedSendAsMode = 'user';
+
+  bool get _effectiveSendAsAnon => _selectedSendAsMode == 'group';
+  String? get _effectiveSendAsChannelId =>
+      _selectedSendAsMode == 'channel' ? _selectedSendAsChatId : null;
+  String get _effectiveSendAsMode => _selectedSendAsMode;
 
   String get _screenProtectionKey =>
       'post_comments_${widget.channelId}_${widget.postMessage.id}';
@@ -212,17 +230,115 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   }
 
   Future<void> _syncProtectionFromDb() async {
+    bool protect = false;
+    bool canDeleteOthers = false;
+    String? linkedName = _linkedGroupName;
+    String? linkedAvatar = _linkedGroupAvatar;
+
+    bool roleAllowsDelete(String? role, AdminRights? perms) {
+      if (role == 'owner') return true;
+      if (role == 'admin') return perms?.canDeleteMessages ?? true;
+      return false;
+    }
+
     try {
+      final chanInstant = ChatInstantCache.instance.getSync(widget.channelId);
+      final grpInstant = (_linkedChatId != null && _linkedChatId!.isNotEmpty)
+          ? ChatInstantCache.instance.getSync(_linkedChatId!)
+          : null;
+      if (chanInstant?.hasProtectedContent == true ||
+          grpInstant?.hasProtectedContent == true) {
+        protect = true;
+      }
+      if (roleAllowsDelete(
+            chanInstant?.chatDetails?.myRole ?? chanInstant?.myRole,
+            chanInstant?.chatDetails?.myAdminPermissions,
+          ) ||
+          roleAllowsDelete(
+            grpInstant?.chatDetails?.myRole ?? grpInstant?.myRole,
+            grpInstant?.chatDetails?.myAdminPermissions,
+          )) {
+        canDeleteOthers = true;
+      }
+      if (grpInstant?.chat?.name.isNotEmpty == true) {
+        linkedName = grpInstant!.chat!.name;
+      }
+      linkedAvatar ??= grpInstant?.chat?.avatarUrl;
+
       final db = AppDatabase();
       final channelChat = await db.getChat(widget.channelId);
       final linkedChat = (_linkedChatId != null && _linkedChatId!.isNotEmpty)
           ? await db.getChat(_linkedChatId!)
           : null;
-      if (!mounted) return;
-      final bool protect =
-          (channelChat?.hasProtectedContent == true) ||
-          (linkedChat?.hasProtectedContent == true);
+      if (channelChat?.hasProtectedContent == true ||
+          linkedChat?.hasProtectedContent == true) {
+        protect = true;
+      }
+      if (roleAllowsDelete(channelChat?.myRole, null) ||
+          roleAllowsDelete(linkedChat?.myRole, null)) {
+        canDeleteOthers = true;
+      }
+      if (linkedChat != null) {
+        if (linkedChat.name.isNotEmpty) linkedName = linkedChat.name;
+        if (linkedChat.avatarUrl != null && linkedChat.avatarUrl!.isNotEmpty) {
+          linkedAvatar = linkedChat.avatarUrl;
+        }
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      if (_hasProtectedContent != protect ||
+          _canDeleteOthers != canDeleteOthers ||
+          _linkedGroupName != linkedName ||
+          _linkedGroupAvatar != linkedAvatar) {
+        setState(() {
+          _hasProtectedContent = protect;
+          _canDeleteOthers = canDeleteOthers;
+          _linkedGroupName = linkedName;
+          _linkedGroupAvatar = linkedAvatar;
+        });
+      }
       _syncScreenProtection(protect);
+    }
+
+    // Fetch authoritative permissions for channel & linked discussion group
+    try {
+      final futures = <Future<Map<String, dynamic>>>[
+        ChatService.getChat(widget.channelId),
+        if (_linkedChatId != null && _linkedChatId!.isNotEmpty)
+          ChatService.getChat(_linkedChatId!),
+      ];
+      final results = await Future.wait(futures);
+      if (!mounted) return;
+      bool remoteProtect = protect;
+      bool remoteCanDelete = canDeleteOthers;
+      String? remoteGroupName = linkedName;
+      String? remoteGroupAvatar = linkedAvatar;
+      for (int i = 0; i < results.length; i++) {
+        final r = results[i];
+        if (r['success'] == true && r['chat'] is ChatDetails) {
+          final details = r['chat'] as ChatDetails;
+          if (details.hasProtectedContent) remoteProtect = true;
+          if (roleAllowsDelete(details.myRole, details.myAdminPermissions)) {
+            remoteCanDelete = true;
+          }
+          if (i == 1) {
+            if (details.name.isNotEmpty) remoteGroupName = details.name;
+            if (details.avatarUrl != null && details.avatarUrl!.isNotEmpty) {
+              remoteGroupAvatar = details.avatarUrl;
+            }
+          }
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _hasProtectedContent = remoteProtect;
+          _canDeleteOthers = remoteCanDelete;
+          _linkedGroupName = remoteGroupName;
+          _linkedGroupAvatar = remoteGroupAvatar;
+        });
+        _syncScreenProtection(remoteProtect);
+      }
     } catch (_) {}
   }
 
@@ -236,6 +352,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       if (!mounted) return;
       setState(() {
         _sendAsPeers = res.peers;
+        _selectedSendAsMode = res.selectedSendAsMode;
         _selectedSendAsChatId = res.selectedSendAsChatId;
       });
     } catch (_) {}
@@ -243,38 +360,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
 
   SendAsPeer? get _activeSendAsPeer {
     if (_sendAsPeers.isEmpty) return null;
-    final sel = _selectedSendAsChatId;
-    if (sel != null && sel.isNotEmpty) {
-      for (final p in _sendAsPeers) {
-        if (p.isChannel && (p.chatId == sel || p.id == sel)) {
-          return p;
-        }
+    for (final p in _sendAsPeers) {
+      if (p.matchesSelection(
+        selectedSendAsMode: _effectiveSendAsMode,
+        selectedSendAsChatId: _effectiveSendAsChannelId,
+      )) {
+        return p;
       }
     }
     for (final p in _sendAsPeers) {
       if (p.isSelected) return p;
     }
     return _sendAsPeers.first;
-  }
-
-  Future<void> _openSendAsPicker() async {
-    final targetChatId = _linkedChatId;
-    if (targetChatId == null || targetChatId.isEmpty || _sendAsPeers.isEmpty) {
-      return;
-    }
-    final picked = await showSendAsPeerSheet(
-      context: context,
-      chatId: targetChatId,
-      peers: _sendAsPeers,
-      selectedSendAsChatId: _selectedSendAsChatId,
-    );
-    if (picked != null && mounted) {
-      setState(() {
-        _selectedSendAsChatId = picked.isChannel
-            ? (picked.chatId ?? picked.id)
-            : null;
-      });
-    }
   }
 
   void _openChannelProfileById(
@@ -743,13 +840,20 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final String? capturedQuoteText = _quoteText;
     final int capturedQuoteOffset = _quoteOffset;
     final int capturedQuoteLength = _quoteLength;
-    final String? activeSendAsChatId = _selectedSendAsChatId;
+    final String activeSendAsMode = _effectiveSendAsMode;
+    final String? activeSendAsChatId = _effectiveSendAsChannelId;
+    final bool sendAsAnon = _effectiveSendAsAnon;
     final SendAsPeer? activeSendAsPeer = _activeSendAsPeer;
     final bool sendingAsChannel =
+        activeSendAsMode == 'channel' &&
         activeSendAsChatId != null &&
-        activeSendAsChatId.isNotEmpty &&
-        activeSendAsPeer != null &&
-        activeSendAsPeer.isChannel;
+        activeSendAsChatId.isNotEmpty;
+    final String anonGroupTitle =
+        (_linkedGroupName != null && _linkedGroupName!.trim().isNotEmpty)
+        ? _linkedGroupName!
+        : (activeSendAsPeer != null && activeSendAsPeer.isGroupAnon && activeSendAsPeer.name.isNotEmpty
+            ? activeSendAsPeer.name
+            : (widget.channelName ?? 'Обсуждение'));
 
     final List<File> filesToSend = List<File>.from(_attachedFiles);
     _attachedFiles.clear();
@@ -766,30 +870,183 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     });
 
     try {
-      String? fileUrl;
-      String? fileName;
-      String messageType = 'text';
+      String resolveMimeMessageType(String mimeType) {
+        if (asDocument) return 'file';
+        if (mimeType.startsWith('image/')) return 'image';
+        if (mimeType.startsWith('video/')) return 'video';
+        if (mimeType.startsWith('audio/')) return 'audio';
+        return 'file';
+      }
+
       if (filesToSend.isNotEmpty) {
-        final file = filesToSend.first;
-        final uploadRes = await _fileService.uploadFileChunked(
-          file,
-          onProgress: (p) {
-            if (mounted) _uploadProgressNotifier.value = p;
-          },
-        );
-        fileUrl = uploadRes.url;
-        fileName = uploadRes.fileName;
-        if (asDocument) {
-          messageType = 'file';
-        } else if (uploadRes.mimeType.startsWith('image/')) {
-          messageType = 'image';
-        } else if (uploadRes.mimeType.startsWith('video/')) {
-          messageType = 'video';
-        } else if (uploadRes.mimeType.startsWith('audio/')) {
-          messageType = 'audio';
-        } else {
-          messageType = 'file';
+        final uploadedItems = <({
+          String url,
+          String fileName,
+          String messageType,
+        })>[];
+        for (int i = 0; i < filesToSend.length; i++) {
+          final file = filesToSend[i];
+          final uploadRes = await _fileService.uploadFileChunked(
+            file,
+            onProgress: (p) {
+              if (mounted) {
+                _uploadProgressNotifier.value =
+                    (i + p) / filesToSend.length;
+              }
+            },
+          );
+          uploadedItems.add((
+            url: uploadRes.url,
+            fileName: uploadRes.fileName,
+            messageType: resolveMimeMessageType(uploadRes.mimeType),
+          ));
         }
+
+        final bool isVisualBatch = !asDocument &&
+            uploadedItems.length >= 2 &&
+            uploadedItems.every(
+              (u) => u.messageType == 'image' || u.messageType == 'video',
+            );
+        final String? batchGroupedId = isVisualBatch
+            ? 'album_${DateTime.now().millisecondsSinceEpoch}_${const Uuid().v4().substring(0, 8)}'
+            : null;
+
+        final localIds = <String>[];
+        final optimisticBatch = <Message>[];
+        for (int i = 0; i < uploadedItems.length; i++) {
+          final u = uploadedItems[i];
+          final itemText = i == 0 ? text : '';
+          final itemEntities = i == 0 ? resolvedEntities : const <MessageEntity>[];
+          final localId =
+              'local_comment_${DateTime.now().microsecondsSinceEpoch}_$i';
+          localIds.add(localId);
+          optimisticBatch.add(
+            Message(
+              id: localId,
+              localId: localId,
+              chatId: _linkedChatId ?? widget.channelId,
+              senderId: _currentUserId ?? '',
+              content: itemText,
+              messageType: u.messageType,
+              fileUrl: u.url,
+              fileName: u.fileName,
+              groupedId: batchGroupedId,
+              replyToMessageId: replyTo?.id,
+              replyInfo: replyTo != null
+                  ? ReplyInfo(
+                      messageId: replyTo.id,
+                      senderId: replyTo.senderId,
+                      senderName: replyTo.senderName,
+                      content: replyTo.content,
+                      messageType: replyTo.messageType,
+                      entities: replyTo.entities,
+                    )
+                  : null,
+              isEdited: false,
+              createdAt: DateTime.now().toUtc().toIso8601String(),
+              senderName: sendingAsChannel
+                  ? (activeSendAsPeer?.name ?? 'Канал')
+                  : (sendAsAnon ? anonGroupTitle : 'Вы'),
+              senderAvatarUrl: sendingAsChannel
+                  ? activeSendAsPeer?.avatarUrl
+                  : (sendAsAnon
+                      ? (_linkedGroupAvatar ?? widget.channelAvatar)
+                      : null),
+              senderChatId: sendingAsChannel ? activeSendAsChatId : null,
+              senderChatName: sendingAsChannel ? activeSendAsPeer?.name : null,
+              senderChatAvatarUrl:
+                  sendingAsChannel ? activeSendAsPeer?.avatarUrl : null,
+              isFromAnonymousAdmin: !sendingAsChannel && sendAsAnon,
+              isOwn: true,
+              sendStatus: 0,
+              hasMediaSpoiler: hasMediaSpoiler,
+              entities: itemEntities,
+            ),
+          );
+        }
+
+        if (mounted) {
+          setState(() {
+            _comments.addAll(optimisticBatch);
+            _isUploading = false;
+            _uploadProgressNotifier.value = 0.0;
+          });
+          _scrollToBottom();
+        }
+
+        bool anyFailed = false;
+        for (int i = 0; i < uploadedItems.length; i++) {
+          final u = uploadedItems[i];
+          final localId = localIds[i];
+          final itemText = i == 0 ? text : '';
+          final itemEntities = i == 0 && resolvedEntities.isNotEmpty
+              ? resolvedEntities
+              : null;
+
+          final sent = await ChatService.sendPostComment(
+            channelId: widget.channelId,
+            messageId: widget.postMessage.id,
+            content: itemText,
+            replyToMessageId: replyTo?.id,
+            isQuote: i == 0 && capturedIsQuote,
+            quoteText: i == 0 ? capturedQuoteText : null,
+            quoteOffset: i == 0 ? capturedQuoteOffset : 0,
+            quoteLength: i == 0 ? capturedQuoteLength : 0,
+            entities: itemEntities,
+            fileUrl: u.url,
+            fileName: u.fileName,
+            messageType: u.messageType,
+            hasMediaSpoiler: hasMediaSpoiler,
+            groupedId: batchGroupedId,
+            sendAsMode: activeSendAsMode,
+            sendAsChatId: activeSendAsChatId,
+            sendAsAnonymous: sendAsAnon,
+          );
+
+          if (!mounted) return;
+          if (sent != null) {
+            setState(() {
+              if (sent.threadRootMessageId != null &&
+                  sent.threadRootMessageId!.isNotEmpty) {
+                _rootMessageId ??= sent.threadRootMessageId;
+              }
+              if (sent.chatId.isNotEmpty && _linkedChatId == null) {
+                _linkedChatId = sent.chatId;
+              }
+              final idx = _comments.indexWhere((c) => c.localId == localId);
+              if (idx != -1) {
+                final alreadyById =
+                    _comments.indexWhere((c) => c.id == sent.id);
+                if (alreadyById != -1 && alreadyById != idx) {
+                  _comments.removeAt(idx);
+                } else {
+                  _comments[idx] = sent.copyWith(
+                    localId: localId,
+                    sendStatus: 1,
+                    isOwn: true,
+                  );
+                }
+              } else {
+                _upsertComment(sent.copyWith(isOwn: true));
+              }
+              _commentsCount = math.max(_commentsCount, _comments.length);
+              _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+            });
+            _bindLinkedGroupSubscription();
+          } else {
+            anyFailed = true;
+            setState(() {
+              final idx = _comments.indexWhere((c) => c.localId == localId);
+              if (idx != -1) {
+                _comments[idx] = _comments[idx].copyWith(sendStatus: 2);
+              }
+            });
+          }
+        }
+        if (anyFailed && mounted) {
+          GlassToastService().show(context, 'Не удалось отправить вложение');
+        }
+        return;
       }
 
       final localId = 'local_comment_${DateTime.now().microsecondsSinceEpoch}';
@@ -799,9 +1056,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         chatId: _linkedChatId ?? widget.channelId,
         senderId: _currentUserId ?? '',
         content: text,
-        messageType: messageType,
-        fileUrl: fileUrl,
-        fileName: fileName,
+        messageType: 'text',
         replyToMessageId: replyTo?.id,
         replyInfo: replyTo != null
             ? ReplyInfo(
@@ -815,12 +1070,20 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             : null,
         isEdited: false,
         createdAt: DateTime.now().toUtc().toIso8601String(),
-        senderName: sendingAsChannel ? activeSendAsPeer.name : 'Вы',
+        senderName: sendingAsChannel
+            ? (activeSendAsPeer?.name ?? 'Канал')
+            : (sendAsAnon ? anonGroupTitle : 'Вы'),
+        senderAvatarUrl: sendingAsChannel
+            ? activeSendAsPeer?.avatarUrl
+            : (sendAsAnon
+                ? (_linkedGroupAvatar ?? widget.channelAvatar)
+                : null),
         senderChatId: sendingAsChannel ? activeSendAsChatId : null,
-        senderChatName: sendingAsChannel ? activeSendAsPeer.name : null,
-        senderChatAvatarUrl: sendingAsChannel
-            ? activeSendAsPeer.avatarUrl
-            : null,
+        senderChatName: sendingAsChannel ? activeSendAsPeer?.name : null,
+        senderChatAvatarUrl:
+            sendingAsChannel ? activeSendAsPeer?.avatarUrl : null,
+        isFromAnonymousAdmin: !sendingAsChannel && sendAsAnon,
+        isOwn: true,
         sendStatus: 0,
         hasMediaSpoiler: hasMediaSpoiler,
         entities: resolvedEntities,
@@ -845,11 +1108,11 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         quoteOffset: capturedQuoteOffset,
         quoteLength: capturedQuoteLength,
         entities: resolvedEntities.isNotEmpty ? resolvedEntities : null,
-        fileUrl: fileUrl,
-        fileName: fileName,
-        messageType: messageType,
+        messageType: 'text',
         hasMediaSpoiler: hasMediaSpoiler,
+        sendAsMode: activeSendAsMode,
         sendAsChatId: activeSendAsChatId,
+        sendAsAnonymous: sendAsAnon,
       );
 
       if (!mounted) return;
@@ -868,10 +1131,14 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             if (alreadyById != -1 && alreadyById != idx) {
               _comments.removeAt(idx);
             } else {
-              _comments[idx] = sent.copyWith(localId: localId, sendStatus: 1);
+              _comments[idx] = sent.copyWith(
+                localId: localId,
+                sendStatus: 1,
+                isOwn: true,
+              );
             }
           } else {
-            _upsertComment(sent);
+            _upsertComment(sent.copyWith(isOwn: true));
           }
           _commentsCount = math.max(_commentsCount, _comments.length);
           _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
@@ -914,11 +1181,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       fileUrl: item.fileUrl,
       fileName: 'sticker.${item.format}',
       messageType: 'sticker',
-      sendAsChatId: _selectedSendAsChatId,
+      sendAsMode: _effectiveSendAsMode,
+      sendAsChatId: _effectiveSendAsChannelId,
+      sendAsAnonymous: _effectiveSendAsAnon,
     );
     if (sent != null && mounted) {
       setState(() {
-        _upsertComment(sent);
+        _upsertComment(sent.copyWith(isOwn: true));
         _commentsCount = math.max(_commentsCount, _comments.length);
         _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
       });
@@ -938,11 +1207,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       fileUrl: gif.url,
       fileName: 'animation.gif',
       messageType: 'gif',
-      sendAsChatId: _selectedSendAsChatId,
+      sendAsMode: _effectiveSendAsMode,
+      sendAsChatId: _effectiveSendAsChannelId,
+      sendAsAnonymous: _effectiveSendAsAnon,
     );
     if (sent != null && mounted) {
       setState(() {
-        _upsertComment(sent);
+        _upsertComment(sent.copyWith(isOwn: true));
         _commentsCount = math.max(_commentsCount, _comments.length);
         _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
       });
@@ -1271,8 +1542,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         );
         if (mediaRes != null && mediaRes.files.isNotEmpty && mounted) {
           setState(() {
-            _attachedFiles.add(mediaRes.files.first);
-            _attachedFileNames.add(p.basename(mediaRes.files.first.path));
+            for (final file in mediaRes.files) {
+              _attachedFiles.add(file);
+              _attachedFileNames.add(p.basename(file.path));
+            }
             if (mediaRes.caption != null && mediaRes.caption!.isNotEmpty) {
               _messageController.text = mediaRes.caption!;
             }
@@ -1302,28 +1575,44 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         }
         break;
       case AttachmentPickerAction.gallery:
-        final XFile? media = await _imagePicker.pickMedia(
-          maxWidth: 1920,
-          maxHeight: 1920,
-          imageQuality: 92,
-        );
-        if (media != null && mounted) {
+        List<XFile> pickedMedia = [];
+        try {
+          pickedMedia = await _imagePicker.pickMultipleMedia(
+            maxWidth: 1920,
+            maxHeight: 1920,
+            imageQuality: 92,
+          );
+        } catch (_) {
+          final XFile? single = await _imagePicker.pickMedia(
+            maxWidth: 1920,
+            maxHeight: 1920,
+            imageQuality: 92,
+          );
+          if (single != null) pickedMedia = [single];
+        }
+        if (pickedMedia.isNotEmpty && mounted) {
           setState(() {
-            _attachedFiles.add(File(media.path));
-            _attachedFileNames.add(p.basename(media.path));
+            for (final media in pickedMedia) {
+              _attachedFiles.add(File(media.path));
+              _attachedFileNames.add(p.basename(media.path));
+            }
           });
         }
         break;
       case AttachmentPickerAction.file:
-        final picked = await FilePicker.platform.pickFiles(type: FileType.any);
+        final picked = await FilePicker.platform.pickFiles(
+          type: FileType.any,
+          allowMultiple: true,
+        );
         if (picked != null && picked.files.isNotEmpty && mounted) {
-          final f = picked.files.first;
-          if (f.path != null) {
-            setState(() {
-              _attachedFiles.add(File(f.path!));
-              _attachedFileNames.add(f.name);
-            });
-          }
+          setState(() {
+            for (final f in picked.files) {
+              if (f.path != null) {
+                _attachedFiles.add(File(f.path!));
+                _attachedFileNames.add(f.name);
+              }
+            }
+          });
         }
         break;
       case AttachmentPickerAction.poll:
@@ -1333,7 +1622,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             MaterialPageRoute(
               builder: (_) => PollCreateScreen(
                 chatId: _linkedChatId!,
-                sendAsChatId: _selectedSendAsChatId,
+                sendAsMode: _effectiveSendAsMode,
+                sendAsChatId: _effectiveSendAsChannelId,
+                sendAsAnonymous: _effectiveSendAsAnon,
               ),
             ),
           );
@@ -1341,6 +1632,133 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         break;
       default:
         break;
+    }
+  }
+
+  void _openFile(
+    String fileUrl,
+    String fileName,
+    String messageType, {
+    Message? sourceMessage,
+  }) {
+    final resolved = AppConfig.resolveMediaUrl(fileUrl) ?? fileUrl;
+    final lowerType = messageType.toLowerCase();
+    if (lowerType == 'image' || lowerType == 'photo') {
+      FullscreenPhotoViewer.open(context, resolved);
+      return;
+    }
+    if (lowerType == 'video') {
+      final baseMsg = (sourceMessage ?? _rootPost).copyWith(
+        fileUrl: resolved,
+        fileName: fileName.isNotEmpty ? fileName : sourceMessage?.fileName,
+        messageType: 'video',
+      );
+      final singleAlbum = MediaAlbum(
+        groupedId: 'comment_video_${baseMsg.id}',
+        items: [
+          MediaAlbumItem(message: baseMsg, index: 0, totalCount: 1),
+        ],
+        primaryMessage: baseMsg,
+        caption: baseMsg.content.isNotEmpty ? baseMsg.content : null,
+        entities: baseMsg.entities,
+      );
+      Navigator.of(context, rootNavigator: true).push(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => MediaAlbumViewer(
+            album: singleAlbum,
+            initialIndex: 0,
+            hasProtectedContent: _hasProtectedContent,
+          ),
+        ),
+      );
+      return;
+    }
+    final sheetTitle = fileName.trim().isNotEmpty
+        ? fileName
+        : (lowerType == 'audio' ? 'Аудиозапись' : 'Файл');
+    showTheavModalSheet<void>(
+      context: context,
+      title: sheetTitle,
+      showCloseButton: true,
+      builder: (sheetCtx) => TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavListRow(
+            leading: const iconoir.OpenNewWindow(width: 20, height: 20),
+            title: context.l10n.translate('chat_open_file'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadAndOpenFile(resolved, sheetTitle);
+            },
+          ),
+          if (!_hasProtectedContent) ...[
+            TheavListRow(
+              leading: const iconoir.Download(width: 20, height: 20),
+              title: context.l10n.translate('chat_download'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _downloadFile(resolved, sheetTitle);
+              },
+            ),
+            TheavListRow(
+              leading: const iconoir.ShareAndroid(width: 20, height: 20),
+              title: context.l10n.translate('share'),
+              onTap: () async {
+                Navigator.pop(sheetCtx);
+                await SharePlus.instance.share(
+                  ShareParams(text: resolved, subject: sheetTitle),
+                );
+              },
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _downloadAndOpenFile(String fileUrl, String fileName) async {
+    try {
+      if (kIsWeb) {
+        final uri = Uri.parse(fileUrl);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, webOnlyWindowName: '_blank');
+        }
+      } else {
+        final filePath = await _fileService.downloadToDownloads(
+          fileUrl,
+          fileName,
+        );
+        if (mounted) {
+          GlassToastService().show(context, 'Файл скачан: $filePath');
+          await _fileService.openFile(filePath);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Ошибка при открытии файла: $e');
+      }
+    }
+  }
+
+  Future<void> _downloadFile(String fileUrl, String fileName) async {
+    try {
+      if (kIsWeb) {
+        final uri = Uri.parse(fileUrl);
+        await launchUrl(uri, webOnlyWindowName: '_blank');
+        return;
+      }
+      final filePath = await _fileService.downloadToDownloads(
+        fileUrl,
+        fileName,
+      );
+      if (mounted) {
+        GlassToastService().show(context, 'Файл скачан: $filePath');
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Ошибка при скачивании файла: $e');
+      }
     }
   }
 
@@ -1377,36 +1795,109 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     );
   }
 
+  bool _isOwnComment(Message c) =>
+      c.isOwn ||
+      (_currentUserId != null &&
+          _currentUserId!.isNotEmpty &&
+          c.senderId == _currentUserId);
+
+  bool get _canDeleteSelectedComments {
+    if (_selectedCommentIds.isEmpty) return false;
+    final selected = _comments
+        .where((c) => _selectedCommentIds.contains(c.id))
+        .toList();
+    if (selected.isEmpty) return false;
+    return selected.every((c) => _isOwnComment(c) || _canDeleteOthers);
+  }
+
   void _confirmDeleteComment(Message comment) {
-    final targetChatId = comment.chatId.isNotEmpty
-        ? comment.chatId
-        : (_linkedChatId ?? widget.channelId);
-    final idx = _comments.indexWhere((c) => c.id == comment.id);
-    ChatActionsHelper.confirmAndDeleteMessage(
+    unawaited(_deleteCommentsWithSheet([comment]));
+  }
+
+  void _deleteSelectedComments() {
+    if (_selectedCommentIds.isEmpty) return;
+    final targets = _comments
+        .where(
+          (c) =>
+              _selectedCommentIds.contains(c.id) &&
+              (_isOwnComment(c) || _canDeleteOthers),
+        )
+        .toList();
+    setState(() => _selectedCommentIds.clear());
+    if (targets.isEmpty) return;
+    unawaited(_deleteCommentsWithSheet(targets));
+  }
+
+  Future<void> _deleteCommentsWithSheet(List<Message> targets) async {
+    if (targets.isEmpty) return;
+    final bool allMine = targets.every(_isOwnComment);
+    if (!allMine && !_canDeleteOthers) return;
+
+    final bool canModerate = !allMine && _canDeleteOthers;
+    final String? authorName =
+        targets.length == 1 ? targets.first.senderName : null;
+
+    final res = await showTelegramDeleteMessagesSheet(
       context: context,
-      chatId: targetChatId,
-      message: comment,
-      onOptimisticDelete: () {
-        if (!mounted) return;
-        setState(() {
-          _comments.removeWhere((c) => c.id == comment.id);
-          if (_commentsCount > 0) _commentsCount--;
-          _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
-        });
-      },
-      onRollback: () {
-        if (!mounted) return;
-        setState(() {
-          if (idx >= 0 && idx <= _comments.length) {
-            _comments.insert(idx, comment);
-          } else {
-            _upsertComment(comment);
-          }
-          _commentsCount++;
-          _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
-        });
-      },
+      messageCount: targets.length,
+      chatType: 'group',
+      canRevoke: allMine || _canDeleteOthers,
+      defaultRevoke: allMine || _canDeleteOthers,
+      canModerateOther: canModerate,
+      targetAuthorName: authorName,
     );
+    if (res == null || !res.confirmed || !mounted) return;
+
+    final ids = targets.map((c) => c.id).toList();
+    final backup = List<Message>.from(_comments);
+    final prevCount = _commentsCount;
+    setState(() {
+      _comments.removeWhere((c) => ids.contains(c.id));
+      _selectedCommentIds.removeAll(ids);
+      _commentsCount = math.max(0, _commentsCount - targets.length);
+      _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+    });
+
+    final targetChatId = targets.first.chatId.isNotEmpty
+        ? targets.first.chatId
+        : (_linkedChatId ?? widget.channelId);
+
+    final apiRes = await ChatService.deleteMessagesBatch(
+      chatId: targetChatId,
+      messageIds: ids,
+      revoke: res.revoke,
+      reportSpam: res.reportSpam,
+      banUser: res.banUser,
+      deleteAllFromUser: res.deleteAllFromUser,
+    );
+    if (apiRes['success'] == true) {
+      if (res.deleteAllFromUser && targets.isNotEmpty && mounted) {
+        final offenderId = targets.first.senderId;
+        if (offenderId.isNotEmpty && offenderId != '0') {
+          setState(() {
+            final before = _comments.length;
+            _comments.removeWhere((c) => c.senderId == offenderId);
+            final removedExtra = before - _comments.length;
+            if (removedExtra > 0) {
+              _commentsCount = math.max(0, _commentsCount - removedExtra);
+              _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+            }
+          });
+        }
+      }
+    } else if (mounted) {
+      setState(() {
+        _comments
+          ..clear()
+          ..addAll(backup);
+        _commentsCount = prevCount;
+        _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+      });
+      GlassToastService().showError(
+        context,
+        apiRes['message']?.toString() ?? 'Не удалось удалить комментарии',
+      );
+    }
   }
 
   void _showCommentContextMenu(Message comment, GlobalKey key, bool isMe) {
@@ -1416,6 +1907,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       messageKey: key,
       isMe: isMe,
       currentUserId: _currentUserId,
+      hasProtectedContent: _hasProtectedContent,
       onReply: _canComment ? () => _startReply(comment) : null,
       onQuote: (_canComment && comment.content.trim().isNotEmpty)
           ? () => _startQuote(
@@ -1432,15 +1924,17 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       onSelect: () {
         setState(() => _selectedCommentIds.add(comment.id));
       },
-      onForward: () {
-        ForwardChatPickerSheet.show(
-          context,
-          fromChatId: comment.chatId.isNotEmpty
-              ? comment.chatId
-              : (_linkedChatId ?? widget.channelId),
-          messageIds: [comment.id],
-        );
-      },
+      onForward: _hasProtectedContent
+          ? null
+          : () {
+              ForwardChatPickerSheet.show(
+                context,
+                fromChatId: comment.chatId.isNotEmpty
+                    ? comment.chatId
+                    : (_linkedChatId ?? widget.channelId),
+                messageIds: [comment.id],
+              );
+            },
       onEdit: (_canComment && isMe && comment.messageType == 'text')
           ? () {
               setState(() {
@@ -1455,7 +1949,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               _focusInput();
             }
           : null,
-      onDelete: isMe ? _confirmDeleteComment : null,
+      onDelete: (isMe || _canDeleteOthers) ? _confirmDeleteComment : null,
       onReaction: (msgId, emoji) => _toggleCommentReaction(msgId, emoji),
       selectedEmojis: comment.myReactions,
     );
@@ -1540,6 +2034,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final isDark = theme.brightness == Brightness.dark;
 
     return ChatScaffold(
+      swipeBackBlocked: _isSelectionMode,
       canPop: bottomInset == 0 && !_showEmojiPanel && !_isSelectionMode,
       onPopInvoked: (didPop, _) {
         if (!didPop) {
@@ -1560,36 +2055,53 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         avatarWidget: _buildAppBarAvatar(theme, themeExt),
         isSelectionMode: _isSelectionMode,
         selectedCount: _selectedCommentIds.length,
+        hasProtectedContent: _hasProtectedContent,
         onCancelSelection: () => setState(() => _selectedCommentIds.clear()),
-        onCopySelected: () {
-          final text = _comments
-              .where((c) => _selectedCommentIds.contains(c.id))
-              .map((c) => c.content.trim())
-              .where((s) => s.isNotEmpty)
-              .join('\n\n');
-          if (text.isNotEmpty) {
-            Clipboard.setData(ClipboardData(text: text));
-            GlassToastService().show(
-              context,
-              context.l10n.translate('copied_to_clipboard'),
-              iconWidget: iconoir.Check(
-                width: 20,
-                height: 20,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
-            );
-          }
-          setState(() => _selectedCommentIds.clear());
-        },
-        onForwardSelected: () {
-          final ids = _selectedCommentIds.toList();
-          setState(() => _selectedCommentIds.clear());
-          ForwardChatPickerSheet.show(
-            context,
-            fromChatId: _linkedChatId ?? widget.channelId,
-            messageIds: ids,
-          );
-        },
+        onReplySelected: (_selectedCommentIds.length == 1 && _canComment)
+            ? () {
+                final id = _selectedCommentIds.first;
+                final target = _comments
+                    .where((c) => c.id == id)
+                    .firstOrNull;
+                setState(() => _selectedCommentIds.clear());
+                if (target != null) _startReply(target);
+              }
+            : null,
+        onCopySelected: _hasProtectedContent
+            ? null
+            : () {
+                final text = _comments
+                    .where((c) => _selectedCommentIds.contains(c.id))
+                    .map((c) => c.content.trim())
+                    .where((s) => s.isNotEmpty)
+                    .join('\n\n');
+                if (text.isNotEmpty) {
+                  Clipboard.setData(ClipboardData(text: text));
+                  GlassToastService().show(
+                    context,
+                    context.l10n.translate('copied_to_clipboard'),
+                    iconWidget: iconoir.Check(
+                      width: 20,
+                      height: 20,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  );
+                }
+                setState(() => _selectedCommentIds.clear());
+              },
+        onForwardSelected: _hasProtectedContent
+            ? null
+            : () {
+                final ids = _selectedCommentIds.toList();
+                setState(() => _selectedCommentIds.clear());
+                ForwardChatPickerSheet.show(
+                  context,
+                  fromChatId: _linkedChatId ?? widget.channelId,
+                  messageIds: ids,
+                );
+              },
+        onDeleteSelected:
+            _canDeleteSelectedComments ? _deleteSelectedComments : null,
         onBack: () {
           if (Navigator.of(context).canPop()) {
             Navigator.of(context).pop();
@@ -1637,12 +2149,14 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                       linkedChatId: _linkedChatId,
                       showCommentsRow: false,
                       reactionSettings: widget.reactionSettings,
+                      hasProtectedContent: _hasProtectedContent,
                       onReactionTap: _toggleRootPostReaction,
-                      onFileTap: (url, name, type) {
-                        if (type == 'image') {
-                          FullscreenPhotoViewer.open(context, url);
-                        }
-                      },
+                      onFileTap: (url, name, type) => _openFile(
+                        url,
+                        name,
+                        type,
+                        sourceMessage: _rootPost,
+                      ),
                     );
                   }
                   if (index == 1) {
@@ -1742,7 +2256,15 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                       ? ChatInputBar(
                           controller: _messageController,
                           focusNode: _inputFocusNode,
-                          hintText: 'Добавить комментарий...',
+                          hintText: _effectiveSendAsAnon
+                              ? context.trOr(
+                                  'send_as_anonymous_hint',
+                                  'Написать анонимно...',
+                                )
+                              : 'Добавить комментарий...',
+                          isAnonymousAdmin: _effectiveSendAsAnon,
+                          anonymousGroupAvatarUrl:
+                              _linkedGroupAvatar ?? widget.channelAvatar,
                           isUploading: _isUploading,
                           uploadProgressNotifier: _uploadProgressNotifier,
                           attachedFiles: _attachedFiles,
@@ -1784,10 +2306,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                                 );
                               },
                           sendAsLeadingWidget: _sendAsPeers.length > 1
-                              ? SendAsPeerSelectorPill(
+                              ? InlineSendAsSelectorButton(
+                                  chatId: _linkedChatId ?? widget.channelId,
                                   peers: _sendAsPeers,
                                   selectedPeer: _activeSendAsPeer,
-                                  onTap: _openSendAsPicker,
+                                  onPeerSelected: (picked) {
+                                    setState(() {
+                                      _selectedSendAsMode = picked.peerType;
+                                      _selectedSendAsChatId = picked.isChannel
+                                          ? (picked.chatId ?? picked.id)
+                                          : null;
+                                    });
+                                  },
                                 )
                               : null,
                           currentUserId: _currentUserId,
@@ -1907,8 +2437,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     }
     final comment = _comments[index];
     final key = _commentKeys.putIfAbsent(comment.id, () => GlobalKey());
-    final bool isMe =
-        comment.senderId == _currentUserId && !comment.isFromAnonymousAdmin;
+    final bool isMe = _isOwnComment(comment);
     final Message? olderNeighbor = index > 0 ? _comments[index - 1] : null;
     final Message? newerNeighbor = index + 1 < _comments.length
         ? _comments[index + 1]
@@ -1945,9 +2474,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                     ? comment.senderName
                     : 'Канал'))
         : (comment.isFromAnonymousAdmin
-              ? (comment.senderName.trim().isNotEmpty
+              ? (comment.senderName.trim().isNotEmpty &&
+                        comment.senderName != 'Вы'
                     ? comment.senderName
-                    : (widget.channelName ?? 'Channel'))
+                    : (_linkedGroupName ?? widget.channelName ?? 'Обсуждение'))
               : comment.senderName);
     final String? resolvedSenderAvatar = hasSenderChat
         ? comment.senderChatAvatarUrl
@@ -1965,15 +2495,43 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                     ? _openLinkedGroupProfile
                     : () => _openUserProfile(comment)));
 
-    final Widget? senderHeaderWidget = (showAvatarGutter && firstInCluster)
+    final bool showSenderHeader = firstInCluster &&
+        (showAvatarGutter ||
+            (isMe && (hasSenderChat || comment.isFromAnonymousAdmin)));
+    final String? resolvedAdminTitle = hasSenderChat
+        ? 'канал'
+        : (comment.isFromAnonymousAdmin &&
+                (comment.senderAdminTitle == null ||
+                    comment.senderAdminTitle!.trim().isEmpty)
+            ? 'анонимно'
+            : comment.senderAdminTitle);
+    final bool isSenderVerified = hasSenderChat
+        ? _sendAsPeers.any(
+            (p) =>
+                p.isChannel &&
+                (p.chatId == comment.senderChatId ||
+                    p.id == comment.senderChatId) &&
+                p.isVerified,
+          )
+        : false;
+
+    final Widget? senderHeaderWidget = showSenderHeader
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
             nameColor: (hasSenderChat || comment.isFromAnonymousAdmin)
-                ? Theme.of(context).colorScheme.primary
+                ? (isMe
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.primary)
                 : _resolveSenderColor(comment),
             customization: senderCust,
-            adminTitle: hasSenderChat ? 'канал' : comment.senderAdminTitle,
-            role: hasSenderChat ? null : comment.senderRole,
+            isVerified: isSenderVerified,
+            adminTitle: resolvedAdminTitle,
+            role: (hasSenderChat || comment.isFromAnonymousAdmin)
+                ? null
+                : comment.senderRole,
+            rankColor: isMe
+                ? Theme.of(context).colorScheme.onPrimary.withValues(alpha: 0.72)
+                : null,
             onTapSender: onSenderTap,
           )
         : null;
@@ -1994,13 +2552,34 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       chatTitle: widget.channelName,
       isSelected: isSelected,
       isSelectionMode: _isSelectionMode,
+      hasProtectedContent: _hasProtectedContent,
       reactions: comment.reactions.isNotEmpty ? comment.reactions : null,
       myReactions: comment.myReactions.isNotEmpty ? comment.myReactions : null,
-      onReactionTap: (emoji) => _toggleCommentReaction(comment.id, emoji),
-      onFileTap: (url, name, type) {
-        if (type == 'image') {
-          FullscreenPhotoViewer.open(context, url);
+      onReactionTap: (emoji) {
+        if (_isSelectionMode) {
+          setState(() {
+            if (isSelected) {
+              _selectedCommentIds.remove(comment.id);
+            } else {
+              _selectedCommentIds.add(comment.id);
+            }
+          });
+          return;
         }
+        _toggleCommentReaction(comment.id, emoji);
+      },
+      onFileTap: (url, name, type) {
+        if (_isSelectionMode) {
+          setState(() {
+            if (isSelected) {
+              _selectedCommentIds.remove(comment.id);
+            } else {
+              _selectedCommentIds.add(comment.id);
+            }
+          });
+          return;
+        }
+        _openFile(url, name, type, sourceMessage: comment);
       },
       formatTime: _formatTime,
     );
@@ -2063,7 +2642,19 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       onLongPress: isDesktop
           ? null
           : () => setState(() => _selectedCommentIds.add(comment.id)),
-      onSecondaryTapUp: (_) => _showCommentContextMenu(comment, key, isMe),
+      onSecondaryTapUp: (_) {
+        if (_isSelectionMode) {
+          setState(() {
+            if (isSelected) {
+              _selectedCommentIds.remove(comment.id);
+            } else {
+              _selectedCommentIds.add(comment.id);
+            }
+          });
+          return;
+        }
+        _showCommentContextMenu(comment, key, isMe);
+      },
       child: rowWidget,
     );
 

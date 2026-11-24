@@ -30,7 +30,7 @@ class AdminLogScreen extends StatefulWidget {
 
 class _AdminLogScreenState extends State<AdminLogScreen> {
   static const List<({String id, String label})> _categories = [
-    (id: '', label: 'Все'),
+    (id: 'all', label: 'Все'),
     (id: 'messages', label: 'Сообщения'),
     (id: 'members', label: 'Участники'),
     (id: 'rights', label: 'Права'),
@@ -41,10 +41,11 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
 
   final TextEditingController _searchController = TextEditingController();
   final List<AdminLogEvent> _events = [];
-  String _selectedCategory = '';
+  String _selectedCategory = 'all';
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = false;
+  int _loadRequestSeq = 0;
   Timer? _debounce;
 
   @override
@@ -66,41 +67,14 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
     super.dispose();
   }
 
-  bool _matchesCategory(AdminLogEvent ev) {
-    final a = ev.action.toLowerCase();
-    switch (_selectedCategory) {
-      case 'messages':
-        return a.contains('message') || a.contains('pin');
-      case 'members':
-        return a.contains('member') ||
-            a.contains('ban') ||
-            a.contains('restrict') ||
-            a.contains('join');
-      case 'rights':
-        return a.contains('role') ||
-            a.contains('admin') ||
-            a.contains('right') ||
-            a.contains('permission') ||
-            a.contains('ownership');
-      case 'settings':
-        return a.contains('setting') ||
-            a.contains('discussion') ||
-            a.contains('auto_delete');
-      case 'invites':
-        return a.contains('invite');
-      case 'topics':
-        return a.contains('topic');
-      default:
-        return true;
-    }
-  }
-
   Future<void> _load({bool reset = false}) async {
     if (!reset && (_loadingMore || !_hasMore)) return;
+    final int reqSeq = ++_loadRequestSeq;
     if (mounted) {
       setState(() {
         if (reset) {
           _loading = true;
+          _loadingMore = false;
         } else {
           _loadingMore = true;
         }
@@ -108,12 +82,13 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
     }
     final res = await GroupsChannelsParityService.getAdminLog(
       widget.chatId,
+      category: _selectedCategory == 'all' ? null : _selectedCategory,
       query: _searchController.text,
       hours: 48,
       limit: 50,
       offset: reset ? 0 : _events.length,
     );
-    if (!mounted) return;
+    if (!mounted || reqSeq != _loadRequestSeq) return;
     setState(() {
       if (reset) _events.clear();
       _events.addAll(res.events);
@@ -133,6 +108,9 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
         return 'Закрепил(а) сообщение';
       case 'message_unpinned':
         return 'Открепил(а) сообщение';
+      case 'chat_history_cleared':
+      case 'history_cleared':
+        return 'Очистил(а) историю чата';
       case 'settings_updated':
         return widget.isChannel
             ? 'Обновил(а) настройки канала'
@@ -212,7 +190,6 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
-    final filtered = _events.where(_matchesCategory).toList();
 
     return SettingsFloatingScaffold(
       title: 'Недавние действия',
@@ -257,8 +234,10 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
                     label: cat.label,
                     isPrimary: _selectedCategory == cat.id,
                     onTap: () {
+                      if (_selectedCategory == cat.id) return;
                       HapticUtils.selection();
                       setState(() => _selectedCategory = cat.id);
+                      unawaited(_load(reset: true));
                     },
                   );
                 },
@@ -272,7 +251,7 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2.2),
                 ),
               )
-            else if (filtered.isEmpty)
+            else if (_events.isEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 52, 24, 24),
                 child: Text(
@@ -284,7 +263,7 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
             else
               TheavInsetGroup(
                 children: [
-                  for (final ev in filtered)
+                  for (final ev in _events)
                     TheavListRow(
                       leading: AvatarWithStatus(
                         userId: ev.actorId,
@@ -300,7 +279,7 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
                     ),
                 ],
               ),
-            if (_hasMore && !_loading)
+            if (_hasMore && !_loading && _events.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: TheavFloatingPillButton(

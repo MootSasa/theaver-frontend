@@ -267,6 +267,7 @@ class AppTheme {
           );
 
     return base.copyWith(
+      pageTransitionsTheme: CustomPageTransitionsTheme.customTheme,
       primaryColor: p.primary,
       indicatorColor: p.primary,
       colorScheme: colorScheme,

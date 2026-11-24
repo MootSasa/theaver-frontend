@@ -7,6 +7,7 @@ import '../../../services/chat_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../services/groups_channels_parity_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../utils/swipe_back_route.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
 import '../../../widgets/user/avatar_with_status.dart';
@@ -53,6 +54,10 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
   late int _slowModeInterval;
   late bool _participantsHidden;
   late bool _aggressiveAntiSpam;
+  late GroupDefaultPermissions _savedPermissions;
+  late int _savedSlowModeInterval;
+  late bool _savedParticipantsHidden;
+  late bool _savedAggressiveAntiSpam;
   bool _mediaExpanded = true;
   bool _isSaving = false;
   bool _savedAtLeastOnce = false;
@@ -68,6 +73,10 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     _slowModeInterval = _nearestSlowModeStop(widget.initialSlowMode);
     _participantsHidden = widget.initialParticipantsHidden;
     _aggressiveAntiSpam = widget.initialAggressiveAntiSpam;
+    _savedPermissions = _permissions;
+    _savedSlowModeInterval = _slowModeInterval;
+    _savedParticipantsHidden = _participantsHidden;
+    _savedAggressiveAntiSpam = _aggressiveAntiSpam;
     _mediaExpanded = _permissions.canSendMessages;
     unawaited(_loadLists());
   }
@@ -155,6 +164,10 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
 
     if (res['success'] == true) {
       _savedAtLeastOnce = true;
+      _savedPermissions = _permissions;
+      _savedSlowModeInterval = _slowModeInterval;
+      _savedParticipantsHidden = _participantsHidden;
+      _savedAggressiveAntiSpam = _aggressiveAntiSpam;
       GlassToastService().show(
         context,
         'Разрешения сохранены',
@@ -177,16 +190,19 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
 
   Map<String, dynamic> _buildResult() {
     return {
-      'default_permissions': _permissions,
-      'slow_mode_interval': _slowModeInterval,
-      'participants_hidden': _participantsHidden,
-      'has_aggressive_anti_spam_enabled': _aggressiveAntiSpam,
+      if (_savedAtLeastOnce) ...{
+        'default_permissions': _savedPermissions,
+        'slow_mode_interval': _savedSlowModeInterval,
+        'participants_hidden': _savedParticipantsHidden,
+        'has_aggressive_anti_spam_enabled': _savedAggressiveAntiSpam,
+      },
       'saved': _savedAtLeastOnce,
       'members_changed': _membersChanged,
     };
   }
 
   void _popWithResult() {
+    if (!Navigator.of(context).canPop()) return;
     Navigator.pop(context, _buildResult());
   }
 
@@ -196,12 +212,14 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     final disableAnim = MediaQuery.disableAnimationsOf(context);
     final stopIdx = _slowModeStops.indexOf(_slowModeInterval).clamp(0, 6);
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _popWithResult();
-      },
-      child: SettingsFloatingScaffold(
+    return SwipeBackPopScope(
+      onSwipeBackPop: _popWithResult,
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _popWithResult();
+        },
+        child: SettingsFloatingScaffold(
         title: 'Разрешения',
         backgroundColor: palette.background,
         onBack: _popWithResult,
@@ -620,6 +638,7 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

@@ -1,12 +1,9 @@
 import 'dart:io';
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
 
-import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
@@ -26,6 +23,8 @@ class CreateChannelScreen extends StatefulWidget {
 }
 
 class _CreateChannelScreenState extends State<CreateChannelScreen> {
+  static final RegExp _usernameRegex = RegExp(r'^[a-zA-Z][a-zA-Z0-9_]{2,63}$');
+
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
@@ -36,12 +35,41 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
   bool _enableComments = true;
   bool _enableHistory = true;
   bool _isLoading = false;
+  String? _usernameServerError;
+
+  String get _cleanUsername =>
+      _usernameController.text.trim().replaceAll('@', '');
+
+  bool get _isUsernameValid {
+    if (!_isPublic) return true;
+    final clean = _cleanUsername;
+    return clean.isEmpty || _usernameRegex.hasMatch(clean);
+  }
+
+  String? get _usernameValidationMessage {
+    if (!_isPublic) return null;
+    if (_usernameServerError != null) return _usernameServerError;
+    final clean = _cleanUsername;
+    if (clean.isEmpty) return null;
+    if (!_usernameRegex.hasMatch(clean)) {
+      return 'От 3 до 64 символов: латинские буквы, цифры и _, начинается с буквы';
+    }
+    return null;
+  }
 
   @override
   void initState() {
     super.initState();
     _nameController.addListener(() {
       if (mounted) setState(() {});
+    });
+    _usernameController.addListener(() {
+      if (!mounted) return;
+      if (_usernameServerError != null) {
+        setState(() => _usernameServerError = null);
+      } else {
+        setState(() {});
+      }
     });
   }
 
@@ -88,6 +116,15 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       return;
     }
 
+    final rawUsername = _cleanUsername;
+    if (_isPublic && !_isUsernameValid) {
+      GlassToastService().showError(
+        context,
+        _usernameValidationMessage ?? 'Некорректный формат @username',
+      );
+      return;
+    }
+
     HapticUtils.tap();
     setState(() => _isLoading = true);
 
@@ -104,7 +141,6 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
         }
       }
 
-      final rawUsername = _usernameController.text.trim().replaceAll('@', '');
       final desc = _descriptionController.text.trim();
 
       final result = await ChatService.createChat(
@@ -123,28 +159,26 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       if (result['success'] == true) {
         Chat chat = result['chat'] as Chat;
 
-        // Если выбран аватар — сохраняем в настройки канала и локальную БД
+        // Если выбран аватар — сохраняем в настройки канала и локальную БД через ChatService
         if (uploadedAvatarUrl != null && uploadedAvatarUrl.isNotEmpty) {
-          try {
-            final token = await AuthService.getToken();
-            final dio = Dio();
-            await dio.put(
-              '${AppConfig.baseUrl}/api/chats/${chat.id}/group-settings',
-              data: {
-                'name': name,
-                'description': desc,
-                'avatar_url': uploadedAvatarUrl,
-                'is_public': _isPublic,
-                'username': _isPublic ? rawUsername : '',
-                'history_for_new': _enableHistory,
-                'sign_messages': _enableSignatures,
-              },
-              options: Options(headers: {'Authorization': 'Bearer $token'}),
-            );
+          final settingsRes = await ChatService.updateGroupSettings(chat.id, {
+            'name': name,
+            'description': desc,
+            'avatar_url': uploadedAvatarUrl,
+            'is_public': _isPublic,
+            'username': _isPublic ? rawUsername : '',
+            'history_for_new': _enableHistory,
+            'sign_messages': _enableSignatures,
+          });
+          if (settingsRes['success'] == true) {
             await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
             chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
-          } catch (e) {
-            debugPrint('[CreateChannelScreen] Set avatar error: $e');
+          } else if (mounted) {
+            GlassToastService().showError(
+              context,
+              settingsRes['message']?.toString() ??
+                  'Не удалось сохранить аватар канала',
+            );
           }
         }
 
@@ -170,15 +204,23 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
           ),
         );
       } else {
-        GlassToastService().show(
-          context,
-          result['message']?.toString() ?? 'Не удалось создать канал',
-        );
-        setState(() => _isLoading = false);
+        final errMsg =
+            result['message']?.toString() ?? 'Не удалось создать канал';
+        final errCode = result['error_code']?.toString().toLowerCase() ?? '';
+        if (errMsg.toLowerCase().contains('username') ||
+            errCode.contains('username')) {
+          setState(() {
+            _usernameServerError = errMsg;
+            _isLoading = false;
+          });
+        } else {
+          setState(() => _isLoading = false);
+        }
+        GlassToastService().showError(context, errMsg);
       }
     } catch (e) {
       if (mounted) {
-        GlassToastService().show(context, 'Ошибка: $e');
+        GlassToastService().showError(context, 'Ошибка: $e');
         setState(() => _isLoading = false);
       }
     }
@@ -359,6 +401,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 TheavInsetGroup(
                   margin: EdgeInsets.zero,
                   header: _tr('channel_type', 'ТИП КАНАЛА').toUpperCase(),
+                  footer: _usernameValidationMessage,
                   children: [
                     TheavListRow(
                       leading: iconoir.Globe(
@@ -404,6 +447,19 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                           height: 19,
                           color: primaryColor,
                         ),
+                        suffix: _cleanUsername.isNotEmpty
+                            ? (_isUsernameValid && _usernameServerError == null
+                                ? const iconoir.CheckCircle(
+                                    width: 18,
+                                    height: 18,
+                                    color: Color(0xFF34C759),
+                                  )
+                                : iconoir.WarningCircle(
+                                    width: 18,
+                                    height: 18,
+                                    color: palette.error,
+                                  ))
+                            : null,
                       ),
                   ],
                 ),

@@ -318,8 +318,10 @@ class _MainScreenState extends State<MainScreen>
   // Animation controllers for selection bottom bar hide & Material '+' menu
   late final AnimationController _selectModeController;
   late final AnimationController _classicCreateMenuController;
+  late final AnimationController _embeddedTabSwipeBackController;
   late final CurvedAnimation _selectModeAnimation;
   late final CurvedAnimation _classicCreateMenuAnimation;
+  int? _swipingFromTabIndex;
 
   // Loading states
   bool _isLoading = false;
@@ -358,6 +360,10 @@ class _MainScreenState extends State<MainScreen>
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
     );
+    _embeddedTabSwipeBackController = AnimationController(
+      vsync: this,
+      value: 1.0,
+    )..addListener(_syncEmbeddedTabSwipeProgress);
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
@@ -1367,6 +1373,7 @@ class _MainScreenState extends State<MainScreen>
       TilingLayoutController.instance.onChatTileClosed = null;
     }
     _searchDebounce?.cancel();
+    _embeddedTabSwipeBackController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
@@ -1531,7 +1538,36 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
+  bool _canSwipeBackToChatsTab() {
+    if (!mounted) return false;
+    if (_currentIndex == 1) return false;
+    if (_isSelectMode ||
+        _isTopMenuOpen ||
+        _isFolderMenuOpen ||
+        _isCreateMenuOpen ||
+        _isSelectionMenuOpen) {
+      return false;
+    }
+    if (TilingLayoutController.instance.isPopTransitionActive) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    return true;
+  }
+
+  void _syncEmbeddedTabSwipeProgress() {
+    final fromIndex = _swipingFromTabIndex;
+    if (fromIndex == null || !_pageController.hasClients) return;
+    final pos = _pageController.position;
+    if (!pos.hasViewportDimension || pos.viewportDimension <= 0) return;
+    final width = pos.viewportDimension;
+    final t = _embeddedTabSwipeBackController.value.clamp(0.0, 1.0);
+    final double targetPixels =
+        fromIndex == 2 ? (1.0 + t) * width : (1.0 - t) * width;
+    pos.jumpTo(targetPixels.clamp(pos.minScrollExtent, pos.maxScrollExtent));
+  }
+
   void _onTabTapped(int index) {
+    _swipingFromTabIndex = null;
     if (_isTopMenuOpen) {
       _closeTopMenu();
     }
@@ -3691,11 +3727,14 @@ class _MainScreenState extends State<MainScreen>
 
             // PageView: страница 0 = Настройки, страница 1 = Чаты, страница 2 = Поиск
             // Свайп влево → Настройки, свайп вправо → Чаты
-            final Widget pageView = PageView(
+            final Widget rawPageView = PageView(
                   key: _pageViewKey,
                   controller: _pageController,
                   physics: const NeverScrollableScrollPhysics(),
                   onPageChanged: (page) {
+                    if (_swipingFromTabIndex != null) {
+                      return;
+                    }
                     if (_isTopMenuOpen) {
                       _closeTopMenu();
                     }
@@ -3837,6 +3876,40 @@ class _MainScreenState extends State<MainScreen>
                     ),
                   ], // closes PageView children
                 ); // closes PageView
+
+            final Widget pageView = InteractiveSwipeBackGestureDetector(
+              animationController: _embeddedTabSwipeBackController,
+              canSwipeBack: _canSwipeBackToChatsTab,
+              onDragStart: () {
+                _swipingFromTabIndex = _currentIndex;
+                _embeddedTabSwipeBackController.value = 1.0;
+                if (_currentIndex == 2) {
+                  _searchFocusNode.unfocus();
+                }
+              },
+              onRestored: () {
+                final originTab = _swipingFromTabIndex;
+                _swipingFromTabIndex = null;
+                _embeddedTabSwipeBackController.value = 1.0;
+                if (originTab != null && _pageController.hasClients) {
+                  _pageController.jumpToPage(originTab);
+                }
+              },
+              onDismissed: () {
+                _swipingFromTabIndex = null;
+                _embeddedTabSwipeBackController.value = 1.0;
+                if (_pageController.hasClients) {
+                  _pageController.jumpToPage(1);
+                }
+                if (mounted && _currentIndex != 1) {
+                  setState(() {
+                    _currentIndex = 1;
+                    _visitedPages.add(1);
+                  });
+                }
+              },
+              child: rawPageView,
+            );
 
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final statusBarHeight = MediaQuery.of(context).padding.top;

@@ -437,13 +437,14 @@ class ChannelPostCard extends StatelessWidget {
 
     final Widget postRow = LayoutBuilder(
       builder: (context, constraints) {
-        final double reserveRight = showShareButton ? 58.0 : 20.0;
-        final double cardWidth = constraints.maxWidth.isFinite
-            ? math.min(
-                specCardWidth,
-                math.max(200.0, constraints.maxWidth - reserveRight),
-              )
-            : specCardWidth;
+        final double availWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : (specCardWidth + 60.0);
+        final double horizontalMargins = 12.0 + (showShareButton ? 4.0 : 8.0);
+        final double shareWidth = showShareButton ? 44.0 : 0.0;
+        final double maxPossibleCardWidth =
+            math.max(0.0, availWidth - horizontalMargins - shareWidth);
+        final double cardWidth = math.min(specCardWidth, maxPossibleCardWidth);
 
         final Widget cardColumn = _buildCardColumn(
           context: context,
@@ -607,22 +608,22 @@ class ChannelPostCard extends StatelessWidget {
           ),
         );
 
-        if (isSelectionMode) {
-          return Row(
+        return leftAlignedCard;
+      },
+    );
+
+    final Widget effectivePostBody = isSelectionMode
+        ? Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Padding(
                 padding: const EdgeInsets.only(left: 10.0, right: 2.0),
                 child: MessageSelectionCheckbox(isSelected: isSelected),
               ),
-              Expanded(child: IgnorePointer(child: leftAlignedCard)),
+              Expanded(child: IgnorePointer(child: postRow)),
             ],
-          );
-        }
-
-        return leftAlignedCard;
-      },
-    );
+          )
+        : postRow;
 
     final Color rowHighlightColor =
         themeExt?.palette.messageSelectionOverlay ??
@@ -640,7 +641,7 @@ class ChannelPostCard extends StatelessWidget {
         curve: Curves.easeOutCubic,
         width: double.infinity,
         color: showHighlighted ? rowHighlightColor : Colors.transparent,
-        child: postRow,
+        child: effectivePostBody,
       ),
     );
   }
@@ -904,6 +905,7 @@ class ChannelPostCard extends StatelessWidget {
         ),
         child: _buildFooterMetadataRow(
           msg: msg,
+          cardWidth: cardWidth,
           subtextColor: subtextColor,
           inlineSignature: inlineSignature,
         ),
@@ -1659,6 +1661,7 @@ class ChannelPostCard extends StatelessWidget {
 
   Widget _buildFooterMetadataRow({
     required Message msg,
+    required double cardWidth,
     required Color subtextColor,
     required String? inlineSignature,
   }) {
@@ -1673,69 +1676,83 @@ class ChannelPostCard extends StatelessWidget {
       height: 1.15,
     );
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        if (msg.isSilent) ...[
-          iconoir.BellOff(width: 12.0, height: 12.0, color: subtextColor),
-          const SizedBox(width: 5.0),
-        ],
-        iconoir.Eye(width: 14.0, height: 14.0, color: subtextColor),
-        const SizedBox(width: 4.0),
-        Text(viewsStr, style: metaStyle),
-        if (msg.forwardsCount > 0) ...[
-          const SizedBox(width: 8.0),
-          iconoir.ForwardMessage(
-            width: 13.0,
-            height: 13.0,
-            color: subtextColor,
-          ),
-          const SizedBox(width: 3.0),
-          Text(formatViewsCount(msg.forwardsCount), style: metaStyle),
-        ],
-        if (inlineSignature != null && inlineSignature.isNotEmpty) ...[
-          Text(' · ', style: metaStyle),
-          Flexible(
-            child: Text(
-              inlineSignature,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: metaStyle,
-            ),
-          ),
-        ],
-        if (msg.isEdited) ...[
-          Text(' · ', style: metaStyle),
-          Text(
-            '(изм.)',
-            style: metaStyle.copyWith(fontStyle: FontStyle.italic),
-          ),
-        ],
-        Text(' · ', style: metaStyle),
-        Text(timeStr, style: metaStyle),
-        if (msg.sendStatus == 0) ...[
-          const SizedBox(width: 5.0),
-          SizedBox(
-            width: 10.0,
-            height: 10.0,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.2,
-              color: subtextColor,
-            ),
-          ),
-        ] else if (msg.sendStatus == 2) ...[
-          const SizedBox(width: 5.0),
-          GestureDetector(
-            onTap: () => onRetry?.call(msg),
-            child: const iconoir.WarningCircle(
-              width: 14.0,
-              height: 14.0,
-              color: Colors.redAccent,
-            ),
-          ),
-        ],
-      ],
+    final String trimmedSig = inlineSignature?.trim() ?? '';
+    final bool showSignature = trimmedSig.isNotEmpty && cardWidth >= 235.0;
+    final double maxSigWidth = math.max(36.0, cardWidth - 165.0);
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerRight,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (msg.isSilent) ...[
+              iconoir.BellOff(width: 12.0, height: 12.0, color: subtextColor),
+              const SizedBox(width: 5.0),
+            ],
+            iconoir.Eye(width: 14.0, height: 14.0, color: subtextColor),
+            const SizedBox(width: 4.0),
+            Text(viewsStr, style: metaStyle),
+            if (msg.forwardsCount > 0) ...[
+              const SizedBox(width: 8.0),
+              iconoir.ForwardMessage(
+                width: 13.0,
+                height: 13.0,
+                color: subtextColor,
+              ),
+              const SizedBox(width: 3.0),
+              Text(formatViewsCount(msg.forwardsCount), style: metaStyle),
+            ],
+            if (showSignature) ...[
+              Text(' · ', style: metaStyle),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxSigWidth),
+                child: Text(
+                  trimmedSig,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: metaStyle,
+                ),
+              ),
+            ],
+            if (msg.isEdited) ...[
+              Text(' · ', style: metaStyle),
+              Text(
+                '(изм.)',
+                style: metaStyle.copyWith(fontStyle: FontStyle.italic),
+              ),
+            ],
+            Text(' · ', style: metaStyle),
+            Text(timeStr, style: metaStyle),
+            if (msg.sendStatus == 0) ...[
+              const SizedBox(width: 5.0),
+              SizedBox(
+                width: 10.0,
+                height: 10.0,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.2,
+                  color: subtextColor,
+                ),
+              ),
+            ] else if (msg.sendStatus == 2) ...[
+              const SizedBox(width: 5.0),
+              GestureDetector(
+                onTap: () => onRetry?.call(msg),
+                child: const iconoir.WarningCircle(
+                  width: 14.0,
+                  height: 14.0,
+                  color: Colors.redAccent,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

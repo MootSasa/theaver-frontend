@@ -256,9 +256,9 @@ class InviteLinkImporter {
   }
 }
 
-/// Identity peer available for "Send As" (personal account or administered channel).
+/// Identity peer available for "Send As" (personal account, anonymous group admin, or public/linked channel).
 class SendAsPeer {
-  final String peerType; // 'user' | 'channel'
+  final String peerType; // 'user' | 'group' | 'channel'
   final String id;
   final String? chatId;
   final String name;
@@ -266,6 +266,8 @@ class SendAsPeer {
   final String? avatarUrl;
   final bool isVerified;
   final bool isSelected;
+  final int? subscriberCount;
+  final int? memberCount;
 
   const SendAsPeer({
     required this.peerType,
@@ -276,9 +278,56 @@ class SendAsPeer {
     this.avatarUrl,
     this.isVerified = false,
     this.isSelected = false,
+    this.subscriberCount,
+    this.memberCount,
   });
 
+  bool get isUser => peerType == 'user';
+  bool get isGroupAnon => peerType == 'group';
   bool get isChannel => peerType == 'channel';
+
+  bool matchesSelection({
+    String? selectedSendAsMode,
+    String? selectedSendAsChatId,
+  }) {
+    final mode = selectedSendAsMode?.trim() ?? '';
+    final cid = selectedSendAsChatId?.trim() ?? '';
+    if (mode == 'group') return isGroupAnon;
+    if (mode == 'channel') {
+      return isChannel && (cid.isEmpty || (chatId ?? id) == cid);
+    }
+    if (mode == 'user') return isUser;
+    if (cid.isNotEmpty) {
+      return isChannel && (chatId ?? id) == cid;
+    }
+    return isSelected;
+  }
+
+  SendAsPeer copyWith({
+    String? peerType,
+    String? id,
+    String? chatId,
+    String? name,
+    String? username,
+    String? avatarUrl,
+    bool? isVerified,
+    bool? isSelected,
+    int? subscriberCount,
+    int? memberCount,
+  }) {
+    return SendAsPeer(
+      peerType: peerType ?? this.peerType,
+      id: id ?? this.id,
+      chatId: chatId ?? this.chatId,
+      name: name ?? this.name,
+      username: username ?? this.username,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      isVerified: isVerified ?? this.isVerified,
+      isSelected: isSelected ?? this.isSelected,
+      subscriberCount: subscriberCount ?? this.subscriberCount,
+      memberCount: memberCount ?? this.memberCount,
+    );
+  }
 
   factory SendAsPeer.fromJson(Map<String, dynamic> json) {
     return SendAsPeer(
@@ -290,7 +339,53 @@ class SendAsPeer {
       avatarUrl: _parityNonEmpty(json['avatar_url']),
       isVerified: _parityBool(json['is_verified']),
       isSelected: _parityBool(json['is_selected']),
+      subscriberCount: json['subscriber_count'] != null
+          ? _parityInt(json['subscriber_count'])
+          : null,
+      memberCount: json['member_count'] != null
+          ? _parityInt(json['member_count'])
+          : null,
     );
+  }
+}
+
+/// Result returned by `GET /api/chats/:id/send-as-peers`.
+class SendAsPeersResult {
+  final List<SendAsPeer> peers;
+  final String? selectedSendAsChatId;
+  final String selectedSendAsMode; // 'user' | 'group' | 'channel'
+
+  const SendAsPeersResult({
+    this.peers = const <SendAsPeer>[],
+    this.selectedSendAsChatId,
+    this.selectedSendAsMode = 'user',
+  });
+
+  SendAsPeer? get activePeer {
+    if (peers.isEmpty) return null;
+    if (selectedSendAsMode == 'group') {
+      for (final p in peers) {
+        if (p.isGroupAnon) return p;
+      }
+    }
+    if (selectedSendAsMode == 'channel' ||
+        (selectedSendAsChatId != null && selectedSendAsChatId!.isNotEmpty)) {
+      for (final p in peers) {
+        if (p.isChannel &&
+            (p.chatId == selectedSendAsChatId || p.id == selectedSendAsChatId)) {
+          return p;
+        }
+      }
+    }
+    if (selectedSendAsMode == 'user') {
+      for (final p in peers) {
+        if (p.isUser) return p;
+      }
+    }
+    for (final p in peers) {
+      if (p.isSelected) return p;
+    }
+    return peers.first;
   }
 }
 
@@ -856,6 +951,7 @@ class GroupsChannelsParityService {
       getAdminLog(
     String chatId, {
     String? action,
+    String? category,
     String? actorId,
     String? query,
     int hours = 48,
@@ -872,6 +968,8 @@ class GroupsChannelsParityService {
         'limit': '$limit',
         'offset': '$offset',
         if (action != null && action.isNotEmpty) 'action': action,
+        if (category != null && category.trim().isNotEmpty)
+          'category': category.trim(),
         if (actorId != null && actorId.isNotEmpty) 'actor_id': actorId,
         if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
       };
@@ -951,12 +1049,11 @@ class GroupsChannelsParityService {
 
   // ==================== SEND AS CHANNEL ====================
 
-  static Future<({List<SendAsPeer> peers, String? selectedSendAsChatId})>
-      getSendAsPeers(String chatId) async {
+  static Future<SendAsPeersResult> getSendAsPeers(String chatId) async {
     try {
       final headers = await _headers();
       if (headers == null) {
-        return (peers: <SendAsPeer>[], selectedSendAsChatId: null);
+        return const SendAsPeersResult();
       }
       final resp = await http.get(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/send-as-peers'),
@@ -972,30 +1069,55 @@ class GroupsChannelsParityService {
             }
           }
         }
-        return (
+        final selectedChatId = _parityNonEmpty(data['selected_send_as_chat_id']);
+        final rawMode = _parityNonEmpty(data['selected_send_as_mode']);
+        String resolvedMode;
+        if (rawMode == 'user' || rawMode == 'group' || rawMode == 'channel') {
+          resolvedMode = rawMode!;
+        } else if (selectedChatId != null && selectedChatId.isNotEmpty) {
+          resolvedMode = 'channel';
+        } else if (peers.any((p) => p.isSelected && p.isGroupAnon)) {
+          resolvedMode = 'group';
+        } else if (peers.any((p) => p.isSelected && p.isChannel)) {
+          resolvedMode = 'channel';
+        } else {
+          resolvedMode = 'user';
+        }
+        return SendAsPeersResult(
           peers: peers,
-          selectedSendAsChatId: _parityNonEmpty(data['selected_send_as_chat_id']),
+          selectedSendAsChatId: selectedChatId,
+          selectedSendAsMode: resolvedMode,
         );
       }
     } catch (e) {
       debugPrint('getSendAsPeers error: $e');
     }
-    return (peers: <SendAsPeer>[], selectedSendAsChatId: null);
+    return const SendAsPeersResult();
   }
 
   static Future<bool> setSendAsPeer(
     String chatId,
-    String? sendAsChatId,
-  ) async {
+    String? sendAsChatId, {
+    String? sendAsMode,
+  }) async {
     try {
       final headers = await _headers();
       if (headers == null) return false;
+      final trimmedChatId = sendAsChatId?.trim() ?? '';
+      final hasChatId = trimmedChatId.isNotEmpty;
+      final trimmedMode = sendAsMode?.trim() ?? '';
+      final effectiveMode = (trimmedMode == 'user' ||
+              trimmedMode == 'group' ||
+              trimmedMode == 'channel')
+          ? trimmedMode
+          : (hasChatId ? 'channel' : 'user');
       final resp = await http.put(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/send-as'),
         headers: headers,
         body: jsonEncode({
-          'send_as_chat_id': (sendAsChatId != null && sendAsChatId.isNotEmpty)
-              ? (int.tryParse(sendAsChatId) ?? sendAsChatId)
+          'send_as_mode': effectiveMode,
+          'send_as_chat_id': (effectiveMode == 'channel' && hasChatId)
+              ? (int.tryParse(trimmedChatId) ?? trimmedChatId)
               : null,
         }),
       );

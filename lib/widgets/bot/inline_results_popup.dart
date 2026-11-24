@@ -614,6 +614,10 @@ class InlineQueryController extends ChangeNotifier {
     required BotInlineResult result,
     String? replyToMessageId,
     int? topicId,
+    bool isSilent = false,
+    String? sendAsMode,
+    String? sendAsChatId,
+    bool sendAsAnonymous = false,
   }) async {
     final targetBot = (response?.botId.isNotEmpty == true)
         ? response!.botId
@@ -627,6 +631,10 @@ class InlineQueryController extends ChangeNotifier {
       inlineQueryId: response?.inlineQueryId,
       replyToMessageId: replyToMessageId,
       topicId: topicId,
+      isSilent: isSilent,
+      sendAsMode: sendAsMode,
+      sendAsChatId: sendAsChatId,
+      sendAsAnonymous: sendAsAnonymous,
     );
     return res['success'] == true;
   }

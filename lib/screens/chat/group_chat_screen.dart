@@ -91,6 +91,7 @@ import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
 import '../../widgets/chat/live_chat_call_banner.dart';
+import '../../widgets/chat/message_reply_info.dart';
 import '../../widgets/chat/pinned_message_banner.dart';
 import '../../widgets/message/telegram_service_message_widget.dart';
 import 'media_send_screen.dart';
@@ -223,6 +224,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   List<ForumTopic> _forumTopics = [];
   List<SendAsPeer> _sendAsPeers = [];
   String? _selectedSendAsChatId;
+  String _selectedSendAsMode = 'user';
+  bool _hasLoadedSendAsPeers = false;
   int _unreadMentionsCount = 0;
   int _unreadReactionsCount = 0;
 
@@ -282,8 +285,35 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       !_isGuestViewer &&
       !_isActiveTopicClosed &&
       _effectivePermissions.canSendMessages;
-  bool get _isAnonymousAdminActive =>
-      (_myRole == 'owner' || _myRole == 'admin') && _myIsAnonymous;
+  bool get _effectiveSendAsAnon => _selectedSendAsMode == 'group';
+  String? get _effectiveSendAsChannelId =>
+      _selectedSendAsMode == 'channel' ? _selectedSendAsChatId : null;
+  String get _effectiveSendAsMode => _selectedSendAsMode;
+  bool _isOwnMessage(Message m) {
+    if (m.channelPostId != null && m.channelPostId!.isNotEmpty) {
+      return false;
+    }
+    return m.isOwn ||
+        (_currentUserId != null &&
+            _currentUserId!.isNotEmpty &&
+            m.senderId == _currentUserId);
+  }
+  bool get _canDeleteOthers {
+    if (_isGuestViewer) return false;
+    if (_myRole == 'owner') return true;
+    if (_myRole == 'admin') {
+      return _myAdminPermissions?.canDeleteMessages ?? true;
+    }
+    return false;
+  }
+  bool get _canDeleteSelectedMessages {
+    if (_selectedMessageIds.isEmpty) return false;
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    if (selected.isEmpty) return false;
+    return selected.every((m) => _isOwnMessage(m) || _canDeleteOthers);
+  }
   bool get _canPinMessages {
     if (_isGuestViewer) return false;
     if (_myRole == 'owner') return true;
@@ -942,7 +972,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _editLastOwnMessage() {
     if (_currentUserId == null) return;
     for (final msg in _messages) {
-      if (msg.senderId == _currentUserId &&
+      if (_isOwnMessage(msg) &&
           msg.messageType == 'text' &&
           !msg.isRound &&
           msg.content.trim().isNotEmpty) {
@@ -1115,7 +1145,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
       return;
     }
-    final bool sendAnon = _isAnonymousAdminActive;
+    final bool sendAnon = _effectiveSendAsAnon;
+    final String sendMode = _effectiveSendAsMode;
+    final String? sendChannelId = _effectiveSendAsChannelId;
+    final SendAsPeer? activePeer = _activeSendAsPeer;
+    final bool sendingAsChannel =
+        sendMode == 'channel' &&
+        sendChannelId != null &&
+        sendChannelId.isNotEmpty;
     final replyTo = _replyToMessage;
     _cancelReply();
     final fallback = item.emojis.isNotEmpty ? item.emojis.first : '😀';
@@ -1144,13 +1181,27 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       replyToMessageId: replyTo?.id,
       isEdited: false,
       createdAt: DateTime.now().toUtc().toIso8601String(),
-      senderName: sendAnon
-          ? (_groupName.isNotEmpty ? _groupName : (widget.groupName ?? 'Group'))
-          : 'You',
+      senderName: sendingAsChannel
+          ? (activePeer?.name ?? 'Канал')
+          : (sendAnon
+              ? (_groupName.isNotEmpty
+                  ? _groupName
+                  : (widget.groupName ?? 'Group'))
+              : 'You'),
+      senderAvatarUrl: sendingAsChannel
+          ? activePeer?.avatarUrl
+          : (sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null),
       sendStatus: 0,
-      senderRole: _myRole,
-      senderAdminTitle: _myAdminTitle.isNotEmpty ? _myAdminTitle : null,
-      isFromAnonymousAdmin: sendAnon,
+      senderRole: sendingAsChannel ? null : _myRole,
+      senderAdminTitle: sendingAsChannel
+          ? null
+          : (_myAdminTitle.isNotEmpty ? _myAdminTitle : null),
+      isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+      topicId: _activeTopicId,
+      senderChatId: sendingAsChannel ? sendChannelId : null,
+      senderChatName: sendingAsChannel ? activePeer?.name : null,
+      senderChatAvatarUrl: sendingAsChannel ? activePeer?.avatarUrl : null,
+      isOwn: true,
     );
     if (mounted) {
       setState(() {
@@ -1169,9 +1220,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         mediaPayload: payload,
         replyToMessageId: replyTo?.id,
         localId: localId,
+        sendAsMode: sendMode,
         sendAsAnonymous: sendAnon,
         topicId: _activeTopicId,
-        sendAsChatId: _selectedSendAsChatId,
+        sendAsChatId: sendChannelId,
       );
       if (res['success'] == true && res['message'] is Message) {
         final sent = res['message'] as Message;
@@ -1227,7 +1279,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
       return;
     }
-    final bool sendAnon = _isAnonymousAdminActive;
+    final bool sendAnon = _effectiveSendAsAnon;
+    final String sendMode = _effectiveSendAsMode;
+    final String? sendChannelId = _effectiveSendAsChannelId;
+    final SendAsPeer? activePeer = _activeSendAsPeer;
+    final bool sendingAsChannel =
+        sendMode == 'channel' &&
+        sendChannelId != null &&
+        sendChannelId.isNotEmpty;
     final replyTo = _replyToMessage;
     _cancelReply();
     final localId = 'local_gif_${DateTime.now().microsecondsSinceEpoch}';
@@ -1251,13 +1310,27 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       replyToMessageId: replyTo?.id,
       isEdited: false,
       createdAt: DateTime.now().toUtc().toIso8601String(),
-      senderName: sendAnon
-          ? (_groupName.isNotEmpty ? _groupName : (widget.groupName ?? 'Group'))
-          : 'You',
+      senderName: sendingAsChannel
+          ? (activePeer?.name ?? 'Канал')
+          : (sendAnon
+              ? (_groupName.isNotEmpty
+                  ? _groupName
+                  : (widget.groupName ?? 'Group'))
+              : 'You'),
+      senderAvatarUrl: sendingAsChannel
+          ? activePeer?.avatarUrl
+          : (sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null),
       sendStatus: 0,
-      senderRole: _myRole,
-      senderAdminTitle: _myAdminTitle.isNotEmpty ? _myAdminTitle : null,
-      isFromAnonymousAdmin: sendAnon,
+      senderRole: sendingAsChannel ? null : _myRole,
+      senderAdminTitle: sendingAsChannel
+          ? null
+          : (_myAdminTitle.isNotEmpty ? _myAdminTitle : null),
+      isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+      topicId: _activeTopicId,
+      senderChatId: sendingAsChannel ? sendChannelId : null,
+      senderChatName: sendingAsChannel ? activePeer?.name : null,
+      senderChatAvatarUrl: sendingAsChannel ? activePeer?.avatarUrl : null,
+      isOwn: true,
     );
     if (mounted) {
       setState(() {
@@ -1276,9 +1349,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         mediaPayload: payload,
         replyToMessageId: replyTo?.id,
         localId: localId,
+        sendAsMode: sendMode,
         sendAsAnonymous: sendAnon,
         topicId: _activeTopicId,
-        sendAsChatId: _selectedSendAsChatId,
+        sendAsChatId: sendChannelId,
       );
       if (res['success'] == true && res['message'] is Message) {
         final sent = res['message'] as Message;
@@ -1577,7 +1651,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _isForum = chat.isForum || _activeTopic != null;
     _unreadMentionsCount = chat.unreadMentionsCount;
     _unreadReactionsCount = chat.unreadReactionsCount;
+    _isMuted = NotificationSettingsProvider().isChatMuted(
+      widget.chatId,
+      chatType: 'group',
+    );
     _selectedSendAsChatId ??= chat.mySendAsChatId;
+    if (!_hasLoadedSendAsPeers) {
+      final rawMode = chat.mySendAsMode?.trim().toLowerCase();
+      if (rawMode == 'user' || rawMode == 'group' || rawMode == 'channel') {
+        _selectedSendAsMode = rawMode!;
+        if (rawMode == 'channel' &&
+            chat.mySendAsChatId != null &&
+            chat.mySendAsChatId!.trim().isNotEmpty) {
+          _selectedSendAsChatId = chat.mySendAsChatId!.trim();
+        }
+      } else if (chat.mySendAsChatId != null &&
+          chat.mySendAsChatId!.trim().isNotEmpty) {
+        _selectedSendAsMode = 'channel';
+        _selectedSendAsChatId = chat.mySendAsChatId!.trim();
+      } else if (_myIsAnonymous &&
+          (_myRole == 'owner' || _myRole == 'admin')) {
+        _selectedSendAsMode = 'group';
+      } else {
+        _selectedSendAsMode = 'user';
+      }
+    }
     if (chat.pinnedMessage != null) {
       _pinnedMessage = chat.pinnedMessage;
       _pinnedMessages = [chat.pinnedMessage!];
@@ -1686,11 +1784,28 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     await _loadMessages();
   }
 
+  Future<void> _switchToFlatMessages() async {
+    if (_activeTopic == null) return;
+    setState(() {
+      _activeTopic = null;
+      _messages.clear();
+      _messageReactions.clear();
+      _myReactions.clear();
+      _isLoading = true;
+      _hasMoreMessages = true;
+      _isDetachedHistoryWindow = false;
+      _hasMoreNewerMessages = false;
+      _updateFeedItems();
+    });
+    _updateTopBannerHeight();
+    await _loadMessages();
+  }
+
   Future<void> _openForumTopicsScreen() async {
     final displayName = _groupName.isNotEmpty
         ? _groupName
         : (widget.groupName ?? 'Форум');
-    await Navigator.of(context).push(
+    final selection = await Navigator.of(context).push<ForumTopicSelectionResult>(
       SwipeBackPageRoute(
         builder: (_) => ForumTopicsScreen(
           chatId: widget.chatId,
@@ -1699,11 +1814,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           myRole: _myRole,
           myAdminPermissions: _myAdminPermissions,
           defaultPermissions: _defaultPermissions,
+          openedFromGroupChat: true,
         ),
       ),
     );
-    if (mounted) {
-      unawaited(_loadForumTopics());
+    if (!mounted) return;
+    unawaited(_loadForumTopics());
+    if (selection != null) {
+      if (selection.topic != null) {
+        await _switchToTopic(selection.topic!);
+      } else if (selection.viewFlatMessages) {
+        await _switchToFlatMessages();
+      }
     }
   }
 
@@ -1715,7 +1837,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
       if (!mounted) return;
       setState(() {
+        _hasLoadedSendAsPeers = true;
         _sendAsPeers = res.peers;
+        _selectedSendAsMode = res.selectedSendAsMode;
         _selectedSendAsChatId = res.selectedSendAsChatId;
       });
     } catch (_) {}
@@ -1723,35 +1847,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   SendAsPeer? get _activeSendAsPeer {
     if (_sendAsPeers.isEmpty) return null;
-    final sel = _selectedSendAsChatId;
-    if (sel != null && sel.isNotEmpty) {
-      for (final p in _sendAsPeers) {
-        if (p.isChannel && (p.chatId == sel || p.id == sel)) {
-          return p;
-        }
+    for (final p in _sendAsPeers) {
+      if (p.matchesSelection(
+        selectedSendAsMode: _effectiveSendAsMode,
+        selectedSendAsChatId: _effectiveSendAsChannelId,
+      )) {
+        return p;
       }
     }
     for (final p in _sendAsPeers) {
       if (p.isSelected) return p;
     }
     return _sendAsPeers.first;
-  }
-
-  Future<void> _openSendAsPicker() async {
-    if (_sendAsPeers.isEmpty) return;
-    final picked = await showSendAsPeerSheet(
-      context: context,
-      chatId: widget.chatId,
-      peers: _sendAsPeers,
-      selectedSendAsChatId: _selectedSendAsChatId,
-    );
-    if (picked != null && mounted) {
-      setState(() {
-        _selectedSendAsChatId = picked.isChannel
-            ? (picked.chatId ?? picked.id)
-            : null;
-      });
-    }
   }
 
   void _openChannelProfileById(
@@ -3235,7 +3342,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         hideSender: staged.hideSender,
         hideCaption: staged.hideCaption,
         topicId: _activeTopicId,
-        sendAsChatId: _selectedSendAsChatId,
+        sendAsMode: _effectiveSendAsMode,
+        sendAsChatId: _effectiveSendAsChannelId,
+        sendAsAnonymous: _effectiveSendAsAnon,
       );
       if (fwdRes['success'] == true) {
         _triggerSilentSync();
@@ -3370,7 +3479,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _pendingCustomEmojiEntities.clear();
       final List<MessageEntity>? effectiveEntities =
           mergedEntities.isNotEmpty ? mergedEntities : null;
-      final bool sendAnon = _isAnonymousAdminActive;
+      final bool sendAnon = _effectiveSendAsAnon;
+      final String sendMode = _effectiveSendAsMode;
+      final String? sendChannelId = _effectiveSendAsChannelId;
 
       // CASE 1: MULTIPLE VISUAL ATTACHMENTS (ALBUM: chunked into batches of up to 10 items)
       if (!asDocument && _attachedFiles.length >= 2 && _attachedFiles.every((f) => _isMediaFile(f.path))) {
@@ -3432,10 +3543,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               invertMedia: invertMedia,
               replyToMessageId: replyTo?.id,
               isSilent: isSilent,
+              sendAsMode: sendMode,
               sendAsAnonymous: sendAnon,
               hasMediaSpoiler: hasMediaSpoiler,
               topicId: _activeTopicId,
-              sendAsChatId: _selectedSendAsChatId,
+              sendAsChatId: sendChannelId,
             );
 
             // Fallback: If server album endpoint fails, send items sequentially with the same albumGroupedId
@@ -3457,10 +3569,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   invertMedia: invertMedia,
                   replyToMessageId: replyTo?.id,
                   isSilent: isSilent,
+                  sendAsMode: sendMode,
                   sendAsAnonymous: sendAnon,
                   hasMediaSpoiler: hasMediaSpoiler,
                   topicId: _activeTopicId,
-                  sendAsChatId: _selectedSendAsChatId,
+                  sendAsChatId: sendChannelId,
                 );
                 if (singleRes['success'] == true && singleRes['message'] is Message) {
                   fallbackMsgs.add(singleRes['message'] as Message);
@@ -3534,10 +3647,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               entities: chunkEntities,
               replyToMessageId: replyTo?.id,
               isSilent: isSilent,
+              sendAsMode: sendMode,
               sendAsAnonymous: sendAnon,
               hasMediaSpoiler: hasMediaSpoiler,
               topicId: _activeTopicId,
-              sendAsChatId: _selectedSendAsChatId,
+              sendAsChatId: sendChannelId,
             );
             if (res['success'] == true && res['message'] is Message) {
               _maybeStartLocalSlowmode();
@@ -3591,10 +3705,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             replyToMessageId: replyTo?.id,
             entities: (i == 0) ? effectiveEntities : null,
             isSilent: isSilent,
+            sendAsMode: sendMode,
             sendAsAnonymous: sendAnon,
             hasMediaSpoiler: hasMediaSpoiler,
             topicId: _activeTopicId,
-            sendAsChatId: _selectedSendAsChatId,
+            sendAsChatId: sendChannelId,
           );
           if (res['success'] == true && res['message'] is Message) {
             _maybeStartLocalSlowmode();
@@ -3667,6 +3782,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
 
       final syncService = SyncService();
+      final activeSendAsPeer = _activeSendAsPeer;
+      final bool sendingAsChannel =
+          sendMode == 'channel' &&
+          sendChannelId != null &&
+          sendChannelId.isNotEmpty;
+      final String? pendingSenderName = sendingAsChannel
+          ? activeSendAsPeer?.name
+          : (sendAnon
+                ? (_groupName.isNotEmpty
+                      ? _groupName
+                      : (widget.groupName ?? 'Group'))
+                : null);
+      final String? pendingSenderAvatar = sendingAsChannel
+          ? activeSendAsPeer?.avatarUrl
+          : (sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null);
       String? pendingLocalId;
       DbMessage? pendingMsg;
       try {
@@ -3691,6 +3821,16 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           linkPreviewOptions: linkPreviewOptions,
           invertMedia: invertMedia,
           hasMediaSpoiler: hasMediaSpoiler,
+          isSilent: isSilent,
+          senderName: pendingSenderName,
+          senderAvatarUrl: pendingSenderAvatar,
+          isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+          topicId: _activeTopicId,
+          senderChatId: sendingAsChannel ? sendChannelId : null,
+          senderChatName: sendingAsChannel ? activeSendAsPeer?.name : null,
+          senderChatAvatarUrl:
+              sendingAsChannel ? activeSendAsPeer?.avatarUrl : null,
+          isOwn: true,
         );
       } catch (e) {
         debugPrint('SyncService createPendingMessage error: $e');
@@ -3699,33 +3839,20 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
-        final activeSendAsPeer = _activeSendAsPeer;
-        final bool sendingAsChannel =
-            _selectedSendAsChatId != null &&
-            _selectedSendAsChatId!.isNotEmpty &&
-            activeSendAsPeer != null &&
-            activeSendAsPeer.isChannel;
         var message = Message.fromDbMessage(pendingMsg).copyWith(
-          senderName: sendingAsChannel
-              ? activeSendAsPeer.name
-              : (sendAnon
-                    ? (_groupName.isNotEmpty
-                          ? _groupName
-                          : (widget.groupName ?? 'Group'))
-                    : null),
-          senderAvatarUrl: sendingAsChannel
-              ? activeSendAsPeer.avatarUrl
-              : (sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null),
+          senderName: pendingSenderName,
+          senderAvatarUrl: pendingSenderAvatar,
           senderRole: sendingAsChannel ? null : _myRole,
           senderAdminTitle: sendingAsChannel
               ? null
               : (_myAdminTitle.isNotEmpty ? _myAdminTitle : null),
           isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
           topicId: _activeTopicId,
-          senderChatId: sendingAsChannel ? _selectedSendAsChatId : null,
-          senderChatName: sendingAsChannel ? activeSendAsPeer.name : null,
+          senderChatId: sendingAsChannel ? sendChannelId : null,
+          senderChatName: sendingAsChannel ? activeSendAsPeer?.name : null,
           senderChatAvatarUrl:
-              sendingAsChannel ? activeSendAsPeer.avatarUrl : null,
+              sendingAsChannel ? activeSendAsPeer?.avatarUrl : null,
+          isOwn: true,
         );
         if (replyTo != null) {
           final isReplyToMe = replyTo.senderId == _currentUserId;
@@ -3778,10 +3905,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             linkPreviewOptions: linkPreviewOptions,
             invertMedia: invertMedia,
             isSilent: isSilent,
+            sendAsMode: sendMode,
             sendAsAnonymous: sendAnon,
             hasMediaSpoiler: hasMediaSpoiler,
             topicId: _activeTopicId,
-            sendAsChatId: _selectedSendAsChatId,
+            sendAsChatId: sendChannelId,
           );
 
           if (result['success'] == true) {
@@ -3895,10 +4023,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           fileName: fileName,
           mediaPayload: singleMediaPayload,
           isSilent: isSilent,
+          sendAsMode: sendMode,
           sendAsAnonymous: sendAnon,
           hasMediaSpoiler: hasMediaSpoiler,
           topicId: _activeTopicId,
-          sendAsChatId: _selectedSendAsChatId,
+          sendAsChatId: sendChannelId,
         );
 
         if (mounted) {
@@ -3969,7 +4098,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             builder: (_) => PollCreateScreen(
               chatId: widget.chatId,
               topicId: _activeTopicId,
-              sendAsChatId: _selectedSendAsChatId,
+              sendAsMode: _effectiveSendAsMode,
+              sendAsChatId: _effectiveSendAsChannelId,
+              sendAsAnonymous: _effectiveSendAsAnon,
             ),
           ),
         );
@@ -4043,7 +4174,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             builder: (_) => PollCreateScreen(
               chatId: widget.chatId,
               topicId: _activeTopicId,
-              sendAsChatId: _selectedSendAsChatId,
+              sendAsMode: _effectiveSendAsMode,
+              sendAsChatId: _effectiveSendAsChannelId,
+              sendAsAnonymous: _effectiveSendAsAnon,
             ),
           ),
         );
@@ -4135,7 +4268,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             fileName: uploadResult.fileName,
             hasMediaSpoiler: result.hasMediaSpoiler,
             mediaPayload: uploadResult.toMediaPayload(),
-            sendAsAnonymous: _isAnonymousAdminActive,
+            isSilent: result.isSilent,
+            topicId: _activeTopicId,
+            sendAsMode: _effectiveSendAsMode,
+            sendAsChatId: _effectiveSendAsChannelId,
+            sendAsAnonymous: _effectiveSendAsAnon,
           );
         }
         unawaited(_loadScheduledCount());
@@ -5336,6 +5473,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   Future<void> _openGroupInfo() async {
     final displayName =
         widget.groupName ?? (_groupName.isNotEmpty ? _groupName : 'Group');
+    final heroTag = 'chat_avatar_${widget.chatId}';
     await Navigator.push(
       context,
       SwipeBackPageRoute(
@@ -5343,12 +5481,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           chatId: widget.chatId,
           groupName: displayName,
           groupAvatar: widget.groupAvatar ?? _groupAvatar,
-          heroTag: displayName,
+          heroTag: heroTag,
           onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
         ),
       ),
     );
     if (mounted) {
+      setState(() {
+        _isMuted = NotificationSettingsProvider().isChatMuted(
+          widget.chatId,
+          chatType: 'group',
+        );
+      });
       unawaited(_refreshChatDetails());
     }
   }
@@ -5463,7 +5607,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           .replaceAll('{count}', memberCount.toString());
     }
 
+    final String heroTag = 'chat_avatar_${widget.chatId}';
+
     return ChatScaffold(
+      swipeBackBlocked:
+          _isSelectionMode || _isVoiceRecording || _isVideoRecording,
       canPop: !_isSelectionMode && !_showEmojiPanel && !isKeyboardVisible && !_isVoiceRecording && !_isVideoRecording,
       onPopInvoked: (didPop, _) {
         if (!didPop) {
@@ -5503,12 +5651,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     : null,
                 isChannel: false,
                 isMuted: _isMuted,
-                heroTag: displayName,
+                heroTag: heroTag,
                 profileScreenBuilder: (_) => GroupInfoScreen(
                   chatId: widget.chatId,
                   groupName: displayName,
                   groupAvatar: widget.groupAvatar ?? _groupAvatar,
-                  heroTag: displayName,
+                  heroTag: heroTag,
                   onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
                 ),
                 onBack: () => TilingLayoutController.popOrCloseChatTile(context),
@@ -5546,7 +5694,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   );
                 },
                 onReport: () {
-                  // TODO: Report dialog
+                  unawaited(
+                    showAbuseReportSheet(
+                      context,
+                      chatId: widget.chatId,
+                    ),
+                  );
                 },
                 autoDeleteSeconds: _autoDeleteSeconds,
                 onAutoDelete: _isAdmin ? _openAutoDeleteSheet : null,
@@ -5573,7 +5726,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       }
                     : null,
                 onForwardSelected: _forwardSelectedMessages,
-                onDeleteSelected: _deleteSelectedMessages,
+                onDeleteSelected:
+                    _canDeleteSelectedMessages ? _deleteSelectedMessages : null,
                 extraMenuItems: [
                   if (_isForum)
                     FloatingChatMenuItem(
@@ -6358,17 +6512,80 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     return const SizedBox.shrink();
   }
 
+  Widget? _buildAlbumReplyOrForwardWidget(Message message, bool isMe) {
+    final theme = Theme.of(context);
+    final Color subtextColor = isMe
+        ? theme.colorScheme.onPrimary.withValues(alpha: 0.76)
+        : theme.colorScheme.onSurface.withValues(alpha: 0.65);
+
+    if (message.hasReply) {
+      final Widget baseReply = MessageReplyInfo(
+        replyInfo: message.replyInfo,
+        isQuote: message.isQuote,
+        quoteText: message.quoteText,
+        quoteOffset: message.quoteOffset,
+        quoteLength: message.quoteLength,
+        isMe: isMe,
+        currentUserId: _currentUserId,
+        onTap: _isSelectionMode
+            ? null
+            : () => _handleReplyTap(
+                  message.replyToMessageId!,
+                  message.replyInfo?.chatId,
+                  fromMessageId: message.id,
+                ),
+      );
+      final String? originChatName = message.replyToChatName?.trim();
+      if (originChatName != null && originChatName.isNotEmpty) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2.0),
+              child: Text(
+                'из «$originChatName»',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: subtextColor,
+                ),
+              ),
+            ),
+            baseReply,
+          ],
+        );
+      }
+      return baseReply;
+    }
+
+    if (message.forwardFromName != null &&
+        message.forwardFromName!.trim().isNotEmpty) {
+      return MessageReplyInfo.forwarded(
+        authorName: message.forwardFromName!,
+        authorAvatarUrl: message.forwardFromAvatarUrl,
+        isMe: isMe,
+      );
+    }
+    return null;
+  }
+
   Widget _buildAlbumFeedItem(MediaAlbum album, int index) {
     final message = album.primaryMessage;
     final key = _obtainPrimaryMessageKey(message);
-    final bool isMe = message.senderId == _currentUserId;
+    final bool isMe = _isOwnMessage(message);
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
-    final bool isSelected = _selectedMessageIds.contains(message.id);
+    final bool isSelected = _selectedMessageIds.contains(message.id) ||
+        album.items.any((ai) => _selectedMessageIds.contains(ai.id));
     final bool isAnonMsg = message.isFromAnonymousAdmin;
+    final bool hasSenderChat =
+        message.senderChatId != null && message.senderChatId!.isNotEmpty;
     final bool canCluster = message.messageType != 'system' &&
-        (message.senderId.isNotEmpty || isAnonMsg);
+        (message.senderId.isNotEmpty || isAnonMsg || hasSenderChat);
     final Message? olderMsg =
         (_showUnreadDivider && index == _firstUnreadFeedIndex)
             ? null
@@ -6389,8 +6606,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             newerNeighbor: newerMsg,
           )
         : true;
-    final bool hasSenderChat =
-        message.senderChatId != null && message.senderChatId!.isNotEmpty;
     final bool showGroupSenderAvatar = !isMe &&
         message.messageType != 'system' &&
         (message.senderId.isNotEmpty || isAnonMsg || hasSenderChat);
@@ -6414,7 +6629,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     ? message.senderName
                     : 'Канал'))
         : (isAnonMsg
-              ? (message.senderName.trim().isNotEmpty
+              ? (message.senderName.trim().isNotEmpty &&
+                        message.senderName != 'You'
                     ? message.senderName
                     : effectiveGroupName)
               : message.senderName);
@@ -6434,31 +6650,51 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     : () => _openSenderProfile(message)));
     final String? resolvedAdminTitle = hasSenderChat
         ? 'канал'
-        : ((message.senderAdminTitle != null &&
-                message.senderAdminTitle!.trim().isNotEmpty)
-            ? message.senderAdminTitle
-            : participant?.adminTitle);
-    final String? resolvedRole = hasSenderChat
+        : (isAnonMsg &&
+                (message.senderAdminTitle == null ||
+                    message.senderAdminTitle!.trim().isEmpty)
+            ? 'анонимно'
+            : ((message.senderAdminTitle != null &&
+                    message.senderAdminTitle!.trim().isNotEmpty)
+                ? message.senderAdminTitle
+                : participant?.adminTitle));
+    final String? resolvedRole = (hasSenderChat || isAnonMsg)
         ? null
         : ((message.senderRole != null && message.senderRole!.trim().isNotEmpty)
             ? message.senderRole
             : participant?.role);
-    final Widget? senderHeaderWidget = (showGroupSenderAvatar && firstInCluster)
+    final bool isSenderVerified = hasSenderChat
+        ? _sendAsPeers.any(
+            (p) =>
+                p.isChannel &&
+                (p.chatId == message.senderChatId ||
+                    p.id == message.senderChatId) &&
+                p.isVerified,
+          )
+        : (isAnonMsg ? _isVerified : (participant?.isVerified ?? false));
+    final bool showSenderHeader = firstInCluster &&
+        (showGroupSenderAvatar || (isMe && (hasSenderChat || isAnonMsg)));
+    final Widget? senderHeaderWidget = showSenderHeader
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
-            nameColor: hasSenderChat
-                ? Theme.of(context).colorScheme.primary
+            nameColor: (hasSenderChat || isAnonMsg)
+                ? (isMe
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.primary)
                 : _resolveSenderNameColor(message),
             customization: senderCust,
             isBot: !isAnonMsg && !hasSenderChat && (participant?.isBot ?? false),
-            isVerified: isAnonMsg
-                ? _isVerified
-                : (!hasSenderChat && (participant?.isVerified ?? false)),
+            isVerified: isSenderVerified,
             adminTitle: resolvedAdminTitle,
             role: resolvedRole,
+            rankColor: isMe
+                ? Theme.of(context).colorScheme.onPrimary.withValues(alpha: 0.72)
+                : null,
             onTapSender: onSenderTap,
           )
         : null;
+    final Widget? replyOrForwardWidget =
+        _buildAlbumReplyOrForwardWidget(message, isMe);
 
     Widget albumWidget = MediaAlbumWidget(
       key: key,
@@ -6467,12 +6703,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       currentUserId: _currentUserId ?? '',
       chatType: 'group',
       senderName: (isMe || showGroupSenderAvatar) ? null : resolvedSenderName,
+      headerWidget: senderHeaderWidget,
       senderHeaderWidget: senderHeaderWidget,
+      replyOrForwardWidget: replyOrForwardWidget,
+      reactions: _messageReactions[message.id] ??
+          (message.reactions.isNotEmpty ? message.reactions : null),
+      myReactions: _myReactions[message.id] ??
+          (message.myReactions.isNotEmpty ? message.myReactions : null),
+      onReactionTap: (emoji) {
+        if (_isSelectionMode) {
+          _toggleMessageSelection(message);
+          return;
+        }
+        _toggleReaction(message.id, emoji);
+      },
       hasAvatarGutter: showGroupSenderAvatar,
       isFirstInCluster: firstInCluster,
       isLastInCluster: lastInCluster,
       formatTime: _formatTime,
-      onFileTap: (url, name, type) => _openFile(url, name, type),
+      onFileTap: (url, name, type) {
+        if (_isSelectionMode) {
+          _toggleMessageSelection(message);
+          return;
+        }
+        _openFile(url, name, type);
+      },
       isHighlighted: isAlbumTargeted,
       highlightItemId: _highlightMessageId,
       isSelected: isSelected,
@@ -6539,7 +6794,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             : (isDesktop
                 ? null
                 : () {
-                    _showContextMenu(message, isMe, key, enableBlur: true);
+                    _showContextMenu(
+                      message,
+                      isMe,
+                      key,
+                      album: album,
+                      enableBlur: true,
+                    );
                   }),
         onDoubleTap: _isSelectionMode
             ? null
@@ -6562,6 +6823,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             message,
             isMe,
             key,
+            album: album,
             forceOpen: true,
             enableBlur: insideBubble,
           );
@@ -6627,7 +6889,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   Widget _buildMessageItem(Message message, int index) {
-    final bool isMe = message.senderId == _currentUserId;
+    final bool isMe = _isOwnMessage(message);
     final GlobalKey key = _obtainPrimaryMessageKey(message);
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
 
@@ -6687,8 +6949,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final isHighlighted = _highlightMessageId == message.id;
     final bool isSelected = _selectedMessageIds.contains(message.id);
     final bool isAnonMsg = message.isFromAnonymousAdmin;
+    final bool hasSenderChat =
+        message.senderChatId != null && message.senderChatId!.isNotEmpty;
     final bool canCluster = message.messageType != 'system' &&
-        (message.senderId.isNotEmpty || isAnonMsg);
+        (message.senderId.isNotEmpty || isAnonMsg || hasSenderChat);
     final Message? olderMsg =
         (_showUnreadDivider && index == _firstUnreadFeedIndex)
             ? null
@@ -6709,8 +6973,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             newerNeighbor: newerMsg,
           )
         : true;
-    final bool hasSenderChat =
-        message.senderChatId != null && message.senderChatId!.isNotEmpty;
     final bool showGroupSenderAvatar = !isMe &&
         message.messageType != 'system' &&
         (message.senderId.isNotEmpty || isAnonMsg || hasSenderChat);
@@ -6734,7 +6996,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     ? message.senderName
                     : 'Канал'))
         : (isAnonMsg
-              ? (message.senderName.trim().isNotEmpty
+              ? (message.senderName.trim().isNotEmpty &&
+                        message.senderName != 'You'
                     ? message.senderName
                     : effectiveGroupName)
               : message.senderName);
@@ -6754,28 +7017,46 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     : () => _openSenderProfile(message)));
     final String? resolvedAdminTitle = hasSenderChat
         ? 'канал'
-        : ((message.senderAdminTitle != null &&
-                message.senderAdminTitle!.trim().isNotEmpty)
-            ? message.senderAdminTitle
-            : participant?.adminTitle);
-    final String? resolvedRole = hasSenderChat
+        : (isAnonMsg &&
+                (message.senderAdminTitle == null ||
+                    message.senderAdminTitle!.trim().isEmpty)
+            ? 'анонимно'
+            : ((message.senderAdminTitle != null &&
+                    message.senderAdminTitle!.trim().isNotEmpty)
+                ? message.senderAdminTitle
+                : participant?.adminTitle));
+    final String? resolvedRole = (hasSenderChat || isAnonMsg)
         ? null
         : ((message.senderRole != null && message.senderRole!.trim().isNotEmpty)
             ? message.senderRole
             : participant?.role);
-    final Widget? senderHeaderWidget = (showGroupSenderAvatar && firstInCluster)
+    final bool isSenderVerified = hasSenderChat
+        ? _sendAsPeers.any(
+            (p) =>
+                p.isChannel &&
+                (p.chatId == message.senderChatId ||
+                    p.id == message.senderChatId) &&
+                p.isVerified,
+          )
+        : (isAnonMsg ? _isVerified : (participant?.isVerified ?? false));
+    final bool showSenderHeader = firstInCluster &&
+        (showGroupSenderAvatar || (isMe && (hasSenderChat || isAnonMsg)));
+    final Widget? senderHeaderWidget = showSenderHeader
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
-            nameColor: hasSenderChat
-                ? Theme.of(context).colorScheme.primary
+            nameColor: (hasSenderChat || isAnonMsg)
+                ? (isMe
+                      ? Theme.of(context).colorScheme.onPrimary
+                      : Theme.of(context).colorScheme.primary)
                 : _resolveSenderNameColor(message),
             customization: senderCust,
             isBot: !isAnonMsg && !hasSenderChat && (participant?.isBot ?? false),
-            isVerified: isAnonMsg
-                ? _isVerified
-                : (!hasSenderChat && (participant?.isVerified ?? false)),
+            isVerified: isSenderVerified,
             adminTitle: resolvedAdminTitle,
             role: resolvedRole,
+            rankColor: isMe
+                ? Theme.of(context).colorScheme.onPrimary.withValues(alpha: 0.72)
+                : null,
             onTapSender: onSenderTap,
           )
         : null;
@@ -6902,7 +7183,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             : (isDesktop
                 ? null
                 : () {
-                    _showContextMenu(message, isMe, key, enableBlur: true);
+                    _showContextMenu(
+                      message,
+                      isMe,
+                      key,
+                      enableBlur: true,
+                    );
                   }),
         onDoubleTap: _isSelectionMode
             ? null
@@ -6994,7 +7280,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       TelegramMessageEntrance(
         key: ValueKey('entrance_${message.localId ?? message.id}'),
         animate: isNewMessage,
-        isMe: message.senderId == _currentUserId,
+        isMe: isMe,
         child: messageWidget,
       ),
     );
@@ -7199,7 +7485,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             fileName: uploadResult.fileName,
             mediaPayload: uploadResult.toMediaPayload(),
             entities: i == 0 && entities.isNotEmpty ? entities : null,
-            sendAsAnonymous: _isAnonymousAdminActive,
+            topicId: _activeTopicId,
+            sendAsMode: _effectiveSendAsMode,
+            sendAsChatId: _effectiveSendAsChannelId,
+            sendAsAnonymous: _effectiveSendAsAnon,
           );
         }
         _clearAttachedFiles();
@@ -7212,7 +7501,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         content: parsedText,
         scheduleAt: scheduleAt,
         entities: entities.isNotEmpty ? entities : null,
-        sendAsAnonymous: _isAnonymousAdminActive,
+        topicId: _activeTopicId,
+        sendAsMode: _effectiveSendAsMode,
+        sendAsChatId: _effectiveSendAsChannelId,
+        sendAsAnonymous: _effectiveSendAsAnon,
       );
     }
     _messageController.clear();
@@ -7242,7 +7534,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => PollCreateScreen(chatId: widget.chatId),
+              builder: (_) => PollCreateScreen(
+                chatId: widget.chatId,
+                topicId: _activeTopicId,
+                sendAsMode: _effectiveSendAsMode,
+                sendAsChatId: _effectiveSendAsChannelId,
+                sendAsAnonymous: _effectiveSendAsAnon,
+              ),
             ),
           );
         },
@@ -7489,6 +7787,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                   result: item,
                   replyToMessageId: _replyToMessage?.id,
                   topicId: _activeTopicId,
+                  sendAsMode: _effectiveSendAsMode,
+                  sendAsChatId: _effectiveSendAsChannelId,
+                  sendAsAnonymous: _effectiveSendAsAnon,
                 );
                 if (!ctx.mounted) return;
                 if (ok) {
@@ -7552,6 +7853,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         ChatInputBar(
           controller: _messageController,
           focusNode: _inputFocusNode,
+          hintText: _effectiveSendAsAnon
+              ? context.trOr(
+                  'send_as_anonymous_hint',
+                  'Написать анонимно...',
+                )
+              : null,
           isEditing: _isEditing,
           onCancelEditing: _cancelEditing,
           onEditLastMessage: _editLastOwnMessage,
@@ -7608,7 +7915,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           canSendMedia: perms.canSendMedia,
           canSendStickersGifs: perms.canSendStickersGifs,
           canSendPolls: perms.canSendPolls,
-          isAnonymousAdmin: _isAnonymousAdminActive,
+          isAnonymousAdmin: _effectiveSendAsAnon,
           anonymousGroupAvatarUrl: widget.groupAvatar ?? _groupAvatar,
           showBotCommandsButton: _groupBotCommands.isNotEmpty,
           isBotCommandsOpen: _isBotCommandsOpen,
@@ -7621,10 +7928,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             setState(() => _isReplyKeyboardOpen = !_isReplyKeyboardOpen);
           },
           sendAsLeadingWidget: _sendAsPeers.length > 1
-              ? SendAsPeerSelectorPill(
+              ? InlineSendAsSelectorButton(
+                  chatId: widget.chatId,
                   peers: _sendAsPeers,
                   selectedPeer: _activeSendAsPeer,
-                  onTap: _openSendAsPicker,
+                  onPeerSelected: (picked) {
+                    setState(() {
+                      _selectedSendAsMode = picked.peerType;
+                      _selectedSendAsChatId = picked.isChannel
+                          ? (picked.chatId ?? picked.id)
+                          : null;
+                    });
+                  },
                 )
               : null,
           trailing: _buildPollOnlyTrailingButton(context),
@@ -7678,7 +7993,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     builder: (_) => PollCreateScreen(
                       chatId: widget.chatId,
                       topicId: _activeTopicId,
-                      sendAsChatId: _selectedSendAsChatId,
+                      sendAsMode: _effectiveSendAsMode,
+                      sendAsChatId: _effectiveSendAsChannelId,
+                      sendAsAnonymous: _effectiveSendAsAnon,
                     ),
                   ),
                 );
@@ -7914,6 +8231,25 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     String? pendingLocalId;
     DbMessage? pendingMsg;
 
+    final bool sendAnon = _effectiveSendAsAnon;
+    final String sendMode = _effectiveSendAsMode;
+    final String? sendChannelId = _effectiveSendAsChannelId;
+    final SendAsPeer? activePeer = _activeSendAsPeer;
+    final bool sendingAsChannel =
+        sendMode == 'channel' &&
+        sendChannelId != null &&
+        sendChannelId.isNotEmpty;
+    final String? pendingSenderName = sendingAsChannel
+        ? activePeer?.name
+        : (sendAnon
+            ? (_groupName.isNotEmpty
+                ? _groupName
+                : (widget.groupName ?? 'Group'))
+            : null);
+    final String? pendingSenderAvatar = sendingAsChannel
+        ? activePeer?.avatarUrl
+        : (sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null);
+
     try {
       final fileName = kIsWeb
           ? 'voice_${DateTime.now().millisecondsSinceEpoch}.webm'
@@ -7937,28 +8273,37 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           replyToMessageType: replyTo?.messageType ?? 'text',
           waveform: result.waveform,
           duration: result.duration.inSeconds,
+          senderName: pendingSenderName,
+          senderAvatarUrl: pendingSenderAvatar,
+          isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+          topicId: _activeTopicId,
+          senderChatId: sendingAsChannel ? sendChannelId : null,
+          senderChatName: sendingAsChannel ? activePeer?.name : null,
+          senderChatAvatarUrl: sendingAsChannel ? activePeer?.avatarUrl : null,
+          isOwn: true,
         );
       } catch (e) {
         debugPrint('SyncService createPendingMessage voice error: $e');
       }
 
-      final bool sendAnon = _isAnonymousAdminActive;
       if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
           waveform: result.waveform,
           duration: result.duration.inSeconds,
-          senderName: sendAnon
-              ? (_groupName.isNotEmpty
-                  ? _groupName
-                  : (widget.groupName ?? 'Group'))
-              : null,
-          senderAvatarUrl:
-              sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null,
-          senderRole: _myRole,
-          senderAdminTitle: _myAdminTitle.isNotEmpty ? _myAdminTitle : null,
-          isFromAnonymousAdmin: sendAnon,
+          senderName: pendingSenderName,
+          senderAvatarUrl: pendingSenderAvatar,
+          senderRole: sendingAsChannel ? null : _myRole,
+          senderAdminTitle: sendingAsChannel
+              ? null
+              : (_myAdminTitle.isNotEmpty ? _myAdminTitle : null),
+          isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+          topicId: _activeTopicId,
+          senderChatId: sendingAsChannel ? sendChannelId : null,
+          senderChatName: sendingAsChannel ? activePeer?.name : null,
+          senderChatAvatarUrl: sendingAsChannel ? activePeer?.avatarUrl : null,
+          isOwn: true,
         );
         if (replyTo != null) {
           final isReplyToMe = replyTo.senderId == _currentUserId;
@@ -8022,9 +8367,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         quoteLength: replyQuoteLength,
         waveform: result.waveform,
         duration: effectiveDuration,
+        sendAsMode: sendMode,
         sendAsAnonymous: sendAnon,
         topicId: _activeTopicId,
-        sendAsChatId: _selectedSendAsChatId,
+        sendAsChatId: sendChannelId,
       );
 
       if (sendResult['success'] == true) {
@@ -8129,6 +8475,25 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     String? pendingLocalId;
     DbMessage? pendingMsg;
 
+    final bool sendAnon = _effectiveSendAsAnon;
+    final String sendMode = _effectiveSendAsMode;
+    final String? sendChannelId = _effectiveSendAsChannelId;
+    final SendAsPeer? activePeer = _activeSendAsPeer;
+    final bool sendingAsChannel =
+        sendMode == 'channel' &&
+        sendChannelId != null &&
+        sendChannelId.isNotEmpty;
+    final String? pendingSenderName = sendingAsChannel
+        ? activePeer?.name
+        : (sendAnon
+            ? (_groupName.isNotEmpty
+                ? _groupName
+                : (widget.groupName ?? 'Group'))
+            : null);
+    final String? pendingSenderAvatar = sendingAsChannel
+        ? activePeer?.avatarUrl
+        : (sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null);
+
     try {
       final fileName = kIsWeb
           ? 'video_note_${DateTime.now().millisecondsSinceEpoch}.webm'
@@ -8153,27 +8518,36 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           replyToSenderName: replyTo?.senderName,
           replyToContent: replyTo?.content,
           replyToMessageType: replyTo?.messageType ?? 'text',
+          senderName: pendingSenderName,
+          senderAvatarUrl: pendingSenderAvatar,
+          isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+          topicId: _activeTopicId,
+          senderChatId: sendingAsChannel ? sendChannelId : null,
+          senderChatName: sendingAsChannel ? activePeer?.name : null,
+          senderChatAvatarUrl: sendingAsChannel ? activePeer?.avatarUrl : null,
+          isOwn: true,
         );
       } catch (e) {
         debugPrint('SyncService createPendingMessage error: $e');
       }
 
-      final bool sendAnon = _isAnonymousAdminActive;
       if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
         final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
           duration: recordedDurationSec,
-          senderName: sendAnon
-              ? (_groupName.isNotEmpty
-                  ? _groupName
-                  : (widget.groupName ?? 'Group'))
-              : null,
-          senderAvatarUrl:
-              sendAnon ? (_groupAvatar ?? widget.groupAvatar) : null,
-          senderRole: _myRole,
-          senderAdminTitle: _myAdminTitle.isNotEmpty ? _myAdminTitle : null,
-          isFromAnonymousAdmin: sendAnon,
+          senderName: pendingSenderName,
+          senderAvatarUrl: pendingSenderAvatar,
+          senderRole: sendingAsChannel ? null : _myRole,
+          senderAdminTitle: sendingAsChannel
+              ? null
+              : (_myAdminTitle.isNotEmpty ? _myAdminTitle : null),
+          isFromAnonymousAdmin: !sendingAsChannel && sendAnon,
+          topicId: _activeTopicId,
+          senderChatId: sendingAsChannel ? sendChannelId : null,
+          senderChatName: sendingAsChannel ? activePeer?.name : null,
+          senderChatAvatarUrl: sendingAsChannel ? activePeer?.avatarUrl : null,
+          isOwn: true,
         );
         if (replyTo != null) {
           final isReplyToMe = replyTo.senderId == _currentUserId;
@@ -8237,9 +8611,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         quoteText: replyQuoteText,
         quoteOffset: replyQuoteOffset,
         quoteLength: replyQuoteLength,
+        sendAsMode: sendMode,
         sendAsAnonymous: sendAnon,
         topicId: _activeTopicId,
-        sendAsChatId: _selectedSendAsChatId,
+        sendAsChatId: sendChannelId,
       );
 
       if (result['success'] == true) {
@@ -8542,7 +8917,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _deleteSelectedMessages() {
     if (_selectedMessageIds.isEmpty) return;
     final toDelete = _messages
-        .where((m) => _selectedMessageIds.contains(m.id))
+        .where(
+          (m) =>
+              _selectedMessageIds.contains(m.id) &&
+              (_isOwnMessage(m) || _canDeleteOthers),
+        )
         .toList();
     _clearSelection();
     if (toDelete.isEmpty) return;
@@ -8781,16 +9160,36 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _dragSelectStartIndex = null;
   }
 
+  MediaAlbum? _resolveAlbumForMessage(Message message) {
+    final gId = message.groupedId;
+    if (gId == null || gId.isEmpty) return null;
+    for (final item in _feedItems) {
+      if (item is FeedAlbumItem &&
+          (item.album.groupedId == gId ||
+              item.album.items.any((ai) => ai.id == message.id))) {
+        return item.album;
+      }
+    }
+    return null;
+  }
+
   void _showContextMenu(
     Message message,
     bool isMe,
     GlobalKey key, {
+    MediaAlbum? album,
     bool forceOpen = false,
     bool enableBlur = true,
     Offset? initialDragStartGlobalPosition,
     Offset? initialDragCurrentGlobalPosition,
   }) {
     _dismissKeyboardAndEmoji();
+    final MediaAlbum? resolvedAlbum = album ?? _resolveAlbumForMessage(message);
+    final List<String> targetIds = resolvedAlbum != null
+        ? resolvedAlbum.items.map((m) => m.id).toList()
+        : _resolveSelectionIdsForMessage(message);
+    final List<Message> targetMessages =
+        _messages.where((m) => targetIds.contains(m.id)).toList();
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
     final bool isPoll = message.messageType == 'poll';
@@ -8821,24 +9220,30 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           }
         });
       },
-      onReply: () => _startReply(message),
-      onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
-      onQuotePartial: (isVideoNote || isVoiceNote || isPoll)
+      onReply: _canSendMessages ? () => _startReply(message) : null,
+      onQuote: (!_canSendMessages || isVideoNote || isVoiceNote || isPoll)
+          ? null
+          : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuotePartial: (!_canSendMessages || isVideoNote || isVoiceNote || isPoll)
           ? null
           : (selectedText, offset, length) =>
               _startQuote(message, selectedText, offset, length),
       onPin: _canPinMessages ? () => _togglePinMessage(message) : null,
       isPinned: _pinnedMessage?.id == message.id,
-      onForward: () => _forwardMessagesToPickedChat([message.id]),
-      onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
-        setState(() {
-          _cancelReply();
-          _messageController.loadMessage(message.content, message.entities);
-          _isEditing = true;
-          _editingMessageId = message.id;
-        });
-        _focusInputField();
-      },
+      onForward: _hasProtectedContent
+          ? null
+          : () => _forwardMessagesToPickedChat(targetIds),
+      onEdit: (!isMe || !_canSendMessages || isVideoNote || isVoiceNote || isPoll)
+          ? null
+          : () {
+              setState(() {
+                _cancelReply();
+                _messageController.loadMessage(message.content, message.entities);
+                _isEditing = true;
+                _editingMessageId = message.id;
+              });
+              _focusInputField();
+            },
       onSelect: () => _enterSelectionMode(message),
       onTranslate: message.content.trim().isNotEmpty
           ? () => unawaited(_toggleTranslateMessage(message))
@@ -8847,7 +9252,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       onReplyInAnotherChat: !_hasProtectedContent
           ? () => unawaited(_replyInAnotherChat(message))
           : null,
-      onDelete: (msg) => _confirmDeleteMessage(msg),
+      onDelete: (isMe || _canDeleteOthers)
+          ? (_) => _deleteMessagesWithSheet(
+                targetMessages.isNotEmpty ? targetMessages : [message],
+              )
+          : null,
       onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
       selectedEmojis: _myReactions[message.id] ?? message.myReactions,
     );
@@ -8869,8 +9278,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       placeName: picked.placeName,
       address: picked.address,
       topicId: _activeTopicId,
-      sendAsChatId: _selectedSendAsChatId,
-      sendAsAnonymous: _isAnonymousAdminActive,
+      sendAsMode: _effectiveSendAsMode,
+      sendAsChatId: _effectiveSendAsChannelId,
+      sendAsAnonymous: _effectiveSendAsAnon,
     );
     if (!mounted) return;
     if (res['success'] == true && res['message'] is Message) {
@@ -9032,8 +9442,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         longitude: pos.longitude,
         horizontalAccuracy: pos.accuracy > 0 ? pos.accuracy : null,
         topicId: _activeTopicId,
-        sendAsChatId: _selectedSendAsChatId,
-        sendAsAnonymous: _isAnonymousAdminActive,
+        sendAsMode: _effectiveSendAsMode,
+        sendAsChatId: _effectiveSendAsChannelId,
+        sendAsAnonymous: _effectiveSendAsAnon,
       );
       if (!mounted) return;
       if (res['success'] == true && res['message'] is Message) {
@@ -9154,8 +9565,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       messageType: 'contact',
       contact: contactPayload,
       topicId: _activeTopicId,
-      sendAsChatId: _selectedSendAsChatId,
-      sendAsAnonymous: _isAnonymousAdminActive,
+      sendAsMode: _effectiveSendAsMode,
+      sendAsChatId: _effectiveSendAsChannelId,
+      sendAsAnonymous: _effectiveSendAsAnon,
     );
     if (!mounted) return;
     if (res['success'] == true && res['message'] is Message) {
@@ -9186,8 +9598,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       messageType: 'contact',
       contact: picked.toPayload(),
       topicId: _activeTopicId,
-      sendAsChatId: _selectedSendAsChatId,
-      sendAsAnonymous: _isAnonymousAdminActive,
+      sendAsMode: _effectiveSendAsMode,
+      sendAsChatId: _effectiveSendAsChannelId,
+      sendAsAnonymous: _effectiveSendAsAnon,
     );
     if (!mounted) return;
     if (res['success'] == true && res['message'] is Message) {
@@ -9314,15 +9727,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
   }
 
-  void _confirmDeleteMessage(Message message) {
-    _deleteMessagesWithSheet([message]);
-  }
-
   Future<void> _deleteMessagesWithSheet(List<Message> targets) async {
     if (targets.isEmpty) return;
-    final bool allMine = targets.every((m) => m.senderId == _currentUserId);
-    final bool isAdmin = _myRole == 'owner' ||
-        (_myRole == 'admin' && (_myAdminPermissions?.canDeleteMessages ?? true));
+    final bool allMine = targets.every(_isOwnMessage);
+    final bool isAdmin = _canDeleteOthers;
+    if (!allMine && !isAdmin) return;
     final bool canModerate = !allMine && isAdmin;
     final String? authorName =
         targets.length == 1 ? targets.first.senderName : null;

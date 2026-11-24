@@ -1325,6 +1325,7 @@ class Chat {
   final int unreadMentionsCount;
   final int unreadReactionsCount;
   final String? mySendAsChatId;
+  final String? mySendAsMode;
   late final int updatedAtEpochMs =
       DateTimeUtils.parseUtcDateTime(updatedAt)?.millisecondsSinceEpoch ?? 0;
 
@@ -1380,6 +1381,7 @@ class Chat {
     this.unreadMentionsCount = 0,
     this.unreadReactionsCount = 0,
     this.mySendAsChatId,
+    this.mySendAsMode,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   /// Whether this chat belongs to a community channel
@@ -1627,6 +1629,7 @@ class Chat {
       unreadMentionsCount: _parseIntValue(json['unread_mentions_count']),
       unreadReactionsCount: _parseIntValue(json['unread_reactions_count']),
       mySendAsChatId: _nonEmptyString(json['my_send_as_chat_id']),
+      mySendAsMode: _nonEmptyString(json['my_send_as_mode']),
     );
   }
 
@@ -1836,6 +1839,7 @@ class Chat {
     int? unreadReactionsCount,
     String? mySendAsChatId,
     bool clearMySendAsChatId = false,
+    String? mySendAsMode,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -1898,6 +1902,7 @@ class Chat {
       mySendAsChatId: clearMySendAsChatId
           ? null
           : (mySendAsChatId ?? this.mySendAsChatId),
+      mySendAsMode: mySendAsMode ?? this.mySendAsMode,
     );
   }
 }
@@ -2263,6 +2268,7 @@ class Message {
   final String? senderChatId;
   final String? senderChatName;
   final String? senderChatAvatarUrl;
+  final bool isOwn;
   late final int createdAtEpochMs =
       DateTimeUtils.parseUtcDateTime(createdAt)?.millisecondsSinceEpoch ?? 0;
 
@@ -2335,6 +2341,7 @@ class Message {
     this.senderChatId,
     this.senderChatName,
     this.senderChatAvatarUrl,
+    this.isOwn = false,
   });
 
   /// Whether this message has a reply or quote
@@ -2785,6 +2792,8 @@ class Message {
       senderChatId: _nonEmptyString(json['sender_chat_id']),
       senderChatName: _nonEmptyString(json['sender_chat_name']),
       senderChatAvatarUrl: _nonEmptyString(json['sender_chat_avatar_url']),
+      isOwn: _parseBoolFlag(json['is_own']) ||
+          _parseBoolFlag(parsedMediaPayload?['is_own']),
     );
   }
 
@@ -2984,6 +2993,7 @@ class Message {
       senderChatId: _nonEmptyString(model.senderChatId),
       senderChatName: _nonEmptyString(model.senderChatName),
       senderChatAvatarUrl: _nonEmptyString(model.senderChatAvatarUrl),
+      isOwn: dbMediaPayload?['is_own'] == true,
       savedTags: () {
         if (model.savedTagsJson == null || model.savedTagsJson!.isEmpty) {
           return const <String>[];
@@ -3018,6 +3028,7 @@ class Message {
       if (canComment) 'can_comment': true,
       if (channelPostId != null && channelPostId!.isNotEmpty)
         'channel_post_id': channelPostId,
+      if (isOwn) 'is_own': true,
     };
 
     return MessagesCompanion(
@@ -3172,6 +3183,7 @@ class Message {
     String? senderChatId,
     String? senderChatName,
     String? senderChatAvatarUrl,
+    bool? isOwn,
   }) {
     return Message(
       id: id ?? this.id,
@@ -3242,6 +3254,7 @@ class Message {
       senderChatId: senderChatId ?? this.senderChatId,
       senderChatName: senderChatName ?? this.senderChatName,
       senderChatAvatarUrl: senderChatAvatarUrl ?? this.senderChatAvatarUrl,
+      isOwn: isOwn ?? this.isOwn,
     );
   }
 
@@ -3306,6 +3319,7 @@ class ChatDetails {
   final int unreadMentionsCount;
   final int unreadReactionsCount;
   final String? mySendAsChatId;
+  final String? mySendAsMode;
   late final int updatedAtEpochMs =
       DateTimeUtils.parseUtcDateTime(updatedAt)?.millisecondsSinceEpoch ?? 0;
 
@@ -3360,6 +3374,7 @@ class ChatDetails {
     this.unreadMentionsCount = 0,
     this.unreadReactionsCount = 0,
     this.mySendAsChatId,
+    this.mySendAsMode,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   bool get isOwner => myRole == 'owner';
@@ -3480,6 +3495,7 @@ class ChatDetails {
     int? unreadReactionsCount,
     String? mySendAsChatId,
     bool clearMySendAsChatId = false,
+    String? mySendAsMode,
   }) {
     return ChatDetails(
       id: id ?? this.id,
@@ -3541,6 +3557,7 @@ class ChatDetails {
       mySendAsChatId: clearMySendAsChatId
           ? null
           : (mySendAsChatId ?? this.mySendAsChatId),
+      mySendAsMode: mySendAsMode ?? this.mySendAsMode,
     );
   }
 
@@ -3673,6 +3690,7 @@ class ChatDetails {
       unreadMentionsCount: _parseIntValue(json['unread_mentions_count']),
       unreadReactionsCount: _parseIntValue(json['unread_reactions_count']),
       mySendAsChatId: _nonEmptyString(json['my_send_as_chat_id']),
+      mySendAsMode: _nonEmptyString(json['my_send_as_mode']),
     );
   }
 }
@@ -3696,6 +3714,7 @@ class ChatParticipant {
   final DateTime? restrictedUntil;
   final bool isBanned;
   final PeerCustomization? peerCustomization;
+  final int? promotedByUserId;
 
   ChatParticipant({
     required this.id,
@@ -3715,6 +3734,7 @@ class ChatParticipant {
     this.restrictedUntil,
     this.isBanned = false,
     this.peerCustomization,
+    this.promotedByUserId,
   });
 
   ChatParticipant copyWith({
@@ -3735,6 +3755,7 @@ class ChatParticipant {
     DateTime? restrictedUntil,
     bool? isBanned,
     PeerCustomization? peerCustomization,
+    int? promotedByUserId,
   }) {
     return ChatParticipant(
       id: id ?? this.id,
@@ -3754,6 +3775,7 @@ class ChatParticipant {
       restrictedUntil: restrictedUntil ?? this.restrictedUntil,
       isBanned: isBanned ?? this.isBanned,
       peerCustomization: peerCustomization ?? this.peerCustomization,
+      promotedByUserId: promotedByUserId ?? this.promotedByUserId,
     );
   }
 
@@ -3777,6 +3799,7 @@ class ChatParticipant {
         if (restrictedUntil != null)
           'restricted_until': restrictedUntil!.toUtc().toIso8601String(),
         'is_banned': isBanned,
+        if (promotedByUserId != null) 'promoted_by': promotedByUserId,
       };
 
   factory ChatParticipant.fromJson(Map<String, dynamic> json) {
@@ -3790,6 +3813,12 @@ class ChatParticipant {
     if (pid.isNotEmpty && parsedCust != null) {
       PeerCustomizationCache.instance.put(pid, parsedCust, notify: false);
     }
+    final rawPromotedBy = json['promoted_by'];
+    final int? parsedPromotedBy = rawPromotedBy is num
+        ? rawPromotedBy.toInt()
+        : (rawPromotedBy != null
+            ? int.tryParse(rawPromotedBy.toString())
+            : null);
     return ChatParticipant(
       id: pid,
       username: json['username']?.toString() ?? '',
@@ -3810,6 +3839,7 @@ class ChatParticipant {
       restrictedUntil: DateTimeUtils.parseUtcDateTime(json['restricted_until']),
       isBanned: _parseBoolFlag(json['is_banned']),
       peerCustomization: parsedCust,
+      promotedByUserId: parsedPromotedBy,
     );
   }
 }
@@ -4172,6 +4202,29 @@ class ChatService {
   /// [fileUrl] - URL of the file (for media messages)
   /// [fileName] - Name of the file (for file messages)
   /// [replyToMessageId] - ID of the message being replied to (optional)
+  static void _applySendAsPayload(
+    Map<String, dynamic> body, {
+    String? sendAsMode,
+    String? sendAsChatId,
+    required bool sendAsAnonymous,
+  }) {
+    final trimmedChatId = sendAsChatId?.trim() ?? '';
+    final explicitMode = sendAsMode?.trim() ?? '';
+    final String resolvedMode = explicitMode.isNotEmpty
+        ? explicitMode
+        : (trimmedChatId.isNotEmpty
+            ? 'channel'
+            : (sendAsAnonymous ? 'group' : 'user'));
+    final bool effectiveAnonymous = resolvedMode == 'group' ||
+        (explicitMode.isEmpty && sendAsAnonymous && trimmedChatId.isEmpty);
+    body['send_as_anonymous'] = effectiveAnonymous;
+    body['send_as_mode'] = resolvedMode;
+    body['send_as_chat_id'] =
+        (resolvedMode == 'channel' && trimmedChatId.isNotEmpty)
+            ? (int.tryParse(trimmedChatId) ?? trimmedChatId)
+            : '';
+  }
+
   /// [localId] - Local message ID for offline-first tracking (optional)
   /// [isQuote] - Whether this is a quote (partial text) reply (optional)
   /// [quoteText] - The quoted text fragment (optional)
@@ -4214,6 +4267,7 @@ class ChatService {
     Map<String, dynamic>? contact,
     int? topicId,
     String? sendAsChatId,
+    String? sendAsMode,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -4284,9 +4338,6 @@ class ChatService {
       if (isSilent) {
         body['is_silent'] = true;
       }
-      if (sendAsAnonymous) {
-        body['send_as_anonymous'] = true;
-      }
       if (hasMediaSpoiler) {
         body['has_media_spoiler'] = true;
       }
@@ -4324,9 +4375,12 @@ class ChatService {
       if (topicId != null && topicId > 0) {
         body['topic_id'] = topicId;
       }
-      if (sendAsChatId != null && sendAsChatId.isNotEmpty) {
-        body['send_as_chat_id'] = int.tryParse(sendAsChatId) ?? sendAsChatId;
-      }
+      _applySendAsPayload(
+        body,
+        sendAsMode: sendAsMode,
+        sendAsChatId: sendAsChatId,
+        sendAsAnonymous: sendAsAnonymous,
+      );
 
       // Try WebSocket RPC first when connected
       if (WebSocketService().isConnected) {
@@ -4472,6 +4526,7 @@ class ChatService {
     bool hasMediaSpoiler = false,
     int? topicId,
     String? sendAsChatId,
+    String? sendAsMode,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -4497,18 +4552,18 @@ class ChatService {
       if (isSilent) {
         body['is_silent'] = true;
       }
-      if (sendAsAnonymous) {
-        body['send_as_anonymous'] = true;
-      }
       if (hasMediaSpoiler) {
         body['has_media_spoiler'] = true;
       }
       if (topicId != null && topicId > 0) {
         body['topic_id'] = topicId;
       }
-      if (sendAsChatId != null && sendAsChatId.isNotEmpty) {
-        body['send_as_chat_id'] = int.tryParse(sendAsChatId) ?? sendAsChatId;
-      }
+      _applySendAsPayload(
+        body,
+        sendAsMode: sendAsMode,
+        sendAsChatId: sendAsChatId,
+        sendAsAnonymous: sendAsAnonymous,
+      );
       if (effectId != null && effectId.isNotEmpty) {
         body['effect_id'] = effectId;
       }
@@ -5585,6 +5640,9 @@ class ChatService {
     bool hideCaption = false,
     int? topicId,
     String? sendAsChatId,
+    String? sendAsMode,
+    bool sendAsAnonymous = false,
+    bool isSilent = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -5596,21 +5654,28 @@ class ChatService {
           .map((id) => int.tryParse(id) ?? id)
           .toList();
 
+      final body = <String, dynamic>{
+        'from_chat_id': int.tryParse(fromChatId) ?? fromChatId,
+        'message_ids': parsedIds,
+        'hide_sender': hideSender,
+        if (hideCaption) 'hide_caption': true,
+        if (topicId != null && topicId > 0) 'topic_id': topicId,
+        if (isSilent) 'is_silent': true,
+      };
+      _applySendAsPayload(
+        body,
+        sendAsMode: sendAsMode,
+        sendAsChatId: sendAsChatId,
+        sendAsAnonymous: sendAsAnonymous,
+      );
+
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$toChatId/messages/forward'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
-        body: jsonEncode({
-          'from_chat_id': int.tryParse(fromChatId) ?? fromChatId,
-          'message_ids': parsedIds,
-          'hide_sender': hideSender,
-          if (hideCaption) 'hide_caption': true,
-          if (topicId != null && topicId > 0) 'topic_id': topicId,
-          if (sendAsChatId != null && sendAsChatId.isNotEmpty)
-            'send_as_chat_id': int.tryParse(sendAsChatId) ?? sendAsChatId,
-        }),
+        body: jsonEncode(body),
       );
 
       final data = jsonDecode(response.body);
@@ -6455,6 +6520,9 @@ class ChatService {
     bool hasMediaSpoiler = false,
     String? groupedId,
     String? sendAsChatId,
+    String? sendAsMode,
+    bool sendAsAnonymous = false,
+    bool isSilent = false,
   }) async {
     try {
       final headers = await _authHeaders();
@@ -6476,9 +6544,14 @@ class ChatService {
         if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
         if (hasMediaSpoiler) 'has_media_spoiler': true,
         if (groupedId != null && groupedId.isNotEmpty) 'grouped_id': groupedId,
-        if (sendAsChatId != null && sendAsChatId.isNotEmpty)
-          'send_as_chat_id': int.tryParse(sendAsChatId) ?? sendAsChatId,
+        if (isSilent) 'is_silent': true,
       };
+      _applySendAsPayload(
+        body,
+        sendAsMode: sendAsMode,
+        sendAsChatId: sendAsChatId,
+        sendAsAnonymous: sendAsAnonymous,
+      );
 
       final response = await http.post(
         Uri.parse(
@@ -6997,7 +7070,10 @@ class ChatService {
     Map<String, dynamic>? mediaPayload,
     String? groupedId,
     bool isSilent = false,
-    bool? sendAsAnonymous,
+    bool sendAsAnonymous = false,
+    String? sendAsChatId,
+    String? sendAsMode,
+    int? topicId,
   }) async {
     try {
       final headers = await _authHeaders();
@@ -7038,11 +7114,17 @@ class ChatService {
           'media_payload': mediaPayload,
         if (groupedId != null && groupedId.isNotEmpty) 'grouped_id': groupedId,
         if (isSilent) 'is_silent': true,
-        if (sendAsAnonymous != null) 'send_as_anonymous': sendAsAnonymous,
+        if (topicId != null && topicId > 0) 'topic_id': topicId,
         'send_when_online': sendWhenOnline,
         if (!sendWhenOnline && scheduleAt != null)
           'schedule_at': scheduleAt.toUtc().toIso8601String(),
       };
+      _applySendAsPayload(
+        body,
+        sendAsMode: sendAsMode,
+        sendAsChatId: sendAsChatId,
+        sendAsAnonymous: sendAsAnonymous,
+      );
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/scheduled'),

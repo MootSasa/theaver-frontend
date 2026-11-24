@@ -1294,6 +1294,10 @@ class BotService {
     String? inlineQueryId,
     String? replyToMessageId,
     int? topicId,
+    bool isSilent = false,
+    String? sendAsMode,
+    String? sendAsChatId,
+    bool sendAsAnonymous = false,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -1332,6 +1336,13 @@ class BotService {
           if (topicId != null && topicId > 0) 'topic_id': topicId,
           if (result.parseMode != null && result.parseMode!.isNotEmpty)
             'parse_mode': result.parseMode,
+          if (isSilent) 'is_silent': true,
+          if (sendAsMode != null && sendAsMode.trim().isNotEmpty)
+            'send_as_mode': sendAsMode.trim(),
+          if (sendAsChatId != null && sendAsChatId.trim().isNotEmpty)
+            'send_as_chat_id':
+                int.tryParse(sendAsChatId.trim()) ?? sendAsChatId.trim(),
+          if (sendAsAnonymous) 'send_as_anonymous': true,
         }),
       );
 

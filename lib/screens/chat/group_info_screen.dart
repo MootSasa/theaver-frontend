@@ -11,6 +11,7 @@ class GroupInfoScreen extends StatelessWidget {
   final String? groupName;
   final String? groupAvatar;
   final String? heroTag;
+  final VoidCallback? onUpdate;
   final VoidCallback? onSearchInChat;
   final ValueChanged<String>? onJumpToMessageId;
 
@@ -20,6 +21,7 @@ class GroupInfoScreen extends StatelessWidget {
     this.groupName,
     this.groupAvatar,
     this.heroTag,
+    this.onUpdate,
     this.onSearchInChat,
     this.onJumpToMessageId,
   }) : super(key: key);
@@ -32,6 +34,7 @@ class GroupInfoScreen extends StatelessWidget {
       initialName: groupName,
       initialAvatarUrl: groupAvatar,
       heroTag: heroTag ?? groupName ?? chatId,
+      onUpdate: onUpdate,
       onSearchInChat: onSearchInChat,
       onJumpToMessageId: onJumpToMessageId,
     );
