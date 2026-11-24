@@ -5,7 +5,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart' show immutable, kIsWeb;
+import 'package:flutter/foundation.dart' show SynchronousFuture, immutable, kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
 
@@ -118,6 +118,52 @@ class AvatarCropSpec {
 /// underlying full-resolution file or network object.
 String? stripAvatarCropFragment(String? url) => AvatarCropSpec.split(url).cleanUrl;
 
+/// Upgrades [primary] to include an `#acrop=...` fragment from [candidates]
+/// when both reference the same underlying full photo and [primary] lost its
+/// fragment in a non-fragmented cache/API field.
+String? preferAvatarUrlWithCrop(
+  String? primary,
+  Iterable<String?> candidates,
+) {
+  if (primary == null) return null;
+  final String trimmedPrimary = primary.trim();
+  if (trimmedPrimary.isEmpty) return primary;
+
+  final ({String? cleanUrl, AvatarCropSpec? crop}) primarySplit =
+      AvatarCropSpec.split(trimmedPrimary);
+  if (primarySplit.crop != null ||
+      primarySplit.cleanUrl == null ||
+      primarySplit.cleanUrl!.isEmpty) {
+    return trimmedPrimary;
+  }
+
+  final String rawCleanPrimary = primarySplit.cleanUrl!;
+  final String? resolvedCleanPrimary = getValidAvatarUrl(rawCleanPrimary);
+
+  for (final String? candidate in candidates) {
+    if (candidate == null) continue;
+    final String trimmedCand = candidate.trim();
+    if (trimmedCand.isEmpty) continue;
+    final ({String? cleanUrl, AvatarCropSpec? crop}) candSplit =
+        AvatarCropSpec.split(trimmedCand);
+    final AvatarCropSpec? candCrop = candSplit.crop;
+    final String? rawCleanCand = candSplit.cleanUrl;
+    if (candCrop == null || rawCleanCand == null || rawCleanCand.isEmpty) {
+      continue;
+    }
+    final String? resolvedCleanCand = getValidAvatarUrl(rawCleanCand);
+    final bool matches = rawCleanCand == rawCleanPrimary ||
+        (resolvedCleanPrimary != null &&
+            resolvedCleanCand != null &&
+            resolvedCleanCand == resolvedCleanPrimary);
+    if (matches) {
+      return candCrop.attachToUrl(rawCleanPrimary);
+    }
+  }
+
+  return trimmedPrimary;
+}
+
 @immutable
 class AvatarSubregionImageKey {
   final Object baseKey;
@@ -176,16 +222,36 @@ class AvatarSubregionImageProvider
   @override
   Future<AvatarSubregionImageKey> obtainKey(
     ImageConfiguration configuration,
-  ) async {
-    final Object baseKey = await baseProvider.obtainKey(configuration);
-    return AvatarSubregionImageKey(
-      baseKey: baseKey,
-      nx10k: (crop.nx * 10000).round(),
-      ny10k: (crop.ny * 10000).round(),
-      nw10k: (crop.nw * 10000).round(),
-      nh10k: (crop.nh * 10000).round(),
-      targetDimension: targetDimension,
+  ) {
+    Completer<AvatarSubregionImageKey>? completer;
+    SynchronousFuture<AvatarSubregionImageKey>? result;
+    baseProvider.obtainKey(configuration).then(
+      (Object baseKey) {
+        final key = AvatarSubregionImageKey(
+          baseKey: baseKey,
+          nx10k: (crop.nx * 10000).round(),
+          ny10k: (crop.ny * 10000).round(),
+          nw10k: (crop.nw * 10000).round(),
+          nh10k: (crop.nh * 10000).round(),
+          targetDimension: targetDimension,
+        );
+        if (completer == null) {
+          result = SynchronousFuture<AvatarSubregionImageKey>(key);
+        } else {
+          completer!.complete(key);
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        completer ??= Completer<AvatarSubregionImageKey>();
+        completer!.completeError(error, stack);
+      },
     );
+    if (result != null) {
+      return result!;
+    }
+    final c = Completer<AvatarSubregionImageKey>();
+    completer = c;
+    return c.future;
   }
 
   @override
@@ -199,6 +265,18 @@ class AvatarSubregionImageProvider
       targetDimension: targetDimension,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AvatarSubregionImageProvider &&
+          runtimeType == other.runtimeType &&
+          baseProvider == other.baseProvider &&
+          crop == other.crop &&
+          targetDimension == other.targetDimension;
+
+  @override
+  int get hashCode => Object.hash(baseProvider, crop, targetDimension);
 }
 
 class _SubregionImageStreamCompleter extends ImageStreamCompleter {
@@ -514,17 +592,15 @@ ImageProvider? _buildRawAvatarImageProvider(
     return null;
   }
 
-  final int? targetDim =
-      (!fullResolution && maxDecodeDimension != null && maxDecodeDimension > 0)
-          ? maxDecodeDimension
-          : null;
-  return CachedNetworkImageProvider(
-    validUrl,
-    maxWidth: targetDim,
-    maxHeight: targetDim,
-    errorListener: (e) {
-      debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
-    },
+  return _maybeResizeAvatar(
+    CachedNetworkImageProvider(
+      validUrl,
+      errorListener: (e) {
+        debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
+      },
+    ),
+    maxDecodeDimension: maxDecodeDimension,
+    fullResolution: fullResolution,
   );
 }
 

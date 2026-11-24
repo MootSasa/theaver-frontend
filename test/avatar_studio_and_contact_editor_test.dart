@@ -6,9 +6,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/l10n/app_localizations.dart';
@@ -30,6 +32,7 @@ import 'package:theaver/widgets/avatar_editor/theav_avatar_editor_screen.dart';
 import 'package:theaver/widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import 'package:theaver/widgets/chat/suggested_photo_bubble_card.dart';
 import 'package:theaver/widgets/profile/expandable_avatar.dart';
+import 'package:theaver/widgets/profile/qr_code_dialog.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
 
 class _SyncAppLocalizationsDelegate
@@ -297,6 +300,28 @@ Future<Uint8List> _createSplitPng({int width = 240, int height = 120}) async {
   final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
   img.dispose();
   return data!.buffer.asUint8List();
+}
+
+Future<Uint8List> _createCornerBadgePng({int size = 240}) async {
+  final ui.PictureRecorder recorder = ui.PictureRecorder();
+  final Canvas canvas = Canvas(recorder);
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
+    Paint()..color = const Color(0xFFFF0000),
+  );
+  canvas.drawRect(
+    Rect.fromLTWH(size * 0.70, size * 0.70, size * 0.25, size * 0.25),
+    Paint()..color = const Color(0xFF00FF00),
+  );
+  final ui.Picture pic = recorder.endRecording();
+  final ui.Image img = await pic.toImage(size, size);
+  pic.dispose();
+  try {
+    final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+    return data!.buffer.asUint8List();
+  } finally {
+    img.dispose();
+  }
 }
 
 Future<ui.Image> _resolveProviderImage(ImageProvider provider) {
@@ -796,6 +821,125 @@ void main() {
         );
         await _pumpFrames(tester);
         expect(tester.takeException(), isNull);
+      }
+    });
+
+    test('AvatarSubregionImageProvider supports value equality and synchronous obtainKey', () {
+      const cropA = AvatarCropSpec(nx: 0.25, ny: 0.15, nw: 0.40, nh: 0.40);
+      const cropB = AvatarCropSpec(nx: 0.25, ny: 0.15, nw: 0.40, nh: 0.40);
+      final ImageProvider base = MemoryImage(_kDummyPngBytes);
+      final p1 = AvatarSubregionImageProvider(
+        baseProvider: base,
+        crop: cropA,
+        targetDimension: 256,
+      );
+      final p2 = AvatarSubregionImageProvider(
+        baseProvider: base,
+        crop: cropB,
+        targetDimension: 256,
+      );
+      expect(p1, equals(p2));
+      expect(p1.hashCode, equals(p2.hashCode));
+      expect(
+        p1.obtainKey(ImageConfiguration.empty),
+        isA<SynchronousFuture<AvatarSubregionImageKey>>(),
+      );
+    });
+
+    test('preferAvatarUrlWithCrop restores missing #acrop fragment from matching candidate URL', () {
+      const bareUrl = 'https://cdn.example.com/avatars/u/pic.jpg';
+      const taggedUrl =
+          'https://cdn.example.com/avatars/u/pic.jpg#acrop=0.7000,0.7000,0.2500,0.2500';
+      const otherTagged =
+          'https://cdn.example.com/avatars/u/other.jpg#acrop=0.1000,0.1000,0.2000,0.2000';
+
+      expect(
+        preferAvatarUrlWithCrop(bareUrl, <String?>[otherTagged, taggedUrl]),
+        taggedUrl,
+      );
+      expect(
+        preferAvatarUrlWithCrop(bareUrl, <String?>[otherTagged]),
+        bareUrl,
+      );
+    });
+
+    testWidgets('QrCodeDialog renders the miniature #acrop circle rather than cropping the center of the outer photo', (tester) async {
+      late Directory tmpDir;
+      late String taggedUrl;
+      await tester.runAsync(() async {
+        tmpDir = Directory.systemTemp.createTempSync('theaver_qr_acrop_test_');
+        final Uint8List pngBytes = await _createCornerBadgePng(size: 240);
+        final File imgFile = File('${tmpDir.path}/qr_corner.png');
+        await imgFile.writeAsBytes(pngBytes, flush: true);
+        taggedUrl = '${imgFile.path}#acrop=0.7000,0.7000,0.2500,0.2500';
+      });
+
+      try {
+        final GlobalKey boundaryKey = GlobalKey();
+        await tester.pumpWidget(
+          _wrapTestApp(
+            home: Scaffold(
+              body: Center(
+                child: RepaintBoundary(
+                  key: boundaryKey,
+                  child: QrCodeDialog(
+                    userId: '777',
+                    displayName: 'Test User',
+                    username: 'test_user',
+                    avatarUrl: taggedUrl,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        for (int i = 0; i < 12; i++) {
+          await tester.pump();
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 50)),
+          );
+          await tester.pump();
+        }
+        expect(tester.takeException(), isNull);
+
+        final Finder qrFinder = find.byType(PrettyQrView);
+        expect(qrFinder, findsOneWidget);
+
+        final RenderRepaintBoundary boundary =
+            boundaryKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+        final Offset qrCenterGlobal = tester.getCenter(qrFinder);
+        final Offset localCenter = boundary.globalToLocal(qrCenterGlobal);
+
+        final int px = localCenter.dx.round();
+        final int py = localCenter.dy.round();
+
+        late ByteData? rgba;
+        await tester.runAsync(() async {
+          final ui.Image snapshot = await boundary.toImage(pixelRatio: 1.0);
+          try {
+            rgba = await snapshot.toByteData(format: ui.ImageByteFormat.rawRgba);
+          } finally {
+            snapshot.dispose();
+          }
+        });
+
+        expect(rgba, isNotNull);
+        final int width = boundary.size.width.round();
+        final int offset = (py * width + px) * 4;
+        final int r = rgba!.getUint8(offset);
+        final int g = rgba!.getUint8(offset + 1);
+        final int b = rgba!.getUint8(offset + 2);
+        // Center of QR code must sample the green miniature circle (#00FF00), not the red center (#FF0000).
+        expect(g, greaterThan(180), reason: 'rgba=($r,$g,$b) at ($px,$py) size=${boundary.size}');
+        expect(r, lessThan(80), reason: 'rgba=($r,$g,$b) at ($px,$py) size=${boundary.size}');
+        expect(b, lessThan(80), reason: 'rgba=($r,$g,$b) at ($px,$py) size=${boundary.size}');
+      } finally {
+        await tester.runAsync(() async {
+          if (await tmpDir.exists()) {
+            await tmpDir.delete(recursive: true);
+          }
+        });
       }
     });
   });

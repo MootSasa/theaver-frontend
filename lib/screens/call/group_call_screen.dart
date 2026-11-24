@@ -10,6 +10,7 @@ import '../../config/app_config.dart';
 import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/image_utils.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
@@ -1430,27 +1431,36 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    CircleAvatar(
-                                      radius: 30,
-                                      backgroundColor:
-                                          primaryColor.withValues(alpha: 0.26),
-                                      backgroundImage:
-                                          resolvedAvatar.isNotEmpty
-                                              ? NetworkImage(resolvedAvatar)
+                                    Builder(
+                                      builder: (_) {
+                                        final ImageProvider? participantAvatarProvider =
+                                            resolvedAvatar.isNotEmpty
+                                                ? avatarImageProvider(
+                                                    resolvedAvatar,
+                                                    maxDecodeDimension: 240,
+                                                  )
+                                                : null;
+                                        return CircleAvatar(
+                                          radius: 30,
+                                          backgroundColor:
+                                              primaryColor.withValues(alpha: 0.26),
+                                          backgroundImage:
+                                              participantAvatarProvider,
+                                          child: participantAvatarProvider == null
+                                              ? Text(
+                                                  participant.displayName.isNotEmpty
+                                                      ? participant.displayName[0]
+                                                          .toUpperCase()
+                                                      : '?',
+                                                  style: const TextStyle(
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: Colors.white,
+                                                  ),
+                                                )
                                               : null,
-                                      child: resolvedAvatar.isEmpty
-                                          ? Text(
-                                              participant.displayName.isNotEmpty
-                                                  ? participant.displayName[0]
-                                                      .toUpperCase()
-                                                  : '?',
-                                              style: const TextStyle(
-                                                fontSize: 22,
-                                                fontWeight: FontWeight.w700,
-                                                color: Colors.white,
-                                              ),
-                                            )
-                                          : null,
+                                        );
+                                      },
                                     ),
                                     const SizedBox(height: 10),
                                     Padding(

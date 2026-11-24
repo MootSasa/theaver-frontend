@@ -10,6 +10,7 @@ import '../../models/call_models.dart';
 import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/image_utils.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
@@ -447,26 +448,31 @@ class _VoiceCallScreenState extends State<VoiceCallScreen>
                         ],
                       );
                     },
-                    child: CircleAvatar(
-                      radius: 58,
-                      backgroundColor: primaryColor.withValues(alpha: 0.25),
-                      backgroundImage: widget.peerAvatarUrl != null &&
-                              widget.peerAvatarUrl!.isNotEmpty
-                          ? NetworkImage(widget.peerAvatarUrl!)
-                          : null,
-                      child: (widget.peerAvatarUrl == null ||
-                              widget.peerAvatarUrl!.isEmpty)
-                          ? Text(
-                              peerTitle.isNotEmpty
-                                  ? peerTitle[0].toUpperCase()
-                                  : '?',
-                              style: const TextStyle(
-                                fontSize: 42,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
-                            )
-                          : null,
+                    child: Builder(
+                      builder: (_) {
+                        final ImageProvider? peerAvatarProvider =
+                            avatarImageProvider(
+                          widget.peerAvatarUrl,
+                          maxDecodeDimension: 360,
+                        );
+                        return CircleAvatar(
+                          radius: 58,
+                          backgroundColor: primaryColor.withValues(alpha: 0.25),
+                          backgroundImage: peerAvatarProvider,
+                          child: peerAvatarProvider == null
+                              ? Text(
+                                  peerTitle.isNotEmpty
+                                      ? peerTitle[0].toUpperCase()
+                                      : '?',
+                                  style: const TextStyle(
+                                    fontSize: 42,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : null,
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(height: 24),

@@ -1080,9 +1080,10 @@ class ProfileInstantCache {
   void _precacheAvatarImages(BuildContext context, List<String> urls) {
     for (final raw in urls.take(3)) {
       final resolved = AppConfig.resolveMediaUrl(raw) ?? raw;
-      if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+      final clean = stripAvatarCropFragment(resolved) ?? resolved;
+      if (clean.startsWith('http://') || clean.startsWith('https://')) {
         try {
-          precacheImage(CachedNetworkImageProvider(resolved), context);
+          precacheImage(CachedNetworkImageProvider(clean), context);
         } catch (_) {}
       }
     }

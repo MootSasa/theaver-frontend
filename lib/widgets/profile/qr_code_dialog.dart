@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -5,6 +6,8 @@ import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/account_manager.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/image_utils.dart';
 
 /// Transparent 1x1 PNG bytes for temporary fallback
@@ -46,8 +49,56 @@ Future<Uint8List> _createInitialsAvatarBytes(String displayName, {required bool 
 
   final picture = recorder.endRecording();
   final img = await picture.toImage(200, 200);
-  final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-  return byteData!.buffer.asUint8List();
+  picture.dispose();
+  try {
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  } finally {
+    img.dispose();
+  }
+}
+
+/// Encodes an already-resolved (and `#acrop=...` subregion-cropped when present)
+/// avatar [src] image into a crisp square PNG for synchronous `MemoryImage`
+/// painting inside `PrettyQrDecorationImage`.
+Future<Uint8List?> _renderSquareAvatarPng(
+  ui.Image src, {
+  int side = 256,
+}) async {
+  final double w = src.width.toDouble();
+  final double h = src.height.toDouble();
+  if (w < 1.0 || h < 1.0) return null;
+
+  final double square = math.min(w, h);
+  final Rect srcRect = Rect.fromLTWH(
+    (w - square) * 0.5,
+    (h - square) * 0.5,
+    square,
+    square,
+  );
+  final double dstSide = side.toDouble();
+  final Rect dstRect = Rect.fromLTWH(0.0, 0.0, dstSide, dstSide);
+
+  final ui.PictureRecorder recorder = ui.PictureRecorder();
+  final Canvas canvas = Canvas(recorder, dstRect);
+  canvas.drawImageRect(
+    src,
+    srcRect,
+    dstRect,
+    Paint()
+      ..isAntiAlias = true
+      ..filterQuality = FilterQuality.high,
+  );
+  final ui.Picture picture = recorder.endRecording();
+  final ui.Image outImg = await picture.toImage(side, side);
+  picture.dispose();
+  try {
+    final ByteData? byteData =
+        await outImg.toByteData(format: ui.ImageByteFormat.png);
+    return byteData?.buffer.asUint8List();
+  } finally {
+    outImg.dispose();
+  }
 }
 
 /// Диалоговое окно с QR-кодом профиля пользователя.
@@ -93,33 +144,172 @@ class QrCodeDialog extends StatefulWidget {
 
 class _QrCodeDialogState extends State<QrCodeDialog> {
   bool _brightnessChanged = false;
+  Uint8List? _bakedAvatarBytes;
   Uint8List? _fallbackAvatarBytes;
+  ImageStream? _avatarStream;
+  ImageStreamListener? _avatarListener;
+  int _avatarLoadGen = 0;
+  bool _hasLoadedAvatar = false;
+  String? _loadedAvatarUrl;
+  String? _loadedDisplayName;
+  bool? _loadedIsDark;
+
+  String? get _effectiveAvatarUrl {
+    String? raw = widget.avatarUrl?.trim();
+    if (widget.userId.isNotEmpty) {
+      Account? currentAcc;
+      try {
+        currentAcc = AccountManager().currentAccount;
+      } catch (_) {}
+      if (currentAcc != null && currentAcc.userId == widget.userId) {
+        if (raw == null || raw.isEmpty) {
+          raw = (currentAcc.avatarUrl != null &&
+                  currentAcc.avatarUrl!.trim().isNotEmpty)
+              ? currentAcc.avatarUrl!.trim()
+              : currentAcc.localAvatarPath?.trim();
+        }
+        raw = preferAvatarUrlWithCrop(raw, <String?>[
+          currentAcc.avatarUrl,
+          currentAcc.localAvatarPath,
+        ]);
+      } else {
+        final ContactItem? cachedContact =
+            ContactsService.getCached(widget.userId);
+        final String? contactOverride =
+            ContactsService.resolveAvatarUrl(widget.userId, raw);
+        if ((raw == null || raw.isEmpty) &&
+            contactOverride != null &&
+            contactOverride.trim().isNotEmpty) {
+          raw = contactOverride.trim();
+        }
+        raw = preferAvatarUrlWithCrop(raw, <String?>[
+          contactOverride,
+          cachedContact?.customAvatarUrl,
+          cachedContact?.avatarUrl,
+        ]);
+      }
+    }
+    return (raw != null && raw.isNotEmpty) ? raw : null;
+  }
 
   @override
   void initState() {
     super.initState();
     _setMaxBrightness();
-    _initFallbackAvatar();
   }
 
-  void _initFallbackAvatar() {
-    if (widget.avatarUrl == null || widget.avatarUrl!.isEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted) return;
-        final theme = Theme.of(context);
-        final isDark = theme.brightness == Brightness.dark;
-        final bytes = await _createInitialsAvatarBytes(widget.displayName, isDark: isDark);
-        if (mounted) {
-          setState(() {
-            _fallbackAvatarBytes = bytes;
-          });
-        }
-      });
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final String? effectiveUrl = _effectiveAvatarUrl;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    if (!_hasLoadedAvatar ||
+        _loadedAvatarUrl != effectiveUrl ||
+        _loadedDisplayName != widget.displayName ||
+        (effectiveUrl == null && _loadedIsDark != isDark)) {
+      _hasLoadedAvatar = true;
+      _loadedAvatarUrl = effectiveUrl;
+      _loadedDisplayName = widget.displayName;
+      _loadedIsDark = isDark;
+      _refreshAvatarGraphics(effectiveUrl: effectiveUrl, isDark: isDark);
     }
   }
 
   @override
+  void didUpdateWidget(covariant QrCodeDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.avatarUrl != widget.avatarUrl ||
+        oldWidget.userId != widget.userId ||
+        oldWidget.displayName != widget.displayName) {
+      final String? effectiveUrl = _effectiveAvatarUrl;
+      final bool isDark = Theme.of(context).brightness == Brightness.dark;
+      _loadedAvatarUrl = effectiveUrl;
+      _loadedDisplayName = widget.displayName;
+      _loadedIsDark = isDark;
+      _refreshAvatarGraphics(effectiveUrl: effectiveUrl, isDark: isDark);
+    }
+  }
+
+  void _clearAvatarStream() {
+    if (_avatarStream != null && _avatarListener != null) {
+      _avatarStream!.removeListener(_avatarListener!);
+    }
+    _avatarStream = null;
+    _avatarListener = null;
+  }
+
+  Future<void> _loadFallbackInitials(int gen, {required bool isDark}) async {
+    try {
+      final bytes =
+          await _createInitialsAvatarBytes(widget.displayName, isDark: isDark);
+      if (!mounted || gen != _avatarLoadGen) return;
+      setState(() {
+        _fallbackAvatarBytes = bytes;
+      });
+    } catch (_) {}
+  }
+
+  void _refreshAvatarGraphics({
+    required String? effectiveUrl,
+    required bool isDark,
+  }) {
+    _clearAvatarStream();
+    final int gen = ++_avatarLoadGen;
+    _bakedAvatarBytes = null;
+    _fallbackAvatarBytes = null;
+
+    final ImageProvider? provider = avatarImageProvider(
+      effectiveUrl,
+      maxDecodeDimension: 256,
+    );
+    if (provider == null) {
+      _loadFallbackInitials(gen, isDark: isDark);
+      return;
+    }
+
+    final ImageStream stream = provider.resolve(ImageConfiguration.empty);
+    _avatarStream = stream;
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (ImageInfo info, bool synchronousCall) {
+        if (!mounted || gen != _avatarLoadGen) return;
+        final ui.Image ownedImage = info.image.clone();
+        stream.removeListener(listener);
+        if (identical(_avatarStream, stream)) {
+          _avatarStream = null;
+          _avatarListener = null;
+        }
+        _renderSquareAvatarPng(ownedImage, side: 256).then(
+          (Uint8List? bytes) {
+            ownedImage.dispose();
+            if (!mounted || gen != _avatarLoadGen || bytes == null) return;
+            setState(() {
+              _bakedAvatarBytes = bytes;
+            });
+          },
+          onError: (_, __) {
+            ownedImage.dispose();
+          },
+        );
+      },
+      onError: (Object error, StackTrace? stackTrace) {
+        stream.removeListener(listener);
+        if (identical(_avatarStream, stream)) {
+          _avatarStream = null;
+          _avatarListener = null;
+        }
+        if (!mounted || gen != _avatarLoadGen) return;
+        _loadFallbackInitials(gen, isDark: isDark);
+      },
+    );
+    _avatarListener = listener;
+    stream.addListener(listener);
+  }
+
+  @override
   void dispose() {
+    _avatarLoadGen++;
+    _clearAvatarStream();
     _restoreBrightness();
     super.dispose();
   }
@@ -164,11 +354,15 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
 
     const double qrSize = 200.0;
 
-    final ImageProvider? resolvedAvatarProvider = avatarImageProvider(widget.avatarUrl);
-    final ImageProvider avatarImage = resolvedAvatarProvider ??
-        (_fallbackAvatarBytes != null
-            ? MemoryImage(_fallbackAvatarBytes!)
-            : MemoryImage(_transparentPixelBytes));
+    final String? effectiveAvatarUrl = _effectiveAvatarUrl;
+    final ImageProvider? resolvedAvatarProvider =
+        avatarImageProvider(effectiveAvatarUrl, maxDecodeDimension: 256);
+    final ImageProvider avatarImage = _bakedAvatarBytes != null
+        ? MemoryImage(_bakedAvatarBytes!)
+        : (resolvedAvatarProvider ??
+            (_fallbackAvatarBytes != null
+                ? MemoryImage(_fallbackAvatarBytes!)
+                : MemoryImage(_transparentPixelBytes)));
 
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
@@ -241,6 +435,9 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
                       ),
                       image: PrettyQrDecorationImage(
                         image: avatarImage,
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.high,
+                        isAntiAlias: true,
                         position: PrettyQrDecorationImagePosition.embedded,
                         clipper: const PrettyQrCircleClipper(),
                       ),

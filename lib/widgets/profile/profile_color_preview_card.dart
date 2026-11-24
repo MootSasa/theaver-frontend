@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../utils/image_utils.dart';
 import '../../widgets/profile/liquid_glass_info_panel.dart';
 import '../../widgets/profile/liquid_glass_profile_buttons.dart';
 
@@ -120,23 +121,36 @@ class ProfileColorPreviewCard extends StatelessWidget {
                         ),
                         child: Padding(
                           padding: const EdgeInsets.all(3.0),
-                          child: CircleAvatar(
-                            backgroundColor: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-                            backgroundImage: (avatarUrl != null && avatarUrl!.isNotEmpty)
-                                ? (avatarUrl!.startsWith('http')
-                                    ? NetworkImage(avatarUrl!) as ImageProvider
-                                    : AssetImage(avatarUrl!))
-                                : null,
-                            child: (avatarUrl == null || avatarUrl!.isEmpty)
-                                ? Text(
-                                    displayName.isNotEmpty ? displayName[0].toUpperCase() : 'M',
-                                    style: TextStyle(
-                                      fontSize: 26,
-                                      fontWeight: FontWeight.bold,
-                                      color: preset.backgroundColor,
-                                    ),
-                                  )
-                                : null,
+                          child: Builder(
+                            builder: (_) {
+                              final ImageProvider? resolvedAvatar =
+                                  (avatarUrl != null && avatarUrl!.isNotEmpty)
+                                      ? (avatarUrl!.startsWith('assets/')
+                                          ? AssetImage(avatarUrl!)
+                                          : avatarImageProvider(
+                                              avatarUrl,
+                                              maxDecodeDimension: 240,
+                                            ))
+                                      : null;
+                              return CircleAvatar(
+                                backgroundColor: isDark
+                                    ? const Color(0xFF2C2C2E)
+                                    : Colors.white,
+                                backgroundImage: resolvedAvatar,
+                                child: resolvedAvatar == null
+                                    ? Text(
+                                        displayName.isNotEmpty
+                                            ? displayName[0].toUpperCase()
+                                            : 'M',
+                                        style: TextStyle(
+                                          fontSize: 26,
+                                          fontWeight: FontWeight.bold,
+                                          color: preset.backgroundColor,
+                                        ),
+                                      )
+                                    : null,
+                              );
+                            },
                           ),
                         ),
                       ),

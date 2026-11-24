@@ -528,11 +528,18 @@ class ProfileScreenState extends State<ProfileScreen>
         if (snap.phone.isNotEmpty) _phoneController.text = snap.phone;
         if (snap.bio != null) _bio = snap.bio;
         if (snap.birthday != null) _birthday = snap.birthday;
-        if (snap.avatarUrl != null && snap.avatarUrl!.isNotEmpty) {
-          _avatarUrl = snap.avatarUrl;
-        }
         if (snap.avatarUrls.isNotEmpty) {
           _avatarUrls = List<String>.from(snap.avatarUrls);
+        }
+        if (snap.avatarUrl != null && snap.avatarUrl!.isNotEmpty) {
+          _avatarUrl = preferAvatarUrlWithCrop(
+            snap.avatarUrl,
+            <String?>[
+              acc?.avatarUrl,
+              acc?.localAvatarPath,
+              ...snap.avatarUrls,
+            ],
+          );
         }
         if (snap.avatarIds.isNotEmpty) {
           _avatarIds = List<int>.from(snap.avatarIds);
@@ -655,9 +662,15 @@ class ProfileScreenState extends State<ProfileScreen>
           _myRole = snap.myRole;
           _isChatMember = snap.myRole != 'guest';
           if (snap.avatarUrl != null && snap.avatarUrl!.isNotEmpty) {
-            _avatarUrl = snap.avatarUrl;
-            if (!_avatarUrls.contains(snap.avatarUrl!)) {
-              _avatarUrls = [snap.avatarUrl!, ..._avatarUrls];
+            final hydratedGroupAvatar = preferAvatarUrlWithCrop(
+              snap.avatarUrl,
+              <String?>[_avatarUrl, ..._avatarUrls],
+            );
+            _avatarUrl = hydratedGroupAvatar;
+            if (hydratedGroupAvatar != null &&
+                hydratedGroupAvatar.isNotEmpty &&
+                !_avatarUrls.contains(hydratedGroupAvatar)) {
+              _avatarUrls = [hydratedGroupAvatar, ..._avatarUrls];
             }
           }
           if (snap.members.isNotEmpty) {
@@ -904,6 +917,7 @@ class ProfileScreenState extends State<ProfileScreen>
             (_avatarUrl == null || _avatarUrl!.isEmpty)) {
           _avatarUrl = _avatarUrls.first;
         }
+        _avatarUrl = preferAvatarUrlWithCrop(_avatarUrl, combined);
       });
       _saveSelfSnapshotToInstantCache();
       widget.onUpdate?.call();
@@ -1022,6 +1036,7 @@ class ProfileScreenState extends State<ProfileScreen>
                 (_avatarUrl == null || _avatarUrl!.isEmpty)) {
               _avatarUrl = _avatarUrls.first;
             }
+            _avatarUrl = preferAvatarUrlWithCrop(_avatarUrl, combined);
           } else if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
             final combined = <String>[];
             for (final l in localHistory) {
@@ -1030,6 +1045,7 @@ class ProfileScreenState extends State<ProfileScreen>
             if (!combined.contains(_avatarUrl!)) combined.add(_avatarUrl!);
             _avatarUrls = combined;
             _avatarIds = [];
+            _avatarUrl = preferAvatarUrlWithCrop(_avatarUrl, combined);
           }
         });
         _saveSelfSnapshotToInstantCache();
@@ -5726,12 +5742,29 @@ class ProfileScreenState extends State<ProfileScreen>
         ? _usernameController.text
         : (_inviteLink.isNotEmpty ? _inviteLink : id);
 
+    String? qrAvatarUrl = (_avatarUrls.isNotEmpty &&
+            _currentAvatarIndex >= 0 &&
+            _currentAvatarIndex < _avatarUrls.length)
+        ? _avatarUrls[_currentAvatarIndex]
+        : (_avatarUrls.isNotEmpty ? _avatarUrls.first : _avatarUrl);
+    qrAvatarUrl = preferAvatarUrlWithCrop(
+      qrAvatarUrl,
+      <String?>[
+        ..._avatarUrls,
+        _avatarUrl,
+        if (_isSelf) _accountManager.currentAccount?.avatarUrl,
+        if (_isSelf) _accountManager.currentAccount?.localAvatarPath,
+        if (_isUser) _contactEntry?.customAvatarUrl,
+        if (_isUser) ContactsService.getCached(widget.userId)?.customAvatarUrl,
+      ],
+    );
+
     QrCodeDialog.show(
       context,
       userId: id,
       displayName: _getDisplayName(),
       username: uname,
-      avatarUrl: _avatarUrl,
+      avatarUrl: qrAvatarUrl,
       scanHintLabel: l10n.translate('profile_qr_scan_hint'),
     );
   }
