@@ -16,12 +16,17 @@ import 'package:iconoir_flutter/regular/nav_arrow_right.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/app_lock_service.dart';
+import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../utils/swipe_back_route.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../auth/login_screen.dart';
 import 'blocked_users_screen.dart';
 import 'change_email_screen.dart';
 import 'devices_screen.dart';
@@ -466,13 +471,44 @@ class _SecurityScreenState extends State<SecurityScreen> {
                     onTap: () => _showAccountTTLPicker(context, provider),
                   ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     child: Text(
                       l10n.translate('security_account_ttl_desc'),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Trash(
+                        width: 22,
+                        height: 22,
+                        color: Colors.red,
+                      ),
+                    ),
+                    title: Text(
+                      l10n.translate('security_delete_account_title'),
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: Text(l10n.translate('security_delete_account_subtitle')),
+                    trailing: NavArrowRight(
+                      width: 18,
+                      height: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onTap: () => _showDeleteAccountDialog(context, provider),
                   ),
                 ],
               ),
@@ -1039,5 +1075,227 @@ class _SecurityScreenState extends State<SecurityScreen> {
         }).toList(),
       ),
     );
+  }
+
+  String _mapDeleteAccountError(AppLocalizations l10n, Map<String, dynamic> res) {
+    final err = res['error']?.toString() ?? '';
+    switch (err) {
+      case 'email_not_configured':
+        return l10n.translate('email_error_not_configured');
+      case 'invalid_password':
+        return l10n.translate('email_error_invalid_password');
+      case '2fa_required':
+      case 'invalid_2fa_password':
+        return l10n.translate('email_error_invalid_2fa');
+      case 'cooldown':
+      case 'rate_limited':
+        final wait = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
+        return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$wait');
+      case 'invalid_code':
+      case 'code_expired':
+        return l10n.translate('email_error_invalid_code');
+      case 'too_many_attempts':
+        return l10n.translate('email_error_too_many_attempts');
+      default:
+        final msg = res['message']?.toString() ?? '';
+        return msg.isNotEmpty ? msg : l10n.translate('common_error');
+    }
+  }
+
+  Future<void> _showDeleteAccountDialog(
+    BuildContext context,
+    PrivacySettingsProvider provider,
+  ) async {
+    final l10n = context.l10n;
+    HapticFeedback.lightImpact();
+
+    final codeCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    final twoFactorCtrl = TextEditingController();
+
+    bool requested = false;
+    bool hasEmail = true;
+    bool requires2FA = provider.twoFactor.enabled;
+    String maskedEmail = '';
+    String? errorText;
+    bool loading = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(l10n.translate('security_delete_account_sheet_title')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  l10n.translate('security_delete_account_warning'),
+                  style: Theme.of(ctx).textTheme.bodyMedium,
+                ),
+                if (requested) ...[
+                  const SizedBox(height: 16),
+                  if (hasEmail) ...[
+                    Text(
+                      l10n
+                          .translate('security_delete_account_code_sent')
+                          .replaceAll('{email}', maskedEmail),
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(ctx).colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: codeCtrl,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      decoration: InputDecoration(
+                        labelText: l10n.translate('security_delete_account_code_label'),
+                        counterText: '',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ] else ...[
+                    TextField(
+                      controller: passwordCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: l10n.translate('security_delete_account_password_label'),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                  if (requires2FA) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: twoFactorCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: l10n.translate('security_delete_account_2fa_label'),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ],
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: loading ? null : () => Navigator.pop(ctx),
+              child: Text(l10n.translate('common_cancel')),
+            ),
+            if (!requested)
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: loading
+                    ? null
+                    : () async {
+                        setDialogState(() {
+                          loading = true;
+                          errorText = null;
+                        });
+                        final res = await provider.sendDeleteAccountCode(
+                          locale: l10n.locale.languageCode,
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          setDialogState(() {
+                            loading = false;
+                            requested = true;
+                            hasEmail = res['has_email'] == true;
+                            maskedEmail = res['masked_email']?.toString() ?? '';
+                            if (res['requires_2fa'] == true) {
+                              requires2FA = true;
+                            }
+                          });
+                        } else {
+                          setDialogState(() {
+                            loading = false;
+                            errorText = _mapDeleteAccountError(l10n, res);
+                          });
+                        }
+                      },
+                child: Text(l10n.translate('security_delete_account_send_code')),
+              )
+            else
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: loading
+                    ? null
+                    : () async {
+                        final code = codeCtrl.text.trim();
+                        final pwd = passwordCtrl.text;
+                        if (hasEmail && code.length < 4) {
+                          setDialogState(() {
+                            errorText = l10n.translate('email_error_invalid_code');
+                          });
+                          return;
+                        }
+                        if (!hasEmail && pwd.isEmpty) {
+                          setDialogState(() {
+                            errorText = l10n.translate('email_error_invalid_password');
+                          });
+                          return;
+                        }
+                        setDialogState(() {
+                          loading = true;
+                          errorText = null;
+                        });
+                        final res = await provider.confirmDeleteAccount(
+                          code: hasEmail ? code : null,
+                          password: hasEmail ? null : pwd,
+                          twoFactorPassword: twoFactorCtrl.text,
+                          locale: l10n.locale.languageCode,
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          final toastMsg = l10n.translate('security_delete_account_scheduled_toast');
+                          Navigator.pop(ctx);
+                          TilingLayoutController.instance.closeAllChats();
+                          final nav = DeepLinkService().navigatorKey.currentState ??
+                              (context.mounted ? Navigator.of(context, rootNavigator: true) : null);
+                          nav?.pushAndRemoveUntil(
+                            SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+                            (route) => false,
+                          );
+                          await AuthService.logout();
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            final navCtx = DeepLinkService().navigatorKey.currentContext;
+                            if (navCtx != null && navCtx.mounted) {
+                              ScaffoldMessenger.maybeOf(navCtx)?.showSnackBar(
+                                SnackBar(content: Text(toastMsg)),
+                              );
+                            }
+                          });
+                        } else {
+                          setDialogState(() {
+                            loading = false;
+                            if (res['requires_2fa'] == true) {
+                              requires2FA = true;
+                            }
+                            errorText = _mapDeleteAccountError(l10n, res);
+                          });
+                        }
+                      },
+                child: Text(l10n.translate('security_delete_account_confirm_btn')),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    codeCtrl.dispose();
+    passwordCtrl.dispose();
+    twoFactorCtrl.dispose();
   }
 }

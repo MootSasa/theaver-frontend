@@ -294,6 +294,71 @@ class PrivacySettingsProvider extends ChangeNotifier {
     await Future.wait([loadPrivacySettings(), load2FA(), loadAppLock(), loadBlockedUsers(), loadAccountTTL()]);
   }
 
+  /// Запросить код подтверждения (или форму пароля при отсутствии email) для удаления аккаунта.
+  Future<Map<String, dynamic>> sendDeleteAccountCode({String locale = 'ru'}) async {
+    try {
+      final r = await _dio.post(
+        '${AppConfig.baseUrl}/api/security/account/delete/send-code',
+        data: {'locale': locale},
+        options: Options(headers: await _h()),
+      );
+      final data = r.data is Map ? Map<String, dynamic>.from(r.data as Map) : <String, dynamic>{};
+      return {'success': true, ...data};
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map) {
+        return {
+          'success': false,
+          'error': data['error']?.toString() ?? 'unknown',
+          'cooldown_seconds': data['retry_after'] ?? data['cooldown_seconds'],
+          'message': data['message']?.toString(),
+        };
+      }
+      return {'success': false, 'error': 'network_error'};
+    } catch (e) {
+      debugPrint('PrivacySettingsProvider: sendDeleteAccountCode: $e');
+      return {'success': false, 'error': 'unknown'};
+    }
+  }
+
+  /// Подтвердить постановку аккаунта в очередь на удаление (7 дней ожидания).
+  Future<Map<String, dynamic>> confirmDeleteAccount({
+    String? code,
+    String? password,
+    String? twoFactorPassword,
+    String locale = 'ru',
+  }) async {
+    try {
+      final r = await _dio.post(
+        '${AppConfig.baseUrl}/api/security/account/delete/confirm',
+        data: {
+          if (code != null && code.trim().isNotEmpty) 'code': code.trim(),
+          if (password != null && password.isNotEmpty) 'password': password,
+          if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+            'two_factor_password': twoFactorPassword,
+          'locale': locale,
+        },
+        options: Options(headers: await _h()),
+      );
+      final data = r.data is Map ? Map<String, dynamic>.from(r.data as Map) : <String, dynamic>{};
+      return {'success': true, ...data};
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      if (data is Map) {
+        return {
+          'success': false,
+          'error': data['error']?.toString() ?? 'unknown',
+          'requires_2fa': data['requires_2fa'] == true,
+          'message': data['message']?.toString(),
+        };
+      }
+      return {'success': false, 'error': 'network_error'};
+    } catch (e) {
+      debugPrint('PrivacySettingsProvider: confirmDeleteAccount: $e');
+      return {'success': false, 'error': 'unknown'};
+    }
+  }
+
   /// Сбросить кэш в памяти и перезагрузить данные при смене аккаунта
   Future<void> reloadForUser() async {
     _privacy = const PrivacySettings();

@@ -171,6 +171,16 @@ class SettingsSearchIndex {
         onSelect: (c) => _push(c, const BlockedUsersScreen()),
       ),
       SettingsSearchEntry(
+        id: 'delete_account',
+        titleKey: 'security_delete_account_title',
+        fallbackTitle: 'Удалить аккаунт',
+        sectionKey: 'settings_privacy',
+        fallbackSection: 'Приватность и безопасность',
+        keywords: const ['delete account', 'remove account', 'удалить аккаунт', 'удаление'],
+        icon: Icons.delete_outline,
+        onSelect: (c) => _push(c, const SecurityScreen()),
+      ),
+      SettingsSearchEntry(
         id: 'devices',
         titleKey: 'settings_devices',
         fallbackTitle: 'Устройства и QR-вход',
