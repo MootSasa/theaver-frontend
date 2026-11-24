@@ -24,6 +24,7 @@ import '../../models/chat_draft.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/auth_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/file_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -100,6 +101,8 @@ import '../../widgets/chat/dm_parity_sheets.dart';
 import '../../widgets/chat/location_picker_sheet.dart';
 import '../../widgets/chat/pinned_message_banner.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/suggested_photo_bubble_card.dart';
+import '../../widgets/message/telegram_service_message_widget.dart';
 import '../../widgets/chat/bot_welcome_card.dart';
 import '../../widgets/chat/bot_commands_popup.dart';
 import '../../widgets/chat/mention_and_bot_popup.dart';
@@ -496,16 +499,18 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         : (instant?.chatDetails?.chatType ??
             instant?.chat?.chatType ??
             'private');
-    _chatName = widget.otherUserName ??
-        instant?.chatDetails?.name ??
-        instant?.chat?.name ??
-        _chatName;
-    _chatAvatar = widget.otherUserAvatar ??
-        instant?.chatDetails?.avatarUrl ??
-        instant?.chat?.avatarUrl ??
-        _chatAvatar;
     _otherUserId =
         widget.otherUserId ?? instant?.chat?.otherUserId ?? _otherUserId;
+    _chatName = (instant?.chatDetails?.name.isNotEmpty == true)
+        ? instant!.chatDetails!.name
+        : (instant?.chat?.name.isNotEmpty == true
+            ? instant!.chat!.name
+            : (widget.otherUserName ?? _chatName));
+    _chatAvatar = instant?.chatDetails?.avatarUrl ??
+        instant?.chat?.avatarUrl ??
+        widget.otherUserAvatar ??
+        _chatAvatar;
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _otherUsername = instant?.username ?? instant?.chat?.username;
     _isMuted = NotificationSettingsProvider().isChatMuted(
           widget.chatId,
@@ -1043,6 +1048,66 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final uid = _otherUserId;
+    if (uid != null && uid.isNotEmpty) {
+      final contact = ContactsService.getCached(uid);
+      if (contact != null) {
+        final origName =
+            (contact.originalDisplayName?.trim().isNotEmpty ?? false)
+                ? contact.originalDisplayName!.trim()
+                : (contact.displayName.trim().isNotEmpty
+                    ? contact.displayName.trim()
+                    : null);
+        if (origName != null && origName.isNotEmpty) {
+          _chatName = origName;
+        }
+        if (!contact.hasCustomAvatar) {
+          final origAvatar =
+              (contact.originalAvatarUrl?.trim().isNotEmpty ?? false)
+                  ? contact.originalAvatarUrl!.trim()
+                  : (contact.avatarUrl.trim().isNotEmpty
+                      ? contact.avatarUrl.trim()
+                      : null);
+          if (origAvatar != null) {
+            _chatAvatar = origAvatar;
+          }
+        }
+      } else {
+        unawaited(() async {
+          try {
+            final dbChat = await AppDatabase().getChat(widget.chatId);
+            if (!mounted || dbChat == null) return;
+            setState(() {
+              if (dbChat.name.trim().isNotEmpty) {
+                _chatName = dbChat.name;
+              }
+              _chatAvatar = dbChat.avatarUrl;
+            });
+          } catch (_) {}
+        }());
+      }
+
+      for (int i = 0; i < _messages.length; i++) {
+        final m = _messages[i];
+        if (m.senderId == uid &&
+            (m.senderChatId == null || m.senderChatId!.isEmpty)) {
+          final nextName = ContactsService.resolveName(uid, m.senderName);
+          final nextAvatar =
+              ContactsService.resolveAvatarUrl(uid, m.senderAvatarUrl);
+          if (nextName != m.senderName || nextAvatar != m.senderAvatarUrl) {
+            _messages[i] = m.copyWith(
+              senderName: nextName,
+              senderAvatarUrl: nextAvatar,
+            );
+          }
+        }
+      }
+    }
+    setState(() {});
+  }
+
   void _initWebSocket() {
     _chatSubscription = ChatRealtimeManager().bindChat(
       chatId: widget.chatId,
@@ -1082,12 +1147,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         if (userId == widget.otherUserId || userId == _otherUserId) {
           PaintingBinding.instance.imageCache.clear();
           PaintingBinding.instance.imageCache.clearLiveImages();
+          final effectiveAvatar =
+              ContactsService.resolveAvatarUrl(userId, avatarUrl);
           setState(() {
-            _chatAvatar = avatarUrl;
+            _chatAvatar = effectiveAvatar;
             for (int i = 0; i < _messages.length; i++) {
               if (_messages[i].senderId == userId) {
                 _messages[i] =
-                    _messages[i].copyWith(senderAvatarUrl: avatarUrl);
+                    _messages[i].copyWith(senderAvatarUrl: effectiveAvatar);
               }
             }
           });
@@ -4867,12 +4934,28 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   @override
   Widget build(BuildContext context) {
     _updateInputHeight();
-    final rawDisplayName = widget.otherUserName ?? _chatName;
-    final displayName = (_chatType == 'saved' ||
-            rawDisplayName == 'chat_saved_messages' ||
-            rawDisplayName == 'chat_saved')
+    final isSavedChat = _chatType == 'saved' ||
+        widget.chatId.startsWith('saved_') ||
+        (_currentUserId != null &&
+            _otherUserId != null &&
+            _otherUserId!.isNotEmpty &&
+            _otherUserId == _currentUserId);
+    final rawFallbackName =
+        _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? '');
+    final resolvedPeerName = isSavedChat
+        ? rawFallbackName
+        : ContactsService.resolveName(_otherUserId, rawFallbackName);
+    final displayName = (isSavedChat ||
+            resolvedPeerName == 'chat_saved_messages' ||
+            resolvedPeerName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
-        : rawDisplayName;
+        : resolvedPeerName;
+    final resolvedPeerAvatar = isSavedChat
+        ? (_chatAvatar ?? widget.otherUserAvatar)
+        : ContactsService.resolveAvatarUrl(
+            _otherUserId,
+            _chatAvatar ?? widget.otherUserAvatar,
+          );
 
     return Consumer<LiquidGlassProvider>(
       builder: (context, glassProvider, _) {
@@ -4908,16 +4991,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           },
           appBar: Builder(
             builder: (context) {
-              final isSavedChat = _chatType == 'saved' ||
-                  widget.chatId.startsWith('saved_') ||
-                  (_currentUserId != null &&
-                      _otherUserId != null &&
-                      _otherUserId!.isNotEmpty &&
-                      _otherUserId == _currentUserId);
               final heroTag = _stableHeroTag;
               return FloatingGlassAppBar(
                 name: displayName,
-                avatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                avatarUrl: resolvedPeerAvatar,
                 isOnline: _isOtherUserOnline,
                 lastSeen: _otherUserLastSeen,
                 statusText: _watchingEmoji != null
@@ -4949,7 +5026,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 profileScreenBuilder: (routeContext) => UserProfileScreen(
                   userId: isSavedChat ? '' : (_otherUserId ?? ''),
                   initialName: isSavedChat ? null : displayName,
-                  initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+                  initialAvatarUrl: resolvedPeerAvatar,
                   isOnline: isSavedChat ? null : _isOtherUserOnline,
                   lastSeen: isSavedChat ? null : _otherUserLastSeen,
                   chatId: widget.chatId,
@@ -5654,8 +5731,82 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final GlobalKey key = _obtainPrimaryMessageKey(message);
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
     final bool isMe = message.senderId == _currentUserId;
+
+    if (message.messageType == 'system') {
+      final payload = message.mediaPayload;
+      final sysAction =
+          (payload?['system_action'] ?? payload?['action'] ?? '')
+              .toString()
+              .trim();
+      Widget systemWidget;
+      if (sysAction == 'suggest_profile_photo') {
+        systemWidget = SuggestedPhotoBubbleCard(
+          key: key,
+          message: message,
+          currentUserId: _currentUserId ?? '',
+        );
+      } else {
+        systemWidget = TelegramServiceMessageWidget(
+          key: key,
+          message: message,
+          isChannel: false,
+          onTapUser: (uid) => _openUserProfileById(uid),
+        );
+      }
+      if (!isMe && !message.isRead) {
+        systemWidget = VisibleMessageDetector(
+          messageId: message.id,
+          onMessageSeen: () => _onMessageVisible(message.id),
+          visibilityThreshold: 0.3,
+          visibleDuration: const Duration(milliseconds: 300),
+          child: systemWidget,
+        );
+      }
+
+      final prevItem =
+          index < _feedItems.length - 1 ? _feedItems[index + 1] : null;
+      final (currentDt, currentDate) = _resolveDates(message.createdAt);
+      final prevDate =
+          prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
+      final items = <Widget>[];
+      if (currentDate != prevDate) {
+        final sepKey = _dateSeparatorKeyFor(currentDate, message);
+        items.add(
+          RepaintBoundary(
+            child: InlineChatDateHeader(
+              key: sepKey,
+              day: currentDate,
+              scrollListenable: _scrollController,
+              stickySlotKey: _stickyDateSlotKey,
+              stickyStateListenable: _stickyDateStateNotifier,
+              onNeedsSync: _scheduleStickyDateUpdate,
+              child: DateSeparator(
+                key: ValueKey<DateTime>(currentDate),
+                dateLabel: _formatDateLabel(currentDt),
+                onTap: () => _openCalendarForDate(currentDt),
+              ),
+            ),
+          ),
+        );
+      }
+      if (_showUnreadDivider && index == _firstUnreadFeedIndex) {
+        items.add(UnreadSeparator(key: _unreadSeparatorKey));
+      }
+      items.add(systemWidget);
+      return RepaintBoundary(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: items,
+        ),
+      );
+    }
+
     final isHighlighted = _highlightMessageId == message.id;
     final bool isSelected = _selectedMessageIds.contains(message.id);
+    final String resolvedChatTitle = ContactsService.resolveName(
+      _otherUserId,
+      _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? ''),
+    );
 
     Widget messageWidget = MessageBubble(
       key: key,
@@ -5663,7 +5814,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       isMe: isMe,
       currentUserId: _currentUserId ?? '',
       chatType: _chatType,
-      chatTitle: widget.otherUserName,
+      chatTitle: resolvedChatTitle,
       isHighlighted: isHighlighted,
       isSelected: isSelected,
       isSelectionMode: _isSelectionMode,
@@ -7187,12 +7338,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _otherUserId == null ||
         _otherUserId!.isEmpty ||
         (_currentUserId != null && _otherUserId == _currentUserId);
-    final rawDisplayName = _chatName.isNotEmpty ? _chatName : widget.otherUserName;
+    final rawDisplayName =
+        _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? '');
+    final resolvedPeerName = isSavedChat
+        ? rawDisplayName
+        : ContactsService.resolveName(_otherUserId, rawDisplayName);
     final displayName = (isSavedChat ||
-            rawDisplayName == 'chat_saved_messages' ||
-            rawDisplayName == 'chat_saved')
+            resolvedPeerName == 'chat_saved_messages' ||
+            resolvedPeerName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
-        : rawDisplayName;
+        : resolvedPeerName;
+    final resolvedPeerAvatar = isSavedChat
+        ? (_chatAvatar ?? widget.otherUserAvatar)
+        : ContactsService.resolveAvatarUrl(
+            _otherUserId,
+            _chatAvatar ?? widget.otherUserAvatar,
+          );
     final heroTag = _stableHeroTag;
     Navigator.push(
       context,
@@ -7200,7 +7361,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         builder: (_) => UserProfileScreen(
           userId: isSavedChat ? '' : _otherUserId!,
           initialName: isSavedChat ? null : displayName,
-          initialAvatarUrl: _chatAvatar ?? widget.otherUserAvatar,
+          initialAvatarUrl: resolvedPeerAvatar,
           isOnline: isSavedChat ? null : _isOtherUserOnline,
           lastSeen: isSavedChat ? null : _otherUserLastSeen,
           chatId: widget.chatId,
@@ -7263,13 +7424,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       GlassToastService().show(context, 'Unable to start call in this chat');
       return;
     }
+    final peerId = _otherUserId ?? widget.otherUserId;
+    final resolvedName = ContactsService.resolveName(
+      peerId,
+      _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? ''),
+    );
+    final resolvedAvatar = ContactsService.resolveAvatarUrl(
+      peerId,
+      _chatAvatar ?? widget.otherUserAvatar,
+    );
     Navigator.of(context, rootNavigator: true).pushNamed(
       '/video-call',
       arguments: {
         'chatId': widget.chatId,
-        'userId': _otherUserId ?? widget.otherUserId,
-        'userName': _chatName,
-        'avatarUrl': _chatAvatar ?? widget.otherUserAvatar,
+        'userId': peerId,
+        'userName': resolvedName,
+        'avatarUrl': resolvedAvatar,
         'isVideo': true,
       },
     );
@@ -7281,13 +7451,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       GlassToastService().show(context, 'Unable to start call in this chat');
       return;
     }
+    final peerId = _otherUserId ?? widget.otherUserId;
+    final resolvedName = ContactsService.resolveName(
+      peerId,
+      _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? ''),
+    );
+    final resolvedAvatar = ContactsService.resolveAvatarUrl(
+      peerId,
+      _chatAvatar ?? widget.otherUserAvatar,
+    );
     Navigator.of(context, rootNavigator: true).pushNamed(
       '/voice-call',
       arguments: {
         'chatId': widget.chatId,
-        'userId': _otherUserId ?? widget.otherUserId,
-        'userName': _chatName,
-        'avatarUrl': _chatAvatar ?? widget.otherUserAvatar,
+        'userId': peerId,
+        'userName': resolvedName,
+        'avatarUrl': resolvedAvatar,
         'isVideo': false,
       },
     );
@@ -7975,6 +8154,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     WidgetsBinding.instance.removeObserver(this);
     DeepLinkService.pendingInlinePrefill.removeListener(
       _onPendingInlinePrefillChanged,

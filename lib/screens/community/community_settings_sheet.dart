@@ -4,9 +4,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../models/call_models.dart';
 import '../../models/community_models.dart';
 import '../../services/auth_service.dart';
@@ -14,6 +14,7 @@ import '../../services/community_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/community/community_channel_icon.dart';
 import '../../widgets/community/community_overwrites_sheet.dart';
@@ -275,36 +276,129 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
   // Overview & Invites actions
   // ---------------------------------------------------------------------------
 
-  Future<void> _pickAndUploadAvatar() async {
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 90,
+  Community _communityWithClearedAvatar(Community source) {
+    return Community(
+      id: source.id,
+      name: source.name,
+      description: source.description,
+      avatarUrl: null,
+      bannerUrl: source.bannerUrl,
+      ownerId: source.ownerId,
+      memberCount: source.memberCount,
+      onlineCount: source.onlineCount,
+      isMember: source.isMember,
+      isPublic: source.isPublic,
+      myPermissions: source.myPermissions,
+      categories: source.categories,
+      channels: source.channels,
+      roles: source.roles,
+      createdAt: source.createdAt,
     );
-    if (picked == null || !mounted) return;
+  }
+
+  Future<void> _deleteCommunityAvatar() async {
+    if (_uploadingAvatar) return;
     setState(() => _uploadingAvatar = true);
     try {
-      final res = await FileService().uploadFile(File(picked.path));
+      final ok = await CommunityService.deleteCommunityAvatar(_community.id);
       if (!mounted) return;
-      if (res.url.isNotEmpty) {
-        final updated = await CommunityService.updateCommunity(
-          _community.id,
-          avatarUrl: res.url,
+      if (!ok) {
+        GlassToastService().showError(
+          context,
+          _tr(context, 'common_error', 'Не удалось удалить фото'),
         );
-        if (!mounted) return;
-        setState(() {
-          _avatarUrlOverride = res.url;
-          if (updated != null) {
-            _community = updated;
-          } else {
-            _community = _community.copyWith(avatarUrl: res.url);
-          }
-        });
-        widget.onCommunityUpdated(_community);
-        GlassToastService().show(context, 'Аватар сообщества обновлён');
+        return;
       }
+      setState(() {
+        _avatarUrlOverride = null;
+        _community = _communityWithClearedAvatar(_community);
+      });
+      widget.onCommunityUpdated(_community);
+      GlassToastService().show(context, 'Фото сообщества удалено');
+    } catch (_) {
+      if (mounted) {
+        GlassToastService().showError(
+          context,
+          _tr(context, 'common_error', 'Не удалось удалить фото'),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
+  }
+
+  Future<void> _confirmAndDeleteCommunityAvatar() async {
+    if (_uploadingAvatar) return;
+    HapticUtils.heavy();
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: _tr(context, 'avatar_delete_photo', 'Удалить фото'),
+      message: _tr(
+        context,
+        'avatar_delete_confirm_community',
+        'Удалить текущее фото сообщества?',
+      ),
+      actions: [
+        TheavDialogAction<bool>(
+          label: _tr(context, 'profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _tr(context, 'avatar_delete_photo', 'Удалить фото'),
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed == true && mounted) {
+      await _deleteCommunityAvatar();
+    }
+  }
+
+  Future<void> _pickAndUploadAvatar() async {
+    if (_uploadingAvatar) return;
+    HapticUtils.tap();
+    final currentAvatar = _avatarUrlOverride ?? _community.avatarUrl;
+    final hasCurrentAvatar =
+        currentAvatar != null && currentAvatar.isNotEmpty;
+
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.squircle,
+      ctaMode: AvatarEditorCtaMode.setPhoto,
+      subjectName: _community.name,
+      canDeleteCurrent: hasCurrentAvatar,
+    );
+    if (picked == null || !mounted) return;
+
+    if (picked.deletedCurrent) {
+      await _deleteCommunityAvatar();
+      return;
+    }
+
+    if (!picked.hasMedia) return;
+
+    setState(() => _uploadingAvatar = true);
+    try {
+      final uploadFile = picked.file ??
+          File(picked.fileName.isNotEmpty ? picked.fileName : 'avatar.jpg');
+      final updated = await CommunityService.uploadCommunityAvatar(
+        _community.id,
+        uploadFile,
+        bytes: picked.bytes,
+        fileName: picked.fileName,
+      );
+      if (!mounted) return;
+      if (updated == null) {
+        GlassToastService().showError(context, 'Не удалось загрузить фото');
+        return;
+      }
+      setState(() {
+        _avatarUrlOverride = null;
+        _community = updated;
+      });
+      widget.onCommunityUpdated(_community);
+      GlassToastService().show(context, 'Аватар сообщества обновлён');
     } catch (_) {
       if (mounted) {
         GlassToastService().showError(context, 'Не удалось загрузить фото');
@@ -1466,51 +1560,85 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
   Widget _buildOverviewTab(BuildContext context, TheavPalette palette) {
     final bool isOwner =
         _currentUserId == null || _currentUserId == _community.ownerId;
+    final String? effectiveAvatar = _avatarUrlOverride ?? _community.avatarUrl;
+    final bool hasCurrentAvatar =
+        effectiveAvatar != null && effectiveAvatar.isNotEmpty;
 
     return ListView(
       padding: const EdgeInsets.only(top: 6, bottom: 24),
       children: [
         Center(
-          child: GestureDetector(
-            onTap: _uploadingAvatar ? null : _pickAndUploadAvatar,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                CommunityAvatar(
-                  avatarUrl: _avatarUrlOverride ?? _community.avatarUrl,
-                  name: _community.name,
-                  size: 76,
-                ),
-                Positioned(
-                  right: -4,
-                  bottom: -4,
-                  child: Container(
-                    width: 28,
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: palette.primary,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: palette.surface, width: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: _uploadingAvatar ? null : _pickAndUploadAvatar,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    CommunityAvatar(
+                      avatarUrl: effectiveAvatar,
+                      name: _community.name,
+                      size: 76,
                     ),
-                    alignment: Alignment.center,
-                    child: _uploadingAvatar
-                        ? const SizedBox(
-                            width: 13,
-                            height: 13,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const iconoir.Camera(
-                            width: 14,
-                            height: 14,
-                            color: Colors.white,
-                          ),
+                    Positioned(
+                      right: -4,
+                      bottom: -4,
+                      child: Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: palette.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: palette.surface, width: 2),
+                        ),
+                        alignment: Alignment.center,
+                        child: _uploadingAvatar
+                            ? const SizedBox(
+                                width: 13,
+                                height: 13,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const iconoir.Camera(
+                                width: 14,
+                                height: 14,
+                                color: Colors.white,
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (hasCurrentAvatar && !_uploadingAvatar) ...[
+                const SizedBox(height: 6),
+                TextButton.icon(
+                  onPressed: _confirmAndDeleteCommunityAvatar,
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                  ),
+                  icon: iconoir.Trash(
+                    width: 14,
+                    height: 14,
+                    color: palette.error,
+                  ),
+                  label: Text(
+                    _tr(context, 'avatar_delete_photo', 'Удалить фото'),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: palette.error,
+                    ),
                   ),
                 ),
               ],
-            ),
+            ],
           ),
         ),
         const SizedBox(height: 12),

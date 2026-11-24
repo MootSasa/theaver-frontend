@@ -7,11 +7,13 @@ import 'package:provider/provider.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../utils/date_time_utils.dart';
 import '../common/peer_badges_widget.dart';
 import '../user/avatar_with_status.dart';
 import '../user/emoji_status_badge.dart';
+import 'media_album_widget.dart' show MediaAlbumWidget;
 import 'message_bubble.dart';
 
 /// Whether two adjacent messages belong to the same continuous sender visual cluster
@@ -459,6 +461,9 @@ class SenderHeaderRow extends StatelessWidget {
   final String? role;
   final Color? rankColor;
   final VoidCallback? onTapSender;
+  final String? senderId;
+  final String? senderChatId;
+  final bool isFromAnonymousAdmin;
 
   const SenderHeaderRow({
     super.key,
@@ -471,6 +476,9 @@ class SenderHeaderRow extends StatelessWidget {
     this.role,
     this.rankColor,
     this.onTapSender,
+    this.senderId,
+    this.senderChatId,
+    this.isFromAnonymousAdmin = false,
   });
 
   String? get _resolvedRankLabel {
@@ -492,13 +500,23 @@ class SenderHeaderRow extends StatelessWidget {
         (themeExt?.palette.chatBubbleIncomingText ?? theme.colorScheme.onSurface)
             .withValues(alpha: 0.65);
     final bool hasAnyBadge = isBot || isVerified || badge != null;
+    final sid = senderId?.trim() ?? '';
+    final scid = senderChatId?.trim() ?? '';
+    final bool isHumanSender = !isFromAnonymousAdmin &&
+        !isBot &&
+        !(ContactsService.getCached(sid)?.isBot ?? false) &&
+        sid.isNotEmpty &&
+        sid != '0' &&
+        (scid.isEmpty || scid == '0');
+    final String effectiveName =
+        isHumanSender ? ContactsService.resolveName(sid, senderName) : senderName;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTapSender,
       child: _SenderHeaderLayout(
         nameWidget: Text(
-          senderName,
+          effectiveName,
           maxLines: 1,
           softWrap: false,
           overflow: TextOverflow.ellipsis,
@@ -567,6 +585,8 @@ class GroupMessageAvatarRow extends StatelessWidget {
   final String? groupAvatarUrl;
   final String? groupName;
   final VoidCallback? onTapGroupAvatar;
+  final String? senderChatId;
+  final bool isBot;
 
   const GroupMessageAvatarRow({
     super.key,
@@ -585,14 +605,37 @@ class GroupMessageAvatarRow extends StatelessWidget {
     this.groupAvatarUrl,
     this.groupName,
     this.onTapGroupAvatar,
+    this.senderChatId,
+    this.isBot = false,
   });
 
   static const double gutterWidth = 40.0;
 
   @override
   Widget build(BuildContext context) {
+    final Message? wrappedMessage = child is MessageBubble
+        ? (child as MessageBubble).message
+        : (child is MediaAlbumWidget
+            ? (child as MediaAlbumWidget).album.primaryMessage
+            : null);
+    final String effectiveSenderId = wrappedMessage != null
+        ? wrappedMessage.senderId.trim()
+        : senderId.trim();
+    final String? effectiveSenderChatId =
+        senderChatId ?? wrappedMessage?.senderChatId;
+    final bool effectiveAnon =
+        isFromAnonymousAdmin || (wrappedMessage?.isFromAnonymousAdmin ?? false);
+    final bool isHumanSender = !effectiveAnon &&
+        !isBot &&
+        !(ContactsService.getCached(effectiveSenderId)?.isBot ?? false) &&
+        effectiveSenderId.isNotEmpty &&
+        effectiveSenderId != '0' &&
+        (effectiveSenderChatId == null ||
+            effectiveSenderChatId.trim().isEmpty ||
+            effectiveSenderChatId.trim() == '0');
+
     PeerCustomization? cached;
-    if (!isFromAnonymousAdmin) {
+    if (!effectiveAnon) {
       try {
         cached = context.select<PeerCustomizationCache?, PeerCustomization?>(
           (cache) => senderId.isNotEmpty ? cache?.getSync(senderId) : null,
@@ -605,24 +648,48 @@ class GroupMessageAvatarRow extends StatelessWidget {
     }
 
     final effectiveCustomization =
-        isFromAnonymousAdmin ? null : (cached ?? customizationOverride);
-    final effectiveAvatarUrl = isFromAnonymousAdmin
-        ? ((groupAvatarUrl != null && groupAvatarUrl!.isNotEmpty)
-            ? groupAvatarUrl
-            : senderAvatarUrl)
-        : senderAvatarUrl;
-    final effectiveName = isFromAnonymousAdmin
-        ? ((groupName != null && groupName!.isNotEmpty)
-            ? groupName!
-            : senderName)
-        : senderName;
+        effectiveAnon ? null : (cached ?? customizationOverride);
     final effectiveTap =
-        isFromAnonymousAdmin ? (onTapGroupAvatar ?? onAvatarTap) : onAvatarTap;
+        effectiveAnon ? (onTapGroupAvatar ?? onAvatarTap) : onAvatarTap;
 
     final diameter = avatarRadius * 2;
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final Color rowHighlightColor = themeExt?.palette.messageSelectionOverlay ??
         Theme.of(context).colorScheme.primary.withValues(alpha: 0.18);
+
+    Widget buildAvatar() {
+      final effectiveAvatarUrl = effectiveAnon
+          ? ((groupAvatarUrl != null && groupAvatarUrl!.isNotEmpty)
+              ? groupAvatarUrl
+              : senderAvatarUrl)
+          : (isHumanSender
+              ? ContactsService.resolveAvatarUrl(
+                  effectiveSenderId,
+                  senderAvatarUrl,
+                )
+              : senderAvatarUrl);
+      final effectiveName = effectiveAnon
+          ? ((groupName != null && groupName!.isNotEmpty)
+              ? groupName!
+              : senderName)
+          : (isHumanSender
+              ? ContactsService.resolveName(effectiveSenderId, senderName)
+              : senderName);
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: effectiveTap,
+        child: AvatarWithStatus(
+          userId: effectiveAnon ? null : senderId,
+          avatarUrl: effectiveAvatarUrl,
+          name: effectiveName,
+          radius: avatarRadius,
+          isOnline: false,
+          decorationOverride: effectiveCustomization?.avatarDecoration,
+          showDecoration: !effectiveAnon,
+          animateDecoration: false,
+        ),
+      );
+    }
 
     final Widget avatarAndBubble = Padding(
       padding: const EdgeInsets.only(left: 8.0),
@@ -634,21 +701,12 @@ class GroupMessageAvatarRow extends StatelessWidget {
             child: SizedBox(
               width: diameter,
               child: showAvatar
-                  ? GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: effectiveTap,
-                      child: AvatarWithStatus(
-                        userId: isFromAnonymousAdmin ? null : senderId,
-                        avatarUrl: effectiveAvatarUrl,
-                        name: effectiveName,
-                        radius: avatarRadius,
-                        isOnline: false,
-                        decorationOverride:
-                            effectiveCustomization?.avatarDecoration,
-                        showDecoration: !isFromAnonymousAdmin,
-                        animateDecoration: false,
-                      ),
-                    )
+                  ? (isHumanSender
+                      ? ValueListenableBuilder<int>(
+                          valueListenable: ContactsService.revisionNotifier,
+                          builder: (_, __, ___) => buildAvatar(),
+                        )
+                      : buildAvatar())
                   : const SizedBox.shrink(),
             ),
           ),

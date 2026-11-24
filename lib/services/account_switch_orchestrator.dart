@@ -10,6 +10,7 @@ import 'browser_data_service.dart';
 import 'browser_site_settings_service.dart';
 import 'browser_vault_auth_gate.dart';
 import 'browser_vault_service.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
 import 'draft_service.dart';
@@ -126,6 +127,10 @@ class AccountSwitchOrchestrator {
       await _accountManager.setCurrentAccount(account.userId);
       AppDatabase.setActiveUser(account.userId);
       await DraftService().switchAccount(account.userId);
+      await ContactsService.switchAccount(account.userId);
+      unawaited(
+        ContactsService.getContacts(forceRefresh: true, includeOverrides: true),
+      );
       await SettingsService().reloadForUser(account.userId);
       await PowerSavingProvider.instance.reloadForUser();
       await _accountManager.registerDeviceSession(account.userId);
@@ -180,6 +185,9 @@ class AccountSwitchOrchestrator {
         account.userId,
         isCurrentAccount: false,
       );
+      try {
+        await ContactsService.clearCache(clearDisk: true, userId: account.userId);
+      } catch (_) {}
       try {
         await AppDatabase.removeUserDatabase(account.userId);
       } catch (_) {}

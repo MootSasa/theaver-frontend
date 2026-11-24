@@ -10,6 +10,7 @@ import '../widgets/profile/profile_content_tabs.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
 import 'avatar_sync_service.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import 'profile_theme_provider.dart';
 
@@ -66,6 +67,7 @@ class CachedUserProfileSnapshot {
     String? bio,
     DateTime? birthday,
     String? avatarUrl,
+    bool clearAvatarUrl = false,
     List<String>? avatarUrls,
     List<int>? avatarIds,
     bool? isOnline,
@@ -86,7 +88,7 @@ class CachedUserProfileSnapshot {
       phone: phone ?? this.phone,
       bio: bio ?? this.bio,
       birthday: birthday ?? this.birthday,
-      avatarUrl: avatarUrl ?? this.avatarUrl,
+      avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
       avatarUrls: avatarUrls ?? this.avatarUrls,
       avatarIds: avatarIds ?? this.avatarIds,
       isOnline: isOnline ?? this.isOnline,
@@ -478,22 +480,136 @@ class ProfileInstantCache {
     _persistGroupSnapshot(snapshot);
   }
 
+  /// Applies or clears a local contact name/avatar override in RAM and `SharedPreferences`.
+  void applyUserContactOverride(
+    String userId, {
+    String? customName,
+    String? customAvatarUrl,
+    String? originalDisplayName,
+    String? originalAvatarUrl,
+  }) {
+    final uid = userId.trim();
+    if (uid.isEmpty) return;
+
+    final existing = _userSnapshots[uid];
+    final cleanCustomName = customName?.trim() ?? '';
+    final cleanOrigName = originalDisplayName?.trim() ?? '';
+    final effectiveDisplayName =
+        cleanCustomName.isNotEmpty ? cleanCustomName : cleanOrigName;
+
+    String name = existing?.name ?? '';
+    String surname = existing?.surname ?? '';
+    if (effectiveDisplayName.isNotEmpty) {
+      final parts = effectiveDisplayName.split(RegExp(r'\s+'));
+      name = parts.first;
+      surname = parts.length > 1 ? parts.sublist(1).join(' ') : '';
+    }
+
+    final cleanCustomAvatar = customAvatarUrl?.trim() ?? '';
+    final cleanOrigAvatar = originalAvatarUrl?.trim() ?? '';
+    final normalizedCustom = cleanCustomAvatar.isNotEmpty
+        ? (getValidAvatarUrl(cleanCustomAvatar) ?? cleanCustomAvatar)
+        : '';
+    final normalizedOrig = cleanOrigAvatar.isNotEmpty
+        ? (getValidAvatarUrl(cleanOrigAvatar) ?? cleanOrigAvatar)
+        : '';
+
+    final existingList = (existing?.avatarUrls ?? const <String>[])
+        .where((u) => u.isNotEmpty)
+        .toList();
+
+    String? nextPrimaryAvatar;
+    List<String> nextAvatarUrls;
+    if (normalizedCustom.isNotEmpty) {
+      nextPrimaryAvatar = normalizedCustom;
+      nextAvatarUrls = <String>[
+        normalizedCustom,
+        if (normalizedOrig.isNotEmpty && normalizedOrig != normalizedCustom)
+          normalizedOrig,
+        ...existingList.where(
+          (u) => u != normalizedCustom && u != normalizedOrig,
+        ),
+      ];
+    } else {
+      final filteredExisting = (customAvatarUrl != null &&
+              existing?.avatarUrl != null &&
+              existing!.avatarUrl!.isNotEmpty &&
+              existing.avatarUrl != normalizedOrig)
+          ? existingList.where((u) => u != existing.avatarUrl).toList()
+          : existingList;
+      if (normalizedOrig.isNotEmpty) {
+        nextPrimaryAvatar = normalizedOrig;
+        nextAvatarUrls = <String>[
+          normalizedOrig,
+          ...filteredExisting.where((u) => u != normalizedOrig),
+        ];
+      } else if (customAvatarUrl != null) {
+        nextPrimaryAvatar =
+            filteredExisting.isNotEmpty ? filteredExisting.first : null;
+        nextAvatarUrls = filteredExisting;
+      } else {
+        nextPrimaryAvatar = existing?.avatarUrl;
+        nextAvatarUrls = filteredExisting;
+      }
+    }
+
+    final updated = existing != null
+        ? existing.copyWith(
+            name: name,
+            surname: surname,
+            avatarUrl: nextPrimaryAvatar,
+            clearAvatarUrl: nextPrimaryAvatar == null,
+            avatarUrls: nextAvatarUrls,
+          )
+        : CachedUserProfileSnapshot(
+            userId: uid,
+            name: name,
+            surname: surname,
+            avatarUrl: nextPrimaryAvatar,
+            avatarUrls: nextAvatarUrls,
+          );
+
+    _userSnapshots[uid] = updated;
+    _persistUserSnapshot(updated);
+  }
+
   /// Мгновенно обновляет аватар пользователя в in-memory и persistent кэше профилей и групп.
   void updateUserAvatar(String userId, String? avatarUrl) {
     if (userId.isEmpty) return;
     final normalized = (avatarUrl != null && avatarUrl.isNotEmpty)
         ? (getValidAvatarUrl(avatarUrl) ?? avatarUrl)
         : '';
+    final contactOverride = ContactsService.getCached(userId);
+    final rawCustom = contactOverride?.customAvatarUrl?.trim() ?? '';
+    final customAvatar = rawCustom.isNotEmpty
+        ? (getValidAvatarUrl(rawCustom) ?? rawCustom)
+        : '';
+    final hasCustomAvatar = customAvatar.isNotEmpty;
+    final effectiveAvatar = hasCustomAvatar ? customAvatar : normalized;
 
     final existing = _userSnapshots[userId];
     if (existing != null) {
-      final updatedUrls = <String>[
-        if (normalized.isNotEmpty) normalized,
-        ...existing.avatarUrls.where((u) => u.isNotEmpty && u != normalized),
-      ];
+      final List<String> updatedUrls;
+      if (hasCustomAvatar) {
+        updatedUrls = <String>[
+          customAvatar,
+          if (normalized.isNotEmpty && normalized != customAvatar) normalized,
+          ...existing.avatarUrls.where(
+            (u) => u.isNotEmpty && u != customAvatar && u != normalized,
+          ),
+        ];
+      } else {
+        updatedUrls = normalized.isEmpty
+            ? const []
+            : <String>[
+                normalized,
+                ...existing.avatarUrls
+                    .where((u) => u.isNotEmpty && u != normalized),
+              ];
+      }
       final updated = existing.copyWith(
-        avatarUrl: normalized,
-        avatarUrls: normalized.isEmpty ? const [] : updatedUrls,
+        avatarUrl: effectiveAvatar,
+        avatarUrls: updatedUrls,
       );
       _userSnapshots[userId] = updated;
       _persistUserSnapshot(updated);
@@ -503,14 +619,14 @@ class ProfileInstantCache {
       final snap = entry.value;
       bool changed = false;
       final updatedMembers = snap.members.map((m) {
-        if (m.userId == userId && m.avatarUrl != normalized) {
+        if (m.userId == userId && m.avatarUrl != effectiveAvatar) {
           changed = true;
           return ProfileMemberItem(
             userId: m.userId,
             name: m.name,
             surname: m.surname,
             username: m.username,
-            avatarUrl: normalized.isEmpty ? null : normalized,
+            avatarUrl: effectiveAvatar.isEmpty ? null : effectiveAvatar,
             role: m.role,
             isOnline: m.isOnline,
             lastSeen: m.lastSeen,
@@ -745,6 +861,30 @@ class ProfileInstantCache {
             ? (_prefs?.getBool('muted_chat_$resolvedCid') ?? false)
             : (existing?.isMuted ?? false);
 
+        final contactOverride = ContactsService.getCached(userId);
+        if (contactOverride != null && contactOverride.hasCustomName) {
+          final customParts =
+              contactOverride.customName.trim().split(RegExp(r'\s+'));
+          name = customParts.first;
+          surname = customParts.length > 1
+              ? customParts.sublist(1).join(' ')
+              : '';
+        }
+
+        String? effectiveAvatar =
+            srvAvatar ?? (urls.isNotEmpty ? urls.first : existing?.avatarUrl);
+        List<String> effectiveUrls =
+            urls.isNotEmpty ? urls : (existing?.avatarUrls ?? const []);
+        if (contactOverride != null && contactOverride.hasCustomAvatar) {
+          final customUrl = getValidAvatarUrl(contactOverride.customAvatarUrl) ??
+              contactOverride.customAvatarUrl!;
+          effectiveAvatar = customUrl;
+          effectiveUrls = <String>[
+            customUrl,
+            ...effectiveUrls.where((u) => u.isNotEmpty && u != customUrl),
+          ];
+        }
+
         final snap = CachedUserProfileSnapshot(
           userId: userId,
           name: name,
@@ -755,9 +895,8 @@ class ProfileInstantCache {
           birthday: u['birthday'] != null
               ? DateTime.tryParse(u['birthday'].toString())
               : existing?.birthday,
-          avatarUrl: srvAvatar ??
-              (urls.isNotEmpty ? urls.first : existing?.avatarUrl),
-          avatarUrls: urls.isNotEmpty ? urls : (existing?.avatarUrls ?? []),
+          avatarUrl: effectiveAvatar,
+          avatarUrls: effectiveUrls,
           isOnline: u['is_online'] is bool
               ? (u['is_online'] as bool)
               : (existing?.isOnline ?? false),

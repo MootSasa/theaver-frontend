@@ -1,13 +1,15 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -30,6 +32,8 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
   final TextEditingController _usernameController = TextEditingController();
 
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  String? _pickedAvatarFileName;
   bool _isPublic = true;
   bool _enableSignatures = false;
   bool _enableComments = true;
@@ -89,18 +93,44 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
     return fallback;
   }
 
+  bool get _hasPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    return null;
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 90,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.done,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : null,
+      canDeleteCurrent: _pickedAvatarFile != null || _pickedAvatarBytes != null,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarFileName = null;
+      });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarFileName = picked.fileName;
       });
     }
   }
@@ -130,12 +160,20 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
 
     try {
       String? uploadedAvatarUrl;
-      if (_pickedAvatarFile != null) {
+      if (_hasPickedAvatar) {
         try {
-          final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-          if (uploadRes.url.isNotEmpty) {
-            uploadedAvatarUrl = uploadRes.url;
-          }
+          final uploadFile = _pickedAvatarFile ??
+              File(
+                (_pickedAvatarFileName != null &&
+                        _pickedAvatarFileName!.trim().isNotEmpty)
+                    ? _pickedAvatarFileName!.trim()
+                    : 'avatar.jpg',
+              );
+          uploadedAvatarUrl = await FileService().uploadPublicAvatar(
+            uploadFile,
+            bytes: _pickedAvatarBytes,
+            fileName: _pickedAvatarFileName,
+          );
         } catch (e) {
           debugPrint('[CreateChannelScreen] Avatar upload error: $e');
         }
@@ -147,6 +185,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
         chatType: 'channel',
         name: name,
         description: desc,
+        avatarUrl: uploadedAvatarUrl,
         isPublic: _isPublic,
         username: _isPublic && rawUsername.isNotEmpty ? rawUsername : null,
         signMessages: _enableSignatures,
@@ -159,26 +198,34 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       if (result['success'] == true) {
         Chat chat = result['chat'] as Chat;
 
-        // Если выбран аватар — сохраняем в настройки канала и локальную БД через ChatService
+        // Если выбран аватар — обновляем локальную БД и при необходимости делаем fallback через ChatService
         if (uploadedAvatarUrl != null && uploadedAvatarUrl.isNotEmpty) {
-          final settingsRes = await ChatService.updateGroupSettings(chat.id, {
-            'name': name,
-            'description': desc,
-            'avatar_url': uploadedAvatarUrl,
-            'is_public': _isPublic,
-            'username': _isPublic ? rawUsername : '',
-            'history_for_new': _enableHistory,
-            'sign_messages': _enableSignatures,
-          });
-          if (settingsRes['success'] == true) {
-            await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
-            chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
-          } else if (mounted) {
-            GlassToastService().showError(
-              context,
-              settingsRes['message']?.toString() ??
-                  'Не удалось сохранить аватар канала',
-            );
+          final needsAvatarFallback =
+              chat.avatarUrl == null || chat.avatarUrl!.isEmpty;
+          if (needsAvatarFallback) {
+            final settingsRes = await ChatService.updateGroupSettings(chat.id, {
+              'name': name,
+              'description': desc,
+              'avatar_url': uploadedAvatarUrl,
+              'is_public': _isPublic,
+              'username': _isPublic ? rawUsername : '',
+              'history_for_new': _enableHistory,
+              'sign_messages': _enableSignatures,
+            });
+            if (settingsRes['success'] == true) {
+              await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+              chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
+            } else if (mounted) {
+              GlassToastService().showError(
+                context,
+                settingsRes['message']?.toString() ??
+                    'Не удалось сохранить аватар канала',
+              );
+            }
+          } else {
+            try {
+              await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+            } catch (_) {}
           }
         }
 
@@ -231,6 +278,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
     final palette = context.theav;
     final primaryColor = palette.primary;
     final trimmedName = _nameController.text.trim();
+    final avatarProvider = _pickedAvatarProvider;
 
     return SettingsFloatingScaffold(
       title: _tr('chat_new_channel', 'Новый канал'),
@@ -277,7 +325,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                               height: 96,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: _pickedAvatarFile == null
+                                gradient: avatarProvider == null
                                     ? LinearGradient(
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
@@ -294,15 +342,15 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                                     offset: const Offset(0, 6),
                                   ),
                                 ],
-                                image: _pickedAvatarFile != null
+                                image: avatarProvider != null
                                     ? DecorationImage(
-                                        image: FileImage(_pickedAvatarFile!),
+                                        image: avatarProvider,
                                         fit: BoxFit.cover,
                                       )
                                     : null,
                               ),
                               alignment: Alignment.center,
-                              child: _pickedAvatarFile == null
+                              child: avatarProvider == null
                                   ? (trimmedName.isNotEmpty
                                       ? Text(
                                           trimmedName[0].toUpperCase(),
@@ -346,7 +394,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        _pickedAvatarFile != null
+                        _hasPickedAvatar
                             ? 'Нажмите, чтобы изменить фотографию'
                             : _tr('channel_add_photo', 'Выбрать фото канала'),
                         style: TextStyle(

@@ -456,6 +456,225 @@ class ChatInstantCache {
         .catchError((_) => false);
   }
 
+  /// Propagates a contact name/avatar override for [userId] into cached [Chat]
+  /// summaries, [ChatDetails.participants], and cached [Message] entries
+  /// (`senderId == userId && senderChatId == null`).
+  void applyUserContactOverride(
+    String userId, {
+    String? effectiveName,
+    String? effectiveAvatarUrl,
+    bool updateAvatar = true,
+  }) {
+    final uid = userId.trim();
+    if (uid.isEmpty || uid == '0') return;
+
+    final trimmedName = effectiveName?.trim() ?? '';
+    final hasName = trimmedName.isNotEmpty;
+    final trimmedAvatar = effectiveAvatarUrl?.trim() ?? '';
+    if (!hasName && !updateAvatar) return;
+
+    Message? updateMessage(Message m) {
+      bool changed = false;
+      final bool isHumanSender = m.senderId == uid &&
+          (m.senderChatId == null || m.senderChatId!.trim().isEmpty) &&
+          !m.isFromAnonymousAdmin;
+
+      String nextSenderName = m.senderName;
+      String? nextSenderAvatar = m.senderAvatarUrl;
+      if (isHumanSender) {
+        if (hasName && m.senderName != trimmedName) {
+          nextSenderName = trimmedName;
+          changed = true;
+        }
+        if (updateAvatar && (m.senderAvatarUrl ?? '') != trimmedAvatar) {
+          nextSenderAvatar = trimmedAvatar;
+          changed = true;
+        }
+      }
+
+      ReplyInfo? nextReply = m.replyInfo;
+      if (hasName &&
+          nextReply != null &&
+          nextReply.senderId == uid &&
+          nextReply.senderName != trimmedName) {
+        nextReply = nextReply.copyWith(senderName: trimmedName);
+        changed = true;
+      }
+
+      String? nextFwdName = m.forwardFromName;
+      String? nextFwdAvatar = m.forwardFromAvatarUrl;
+      if (m.isForward && m.forwardFromId == uid) {
+        if (hasName && m.forwardFromName != trimmedName) {
+          nextFwdName = trimmedName;
+          changed = true;
+        }
+        if (updateAvatar && (m.forwardFromAvatarUrl ?? '') != trimmedAvatar) {
+          nextFwdAvatar = trimmedAvatar;
+          changed = true;
+        }
+      }
+
+      if (!changed) return null;
+      return m.copyWith(
+        senderName: nextSenderName,
+        senderAvatarUrl: nextSenderAvatar,
+        replyInfo: nextReply,
+        forwardFromName: nextFwdName,
+        forwardFromAvatarUrl: nextFwdAvatar,
+      );
+    }
+
+    for (final entry in _snapshots.entries.toList()) {
+      final snap = entry.value;
+      bool snapChanged = false;
+      bool metaChanged = false;
+
+      Chat? nextChat = snap.chat;
+      if (nextChat != null) {
+        bool chatChanged = false;
+        String cName = nextChat.name;
+        String? cAvatar = nextChat.avatarUrl;
+        String? cLastSenderName = nextChat.lastMessageSenderName;
+        Message? cPinned = nextChat.pinnedMessage;
+
+        if (nextChat.chatType == 'private' && nextChat.otherUserId == uid) {
+          if (hasName && nextChat.name != trimmedName) {
+            cName = trimmedName;
+            chatChanged = true;
+          }
+          if (updateAvatar && (nextChat.avatarUrl ?? '') != trimmedAvatar) {
+            cAvatar = trimmedAvatar;
+            chatChanged = true;
+          }
+        }
+        if (hasName &&
+            nextChat.lastMessageSenderId == uid &&
+            nextChat.lastMessageSenderName != trimmedName) {
+          cLastSenderName = trimmedName;
+          chatChanged = true;
+        }
+        if (cPinned != null) {
+          final updatedPinned = updateMessage(cPinned);
+          if (updatedPinned != null) {
+            cPinned = updatedPinned;
+            chatChanged = true;
+          }
+        }
+        if (chatChanged) {
+          nextChat = nextChat.copyWith(
+            name: cName,
+            avatarUrl: cAvatar,
+            lastMessageSenderName: cLastSenderName,
+            pinnedMessage: cPinned,
+          );
+          snapChanged = true;
+        }
+      }
+
+      ChatDetails? nextDetails = snap.chatDetails;
+      if (nextDetails != null) {
+        bool detailsChanged = false;
+        String dName = nextDetails.name;
+        String? dAvatar = nextDetails.avatarUrl;
+        Message? dPinned = nextDetails.pinnedMessage;
+
+        bool hasParticipantMatch = false;
+        final nextParticipants = nextDetails.participants.map((p) {
+          if (p.id != uid) return p;
+          hasParticipantMatch = true;
+          final pName = hasName ? trimmedName : p.displayName;
+          final pAvatar = updateAvatar ? trimmedAvatar : p.avatarUrl;
+          if (pName != p.displayName || (p.avatarUrl ?? '') != pAvatar) {
+            detailsChanged = true;
+            return p.copyWith(displayName: pName, avatarUrl: pAvatar);
+          }
+          return p;
+        }).toList();
+
+        if (nextDetails.chatType == 'private' &&
+            (hasParticipantMatch || nextChat?.otherUserId == uid)) {
+          if (hasName && nextDetails.name != trimmedName) {
+            dName = trimmedName;
+            detailsChanged = true;
+          }
+          if (updateAvatar && (nextDetails.avatarUrl ?? '') != trimmedAvatar) {
+            dAvatar = trimmedAvatar;
+            detailsChanged = true;
+          }
+        }
+        if (dPinned != null) {
+          final updatedPinned = updateMessage(dPinned);
+          if (updatedPinned != null) {
+            dPinned = updatedPinned;
+            detailsChanged = true;
+          }
+        }
+        if (detailsChanged) {
+          nextDetails = nextDetails.copyWith(
+            name: dName,
+            avatarUrl: dAvatar,
+            participants: nextParticipants,
+            pinnedMessage: dPinned,
+          );
+          snapChanged = true;
+          metaChanged = true;
+        }
+      }
+
+      List<Message>? nextMessages = snap.messages;
+      if (nextMessages != null && nextMessages.isNotEmpty) {
+        bool msgsChanged = false;
+        final updatedList = <Message>[];
+        for (final m in nextMessages) {
+          final u = updateMessage(m);
+          if (u != null) {
+            updatedList.add(u);
+            msgsChanged = true;
+          } else {
+            updatedList.add(m);
+          }
+        }
+        if (msgsChanged) {
+          nextMessages = updatedList;
+          snapChanged = true;
+        }
+      }
+
+      List<Message>? nextPinnedList = snap.pinnedMessages;
+      if (nextPinnedList != null && nextPinnedList.isNotEmpty) {
+        bool pinnedChanged = false;
+        final updatedPinnedList = <Message>[];
+        for (final m in nextPinnedList) {
+          final u = updateMessage(m);
+          if (u != null) {
+            updatedPinnedList.add(u);
+            pinnedChanged = true;
+          } else {
+            updatedPinnedList.add(m);
+          }
+        }
+        if (pinnedChanged) {
+          nextPinnedList = updatedPinnedList;
+          snapChanged = true;
+          metaChanged = true;
+        }
+      }
+
+      if (snapChanged) {
+        final updatedSnap = snap.copyWith(
+          chat: nextChat,
+          chatDetails: nextDetails,
+          messages: nextMessages,
+          pinnedMessages: nextPinnedList,
+        );
+        _snapshots[entry.key] = updatedSnap;
+        if (metaChanged) {
+          _persistMetaSnapshot(updatedSnap);
+        }
+      }
+    }
+  }
+
   @visibleForTesting
   void seedSnapshotForTesting(ChatInstantSnapshot snapshot) {
     _snapshots[snapshot.chatId] = snapshot;

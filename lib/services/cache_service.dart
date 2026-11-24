@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import 'account_manager.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import 'emoji_effect_cache_service.dart';
 import 'media_cache_manager.dart';
@@ -501,6 +502,7 @@ class CacheService {
       await prefs.remove('${userId}_cached_custom_themes');
       await prefs.remove('${userId}_theme_overrides');
       await prefs.remove('chat_drafts_v2_$userId');
+      await ContactsService.clearCache(clearDisk: true, userId: userId);
 
       if (!kIsWeb) {
         if (localWallpaperPath != null &&

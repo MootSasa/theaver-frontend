@@ -24,6 +24,7 @@ import '../../screens/chat/system_notifications_screen.dart';
 import '../../services/search_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
@@ -391,6 +392,7 @@ class _MainScreenState extends State<MainScreen>
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _accountManager.addListener(_onAccountChanged);
     _folderService.addListener(_onServiceUpdate);
     ChatSwipeService().addListener(_onServiceUpdate);
@@ -465,6 +467,10 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _initApp() async {
     _currentUserId = _accountManager.currentAccount?.userId;
     AppDatabase.setActiveUser(_currentUserId);
+    await ContactsService.init(userId: _currentUserId);
+    unawaited(
+      ContactsService.getContacts(forceRefresh: true, includeOverrides: true),
+    );
     unawaited(ArchivePreferencesService().init());
 
     // 1. Немедленно подписываемся на локальный стрим SQLite (UI мгновенно получает кэш)
@@ -1004,7 +1010,9 @@ class _MainScreenState extends State<MainScreen>
       setState(() {
         for (int i = 0; i < _chats.length; i++) {
           if (_chats[i].chatType == 'private' && _chats[i].otherUserId == userId) {
-            _chats[i] = _chats[i].copyWith(avatarUrl: avatarUrl);
+            final effectiveAvatar =
+                ContactsService.resolveAvatarUrl(userId, avatarUrl);
+            _chats[i] = _chats[i].copyWith(avatarUrl: effectiveAvatar);
           } else if (isMe && _chats[i].chatType == 'saved') {
             _chats[i] = _chats[i].copyWith(avatarUrl: avatarUrl);
           }
@@ -1014,7 +1022,9 @@ class _MainScreenState extends State<MainScreen>
     }
 
     try {
-      AppDatabase().updateUserAvatarInChats(userId, avatarUrl);
+      final effectiveAvatar =
+          ContactsService.resolveAvatarUrl(userId, avatarUrl);
+      unawaited(AppDatabase().updateUserAvatarInChats(userId, effectiveAvatar));
     } catch (_) {}
   }
 
@@ -1340,6 +1350,13 @@ class _MainScreenState extends State<MainScreen>
       effectiveLastSeen = live.lastSeen ?? model.lastSeen;
     }
 
+    if (model.chatType == 'private' &&
+        model.otherUserId != null &&
+        model.otherUserId!.isNotEmpty) {
+      name = ContactsService.resolveName(model.otherUserId, name);
+      avatarUrl = ContactsService.resolveAvatarUrl(model.otherUserId, avatarUrl);
+    }
+
     return Chat.fromDbChat(
       model,
       lastMessageEntities: _chatLastMessageEntities[model.chatId] ?? const [],
@@ -1374,6 +1391,7 @@ class _MainScreenState extends State<MainScreen>
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     DraftService().draftsNotifier.removeListener(_onDraftsChanged);
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _accountManager.removeListener(_onAccountChanged);
     _folderService.removeListener(_onServiceUpdate);
     ChatSwipeService().removeListener(_onServiceUpdate);
@@ -1460,6 +1478,13 @@ class _MainScreenState extends State<MainScreen>
     }
     _chatTypingStates.clear();
     AppDatabase.setActiveUser(newUserId);
+    unawaited(() async {
+      await ContactsService.init(userId: newUserId);
+      await ContactsService.getContacts(
+        forceRefresh: true,
+        includeOverrides: true,
+      );
+    }());
     unawaited(ArchivePreferencesService().init());
     CommunityService.clearMemoryCache();
     ChatInstantCache.instance.clearMemory();
@@ -1483,6 +1508,41 @@ class _MainScreenState extends State<MainScreen>
     try {
       SyncService().syncFromServer();
     } catch (_) {}
+  }
+
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    bool changed = false;
+    for (int i = 0; i < _chats.length; i++) {
+      final c = _chats[i];
+      if (c.chatType == 'private' &&
+          c.otherUserId != null &&
+          c.otherUserId!.isNotEmpty) {
+        final uid = c.otherUserId!;
+        final contact = ContactsService.getCached(uid);
+        final baseName =
+            (contact?.originalDisplayName?.trim().isNotEmpty ?? false)
+                ? contact!.originalDisplayName!.trim()
+                : ((contact?.displayName.trim().isNotEmpty ?? false)
+                    ? contact!.displayName.trim()
+                    : c.name);
+        final nextName = ContactsService.resolveName(uid, baseName);
+        final baseAvatar = (contact != null &&
+                !contact.hasCustomAvatar &&
+                (contact.originalAvatarUrl?.trim().isNotEmpty ?? false))
+            ? contact.originalAvatarUrl!.trim()
+            : c.avatarUrl;
+        final nextAvatar = ContactsService.resolveAvatarUrl(uid, baseAvatar);
+        if (nextName != c.name || nextAvatar != c.avatarUrl) {
+          _chats[i] = c.copyWith(name: nextName, avatarUrl: nextAvatar);
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      ChatInstantCache.instance.putChatSummaries(_chats);
+    }
+    setState(() {});
   }
 
   void _onDraftsChanged() {
@@ -3573,9 +3633,14 @@ class _MainScreenState extends State<MainScreen>
             : 'Избранное')
         : (chat.chatType == 'system' && chat.name.isEmpty
             ? context.l10n.translate('system_notifications_title')
-            : chat.name);
-    final effectiveAvatar =
-        chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
+            : (chat.chatType == 'private'
+                ? ContactsService.resolveName(chat.otherUserId, chat.name)
+                : chat.name));
+    final effectiveAvatar = chat.chatType == 'saved'
+        ? effectiveSavedAvatar
+        : (chat.chatType == 'private'
+            ? ContactsService.resolveAvatarUrl(chat.otherUserId, chat.avatarUrl)
+            : chat.avatarUrl);
 
     if (chat.chatType == 'community') {
       if (_markedUnreadCommunityIds.remove(chat.id) && mounted) {
@@ -3660,8 +3725,8 @@ class _MainScreenState extends State<MainScreen>
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: chat.name,
-              otherUserAvatar: chat.avatarUrl,
+              otherUserName: displayName,
+              otherUserAvatar: effectiveAvatar,
               otherUserOnline: chat.isOnline,
               otherUserLastSeen:
                   DateTimeUtils.parseUtcDateTime(chat.lastSeen),
@@ -4733,7 +4798,13 @@ class _MainScreenState extends State<MainScreen>
 
   Widget _buildSearchPeerTile(BuildContext context, SearchPeer peer,
       {required bool isGlobal}) {
-    final validAvatar = getValidAvatarUrl(peer.avatarUrl);
+    final effectiveTitle = peer.isUser
+        ? ContactsService.resolveName(peer.id, peer.title)
+        : peer.title;
+    final effectiveAvatar = peer.isUser
+        ? ContactsService.resolveAvatarUrl(peer.id, peer.avatarUrl)
+        : peer.avatarUrl;
+    final validAvatar = getValidAvatarUrl(effectiveAvatar);
     final canJoin = isGlobal &&
         !peer.isMember &&
         (peer.type == 'group' || peer.type == 'channel' || peer.type == 'community');
@@ -4769,7 +4840,7 @@ class _MainScreenState extends State<MainScreen>
         backgroundColor:
             Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
         backgroundImage:
-            validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
+            validAvatar != null ? avatarImageProvider(effectiveAvatar) : null,
         child: validAvatar == null
             ? (peer.type == 'channel'
                 ? iconoir.Megaphone(
@@ -4790,8 +4861,8 @@ class _MainScreenState extends State<MainScreen>
                             color: Theme.of(context).colorScheme.primary,
                           )
                         : Text(
-                            peer.title.isNotEmpty
-                                ? peer.title[0].toUpperCase()
+                            effectiveTitle.isNotEmpty
+                                ? effectiveTitle[0].toUpperCase()
                                 : '?',
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.primary,
@@ -4804,7 +4875,7 @@ class _MainScreenState extends State<MainScreen>
         children: [
           Flexible(
             child: Text(
-              peer.title,
+              effectiveTitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -4935,12 +5006,15 @@ class _MainScreenState extends State<MainScreen>
           );
           if (chatResult['success'] == true && mounted) {
             final chat = chatResult['chat'] as Chat;
+            final peerName = ContactsService.resolveName(result.id, result.name);
+            final peerAvatar =
+                ContactsService.resolveAvatarUrl(result.id, result.avatarUrl);
             if (TilingLayoutController.instance.isWorkspaceMounted) {
               TilingLayoutController.instance.openChatInActiveTile(
                 chatId: chat.id,
                 chatType: 'private',
-                chatName: result.name,
-                avatarUrl: result.avatarUrl,
+                chatName: peerName,
+                avatarUrl: peerAvatar,
                 otherUserId: result.id,
               );
               return;
@@ -4950,8 +5024,8 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => PrivateChatScreen(
                   chatId: chat.id,
-                  otherUserName: result.name,
-                  otherUserAvatar: result.avatarUrl,
+                  otherUserName: peerName,
+                  otherUserAvatar: peerAvatar,
                   otherUserId: result.id,
                 ),
               ),

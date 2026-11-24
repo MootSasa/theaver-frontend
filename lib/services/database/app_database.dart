@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import '../account_manager.dart';
+import '../contacts_service.dart';
 import 'connection/connection.dart' as impl;
 
 part 'app_database.g.dart';
@@ -939,13 +940,90 @@ class AppDatabase extends _$AppDatabase {
 
   /// Обновить аватар пользователя в чатах и сообщениях
   Future<void> updateUserAvatarInChats(String userId, String? avatarUrl) async {
+    final uid = userId.trim();
+    if (uid.isEmpty) return;
     await ensureInitialized();
+    final effectiveAvatar = ContactsService.resolveAvatarUrl(uid, avatarUrl);
     await (update(chats)
           ..where((t) =>
-              t.chatType.equals('private') & t.otherUserId.equals(userId)))
-        .write(ChatsCompanion(avatarUrl: Value(avatarUrl)));
-    await (update(messages)..where((t) => t.senderId.equals(userId)))
-        .write(MessagesCompanion(senderAvatarUrl: Value(avatarUrl)));
+              t.chatType.equals('private') & t.otherUserId.equals(uid)))
+        .write(ChatsCompanion(avatarUrl: Value(effectiveAvatar)));
+    await (update(messages)
+          ..where((t) =>
+              t.senderId.equals(uid) &
+              (t.senderChatId.isNull() | t.senderChatId.equals(''))))
+        .write(MessagesCompanion(senderAvatarUrl: Value(effectiveAvatar)));
+  }
+
+  /// Applies local contact name and custom avatar overrides for [userId] across
+  /// private chats, last-message previews, senders, replies, and forwards.
+  Future<void> applyContactOverrideInDb(
+    String userId, {
+    String? effectiveName,
+    String? effectiveAvatarUrl,
+    bool updateAvatar = true,
+  }) async {
+    final uid = userId.trim();
+    if (uid.isEmpty || uid == '0') return;
+    await ensureInitialized();
+
+    final trimmedName = effectiveName?.trim();
+    final hasName = trimmedName != null && trimmedName.isNotEmpty;
+    final trimmedAvatar = effectiveAvatarUrl?.trim();
+    final normalizedAvatar =
+        (trimmedAvatar != null && trimmedAvatar.isNotEmpty)
+            ? trimmedAvatar
+            : null;
+
+    if (!hasName && !updateAvatar) return;
+
+    await (update(chats)
+          ..where((t) =>
+              t.chatType.equals('private') & t.otherUserId.equals(uid)))
+        .write(
+      ChatsCompanion(
+        name: hasName ? Value(trimmedName) : const Value.absent(),
+        avatarUrl:
+            updateAvatar ? Value(normalizedAvatar) : const Value.absent(),
+      ),
+    );
+
+    if (hasName) {
+      await (update(chats)
+            ..where((t) =>
+                t.lastMessageSenderId.equals(uid) &
+                t.lastMessageSenderId.isNotValue('0')))
+          .write(
+        ChatsCompanion(lastMessageSenderName: Value(trimmedName)),
+      );
+    }
+
+    await (update(messages)
+          ..where((t) =>
+              t.senderId.equals(uid) &
+              (t.senderChatId.isNull() | t.senderChatId.equals(''))))
+        .write(
+      MessagesCompanion(
+        senderName: hasName ? Value(trimmedName) : const Value.absent(),
+        senderAvatarUrl:
+            updateAvatar ? Value(normalizedAvatar) : const Value.absent(),
+      ),
+    );
+
+    if (hasName) {
+      await (update(messages)..where((t) => t.replyToSenderId.equals(uid)))
+          .write(
+        MessagesCompanion(replyToSenderName: Value(trimmedName)),
+      );
+    }
+
+    await (update(messages)..where((t) => t.forwardFromId.equals(uid))).write(
+      MessagesCompanion(
+        forwardFromName: hasName ? Value(trimmedName) : const Value.absent(),
+        forwardFromAvatarUrl:
+            updateAvatar ? Value(normalizedAvatar) : const Value.absent(),
+      ),
+    );
   }
 
   /// Обновить статус онлайн и время последнего визита собеседника во всех личных чатах с этим пользователем

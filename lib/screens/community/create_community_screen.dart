@@ -1,8 +1,9 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
 
+import '../../models/avatar_editor_models.dart';
 import '../../models/community_models.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
@@ -11,6 +12,7 @@ import '../../services/glass_toast_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import '../../widgets/community/community_channel_icon.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../chat/channel_screen.dart';
@@ -214,6 +216,8 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
   late bool _isJoinMode;
   String _selectedTemplateId = 'standard';
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  String? _pickedAvatarFileName;
   bool _isSubmitting = false;
 
   @override
@@ -238,18 +242,44 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
         orElse: () => _kCommunityTemplates.first,
       );
 
+  bool get _hasPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    return null;
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 90,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.squircle,
+      ctaMode: AvatarEditorCtaMode.done,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : null,
+      canDeleteCurrent: _pickedAvatarFile != null || _pickedAvatarBytes != null,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarFileName = null;
+      });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarFileName = picked.fileName;
       });
     }
   }
@@ -382,12 +412,20 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
     setState(() => _isSubmitting = true);
     try {
       String? uploadedAvatarUrl;
-      if (_pickedAvatarFile != null) {
+      if (_hasPickedAvatar) {
         try {
-          final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-          if (uploadRes.url.isNotEmpty) {
-            uploadedAvatarUrl = uploadRes.url;
-          }
+          final uploadFile = _pickedAvatarFile ??
+              File(
+                (_pickedAvatarFileName != null &&
+                        _pickedAvatarFileName!.trim().isNotEmpty)
+                    ? _pickedAvatarFileName!.trim()
+                    : 'avatar.jpg',
+              );
+          uploadedAvatarUrl = await FileService().uploadPublicAvatar(
+            uploadFile,
+            bytes: _pickedAvatarBytes,
+            fileName: _pickedAvatarFileName,
+          );
         } catch (e) {
           debugPrint('[CreateCommunityScreen] Avatar upload error: $e');
         }
@@ -582,6 +620,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
   Widget _buildCreateModeBody(BuildContext context, TheavPalette palette) {
     final trimmedName = _nameController.text.trim();
     final template = _selectedTemplate;
+    final avatarProvider = _pickedAvatarProvider;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(0, 6, 0, 20),
@@ -594,13 +633,31 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    CommunityAvatar(
-                      avatarUrl: _pickedAvatarFile?.path,
-                      name: trimmedName,
-                      size: 92,
-                      accentColor: palette.primary,
-                      fontSize: 36,
-                    ),
+                    if (avatarProvider != null)
+                      Container(
+                        width: 92,
+                        height: 92,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(92 * 0.30),
+                          color: palette.primary.withValues(alpha: 0.14),
+                          image: DecorationImage(
+                            image: avatarProvider,
+                            fit: BoxFit.cover,
+                          ),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.12),
+                            width: 0.5,
+                          ),
+                        ),
+                      )
+                    else
+                      CommunityAvatar(
+                        avatarUrl: null,
+                        name: trimmedName,
+                        size: 92,
+                        accentColor: palette.primary,
+                        fontSize: 36,
+                      ),
                     Positioned(
                       right: -4,
                       bottom: -4,
@@ -625,7 +682,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                _pickedAvatarFile != null
+                _hasPickedAvatar
                     ? 'Нажмите, чтобы сменить значок'
                     : 'Выбрать значок сообщества',
                 style: TextStyle(

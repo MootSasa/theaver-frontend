@@ -23,6 +23,8 @@ import '../utils/image_utils.dart';
 import '../utils/swipe_back_route.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
+import 'chat_instant_cache.dart';
+import 'contacts_service.dart';
 import 'deep_link_service.dart';
 import 'desktop_tray_service.dart';
 import 'notification_service_hms.dart';
@@ -601,8 +603,13 @@ class NotificationService with WidgetsBindingObserver {
             return;
           case WebSocketEventType.newMessage:
             final data = Map<String, dynamic>.from(event.data);
-            final m = ChatMessageNotification.fromWebSocket(data);
-            if (m == null || m.messageType == 'call') return;
+            final rawMsg = ChatMessageNotification.fromWebSocket(data);
+            if (rawMsg == null || rawMsg.messageType == 'call') return;
+            await ContactsService.init();
+            final m = _applyContactOverridesToMessageNotification(
+              rawMsg,
+              rawData: data,
+            );
             await _onChatMessage(m, NotificationSource.websocket);
             return;
           case WebSocketEventType.appUpdateAvailable:
@@ -625,8 +632,15 @@ class NotificationService with WidgetsBindingObserver {
     switch (type) {
       case 'new_message':
         if ((data['message_type'] ?? '').toString() == 'call') return;
-        final m = ChatMessageNotification.fromPush(data);
-        if (m != null) await _onChatMessage(m, NotificationSource.push);
+        final rawMsg = ChatMessageNotification.fromPush(data);
+        if (rawMsg != null) {
+          await ContactsService.init();
+          final m = _applyContactOverridesToMessageNotification(
+            rawMsg,
+            rawData: data,
+          );
+          await _onChatMessage(m, NotificationSource.push);
+        }
         break;
       case 'read_status_updated':
         final cid = data['chat_id']?.toString();
@@ -670,6 +684,72 @@ class NotificationService with WidgetsBindingObserver {
         _handleAppUpdatePush();
         break;
     }
+  }
+
+  ChatMessageNotification _applyContactOverridesToMessageNotification(
+    ChatMessageNotification m, {
+    Map<String, dynamic>? rawData,
+  }) {
+    if (m.isChannel) return m;
+    final msgMap = rawData?['message'] is Map
+        ? Map<String, dynamic>.from(rawData!['message'] as Map)
+        : rawData;
+    final senderChatId =
+        (msgMap?['sender_chat_id'] ?? rawData?['sender_chat_id'])
+                ?.toString()
+                .trim() ??
+            '';
+    final isAnon = payloadBool(msgMap?['is_from_anonymous_admin']) ||
+        payloadBool(rawData?['is_from_anonymous_admin']);
+    final isMaskedSender = senderChatId.isNotEmpty || isAnon;
+
+    if (m.isGroup) {
+      final sid = m.senderId.trim();
+      if (isMaskedSender || sid.isEmpty || sid == '0') return m;
+      return ChatMessageNotification(
+        chatId: m.chatId,
+        chatName: m.chatName,
+        senderName: ContactsService.resolveName(sid, m.senderName),
+        senderId: m.senderId,
+        text: m.text,
+        messageId: m.messageId,
+        avatarUrl: m.avatarUrl,
+        senderAvatarUrl: ContactsService.resolveAvatarUrl(sid, m.senderAvatarUrl),
+        mediaUrl: m.mediaUrl,
+        isGroup: m.isGroup,
+        isChannel: m.isChannel,
+        isMention: m.isMention,
+        isSilent: m.isSilent,
+        isOwn: m.isOwn,
+        messageType: m.messageType,
+      );
+    }
+
+    if (m.isOwn) return m;
+    final peerId = m.senderId.trim().isNotEmpty && m.senderId.trim() != '0'
+        ? m.senderId.trim()
+        : (ChatInstantCache.instance.getSync(m.chatId)?.chat?.otherUserId ??
+            '');
+    if (peerId.isEmpty || peerId == '0') return m;
+
+    return ChatMessageNotification(
+      chatId: m.chatId,
+      chatName: ContactsService.resolveName(peerId, m.chatName),
+      senderName: ContactsService.resolveName(peerId, m.senderName),
+      senderId: m.senderId,
+      text: m.text,
+      messageId: m.messageId,
+      avatarUrl: ContactsService.resolveAvatarUrl(peerId, m.avatarUrl),
+      senderAvatarUrl:
+          ContactsService.resolveAvatarUrl(peerId, m.senderAvatarUrl),
+      mediaUrl: m.mediaUrl,
+      isGroup: m.isGroup,
+      isChannel: m.isChannel,
+      isMention: m.isMention,
+      isSilent: m.isSilent,
+      isOwn: m.isOwn,
+      messageType: m.messageType,
+    );
   }
 
   Future<void> _onChatMessage(ChatMessageNotification m, NotificationSource source) async {
@@ -922,9 +1002,30 @@ class NotificationService with WidgetsBindingObserver {
       if (!kIsWeb && callId.isNotEmpty && !await CallNotifications.markCallShown(callId)) return;
     }
 
-    final displayCaller = callerName.isNotEmpty
-        ? callerName
-        : (chatTitle != null && chatTitle.isNotEmpty ? chatTitle : 'Входящий звонок');
+    await ContactsService.init();
+    final cleanCallerId = callerId.trim();
+    final peerId = cleanCallerId.isNotEmpty
+        ? cleanCallerId
+        : (!isGroup && chatId.isNotEmpty
+            ? (ChatInstantCache.instance.getSync(chatId)?.chat?.otherUserId ??
+                '')
+            : '');
+    final resolvedCallerName = (peerId.isNotEmpty && peerId != '0')
+        ? ContactsService.resolveName(peerId, callerName)
+        : callerName;
+    final resolvedCallerAvatar = (peerId.isNotEmpty && peerId != '0')
+        ? ContactsService.resolveAvatarUrl(peerId, callerAvatar)
+        : callerAvatar;
+    final resolvedChatTitle =
+        (!isGroup && peerId.isNotEmpty && peerId != '0' && chatTitle != null)
+            ? ContactsService.resolveName(peerId, chatTitle)
+            : chatTitle;
+
+    final displayCaller = resolvedCallerName.isNotEmpty
+        ? resolvedCallerName
+        : (resolvedChatTitle != null && resolvedChatTitle.isNotEmpty
+            ? resolvedChatTitle
+            : 'Входящий звонок');
     final title = CallNotifications.titleFor(isVideo: isVideo, isGroup: isGroup);
     final body = '$displayCaller звонит вам';
     final payload = <String, dynamic>{
@@ -933,17 +1034,17 @@ class NotificationService with WidgetsBindingObserver {
       'chat_id': chatId,
       'caller_id': callerId,
       'caller_name': displayCaller,
-      if (callerAvatar != null) 'caller_avatar': callerAvatar,
+      if (resolvedCallerAvatar != null) 'caller_avatar': resolvedCallerAvatar,
       'is_video': isVideo,
       'is_group': isGroup,
-      if (chatTitle != null) 'chat_title': chatTitle,
+      if (resolvedChatTitle != null) 'chat_title': resolvedChatTitle,
     };
 
     if (kIsWeb) {
       WebNotificationHelper.showBrowserNotification(
         title: title,
         body: body,
-        iconUrl: getValidAvatarUrl(callerAvatar),
+        iconUrl: getValidAvatarUrl(resolvedCallerAvatar),
         tag: 'incoming_call_$dedupKey',
         requireInteraction: true,
         onTap: () => _dispatchCallAction('open_call', payload),
@@ -961,7 +1062,7 @@ class NotificationService with WidgetsBindingObserver {
       _localNotifications,
       payload: payload,
       callerName: displayCaller,
-      callerAvatar: callerAvatar,
+      callerAvatar: resolvedCallerAvatar,
       isVideo: isVideo,
       isGroup: isGroup,
     );
@@ -1022,11 +1123,24 @@ class NotificationService with WidgetsBindingObserver {
     required String callId,
     required String chatId,
     required String callerName,
+    String callerId = '',
     bool isVideo = false,
     bool isGroup = false,
   }) async {
     await cancelIncomingCallNotification(callId: callId, chatId: chatId);
-    final displayCaller = callerName.isNotEmpty ? callerName : 'Собеседник';
+    await ContactsService.init();
+    final cleanCallerId = callerId.trim();
+    final peerId = cleanCallerId.isNotEmpty
+        ? cleanCallerId
+        : (!isGroup && chatId.isNotEmpty
+            ? (ChatInstantCache.instance.getSync(chatId)?.chat?.otherUserId ??
+                '')
+            : '');
+    final resolvedCallerName = (peerId.isNotEmpty && peerId != '0')
+        ? ContactsService.resolveName(peerId, callerName)
+        : callerName;
+    final displayCaller =
+        resolvedCallerName.isNotEmpty ? resolvedCallerName : 'Собеседник';
     final title = isVideo ? 'Пропущенный видеозвонок' : 'Пропущенный звонок';
     final payload = <String, dynamic>{
       'type': 'missed_call',
@@ -1538,11 +1652,27 @@ class NotificationService with WidgetsBindingObserver {
 
     cancelChatNotifications(chatId);
 
-    final chatName = payloadString(data, const ['chat_name', 'sender_name']);
-    final avatarUrl = payloadString(data, const ['avatar_url', 'avatar']);
+    final rawChatName = payloadString(data, const ['chat_name', 'sender_name']);
+    final rawAvatarUrl = payloadString(data, const ['avatar_url', 'avatar']);
     final messageId = payloadString(data, const ['id', 'message_id']);
     final isGroup = payloadBool(data['is_group']);
     final isChannel = payloadBool(data['is_channel']) || data['chat_type'] == 'channel';
+    await ContactsService.init();
+    final rawPeerId = payloadString(
+      data,
+      const ['sender_id', 'caller_id', 'other_user_id'],
+      ChatInstantCache.instance.getSync(chatId)?.chat?.otherUserId ?? '',
+    );
+    final chatName = (!isGroup && !isChannel && rawPeerId.isNotEmpty && rawPeerId != '0')
+        ? ContactsService.resolveName(rawPeerId, rawChatName)
+        : rawChatName;
+    final avatarUrl = (!isGroup && !isChannel && rawPeerId.isNotEmpty && rawPeerId != '0')
+        ? (ContactsService.resolveAvatarUrl(
+              rawPeerId,
+              rawAvatarUrl.isEmpty ? null : rawAvatarUrl,
+            ) ??
+            '')
+        : rawAvatarUrl;
 
     if (TilingLayoutController.instance.isWorkspaceMounted) {
       try {

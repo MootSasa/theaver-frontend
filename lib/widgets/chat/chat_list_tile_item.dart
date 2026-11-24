@@ -13,6 +13,7 @@ import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/power_saving_provider.dart';
@@ -114,10 +115,19 @@ class ChatListTileItem extends StatelessWidget {
 
     const double avatarRadius = 22.0;
 
+    final String effectiveDisplayName = isPrivateChat
+        ? ContactsService.resolveName(chat.otherUserId, chat.name)
+        : chat.name;
+
     final String? effectiveAvatarUrl = chat.chatType == 'saved' &&
             (chat.avatarUrl == null || chat.avatarUrl!.isEmpty)
         ? fallbackSavedAvatarUrl
-        : chat.avatarUrl;
+        : (isPrivateChat
+            ? ContactsService.resolveAvatarUrl(
+                chat.otherUserId,
+                chat.avatarUrl,
+              )
+            : chat.avatarUrl);
 
     final Widget fallbackIcon = _buildFallbackIcon();
 
@@ -125,7 +135,7 @@ class ChatListTileItem extends StatelessWidget {
         ? AvatarWithStatus(
             userId: chat.otherUserId,
             avatarUrl: effectiveAvatarUrl,
-            name: chat.name,
+            name: effectiveDisplayName,
             radius: avatarRadius,
             isOnline: isSelectMode ? false : chat.isOnline,
             decorationOverride: effectiveCust?.avatarDecoration,
@@ -138,7 +148,7 @@ class ChatListTileItem extends StatelessWidget {
                 height: avatarRadius * 2,
                 decoration: BoxDecoration(
                   color: primaryColor,
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular((avatarRadius * 2) * 0.30),
                   image: effectiveAvatarUrl != null &&
                           effectiveAvatarUrl.isNotEmpty &&
                           avatarImageProvider(effectiveAvatarUrl) != null
@@ -467,7 +477,7 @@ class ChatListTileItem extends StatelessWidget {
                       child: Text(
                         chat.chatType == 'saved'
                             ? _tr(context, 'chat_saved_messages', 'Избранное')
-                            : chat.name,
+                            : effectiveDisplayName,
                         style: TextStyle(
                           fontWeight:
                               hasUnread ? FontWeight.w600 : FontWeight.w500,
@@ -586,8 +596,13 @@ class ChatListTileItem extends StatelessWidget {
       final you = _tr(context, 'chat_reply_you', 'Вы');
       return '$you: ';
     }
-    final senderName = chat.lastMessageSenderName?.trim();
-    if (senderName != null && senderName.isNotEmpty) {
+    final rawSenderName = chat.lastMessageSenderName?.trim() ?? '';
+    final senderId = chat.lastMessageSenderId?.trim();
+    final senderName =
+        (senderId != null && senderId.isNotEmpty && senderId != '0')
+            ? ContactsService.resolveName(senderId, rawSenderName).trim()
+            : rawSenderName;
+    if (senderName.isNotEmpty) {
       return '$senderName: ';
     }
     return null;

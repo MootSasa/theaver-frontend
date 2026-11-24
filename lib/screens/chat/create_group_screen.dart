@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/search_service.dart';
@@ -37,6 +39,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   Timer? _searchDebounce;
 
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  String? _pickedAvatarFileName;
   List<SearchResultUser> _allUsers = [];
   List<SearchResultUser> _filteredUsers = [];
   final List<SearchResultUser> _selectedMembers = [];
@@ -107,18 +111,44 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     return fallback;
   }
 
+  bool get _hasPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    return null;
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 90,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.done,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : null,
+      canDeleteCurrent: _pickedAvatarFile != null || _pickedAvatarBytes != null,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarFileName = null;
+      });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarFileName = picked.fileName;
       });
     }
   }
@@ -329,12 +359,20 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
     try {
       String? uploadedAvatarUrl;
-      if (_pickedAvatarFile != null) {
+      if (_hasPickedAvatar) {
         try {
-          final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-          if (uploadRes.url.isNotEmpty) {
-            uploadedAvatarUrl = uploadRes.url;
-          }
+          final uploadFile = _pickedAvatarFile ??
+              File(
+                (_pickedAvatarFileName != null &&
+                        _pickedAvatarFileName!.trim().isNotEmpty)
+                    ? _pickedAvatarFileName!.trim()
+                    : 'avatar.jpg',
+              );
+          uploadedAvatarUrl = await FileService().uploadPublicAvatar(
+            uploadFile,
+            bytes: _pickedAvatarBytes,
+            fileName: _pickedAvatarFileName,
+          );
         } catch (e) {
           debugPrint('[CreateGroupScreen] Avatar upload error: $e');
         }
@@ -348,6 +386,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         name: name,
         description: desc.isNotEmpty ? desc : null,
         username: _isPublic && cleanUsername.isNotEmpty ? cleanUsername : null,
+        avatarUrl: uploadedAvatarUrl,
         isPublic: _isPublic,
         historyForNewMembers: _enableHistory,
         allowInvites: _allowInvites,
@@ -357,21 +396,22 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       if (!mounted) return;
       if (result['success'] == true) {
         Chat chat = result['chat'] as Chat;
+        final needsAvatarFallback = uploadedAvatarUrl != null &&
+            uploadedAvatarUrl.isNotEmpty &&
+            (chat.avatarUrl == null || chat.avatarUrl!.isEmpty);
 
-        // Сохраняем аватар, историю и медленный режим через аутентифицированный ChatService
-        if (uploadedAvatarUrl != null ||
-            !_enableHistory ||
-            _slowModeInterval > 0) {
+        // Сохраняем историю, медленный режим и (при необходимости) fallback-аватар через ChatService
+        if (needsAvatarFallback || !_enableHistory || _slowModeInterval > 0) {
           final settingsRes = await ChatService.updateGroupSettings(chat.id, {
             'name': name,
             'description': desc,
-            if (uploadedAvatarUrl != null) 'avatar_url': uploadedAvatarUrl,
+            if (needsAvatarFallback) 'avatar_url': uploadedAvatarUrl,
             'is_public': _isPublic,
             'username': _isPublic ? cleanUsername : '',
             'history_for_new': _enableHistory,
             'slow_mode_interval': _slowModeInterval,
           });
-          if (settingsRes['success'] == true && uploadedAvatarUrl != null) {
+          if (settingsRes['success'] == true && needsAvatarFallback) {
             await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
             chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
           } else if (settingsRes['success'] != true && mounted) {
@@ -381,6 +421,10 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                   'Часть настроек группы не удалось сохранить',
             );
           }
+        } else if (uploadedAvatarUrl != null && uploadedAvatarUrl.isNotEmpty) {
+          try {
+            await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+          } catch (_) {}
         }
 
         if (!mounted) return;
@@ -432,6 +476,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     final palette = context.theav;
     final primaryColor = palette.primary;
     final trimmedName = _nameController.text.trim();
+    final avatarProvider = _pickedAvatarProvider;
 
     return SettingsFloatingScaffold(
       title: _tr('chat_new_group', 'Новая группа'),
@@ -483,7 +528,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                     height: 68,
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      gradient: _pickedAvatarFile == null
+                                      gradient: avatarProvider == null
                                           ? LinearGradient(
                                               begin: Alignment.topLeft,
                                               end: Alignment.bottomRight,
@@ -495,16 +540,15 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                               ],
                                             )
                                           : null,
-                                      image: _pickedAvatarFile != null
+                                      image: avatarProvider != null
                                           ? DecorationImage(
-                                              image:
-                                                  FileImage(_pickedAvatarFile!),
+                                              image: avatarProvider,
                                               fit: BoxFit.cover,
                                             )
                                           : null,
                                     ),
                                     alignment: Alignment.center,
-                                    child: _pickedAvatarFile == null
+                                    child: avatarProvider == null
                                         ? (trimmedName.isNotEmpty
                                             ? Text(
                                                 trimmedName[0].toUpperCase(),

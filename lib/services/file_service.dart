@@ -681,20 +681,40 @@ class FileService {
     }
   }
 
-  /// Upload an avatar image
-  Future<String> uploadAvatar(File file) async {
-    final fileName = path.basename(file.path);
-    final fileLength = await file.length();
-    final mimeType = _getMimeType(fileName);
+  Future<FormData> _buildAvatarFormData(
+    File file, {
+    Uint8List? bytes,
+    String? fileName,
+  }) async {
+    final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+        ? path.basename(fileName.trim())
+        : (file.path.isNotEmpty ? path.basename(file.path) : 'avatar.jpg');
+    final detectedMime = _getMimeType(resolvedName);
+    final mimeType =
+        detectedMime.startsWith('image/') ? detectedMime : 'image/jpeg';
 
-    final formData = FormData.fromMap({
-      'avatar': MultipartFile.fromStream(
+    final MultipartFile part;
+    if (bytes != null) {
+      part = MultipartFile.fromBytes(
+        bytes,
+        filename: resolvedName,
+        contentType: MediaType.parse(mimeType),
+      );
+    } else {
+      final fileLength = await file.length();
+      part = MultipartFile.fromStream(
         () => file.openRead(),
         fileLength,
-        filename: fileName,
+        filename: resolvedName,
         contentType: MediaType.parse(mimeType),
-      ),
-    });
+      );
+    }
+    return FormData.fromMap({'avatar': part});
+  }
+
+  /// Upload an avatar image
+  Future<String> uploadAvatar(File file) async {
+    final formData = await _buildAvatarFormData(file);
 
     try {
       final headers = await _getHeaders();
@@ -716,6 +736,38 @@ class FileService {
         e.response?.data?['message'] ?? 'Avatar upload failed: ${e.message}',
       );
     }
+  }
+
+  /// Uploads a public avatar image during group/channel/community creation
+  /// (`POST /api/files/upload-public-avatar`) and returns the public URL, or null on failure.
+  Future<String?> uploadPublicAvatar(
+    File file, {
+    Uint8List? bytes,
+    String? fileName,
+  }) async {
+    try {
+      final formData = await _buildAvatarFormData(
+        file,
+        bytes: bytes,
+        fileName: fileName,
+      );
+      final headers = await _getHeaders();
+      final response = await _dio.post(
+        '$baseUrl/api/files/upload-public-avatar',
+        data: formData,
+        options: Options(headers: headers),
+      );
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          response.data is Map &&
+          response.data['success'] == true) {
+        final rawUrl =
+            (response.data['avatar_url'] ?? response.data['url'])?.toString().trim();
+        return (rawUrl != null && rawUrl.isNotEmpty) ? rawUrl : null;
+      }
+    } catch (e) {
+      debugPrint('FileService.uploadPublicAvatar error: $e');
+    }
+    return null;
   }
 
   /// Get mime type from file extension

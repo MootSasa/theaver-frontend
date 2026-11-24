@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File;
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/call_models.dart';
@@ -447,6 +450,147 @@ class CommunityService {
       return updated;
     }
     return null;
+  }
+
+  static MediaType _imageMediaType(String fileName) {
+    final ext = path.extension(fileName).toLowerCase();
+    switch (ext) {
+      case '.png':
+        return MediaType('image', 'png');
+      case '.gif':
+        return MediaType('image', 'gif');
+      case '.webp':
+        return MediaType('image', 'webp');
+      default:
+        return MediaType('image', 'jpeg');
+    }
+  }
+
+  /// Uploads a new avatar image for a community (`POST /api/communities/:communityId/avatar`).
+  static Future<Community?> uploadCommunityAvatar(
+    String communityId,
+    File file, {
+    Uint8List? bytes,
+    String? fileName,
+  }) async {
+    final cleanId = communityId.startsWith('community_')
+        ? communityId.substring('community_'.length)
+        : communityId;
+    if (cleanId.isEmpty) return null;
+
+    try {
+      final token = await AuthService.getToken();
+      if (token == null || token.isEmpty) return null;
+
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$cleanId/avatar'),
+      );
+      request.headers['Authorization'] = 'Bearer $token';
+
+      if (bytes != null) {
+        final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : (file.path.isNotEmpty
+                ? path.basename(file.path)
+                : 'avatar.jpg');
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'avatar',
+            bytes,
+            filename: resolvedName,
+            contentType: _imageMediaType(resolvedName),
+          ),
+        );
+      } else {
+        if (!await file.exists()) return null;
+        final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : path.basename(file.path);
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'avatar',
+            file.path,
+            filename: resolvedName,
+            contentType: _imageMediaType(resolvedName),
+          ),
+        );
+      }
+
+      final streamed = await request.send().timeout(
+        const Duration(seconds: 60),
+        onTimeout: () => throw TimeoutException('Upload timed out'),
+      );
+      final response = await http.Response.fromStream(streamed)
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          if (decoded['community'] is Map) {
+            final comm = Community.fromJson(
+              Map<String, dynamic>.from(decoded['community'] as Map),
+            );
+            cacheCommunity(comm);
+            return comm;
+          }
+          final avatarUrl =
+              (decoded['avatar_url'] ?? decoded['icon_url'])?.toString().trim();
+          if (avatarUrl != null && avatarUrl.isNotEmpty) {
+            final existing = _cache[cleanId];
+            if (existing != null) {
+              final updated = existing.copyWith(avatarUrl: avatarUrl);
+              cacheCommunity(updated);
+              return updated;
+            }
+            return await getCommunity(cleanId);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] uploadCommunityAvatar error: $e');
+    }
+    return null;
+  }
+
+  /// Deletes the avatar of a community (`DELETE /api/communities/:communityId/avatar`).
+  static Future<bool> deleteCommunityAvatar(String communityId) async {
+    final cleanId = communityId.startsWith('community_')
+        ? communityId.substring('community_'.length)
+        : communityId;
+    if (cleanId.isEmpty) return false;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$cleanId/avatar'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final decoded = response.body.trim().isNotEmpty
+            ? jsonDecode(response.body)
+            : null;
+        if (decoded is Map<String, dynamic> && decoded['community'] is Map) {
+          final comm = Community.fromJson(
+            Map<String, dynamic>.from(decoded['community'] as Map),
+          );
+          cacheCommunity(comm);
+        } else if (_cache.containsKey(cleanId)) {
+          final prev = _cache[cleanId]!;
+          final clearedMap = prev.toJson()
+            ..remove('avatar_url')
+            ..remove('icon_url');
+          final updated = Community.fromJson(clearedMap);
+          cacheCommunity(updated);
+        } else {
+          try {
+            await AppDatabase().updateChatAvatar('community_$cleanId', null);
+          } catch (_) {}
+        }
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] deleteCommunityAvatar error: $e');
+    }
+    return false;
   }
 
   /// Deletes a community (`DELETE /api/communities/:communityId`).

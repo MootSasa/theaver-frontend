@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File;
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:drift/drift.dart' as drift;
+import 'package:path/path.dart' as path;
 import '../config/app_config.dart';
 import 'auth_service.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import 'draft_service.dart';
 import 'notification_service.dart';
@@ -1405,6 +1409,16 @@ class Chat {
 
   /// Whether this chat has unread messages or is marked as unread.
   bool get hasUnread => unreadCount > 0 || isMarkedUnread;
+
+  /// Contact-aware display name for private chats, falling back to [name].
+  String get effectiveName => chatType == 'private'
+      ? ContactsService.resolveName(otherUserId, name)
+      : name;
+
+  /// Contact-aware avatar URL for private chats, falling back to [avatarUrl].
+  String? get effectiveAvatarUrl => chatType == 'private'
+      ? ContactsService.resolveAvatarUrl(otherUserId, avatarUrl)
+      : avatarUrl;
 
   /// True if the last message in this chat is a round video note («кружочек»)
   bool get isLastMessageRoundVideo =>
@@ -3313,12 +3327,52 @@ class Message {
   int get hashCode => id.hashCode;
 }
 
+/// Historical or active avatar entry for a group or channel chat.
+class ChatAvatarItem {
+  final int id;
+  final String avatarUrl;
+  final String createdAt;
+
+  const ChatAvatarItem({
+    required this.id,
+    required this.avatarUrl,
+    this.createdAt = '',
+  });
+
+  factory ChatAvatarItem.fromJson(Map<String, dynamic> json) {
+    return ChatAvatarItem(
+      id: _parseIntValue(json['id']),
+      avatarUrl: (json['avatar_url'] ?? json['url'] ?? '').toString(),
+      createdAt: (json['created_at'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'avatar_url': avatarUrl,
+        'created_at': createdAt,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatAvatarItem &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          avatarUrl == other.avatarUrl &&
+          createdAt == other.createdAt;
+
+  @override
+  int get hashCode => Object.hash(id, avatarUrl, createdAt);
+}
+
 /// ChatDetails represents detailed information about a chat.
 class ChatDetails {
   final String id;
   final String chatType;
   final String name;
   final String? avatarUrl;
+  final List<ChatAvatarItem> avatars;
   final String createdBy;
   final String createdAt;
   final String updatedAt;
@@ -3374,6 +3428,7 @@ class ChatDetails {
     required this.chatType,
     required this.name,
     this.avatarUrl,
+    this.avatars = const [],
     required this.createdBy,
     required this.createdAt,
     required this.updatedAt,
@@ -3490,6 +3545,7 @@ class ChatDetails {
     String? chatType,
     String? name,
     String? avatarUrl,
+    List<ChatAvatarItem>? avatars,
     String? createdBy,
     String? createdAt,
     String? updatedAt,
@@ -3548,6 +3604,7 @@ class ChatDetails {
       chatType: chatType ?? this.chatType,
       name: name ?? this.name,
       avatarUrl: avatarUrl ?? this.avatarUrl,
+      avatars: avatars ?? this.avatars,
       createdBy: createdBy ?? this.createdBy,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -3669,11 +3726,26 @@ class ChatDetails {
       }
     }
 
+    final parsedAvatars = <ChatAvatarItem>[];
+    if (json['avatars'] is List) {
+      for (final item in json['avatars'] as List) {
+        if (item is Map) {
+          final parsed = ChatAvatarItem.fromJson(
+            Map<String, dynamic>.from(item),
+          );
+          if (parsed.avatarUrl.isNotEmpty) {
+            parsedAvatars.add(parsed);
+          }
+        }
+      }
+    }
+
     return ChatDetails(
       id: json['id']?.toString() ?? '',
       chatType: parsedChatType,
       name: json['name']?.toString() ?? '',
       avatarUrl: json['avatar_url']?.toString(),
+      avatars: List<ChatAvatarItem>.unmodifiable(parsedAvatars),
       createdBy: json['created_by']?.toString() ?? '',
       createdAt: json['created_at']?.toString() ?? '',
       updatedAt: json['updated_at']?.toString() ?? '',
@@ -3922,6 +3994,7 @@ class ChatService {
     String? name,
     String? description,
     String? username,
+    String? avatarUrl,
     bool? isPublic,
     bool? signMessages,
     bool? showAuthorProfiles,
@@ -3943,6 +4016,8 @@ class ChatService {
         'participant_ids': participantIds,
         if (description != null && description.isNotEmpty) 'description': description,
         if (username != null && username.isNotEmpty) 'username': username,
+        if (avatarUrl != null && avatarUrl.trim().isNotEmpty)
+          'avatar_url': avatarUrl.trim(),
         if (isPublic != null) 'is_public': isPublic,
         if (signMessages != null) 'sign_messages': signMessages,
         if (showAuthorProfiles != null) 'show_author_profiles': showAuthorProfiles,
@@ -7473,6 +7548,205 @@ class ChatService {
       merged['reply_markup'] = existing['reply_markup'];
     }
     return merged;
+  }
+
+  static MediaType _imageMediaType(String fileName) {
+    final ext = path.extension(fileName).toLowerCase();
+    switch (ext) {
+      case '.png':
+        return MediaType('image', 'png');
+      case '.gif':
+        return MediaType('image', 'gif');
+      case '.webp':
+        return MediaType('image', 'webp');
+      default:
+        return MediaType('image', 'jpeg');
+    }
+  }
+
+  /// Uploads a new avatar image for a group or channel (`POST /api/chats/:chatId/avatar`).
+  static Future<Map<String, dynamic>> uploadChatAvatar(
+    String chatId,
+    File file, {
+    Uint8List? bytes,
+    String? fileName,
+  }) async {
+    try {
+      final token = await AuthService.getToken();
+      if (token == null || token.isEmpty) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/avatar'),
+      );
+      request.headers['Authorization'] = 'Bearer $token';
+
+      if (bytes != null) {
+        final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : (file.path.isNotEmpty
+                ? path.basename(file.path)
+                : 'avatar.jpg');
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'avatar',
+            bytes,
+            filename: resolvedName,
+            contentType: _imageMediaType(resolvedName),
+          ),
+        );
+      } else {
+        if (!await file.exists()) {
+          return {'success': false, 'message': 'File not found'};
+        }
+        final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : path.basename(file.path);
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'avatar',
+            file.path,
+            filename: resolvedName,
+            contentType: _imageMediaType(resolvedName),
+          ),
+        );
+      }
+
+      final streamed = await request.send().timeout(
+        const Duration(seconds: 60),
+        onTimeout: () => throw TimeoutException('Upload timed out'),
+      );
+      final response = await http.Response.fromStream(streamed)
+          .timeout(const Duration(seconds: 30));
+      final data = _tryDecodeJson(response.body);
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          data is Map &&
+          data['success'] == true) {
+        final avatarUrl = _nonEmptyString(data['avatar_url'] ?? data['url']);
+        final avatarId = _parseNullableInt(
+          data['avatar_id'] ??
+              (data['avatar'] is Map ? data['avatar']['id'] : null),
+        );
+        List<ChatAvatarItem>? avatars;
+        if (data['avatars'] is List) {
+          avatars = (data['avatars'] as List)
+              .whereType<Map>()
+              .map((m) => ChatAvatarItem.fromJson(Map<String, dynamic>.from(m)))
+              .where((a) => a.avatarUrl.isNotEmpty)
+              .toList();
+        }
+        if (avatarUrl != null) {
+          try {
+            await AppDatabase().updateChatAvatar(chatId, avatarUrl);
+          } catch (_) {}
+        }
+        return {
+          'success': true,
+          'avatar_url': avatarUrl,
+          if (avatarId != null) 'avatar_id': avatarId,
+          if (avatars != null) 'avatars': avatars,
+          'message': data['message'] ?? 'Avatar uploaded successfully',
+        };
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(data, 'Failed to upload chat avatar'),
+      };
+    } catch (e) {
+      debugPrint('ChatService.uploadChatAvatar error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Deletes a chat avatar by [avatarId] (`DELETE /api/chats/:chatId/avatars/:avatarId`)
+  /// or clears the active chat avatar (`DELETE /api/chats/:chatId/avatar`).
+  static Future<Map<String, dynamic>> deleteChatAvatar(
+    String chatId, {
+    int? avatarId,
+  }) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) {
+        return {'success': false, 'message': 'Not authenticated'};
+      }
+
+      final uri = (avatarId != null && avatarId > 0)
+          ? Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/avatars/$avatarId')
+          : Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/avatar');
+      var response = await http.delete(uri, headers: headers);
+      var data = _tryDecodeJson(response.body);
+
+      if (avatarId != null &&
+          avatarId > 0 &&
+          response.statusCode == 404 &&
+          data == null) {
+        response = await http.delete(
+          Uri.parse(
+            '${AppConfig.baseUrl}/api/chats/$chatId/avatar?avatar_id=$avatarId',
+          ),
+          headers: headers,
+        );
+        data = _tryDecodeJson(response.body);
+      }
+
+      if (response.statusCode == 200 &&
+          data is Map &&
+          data['success'] == true) {
+        final hasAvatarKey = data.containsKey('avatar_url');
+        final nextAvatarUrl = _nonEmptyString(data['avatar_url']);
+        if (hasAvatarKey) {
+          try {
+            await AppDatabase().updateChatAvatar(chatId, nextAvatarUrl);
+          } catch (_) {}
+        } else if (avatarId == null) {
+          try {
+            await AppDatabase().updateChatAvatar(chatId, null);
+          } catch (_) {}
+        }
+        return {
+          'success': true,
+          'avatar_url': nextAvatarUrl,
+          'message': data['message'] ?? 'Avatar deleted',
+        };
+      }
+      return {
+        'success': false,
+        'status_code': response.statusCode,
+        'message': _extractErrorMessage(data, 'Failed to delete chat avatar'),
+      };
+    } catch (e) {
+      debugPrint('ChatService.deleteChatAvatar error: $e');
+      return {'success': false, 'message': 'Network error: ${e.toString()}'};
+    }
+  }
+
+  /// Fetches avatar history for a group or channel (`GET /api/chats/:chatId/avatars`).
+  static Future<List<ChatAvatarItem>> getChatAvatars(String chatId) async {
+    try {
+      final headers = await _authHeaders();
+      if (headers == null) return const [];
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/avatars'),
+        headers: headers,
+      );
+      final data = _tryDecodeJson(response.body);
+      if (response.statusCode == 200 &&
+          data is Map &&
+          data['success'] == true &&
+          data['avatars'] is List) {
+        return (data['avatars'] as List)
+            .whereType<Map>()
+            .map((m) => ChatAvatarItem.fromJson(Map<String, dynamic>.from(m)))
+            .where((a) => a.avatarUrl.isNotEmpty)
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('ChatService.getChatAvatars error: $e');
+    }
+    return const [];
   }
 }
 

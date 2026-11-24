@@ -7,6 +7,7 @@ import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
@@ -543,19 +544,35 @@ class MessageReplyInfo extends StatelessWidget {
         previewSpan != null && previewSpan.toPlainText().trim().isNotEmpty;
 
     final youTitle = context.l10n.translate('chat_reply_you');
-    String title = titleOverride ?? '';
-    if (title.isEmpty) {
-      if (isReplyingToMe) {
-        title = youTitle;
-      } else if (replyInfo != null && replyInfo!.senderName.isNotEmpty) {
-        title = replyInfo!.senderName;
-      } else {
-        title = 'Сообщение';
+    final String? replySenderId =
+        (!isReplyingToMe && replyInfo != null) ? replyInfo!.senderId.trim() : null;
+    final bool canResolveContactReplyName = titleOverride == null &&
+        replySenderId != null &&
+        replySenderId.isNotEmpty &&
+        replySenderId != '0';
+    String resolveTitleText() {
+      String resolvedTitle = titleOverride ?? '';
+      if (resolvedTitle.isEmpty) {
+        if (isReplyingToMe) {
+          resolvedTitle = youTitle;
+        } else if (replyInfo != null) {
+          final rawSenderName = replyInfo!.senderName;
+          final contactResolved = canResolveContactReplyName
+              ? ContactsService.resolveName(replySenderId, rawSenderName)
+              : rawSenderName;
+          resolvedTitle =
+              contactResolved.isNotEmpty ? contactResolved : 'Сообщение';
+        } else {
+          resolvedTitle = 'Сообщение';
+        }
       }
+      if (resolvedTitle == 'Вы' || resolvedTitle == 'You') {
+        resolvedTitle = youTitle;
+      }
+      return resolvedTitle;
     }
-    if (title == 'Вы' || title == 'You') {
-      title = youTitle;
-    }
+
+    final String title = resolveTitleText();
 
     final ReplyEmojiData? effectiveReplyEmoji;
     if (!isDeleted && replyInfo != null) {
@@ -641,16 +658,31 @@ class MessageReplyInfo extends StatelessWidget {
                           const SizedBox(width: 5),
                         ],
                         Flexible(
-                          child: Text(
-                            title,
-                            style: TextStyle(
-                              color: accentColor,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          child: canResolveContactReplyName
+                              ? ValueListenableBuilder<int>(
+                                  valueListenable:
+                                      ContactsService.revisionNotifier,
+                                  builder: (_, __, ___) => Text(
+                                    resolveTitleText(),
+                                    style: TextStyle(
+                                      color: accentColor,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                )
+                              : Text(
+                                  title,
+                                  style: TextStyle(
+                                    color: accentColor,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                         ),
                       ],
                     ),

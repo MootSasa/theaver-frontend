@@ -48,6 +48,9 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   /// Возраст (строка)
   final String? age;
 
+  /// Личная заметка о контакте (видна только владельцу)
+  final String? note;
+
   /// Коллбэк при нажатии на иконку QR-кода справа от username / inviteLink
   final VoidCallback? onQrCodeTap;
 
@@ -56,6 +59,9 @@ class LiquidGlassInfoPanel extends StatelessWidget {
 
   /// Коллбэк при нажатии на иконку календаря справа от даты рождения
   final VoidCallback? onBirthdayTap;
+
+  /// Коллбэк при нажатии на строку заметки
+  final VoidCallback? onNoteTap;
 
   /// Коллбэк при нажатии на @упоминание в био/описании
   final ValueChanged<String>? onMentionTap;
@@ -71,6 +77,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   final String inviteLinkLabel;
   final String birthdayLabel;
   final String ageLabel;
+  final String noteLabel;
 
   const LiquidGlassInfoPanel({
     Key? key,
@@ -84,9 +91,11 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     this.inviteLink,
     this.birthday,
     this.age,
+    this.note,
     this.onQrCodeTap,
     this.onEmailTap,
     this.onBirthdayTap,
+    this.onNoteTap,
     this.onMentionTap,
     this.phoneLabel = 'телефон',
     this.emailLabel = 'почта',
@@ -95,6 +104,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     this.inviteLinkLabel = 'ссылка-приглашение',
     this.birthdayLabel = 'дата рождения',
     this.ageLabel = 'лет',
+    this.noteLabel = 'заметка',
   }) : super(key: key);
 
   List<_InfoRowData> _buildRows() {
@@ -162,6 +172,16 @@ class LiquidGlassInfoPanel extends StatelessWidget {
         copyValue: formattedValue,
         isRichText: false,
         showCalendarButton: onBirthdayTap != null,
+      ));
+    }
+
+    if (note != null && note!.trim().isNotEmpty) {
+      rows.add(_InfoRowData(
+        label: noteLabel.toLowerCase(),
+        value: note!.trim(),
+        copyValue: note!.trim(),
+        isRichText: false,
+        isNote: true,
       ));
     }
 
@@ -310,6 +330,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
             onQrCodeTap: rows[i].showQrButton ? onQrCodeTap : null,
             onEmailTap: rows[i].showEmailButton ? onEmailTap : null,
             onCalendarTap: rows[i].showCalendarButton ? onBirthdayTap : null,
+            onNoteTap: rows[i].isNote ? onNoteTap : null,
             onMentionTap: onMentionTap,
           ),
           if (i < rows.length - 1)
@@ -335,6 +356,7 @@ class _InfoRowData {
   final bool showQrButton;
   final bool showEmailButton;
   final bool showCalendarButton;
+  final bool isNote;
 
   const _InfoRowData({
     required this.label,
@@ -344,6 +366,7 @@ class _InfoRowData {
     this.showQrButton = false,
     this.showEmailButton = false,
     this.showCalendarButton = false,
+    this.isNote = false,
   });
 }
 
@@ -356,6 +379,7 @@ class _InfoRowWidget extends StatelessWidget {
   final VoidCallback? onQrCodeTap;
   final VoidCallback? onEmailTap;
   final VoidCallback? onCalendarTap;
+  final VoidCallback? onNoteTap;
   final ValueChanged<String>? onMentionTap;
 
   const _InfoRowWidget({
@@ -367,6 +391,7 @@ class _InfoRowWidget extends StatelessWidget {
     this.onQrCodeTap,
     this.onEmailTap,
     this.onCalendarTap,
+    this.onNoteTap,
     this.onMentionTap,
   });
 
@@ -464,7 +489,12 @@ class _InfoRowWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onCopy,
+      onTap: onNoteTap != null
+          ? () {
+              HapticUtils.tap();
+              onNoteTap!();
+            }
+          : onCopy,
       onLongPress: onCopy,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,

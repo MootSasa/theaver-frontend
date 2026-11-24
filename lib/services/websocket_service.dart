@@ -52,6 +52,8 @@ enum WebSocketEventType {
   screenshotTaken,
   forumTopicUpdated,
   unreadBadgesUpdated,
+  contactUpdated,
+  contactDeleted,
   rpcResult,
   rpcError,
 }
@@ -203,6 +205,10 @@ class WebSocketEvent {
         return WebSocketEventType.forumTopicUpdated;
       case 'unread_badges_updated':
         return WebSocketEventType.unreadBadgesUpdated;
+      case 'contact_updated':
+        return WebSocketEventType.contactUpdated;
+      case 'contact_deleted':
+        return WebSocketEventType.contactDeleted;
       case 'rpc_result':
         return WebSocketEventType.rpcResult;
       case 'rpc_error':

@@ -32,6 +32,10 @@ class AvatarGalleryViewer extends StatefulWidget {
   final VoidCallback? onChoosePhoto;
   final Function(int index)? onDelete;
   final Function(int index)? onPageChanged;
+  final bool firstIsCustomAvatar;
+  final String? customAvatarBadgeText;
+  final String? customDeleteLabel;
+  final bool Function(int index)? canDeleteAt;
 
   final String? heroTagPrefix;
 
@@ -44,6 +48,10 @@ class AvatarGalleryViewer extends StatefulWidget {
     this.onChoosePhoto,
     this.onDelete,
     this.onPageChanged,
+    this.firstIsCustomAvatar = false,
+    this.customAvatarBadgeText,
+    this.customDeleteLabel,
+    this.canDeleteAt,
   }) : super(key: key);
 
   /// Открывает просмотрщик аватарок как полноэкранный диалог
@@ -56,6 +64,10 @@ class AvatarGalleryViewer extends StatefulWidget {
     VoidCallback? onChoosePhoto,
     Function(int index)? onDelete,
     Function(int index)? onPageChanged,
+    bool firstIsCustomAvatar = false,
+    String? customAvatarBadgeText,
+    String? customDeleteLabel,
+    bool Function(int index)? canDeleteAt,
   }) {
     if (avatarUrls.isEmpty) return Future.value();
 
@@ -73,6 +85,10 @@ class AvatarGalleryViewer extends StatefulWidget {
           onChoosePhoto: onChoosePhoto,
           onDelete: onDelete,
           onPageChanged: onPageChanged,
+          firstIsCustomAvatar: firstIsCustomAvatar,
+          customAvatarBadgeText: customAvatarBadgeText,
+          customDeleteLabel: customDeleteLabel,
+          canDeleteAt: canDeleteAt,
         ),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(
@@ -366,52 +382,61 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
                       break;
                     case 'delete':
                       HapticUtils.heavy();
-                      widget.onDelete?.call(_currentIndex);
-                      if (widget.avatarUrls.length <= 1) {
-                        Navigator.pop(context);
-                      }
+                      final deleteIdx = _currentIndex;
+                      Navigator.pop(context);
+                      widget.onDelete?.call(deleteIdx);
                       break;
                   }
                 },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'save',
-                    child: ListTile(
-                      leading: const Icon(Icons.save_alt, color: Color(0xFF0088CC)),
-                      title: Text(_tr(context, 'profile_save_to_gallery', 'Сохранить в галерею')),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'share',
-                    child: ListTile(
-                      leading: const Icon(Icons.share, color: Color(0xFF0088CC)),
-                      title: Text(_tr(context, 'share', 'Поделиться')),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                  ),
-                  if (widget.onChoosePhoto != null)
+                itemBuilder: (context) {
+                  final canDeleteThis = widget.onDelete != null &&
+                      (widget.canDeleteAt == null ||
+                          widget.canDeleteAt!(_currentIndex));
+                  final deleteLabel = (widget.firstIsCustomAvatar &&
+                          _currentIndex == 0 &&
+                          widget.customDeleteLabel != null)
+                      ? widget.customDeleteLabel!
+                      : _tr(context, 'profile_delete_photo', 'Удалить фото');
+                  return [
                     PopupMenuItem(
-                      value: 'choose',
+                      value: 'save',
                       child: ListTile(
-                        leading: const Icon(Icons.add_a_photo, color: Color(0xFF0088CC)),
-                        title: Text(_tr(context, 'profile_choose_new_photo', 'Выбрать новое фото')),
+                        leading: const Icon(Icons.save_alt, color: Color(0xFF0088CC)),
+                        title: Text(_tr(context, 'profile_save_to_gallery', 'Сохранить в галерею')),
                         contentPadding: EdgeInsets.zero,
                       ),
                     ),
-                  if (widget.onDelete != null)
                     PopupMenuItem(
-                      value: 'delete',
+                      value: 'share',
                       child: ListTile(
-                        leading: const Icon(Icons.delete_outline, color: Colors.red),
-                        title: Text(
-                          _tr(context, 'profile_delete_photo', 'Удалить фото'),
-                          style: const TextStyle(color: Colors.red),
+                        leading: const Icon(Icons.share, color: Color(0xFF0088CC)),
+                        title: Text(_tr(context, 'share', 'Поделиться')),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    if (widget.onChoosePhoto != null)
+                      PopupMenuItem(
+                        value: 'choose',
+                        child: ListTile(
+                          leading: const Icon(Icons.add_a_photo, color: Color(0xFF0088CC)),
+                          title: Text(_tr(context, 'profile_choose_new_photo', 'Выбрать новое фото')),
+                          contentPadding: EdgeInsets.zero,
                         ),
-                        contentPadding: EdgeInsets.zero,
                       ),
-                    ),
-                ],
+                    if (canDeleteThis)
+                      PopupMenuItem(
+                        value: 'delete',
+                        child: ListTile(
+                          leading: const Icon(Icons.delete_outline, color: Colors.red),
+                          title: Text(
+                            deleteLabel,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                      ),
+                  ];
+                },
               ),
             ],
           ),
@@ -503,6 +528,45 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
                         child: _GalleryNavArrowButton(
                           isLeft: false,
                           onTap: _goToNext,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                if (widget.firstIsCustomAvatar && _currentIndex == 0)
+                  Positioned(
+                    bottom: totalCount > 1 ? 52 : 30,
+                    left: 0,
+                    right: 0,
+                    child: Opacity(
+                      opacity: uiOpacity,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.56),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.16),
+                              width: 0.5,
+                            ),
+                          ),
+                          child: Text(
+                            widget.customAvatarBadgeText ??
+                                _tr(
+                                  context,
+                                  'contact_custom_photo_badge',
+                                  'Персональное фото',
+                                ),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
                         ),
                       ),
                     ),

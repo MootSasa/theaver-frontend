@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
@@ -12,6 +13,7 @@ import 'browser_site_settings_service.dart';
 import 'browser_vault_auth_gate.dart';
 import 'browser_vault_service.dart';
 import 'cache_service.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
 import 'draft_service.dart';
@@ -230,7 +232,12 @@ class AuthService {
         isCurrentAccount: true,
       );
 
-      // 2. Clear current account from AccountManager immediately
+      // 2. Clear current account & contact cache immediately
+      try {
+        await ContactsService.clearCache(clearDisk: true);
+      } catch (e) {
+        debugPrint('Logout: error clearing ContactsService cache: $e');
+      }
       if (currentUserId != null) {
         await accountManager.removeAccount(currentUserId);
       } else {
@@ -353,7 +360,12 @@ class AuthService {
         debugPrint('Error clearing CacheService on session termination: $e');
       }
 
-      // 3. Clear current account credentials locally
+      // 3. Clear current account credentials & contact cache locally
+      try {
+        await ContactsService.clearCache(clearDisk: true);
+      } catch (e) {
+        debugPrint('Error clearing ContactsService on session termination: $e');
+      }
       final accountManager = AccountManager();
       final terminatedAccount = accountManager.currentAccount;
       final currentUserId = terminatedAccount?.userId;
@@ -892,7 +904,11 @@ class AuthService {
     /// Upload avatar image to server.
     /// Returns a map containing the avatar URL on success.
     /// Uses MinIO storage for avatar upload.
-    static Future<Map<String, dynamic>> uploadAvatar(String filePath) async {
+    static Future<Map<String, dynamic>> uploadAvatar(
+      String filePath, {
+      Uint8List? bytes,
+      String? fileName,
+    }) async {
       try {
         debugPrint('[uploadAvatar] Step 1: Getting token...');
         final token = await getToken();
@@ -904,37 +920,50 @@ class AuthService {
           };
         }
         debugPrint('[uploadAvatar] Step 1-ok: token obtained (length=${token.length})');
-  
-        debugPrint('[uploadAvatar] Step 2: Checking file exists at $filePath');
-        final file = File(filePath);
-        if (!await file.exists()) {
-          debugPrint('[uploadAvatar] Step 2-fail: file not found');
-          return {
-            'success': false,
-            'message': 'File not found',
-          };
-        }
-        final fileSize = await file.length();
-        debugPrint('[uploadAvatar] Step 2-ok: file exists, size=$fileSize bytes');
-  
-        final fileName = path.basename(filePath);
-  
+
+        final resolvedFileName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : (filePath.isNotEmpty ? path.basename(filePath) : 'avatar.jpg');
+
         // Use the new MinIO-based avatar upload endpoint
         debugPrint('[uploadAvatar] Step 3: Creating MultipartRequest to ${AppConfig.baseUrl}/api/files/upload-avatar');
         final request = http.MultipartRequest(
           'POST',
           Uri.parse('${AppConfig.baseUrl}/api/files/upload-avatar'),
         );
-  
+
         request.headers['Authorization'] = 'Bearer $token';
-        debugPrint('[uploadAvatar] Step 4: Adding MultipartFile fromPath...');
-        request.files.add(
-          await http.MultipartFile.fromPath(
-            'avatar',
-            filePath,
-            filename: fileName,
-          ),
-        );
+        if (bytes != null) {
+          debugPrint('[uploadAvatar] Step 4: Adding MultipartFile fromBytes (${bytes.length} bytes)...');
+          request.files.add(
+            http.MultipartFile.fromBytes(
+              'avatar',
+              bytes,
+              filename: resolvedFileName,
+            ),
+          );
+        } else {
+          debugPrint('[uploadAvatar] Step 2: Checking file exists at $filePath');
+          final file = File(filePath);
+          if (!await file.exists()) {
+            debugPrint('[uploadAvatar] Step 2-fail: file not found');
+            return {
+              'success': false,
+              'message': 'File not found',
+            };
+          }
+          final fileSize = await file.length();
+          debugPrint('[uploadAvatar] Step 2-ok: file exists, size=$fileSize bytes');
+
+          debugPrint('[uploadAvatar] Step 4: Adding MultipartFile fromPath...');
+          request.files.add(
+            await http.MultipartFile.fromPath(
+              'avatar',
+              filePath,
+              filename: resolvedFileName,
+            ),
+          );
+        }
         debugPrint('[uploadAvatar] Step 4-ok: MultipartFile added');
   
         debugPrint('[uploadAvatar] Step 5: Sending request (timeout=60s)...');

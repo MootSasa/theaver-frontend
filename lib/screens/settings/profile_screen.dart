@@ -9,8 +9,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
@@ -19,11 +19,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/avatar_sync_service.dart';
 import '../../services/bot_service.dart';
 import '../../services/chat_actions_helper.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/chat_service.dart';
 import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
@@ -31,6 +33,8 @@ import '../../services/display_cutout_service.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
+import '../../services/websocket_service.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import '../../widgets/chat/dm_parity_sheets.dart';
 import '../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -42,7 +46,6 @@ import '../../services/notification_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
-import '../../utils/avatar_crop_utils.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
@@ -79,6 +82,7 @@ import '../chat/settings/channel_stats_screen.dart';
 import '../chat/settings/chat_reactions_settings_screen.dart';
 import '../chat/settings/group_permissions_screen.dart';
 import '../chat/settings/invite_links_screen.dart';
+import '../contacts/contact_edit_screen.dart';
 import 'edit_profile_screen.dart';
 import 'profile_customization_screen.dart';
 
@@ -149,8 +153,12 @@ class ProfileScreenState extends State<ProfileScreen>
   String? _avatarUrl;
   List<String> _avatarUrls = [];
   List<int> _avatarIds = [];
+  final Map<String, int> _avatarIdByUrl = {};
   File? _avatarFile;
-  final ImagePicker _imagePicker = ImagePicker();
+
+  String _originalDisplayName = '';
+  String? _originalAvatarUrl;
+  List<String> _originalAvatarUrls = [];
 
   bool _isLoading = false;
   bool _isProcessing = false;
@@ -340,6 +348,16 @@ class ProfileScreenState extends State<ProfileScreen>
       _canManageGroupAdminSettings ||
       (_isGroup && (_chatDetails?.canChangeInfoEffective ?? false));
 
+  bool get _canEditGroupOrChannelAvatar {
+    if (!(_isGroup || _isChannel)) return false;
+    if (_chatDetails != null) {
+      return _chatDetails!.canChangeInfoEffective;
+    }
+    if (_myRole == 'owner') return true;
+    if (_myRole == 'admin') return _myAdminPermissions?.canChangeInfo ?? true;
+    return _isGroup && _isMember && _defaultPermissions.canChangeInfo;
+  }
+
   bool get _canAddGroupMembers =>
       _isGroup &&
       (_myRole == 'owner' ||
@@ -428,10 +446,56 @@ class ProfileScreenState extends State<ProfileScreen>
     _ballisticScrollController = AnimationController.unbounded(vsync: this);
     _ballisticScrollController.addListener(_onBallisticScrollTick);
 
+    if (_isUser) {
+      ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+    }
+
     // Мгновенная синхронная гидратация всех данных профиля на Frame 0 (без lazy-загрузки);
     // сетевые и SQL-запросы _initializeProfileData() запускаются в didChangeDependencies
     // строго после окончания анимации перехода маршрута, чтобы не рвать Hero-перелёт.
     _hydrateSynchronouslyFromCache();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (!mounted || !_isUser) return;
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty) return;
+    final updated = ContactsService.getCached(uid);
+    setState(() {
+      _contactEntry = updated;
+      _isInContacts = updated?.isContact == true;
+      _syncPeerAvatarUrlsFromState();
+    });
+    _updateTopLuminance();
+  }
+
+  void _syncPeerAvatarUrlsFromState() {
+    if (!_isUser) return;
+    final custom = _contactEntry?.customAvatarUrl?.trim();
+    final hasCustom = custom != null && custom.isNotEmpty;
+    final baseList = <String>[
+      for (final url in _originalAvatarUrls)
+        if (url.trim().isNotEmpty && url.trim() != custom) url.trim(),
+    ];
+    if (baseList.isEmpty &&
+        _originalAvatarUrl != null &&
+        _originalAvatarUrl!.trim().isNotEmpty &&
+        _originalAvatarUrl!.trim() != custom) {
+      baseList.add(_originalAvatarUrl!.trim());
+    }
+    if (hasCustom) {
+      _avatarUrls = [custom, ...baseList];
+      _avatarUrl = custom;
+    } else {
+      _avatarUrls = baseList;
+      _avatarUrl =
+          _originalAvatarUrl != null && _originalAvatarUrl!.trim().isNotEmpty
+              ? _originalAvatarUrl!.trim()
+              : (baseList.isNotEmpty ? baseList.first : null);
+    }
+    if (_currentAvatarIndex >= _avatarUrls.length) {
+      _currentAvatarIndex = 0;
+    }
   }
 
   /// Мгновенно (синхронно до первого build) заполняет все поля профиля из `ProfileInstantCache` и `AccountManager`.
@@ -472,6 +536,17 @@ class ProfileScreenState extends State<ProfileScreen>
         }
         if (snap.avatarIds.isNotEmpty) {
           _avatarIds = List<int>.from(snap.avatarIds);
+        }
+        for (int i = 0;
+            i < snap.avatarUrls.length && i < snap.avatarIds.length;
+            i++) {
+          final u = snap.avatarUrls[i].trim();
+          final id = snap.avatarIds[i];
+          if (u.isNotEmpty && id > 0) {
+            _avatarIdByUrl[u] = id;
+            final valid = getValidAvatarUrl(u);
+            if (valid != null) _avatarIdByUrl[valid] = id;
+          }
         }
         _musicTitle = snap.musicTitle;
         _musicAuthor = snap.musicAuthor;
@@ -518,7 +593,24 @@ class ProfileScreenState extends State<ProfileScreen>
           _isBlocked = true;
         }
         _contactEntry = ContactsService.getCached(uid);
-        _isInContacts = _contactEntry != null;
+        _isInContacts = _contactEntry?.isContact == true;
+        final cachedOrigName = _contactEntry?.originalDisplayName?.trim();
+        if (cachedOrigName != null && cachedOrigName.isNotEmpty) {
+          _originalDisplayName = cachedOrigName;
+        } else {
+          _originalDisplayName =
+              '${_nameController.text.trim()} ${_surnameController.text.trim()}'
+                  .trim();
+        }
+        final cachedOrigAvatar = _contactEntry?.originalAvatarUrl?.trim();
+        final customAv = _contactEntry?.customAvatarUrl?.trim();
+        _originalAvatarUrl = (cachedOrigAvatar != null && cachedOrigAvatar.isNotEmpty)
+            ? cachedOrigAvatar
+            : (_avatarUrl != null && _avatarUrl != customAv ? _avatarUrl : null);
+        _originalAvatarUrls = _avatarUrls
+            .where((u) => u.trim().isNotEmpty && u.trim() != customAv)
+            .toList();
+        _syncPeerAvatarUrlsFromState();
       }
       if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
         if (cache.isChatMutedSync(_resolvedChatId)) {
@@ -530,6 +622,27 @@ class ProfileScreenState extends State<ProfileScreen>
       _initInitialEntityData();
       final cid = _resolvedChatId ?? '';
       if (cid.isNotEmpty) {
+        final instantChat = ChatInstantCache.instance.getSync(cid)?.chatDetails;
+        if (instantChat != null) {
+          _chatDetails = instantChat;
+          if (instantChat.avatars.isNotEmpty) {
+            _avatarUrls = instantChat.avatars
+                .map((a) => a.avatarUrl.trim())
+                .where((s) => s.isNotEmpty)
+                .toList();
+            _avatarIds = instantChat.avatars
+                .where((a) => a.avatarUrl.trim().isNotEmpty)
+                .map((a) => a.id)
+                .toList();
+            for (final a in instantChat.avatars) {
+              if (a.avatarUrl.trim().isNotEmpty && a.id > 0) {
+                _avatarIdByUrl[a.avatarUrl.trim()] = a.id;
+              }
+            }
+            _avatarUrl = instantChat.avatarUrl ??
+                (_avatarUrls.isNotEmpty ? _avatarUrls.first : null);
+          }
+        }
         final snap = cache.getGroupSnapshotSync(cid);
         if (snap != null) {
           if (snap.name.isNotEmpty) _nameController.text = snap.name;
@@ -722,6 +835,9 @@ class ProfileScreenState extends State<ProfileScreen>
     if (_isSelf) {
       AvatarSyncService().removeListener(_onAvatarSyncChanged);
     }
+    if (_isUser) {
+      ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    }
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _nameController.dispose();
@@ -868,14 +984,26 @@ class ProfileScreenState extends State<ProfileScreen>
 
           if (user['avatars'] != null) {
             final avatarsList = user['avatars'] as List<dynamic>;
-            final serverUrls = avatarsList
-                .map((a) => a['avatar_url'].toString())
-                .where((s) => s.isNotEmpty)
-                .toList();
-            _avatarIds = avatarsList
-                .map((a) =>
-                    (a['id'] is int ? a['id'] as int : (a['id'] as num).toInt()))
-                .toList();
+            final serverUrls = <String>[];
+            final serverIds = <int>[];
+            for (final a in avatarsList) {
+              if (a is! Map) continue;
+              final url = (a['avatar_url'] ?? '').toString().trim();
+              final rawId = a['id'];
+              final id = rawId is int
+                  ? rawId
+                  : (rawId is num ? rawId.toInt() : int.tryParse('$rawId') ?? 0);
+              if (url.isNotEmpty) {
+                serverUrls.add(url);
+                serverIds.add(id);
+                if (id > 0) {
+                  _avatarIdByUrl[url] = id;
+                  final valid = getValidAvatarUrl(url);
+                  if (valid != null) _avatarIdByUrl[valid] = id;
+                }
+              }
+            }
+            _avatarIds = serverIds;
 
             final combined = <String>[];
             for (final l in localHistory) {
@@ -992,7 +1120,8 @@ class ProfileScreenState extends State<ProfileScreen>
         if (mounted) {
           setState(() {
             _contactEntry = cachedContact;
-            _isInContacts = cachedContact != null;
+            _isInContacts = cachedContact?.isContact == true;
+            _syncPeerAvatarUrlsFromState();
           });
         }
 
@@ -1025,15 +1154,33 @@ class ProfileScreenState extends State<ProfileScreen>
       final res = await AuthService.getUserProfile(widget.userId!);
       if (res['success'] == true && res['user'] != null && mounted) {
         final u = res['user'] as Map<String, dynamic>;
+        final bool hasContactFields = u.containsKey('is_contact') ||
+            u.containsKey('custom_first_name') ||
+            u.containsKey('custom_last_name') ||
+            u.containsKey('note') ||
+            u.containsKey('custom_avatar_url');
+
         setState(() {
-          final displayName =
-              u['display_name']?.toString() ?? u['name']?.toString();
-          if (displayName != null && displayName.isNotEmpty) {
-            final parts = displayName.trim().split(' ');
+          final rawOrigDisplay = (u['original_display_name'] ??
+                  u['display_name'] ??
+                  u['name'])
+              ?.toString()
+              .trim();
+          final rawSurname = u['surname']?.toString().trim() ?? '';
+          final computedOrigName =
+              (rawOrigDisplay != null && rawOrigDisplay.isNotEmpty)
+                  ? (u['original_display_name'] == null &&
+                          u['display_name'] == null &&
+                          rawSurname.isNotEmpty
+                      ? '$rawOrigDisplay $rawSurname'.trim()
+                      : rawOrigDisplay)
+                  : '';
+          if (computedOrigName.isNotEmpty) {
+            _originalDisplayName = computedOrigName;
+            final parts = computedOrigName.split(RegExp(r'\s+'));
             _nameController.text = parts.first;
-            _surnameController.text = parts.length > 1
-                ? parts.sublist(1).join(' ')
-                : (u['surname']?.toString() ?? '');
+            _surnameController.text =
+                parts.length > 1 ? parts.sublist(1).join(' ') : rawSurname;
           }
           if (u['username'] != null) {
             _usernameController.text = u['username'].toString();
@@ -1066,25 +1213,140 @@ class ProfileScreenState extends State<ProfileScreen>
           if (u['last_seen'] != null) {
             _lastSeen = DateTime.tryParse(u['last_seen'].toString());
           }
-          if (u['avatar_url'] != null &&
-              u['avatar_url'].toString().isNotEmpty) {
-            final serverUrl = u['avatar_url'].toString();
-            _avatarUrl = serverUrl;
-            if (!_avatarUrls.contains(serverUrl)) {
-              _avatarUrls = [serverUrl, ..._avatarUrls];
-            }
-          }
-          if (u['avatars'] != null) {
+
+          final rawOrigAvatar = u['original_avatar_url']?.toString().trim();
+          final rawServerAvatar = u['avatar_url']?.toString().trim();
+          final rawCustomAvatar = u['custom_avatar_url']?.toString().trim();
+
+          if (u['avatars'] is List) {
             final list = u['avatars'] as List<dynamic>;
             final urls = list
-                .map((a) => a['avatar_url'].toString())
+                .map((a) =>
+                    (a is Map ? a['avatar_url'] : a)?.toString().trim() ?? '')
                 .where((s) => s.isNotEmpty)
                 .toList();
-            if (urls.isNotEmpty) {
-              _avatarUrls = urls;
-            }
+            _originalAvatarUrls = urls;
+          } else if (rawOrigAvatar != null && rawOrigAvatar.isNotEmpty) {
+            _originalAvatarUrls = [rawOrigAvatar];
+          } else if (rawServerAvatar != null &&
+              rawServerAvatar.isNotEmpty &&
+              rawServerAvatar != rawCustomAvatar) {
+            _originalAvatarUrls = [rawServerAvatar];
+          } else if (u.containsKey('original_avatar_url') ||
+              u.containsKey('avatar_url')) {
+            _originalAvatarUrls = [];
           }
+
+          if (rawOrigAvatar != null && rawOrigAvatar.isNotEmpty) {
+            _originalAvatarUrl = rawOrigAvatar;
+          } else if (_originalAvatarUrls.isNotEmpty) {
+            _originalAvatarUrl = _originalAvatarUrls.first;
+          } else if (rawServerAvatar != null &&
+              rawServerAvatar.isNotEmpty &&
+              rawServerAvatar != rawCustomAvatar) {
+            _originalAvatarUrl = rawServerAvatar;
+          } else if (u.containsKey('original_avatar_url')) {
+            _originalAvatarUrl = null;
+          }
+
+          if (hasContactFields) {
+            final rawIsContact = u['is_contact'];
+            final parsedIsContact = rawIsContact == true ||
+                rawIsContact == 1 ||
+                rawIsContact?.toString().toLowerCase() == 'true';
+            final customFirst = (u['custom_first_name'] ?? '').toString();
+            final customLast = (u['custom_last_name'] ?? '').toString();
+            final note = (u['note'] ?? '').toString();
+            final customAv =
+                (rawCustomAvatar != null && rawCustomAvatar.isNotEmpty)
+                    ? rawCustomAvatar
+                    : null;
+            final hasAny = parsedIsContact ||
+                customFirst.trim().isNotEmpty ||
+                customLast.trim().isNotEmpty ||
+                note.trim().isNotEmpty ||
+                customAv != null;
+
+            _contactEntry = hasAny
+                ? ContactItem(
+                    id: _contactEntry?.id ?? widget.userId!,
+                    userId: widget.userId!,
+                    contactUserId: widget.userId!,
+                    username: _usernameController.text,
+                    displayName: _originalDisplayName,
+                    customFirstName: customFirst,
+                    customLastName: customLast,
+                    note: note,
+                    avatarUrl: _originalAvatarUrl ?? '',
+                    customAvatarUrl: customAv,
+                    originalAvatarUrl: _originalAvatarUrl,
+                    originalDisplayName: _originalDisplayName,
+                    isOnline: _isOnline,
+                    lastSeen: _lastSeen,
+                    isVerified: _peerIsVerified,
+                    isBot: _peerIsBot,
+                    isContact: parsedIsContact,
+                  )
+                : null;
+            _isInContacts = parsedIsContact;
+          } else {
+            final cached = ContactsService.getCached(widget.userId!);
+            _contactEntry = cached;
+            _isInContacts = cached?.isContact == true;
+          }
+          _syncPeerAvatarUrlsFromState();
         });
+
+        if (hasContactFields) {
+          final uid = widget.userId!;
+          final cached = ContactsService.getCached(uid);
+          final next = _contactEntry;
+          if (next != null) {
+            final changed = cached == null ||
+                cached.isContact != next.isContact ||
+                cached.customFirstName != next.customFirstName ||
+                cached.customLastName != next.customLastName ||
+                cached.note != next.note ||
+                cached.customAvatarUrl != next.customAvatarUrl;
+            if (changed) {
+              unawaited(
+                ContactsService.applyRemoteContactEvent(
+                  WebSocketEventType.contactUpdated,
+                  {
+                    'contact_user_id': uid,
+                    'user_id': uid,
+                    'username': _usernameController.text,
+                    'display_name': _originalDisplayName,
+                    'original_display_name': _originalDisplayName,
+                    'avatar_url': _originalAvatarUrl ?? '',
+                    'original_avatar_url': _originalAvatarUrl,
+                    'is_contact': next.isContact,
+                    'custom_first_name': next.customFirstName,
+                    'custom_last_name': next.customLastName,
+                    'note': next.note,
+                    'custom_avatar_url': next.customAvatarUrl,
+                    'is_online': _isOnline,
+                    'is_verified': _peerIsVerified,
+                    'is_bot': _peerIsBot,
+                  },
+                ),
+              );
+            }
+          } else if (cached != null) {
+            unawaited(
+              ContactsService.applyRemoteContactEvent(
+                WebSocketEventType.contactDeleted,
+                {
+                  'contact_user_id': uid,
+                  'user_id': uid,
+                  'original_display_name': _originalDisplayName,
+                  'original_avatar_url': _originalAvatarUrl,
+                },
+              ),
+            );
+          }
+        }
+
         if (u['peer_customization'] is Map) {
           PeerCustomizationCache.instance.mergeFromJson(
             widget.userId!,
@@ -1102,8 +1364,8 @@ class ProfileScreenState extends State<ProfileScreen>
             phone: _phoneController.text,
             bio: _bio,
             birthday: _birthday,
-            avatarUrl: _avatarUrl,
-            avatarUrls: List<String>.from(_avatarUrls),
+            avatarUrl: _originalAvatarUrl,
+            avatarUrls: List<String>.from(_originalAvatarUrls),
             isOnline: _isOnline,
             lastSeen: _lastSeen,
             isMuted: _isMuted,
@@ -1229,11 +1491,43 @@ class ProfileScreenState extends State<ProfileScreen>
             _myRole = details.myRole!;
           }
           _isChatMember = details.isMember && _myRole != 'guest';
-          final srvAvatar = details.avatarUrl;
-          if (srvAvatar != null && srvAvatar.isNotEmpty) {
-            _avatarUrl = srvAvatar;
-            if (!_avatarUrls.contains(srvAvatar)) {
-              _avatarUrls = [srvAvatar, ..._avatarUrls];
+          if (details.avatars.isNotEmpty) {
+            _avatarUrls = details.avatars
+                .map((a) => a.avatarUrl.trim())
+                .where((s) => s.isNotEmpty)
+                .toList();
+            _avatarIds = details.avatars
+                .where((a) => a.avatarUrl.trim().isNotEmpty)
+                .map((a) => a.id)
+                .toList();
+            for (final a in details.avatars) {
+              final url = a.avatarUrl.trim();
+              if (url.isNotEmpty && a.id > 0) {
+                _avatarIdByUrl[url] = a.id;
+                final valid = getValidAvatarUrl(url);
+                if (valid != null) _avatarIdByUrl[valid] = a.id;
+              }
+            }
+            final srvAvatar = details.avatarUrl?.trim();
+            if (srvAvatar != null && srvAvatar.isNotEmpty) {
+              _avatarUrl = srvAvatar;
+              if (!_avatarUrls.contains(srvAvatar)) {
+                _avatarUrls.insert(0, srvAvatar);
+                _avatarIds.insert(0, 0);
+              }
+            } else {
+              _avatarUrl = _avatarUrls.isNotEmpty ? _avatarUrls.first : null;
+            }
+          } else {
+            final srvAvatar = details.avatarUrl?.trim();
+            if (srvAvatar != null && srvAvatar.isNotEmpty) {
+              _avatarUrl = srvAvatar;
+              _avatarUrls = [srvAvatar];
+              _avatarIds = [];
+            } else {
+              _avatarUrl = null;
+              _avatarUrls = [];
+              _avatarIds = [];
             }
           }
           if (details.participants.isNotEmpty) {
@@ -1311,11 +1605,32 @@ class ProfileScreenState extends State<ProfileScreen>
               _chatDetails!.effectiveMemberCount > 0) {
             _memberCount = _chatDetails!.effectiveMemberCount;
           }
-          final srvAvatar = settingsData['avatar_url']?.toString();
+          if (settingsData['avatars'] is List && _avatarUrls.isEmpty) {
+            final parsedAvatars = (settingsData['avatars'] as List)
+                .whereType<Map>()
+                .map((m) => ChatAvatarItem.fromJson(Map<String, dynamic>.from(m)))
+                .where((a) => a.avatarUrl.trim().isNotEmpty)
+                .toList();
+            if (parsedAvatars.isNotEmpty) {
+              _avatarUrls = parsedAvatars.map((a) => a.avatarUrl.trim()).toList();
+              _avatarIds = parsedAvatars.map((a) => a.id).toList();
+              for (final a in parsedAvatars) {
+                if (a.id > 0) {
+                  _avatarIdByUrl[a.avatarUrl.trim()] = a.id;
+                  final valid = getValidAvatarUrl(a.avatarUrl.trim());
+                  if (valid != null) _avatarIdByUrl[valid] = a.id;
+                }
+              }
+            }
+          }
+          final srvAvatar = settingsData['avatar_url']?.toString().trim();
           if (srvAvatar != null && srvAvatar.isNotEmpty) {
             _avatarUrl = srvAvatar;
-            if (!_avatarUrls.contains(srvAvatar)) {
-              _avatarUrls = [srvAvatar, ..._avatarUrls];
+            if (_avatarUrls.isEmpty) {
+              _avatarUrls = [srvAvatar];
+            } else if (!_avatarUrls.contains(srvAvatar)) {
+              _avatarUrls.insert(0, srvAvatar);
+              if (_avatarIds.isNotEmpty) _avatarIds.insert(0, 0);
             }
           }
           if (settingsData['is_forum'] is bool) {
@@ -1880,6 +2195,13 @@ class ProfileScreenState extends State<ProfileScreen>
             label: _tr(l10n, 'group_add_members', 'Добавить'),
             onTap: _showAddMemberDialog,
           ),
+        if (_canEditGroupOrChannelAvatar)
+          ProfileActionButtonItem(
+            iconBuilder: (color, size) =>
+                iconoir.Camera(color: color, width: size, height: size),
+            label: _tr(l10n, 'profile_choose_photo', 'Фото'),
+            onTap: _pickGroupOrChannelAvatar,
+          ),
         if (_canEditGroupOrChannel)
           ProfileActionButtonItem(
             iconBuilder: (color, size) =>
@@ -1917,6 +2239,13 @@ class ProfileScreenState extends State<ProfileScreen>
         label: _tr(l10n, 'share', 'Поделиться'),
         onTap: _copyProfileLink,
       ),
+      if (_canEditGroupOrChannelAvatar)
+        ProfileActionButtonItem(
+          iconBuilder: (color, size) =>
+              iconoir.Camera(color: color, width: size, height: size),
+          label: _tr(l10n, 'profile_choose_photo', 'Фото'),
+          onTap: _pickGroupOrChannelAvatar,
+        ),
       if (_canEditGroupOrChannel)
         ProfileActionButtonItem(
           iconBuilder: (color, size) =>
@@ -4678,85 +5007,142 @@ class ProfileScreenState extends State<ProfileScreen>
 
   Future<void> _pickImage() async {
     final l10n = context.l10n;
-    final accentColor = context.theav.primary;
+    final hasAny =
+        _avatarUrls.isNotEmpty || (_avatarUrl != null && _avatarUrl!.isNotEmpty);
 
-    final ImageSource? source = await showTheavModalSheet<ImageSource>(
+    final AvatarPickResult? pick = await TheavAvatarPickerSheet.pickAndEdit(
       context: context,
-      title: l10n.translate('profile_choose_photo'),
-      builder: (sheetCtx) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-        child: TheavInsetGroup(
-          children: [
-            TheavListRow(
-              leading: iconoir.Camera(
-                width: 22,
-                height: 22,
-                color: accentColor,
-              ),
-              title: l10n.translate('profile_camera'),
-              onTap: () => Navigator.pop(sheetCtx, ImageSource.camera),
-            ),
-            TheavListRow(
-              leading: iconoir.MediaImage(
-                width: 22,
-                height: 22,
-                color: accentColor,
-              ),
-              title: l10n.translate('profile_gallery'),
-              onTap: () => Navigator.pop(sheetCtx, ImageSource.gallery),
-            ),
-          ],
-        ),
-      ),
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.setPhoto,
+      canDeleteCurrent: hasAny,
     );
+    if (!mounted || pick == null) return;
 
-    if (source == null) return;
+    if (pick.deletedCurrent) {
+      await _performDeleteAvatarAt(0);
+      return;
+    }
+    if (!pick.hasMedia) return;
 
+    final account = _accountManager.currentAccount;
+    if (account == null) return;
+
+    setState(() => _isProcessing = true);
     try {
-      final XFile? pickedFile = await _imagePicker.pickImage(source: source);
-      if (pickedFile != null && mounted) {
-        final processedPath = await AvatarCropUtils.processAvatar(
-          imagePath: pickedFile.path,
-          context: context,
+      if (kIsWeb) {
+        final bytes = pick.bytes;
+        if (bytes == null || bytes.isEmpty) return;
+        final token = await AuthService.getToken();
+        if (token == null || token.isEmpty) {
+          if (mounted) {
+            _showToast('Not authenticated');
+          }
+          return;
+        }
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('${AppConfig.baseUrl}/api/files/upload-avatar'),
         );
-
-        if (processedPath != null && mounted) {
-          final account = _accountManager.currentAccount;
-          if (account != null) {
-            setState(() => _isProcessing = true);
-            try {
-              final permanentPath = await AvatarSyncService().setLocalAvatar(
-                account.userId,
-                processedPath,
-              );
-              if (mounted) {
-                setState(() {
-                  _avatarFile = null;
-                  _avatarUrl = permanentPath;
-                  if (!_avatarUrls.contains(permanentPath)) {
-                    _avatarUrls.insert(0, permanentPath);
-                  }
-                });
-                widget.onUpdate?.call();
-                _showToast(l10n.translate('profile_photo_updated'));
-              }
-            } finally {
-              if (mounted) {
-                setState(() => _isProcessing = false);
+        request.headers['Authorization'] = 'Bearer $token';
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'avatar',
+            bytes,
+            filename: pick.fileName.isNotEmpty ? pick.fileName : 'avatar.jpg',
+          ),
+        );
+        final streamed = await request.send().timeout(const Duration(seconds: 60));
+        final response = await http.Response.fromStream(streamed);
+        final data = jsonDecode(response.body);
+        if (response.statusCode == 200 && data is Map && data['success'] == true) {
+          final uploadedUrl = (data['avatar_url'] ?? '').toString().trim();
+          final uploadedId = (data['avatar_id'] as num?)?.toInt();
+          await _accountManager.updateAccountProfile(
+            account.userId,
+            avatarUrl: uploadedUrl,
+          );
+          if (!mounted) return;
+          setState(() {
+            _avatarFile = null;
+            _avatarUrl = uploadedUrl;
+            _avatarUrls.remove(uploadedUrl);
+            if (uploadedUrl.isNotEmpty) {
+              _avatarUrls.insert(0, uploadedUrl);
+              if (uploadedId != null && uploadedId > 0) {
+                _avatarIdByUrl[uploadedUrl] = uploadedId;
+                _avatarIds.insert(0, uploadedId);
               }
             }
-          }
+            _currentAvatarIndex = 0;
+          });
+          _saveSelfSnapshotToInstantCache();
+          _updateTopLuminance();
+          widget.onUpdate?.call();
+          _showToast(l10n.translate('profile_photo_updated'));
+        } else if (mounted) {
+          _showToast(
+            l10n.translate('profile_photo_error').replaceAll(
+                  '{error}',
+                  (data is Map ? data['message'] : '')?.toString() ?? '',
+                ),
+          );
         }
+        return;
       }
+
+      String? sourcePath = pick.file?.path;
+      if (sourcePath == null ||
+          sourcePath.isEmpty ||
+          !await File(sourcePath).exists()) {
+        final bytes = pick.bytes;
+        if (bytes == null || bytes.isEmpty) return;
+        final tempDir = await getTemporaryDirectory();
+        final ext = pick.fileName.contains('.')
+            ? '.${pick.fileName.split('.').last}'
+            : '.jpg';
+        final tempFile = File(
+          '${tempDir.path}/avatar_profile_${DateTime.now().millisecondsSinceEpoch}$ext',
+        );
+        await tempFile.writeAsBytes(bytes, flush: true);
+        sourcePath = tempFile.path;
+      }
+
+      final permanentPath = await AvatarSyncService().setLocalAvatar(
+        account.userId,
+        sourcePath,
+      );
+      if (!mounted) return;
+      setState(() {
+        _avatarFile = null;
+        _avatarUrl = permanentPath;
+        _avatarUrls.remove(permanentPath);
+        _avatarUrls.insert(0, permanentPath);
+        _currentAvatarIndex = 0;
+      });
+      _saveSelfSnapshotToInstantCache();
+      _updateTopLuminance();
+      widget.onUpdate?.call();
+      _showToast(l10n.translate('profile_photo_updated'));
     } catch (e) {
       if (!mounted) return;
       _showToast(l10n
           .translate('profile_photo_error')
           .replaceAll('{error}', e.toString()));
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
 
   Future<void> _deleteAvatar() async {
+    final targetIdx = _avatarUrls.isNotEmpty
+        ? _currentAvatarIndex.clamp(0, _avatarUrls.length - 1)
+        : 0;
+    await _deleteAvatarAt(targetIdx);
+  }
+
+  Future<void> _deleteAvatarAt(int index) async {
     final l10n = context.l10n;
 
     final confirmed = await showTheavDialog<bool>(
@@ -4776,29 +5162,45 @@ class ProfileScreenState extends State<ProfileScreen>
       ],
     );
 
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
+    await _performDeleteAvatarAt(index);
+  }
 
+  Future<void> _performDeleteAvatarAt(int index) async {
+    final l10n = context.l10n;
     HapticUtils.heavy();
     setState(() => _isProcessing = true);
 
     try {
       final account = _accountManager.currentAccount;
-      final topAvatar = _avatarUrls.isNotEmpty ? _avatarUrls.first : null;
-      final isLocalAvatar = topAvatar != null &&
+      final safeIdx =
+          _avatarUrls.isNotEmpty ? index.clamp(0, _avatarUrls.length - 1) : -1;
+      final targetAvatar = safeIdx >= 0 ? _avatarUrls[safeIdx] : _avatarUrl;
+      final isLocalAvatar = targetAvatar != null &&
           !kIsWeb &&
-          (topAvatar.startsWith('/') ||
-              topAvatar.startsWith('file:') ||
-              File(topAvatar).existsSync());
+          (targetAvatar.startsWith('/') ||
+              targetAvatar.startsWith('file:') ||
+              File(targetAvatar).existsSync());
 
       if (isLocalAvatar && account != null) {
-        await AvatarSyncService().removeAvatar(account.userId, topAvatar);
+        await AvatarSyncService().removeAvatar(account.userId, targetAvatar);
+        if (!mounted) return;
         setState(() {
-          _avatarUrls.removeAt(0);
+          if (safeIdx >= 0 && safeIdx < _avatarUrls.length) {
+            _avatarUrls.removeAt(safeIdx);
+          }
           _avatarUrl = _avatarUrls.isNotEmpty ? _avatarUrls.first : null;
           _avatarFile = null;
+          _currentAvatarIndex = _avatarUrls.isEmpty
+              ? 0
+              : _currentAvatarIndex.clamp(0, _avatarUrls.length - 1);
         });
-        await _accountManager.updateAccountProfile(account.userId,
-            avatarUrl: _avatarUrl);
+        await _accountManager.updateAccountProfile(
+          account.userId,
+          avatarUrl: _avatarUrl ?? '',
+        );
+        _saveSelfSnapshotToInstantCache();
+        _updateTopLuminance();
         widget.onUpdate?.call();
         if (mounted) {
           _showToast(l10n.translate('profile_photo_deleted'));
@@ -4806,24 +5208,52 @@ class ProfileScreenState extends State<ProfileScreen>
         return;
       }
 
-      final avatarIdToDelete =
-          _avatarIds.isNotEmpty ? _avatarIds.first : null;
+      int? avatarIdToDelete;
+      if (targetAvatar != null && targetAvatar.isNotEmpty) {
+        avatarIdToDelete = _avatarIdByUrl[targetAvatar] ??
+            _avatarIdByUrl[getValidAvatarUrl(targetAvatar) ?? ''];
+      }
+      if (avatarIdToDelete == null &&
+          safeIdx >= 0 &&
+          safeIdx < _avatarIds.length &&
+          _avatarIds[safeIdx] > 0) {
+        avatarIdToDelete = _avatarIds[safeIdx];
+      }
+
       final result = await AuthService.deleteAvatar(avatarId: avatarIdToDelete);
       if (!mounted) return;
 
       if (result['success'] == true) {
+        if (account != null && targetAvatar != null && targetAvatar.isNotEmpty) {
+          await AvatarSyncService().removeAvatar(account.userId, targetAvatar);
+        }
+        if (!mounted) return;
         setState(() {
-          if (_avatarIds.isNotEmpty) _avatarIds.removeAt(0);
-          if (_avatarUrls.isNotEmpty) _avatarUrls.removeAt(0);
+          if (targetAvatar != null) _avatarIdByUrl.remove(targetAvatar);
+          if (avatarIdToDelete != null) {
+            _avatarIds.remove(avatarIdToDelete);
+          } else if (safeIdx >= 0 && safeIdx < _avatarIds.length) {
+            _avatarIds.removeAt(safeIdx);
+          }
+          if (safeIdx >= 0 && safeIdx < _avatarUrls.length) {
+            _avatarUrls.removeAt(safeIdx);
+          }
           _avatarUrl = _avatarUrls.isNotEmpty ? _avatarUrls.first : null;
           _avatarFile = null;
+          _currentAvatarIndex = _avatarUrls.isEmpty
+              ? 0
+              : _currentAvatarIndex.clamp(0, _avatarUrls.length - 1);
         });
 
         if (account != null) {
-          await _accountManager.updateAccountProfile(account.userId,
-              avatarUrl: _avatarUrl);
+          await _accountManager.updateAccountProfile(
+            account.userId,
+            avatarUrl: _avatarUrl ?? '',
+          );
         }
 
+        _saveSelfSnapshotToInstantCache();
+        _updateTopLuminance();
         widget.onUpdate?.call();
         if (mounted) {
           _showToast(l10n.translate('profile_photo_deleted'));
@@ -4838,6 +5268,437 @@ class ProfileScreenState extends State<ProfileScreen>
         _showToast(l10n
             .translate('profile_photo_error')
             .replaceAll('{error}', e.toString()));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  void _syncChatInstantCacheAvatar(String cid, String? nextAvatarUrl) {
+    final snap = ChatInstantCache.instance.getSync(cid);
+    final effectiveAvatar = nextAvatarUrl ?? '';
+    if (_chatDetails != null) {
+      final nextAvatars = [
+        for (int i = 0; i < _avatarUrls.length; i++)
+          ChatAvatarItem(
+            id: i < _avatarIds.length ? _avatarIds[i] : 0,
+            avatarUrl: _avatarUrls[i],
+          ),
+      ];
+      _chatDetails = _chatDetails!.copyWith(
+        avatarUrl: effectiveAvatar,
+        avatars: nextAvatars,
+      );
+      ChatInstantCache.instance.putChatDetails(_chatDetails!);
+    } else if (snap?.chatDetails != null) {
+      ChatInstantCache.instance.putChatDetails(
+        snap!.chatDetails!.copyWith(avatarUrl: effectiveAvatar),
+      );
+    }
+    if (snap?.chat != null) {
+      ChatInstantCache.instance.putChatSummaries([
+        snap!.chat!.copyWith(avatarUrl: effectiveAvatar),
+      ]);
+    }
+  }
+
+  Future<void> _pickGroupOrChannelAvatar() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty || !_canEditGroupOrChannelAvatar) return;
+    final l10n = context.l10n;
+    final hasAny =
+        _avatarUrls.isNotEmpty || (_avatarUrl != null && _avatarUrl!.isNotEmpty);
+
+    final AvatarPickResult? pick = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.setPhoto,
+      subjectName: _getDisplayName(),
+      canDeleteCurrent: hasAny,
+    );
+    if (!mounted || pick == null) return;
+
+    if (pick.deletedCurrent) {
+      await _performDeleteGroupOrChannelAvatarAt(0);
+      return;
+    }
+    if (!pick.hasMedia) return;
+
+    setState(() => _isProcessing = true);
+    try {
+      final res = await ChatService.uploadChatAvatar(
+        cid,
+        pick.file ?? File(pick.fileName),
+        bytes: pick.bytes,
+        fileName: pick.fileName,
+      );
+      if (!mounted) return;
+
+      if (res['success'] == true) {
+        final returnedAvatars = res['avatars'] as List<ChatAvatarItem>?;
+        final returnedUrl = (res['avatar_url'] ?? '').toString().trim();
+        final returnedId = (res['avatar_id'] as num?)?.toInt();
+
+        setState(() {
+          if (returnedAvatars != null && returnedAvatars.isNotEmpty) {
+            _avatarUrls = returnedAvatars
+                .map((a) => a.avatarUrl.trim())
+                .where((s) => s.isNotEmpty)
+                .toList();
+            _avatarIds = returnedAvatars
+                .where((a) => a.avatarUrl.trim().isNotEmpty)
+                .map((a) => a.id)
+                .toList();
+            for (final a in returnedAvatars) {
+              if (a.avatarUrl.trim().isNotEmpty && a.id > 0) {
+                _avatarIdByUrl[a.avatarUrl.trim()] = a.id;
+              }
+            }
+            _avatarUrl = returnedUrl.isNotEmpty
+                ? returnedUrl
+                : (_avatarUrls.isNotEmpty ? _avatarUrls.first : null);
+          } else if (returnedUrl.isNotEmpty) {
+            _avatarUrl = returnedUrl;
+            _avatarUrls.remove(returnedUrl);
+            _avatarUrls.insert(0, returnedUrl);
+            if (returnedId != null && returnedId > 0) {
+              _avatarIdByUrl[returnedUrl] = returnedId;
+              _avatarIds.remove(returnedId);
+              _avatarIds.insert(0, returnedId);
+            } else if (_avatarIds.isNotEmpty) {
+              _avatarIds.insert(0, 0);
+            }
+          }
+          _currentAvatarIndex = 0;
+        });
+
+        await AppDatabase().updateChatAvatar(cid, _avatarUrl);
+        _syncChatInstantCacheAvatar(cid, _avatarUrl);
+        ProfileInstantCache.instance.putGroupSnapshot(
+          CachedGroupProfileSnapshot(
+            chatId: cid,
+            name: _nameController.text,
+            description: _bio ?? '',
+            inviteLink: _inviteLink,
+            isPublic: _isPublic,
+            historyForNew: _historyForNew,
+            slowModeInterval: _slowModeInterval,
+            memberCount: _memberCount,
+            myRole: _myRole,
+            avatarUrl: _avatarUrl,
+            members: List<ProfileMemberItem>.from(_members),
+            isMuted: _isMuted,
+          ),
+        );
+        _updateTopLuminance();
+        widget.onUpdate?.call();
+        if (mounted) {
+          _showToast(_tr(l10n, 'profile_photo_updated', 'Фото обновлено'));
+        }
+      } else {
+        _showToast(
+          res['message']?.toString() ?? 'Не удалось обновить фото',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showToast(l10n
+            .translate('profile_photo_error')
+            .replaceAll('{error}', e.toString()));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  Future<void> _deleteGroupOrChannelAvatarAt(int index) async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty || !_canEditGroupOrChannelAvatar) return;
+    final l10n = context.l10n;
+
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: _tr(l10n, 'profile_delete_photo_confirm_title', 'Удалить фото?'),
+      message: _tr(
+        l10n,
+        'avatar_delete_confirm_chat',
+        'Удалить текущее фото чата?',
+      ),
+      actions: [
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'avatar_delete_photo', 'Удалить фото'),
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed != true || !mounted) return;
+    await _performDeleteGroupOrChannelAvatarAt(index);
+  }
+
+  Future<void> _performDeleteGroupOrChannelAvatarAt(int index) async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    final l10n = context.l10n;
+
+    HapticUtils.heavy();
+    setState(() => _isProcessing = true);
+    try {
+      final safeIdx =
+          _avatarUrls.isNotEmpty ? index.clamp(0, _avatarUrls.length - 1) : -1;
+      final targetUrl = safeIdx >= 0 ? _avatarUrls[safeIdx] : _avatarUrl;
+      int? avatarId;
+      if (safeIdx >= 0 && safeIdx < _avatarIds.length && _avatarIds[safeIdx] > 0) {
+        avatarId = _avatarIds[safeIdx];
+      } else if (targetUrl != null && targetUrl.isNotEmpty) {
+        avatarId = _avatarIdByUrl[targetUrl] ??
+            _avatarIdByUrl[getValidAvatarUrl(targetUrl) ?? ''];
+      }
+
+      final res = await ChatService.deleteChatAvatar(cid, avatarId: avatarId);
+      if (!mounted) return;
+
+      if (res['success'] == true) {
+        final serverNextUrl = res['avatar_url']?.toString().trim();
+        setState(() {
+          if (targetUrl != null) _avatarIdByUrl.remove(targetUrl);
+          if (safeIdx >= 0 && safeIdx < _avatarUrls.length) {
+            _avatarUrls.removeAt(safeIdx);
+          }
+          if (safeIdx >= 0 && safeIdx < _avatarIds.length) {
+            _avatarIds.removeAt(safeIdx);
+          }
+          if (serverNextUrl != null && serverNextUrl.isNotEmpty) {
+            _avatarUrl = serverNextUrl;
+            if (!_avatarUrls.contains(serverNextUrl)) {
+              _avatarUrls.insert(0, serverNextUrl);
+            }
+          } else {
+            _avatarUrl = _avatarUrls.isNotEmpty ? _avatarUrls.first : null;
+          }
+          _currentAvatarIndex = _avatarUrls.isEmpty
+              ? 0
+              : _currentAvatarIndex.clamp(0, _avatarUrls.length - 1);
+        });
+
+        await AppDatabase().updateChatAvatar(cid, _avatarUrl);
+        _syncChatInstantCacheAvatar(cid, _avatarUrl);
+        ProfileInstantCache.instance.putGroupSnapshot(
+          CachedGroupProfileSnapshot(
+            chatId: cid,
+            name: _nameController.text,
+            description: _bio ?? '',
+            inviteLink: _inviteLink,
+            isPublic: _isPublic,
+            historyForNew: _historyForNew,
+            slowModeInterval: _slowModeInterval,
+            memberCount: _memberCount,
+            myRole: _myRole,
+            avatarUrl: _avatarUrl,
+            members: List<ProfileMemberItem>.from(_members),
+            isMuted: _isMuted,
+          ),
+        );
+        _updateTopLuminance();
+        widget.onUpdate?.call();
+        if (mounted) {
+          _showToast(_tr(l10n, 'profile_photo_deleted', 'Фото удалено'));
+        }
+      } else {
+        _showToast(
+          res['message']?.toString() ?? 'Не удалось удалить фото',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        _showToast(l10n
+            .translate('profile_photo_error')
+            .replaceAll('{error}', e.toString()));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  String get _shortTargetName {
+    final full = _getDisplayName().trim();
+    if (full.isNotEmpty) return full.split(RegExp(r'\s+')).first;
+    if (_usernameController.text.trim().isNotEmpty) {
+      return '@${_usernameController.text.trim()}';
+    }
+    return context.trOr('profile_default_user', 'пользователя');
+  }
+
+  Future<void> _pickCustomAvatarForPeer() async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty || _peerIsBot) return;
+    final l10n = context.l10n;
+    final hasCustom = _contactEntry?.hasCustomAvatar == true;
+
+    final AvatarPickResult? pick = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.setPhoto,
+      subjectName: _shortTargetName,
+      canDeleteCurrent: hasCustom,
+    );
+    if (!mounted || pick == null) return;
+
+    if (pick.deletedCurrent) {
+      await _confirmResetPeerCustomAvatar(skipConfirm: true);
+      return;
+    }
+    if (!pick.hasMedia) return;
+
+    setState(() => _isProcessing = true);
+    try {
+      final res = await ContactsService.setCustomAvatar(
+        uid,
+        pick.file ?? File(pick.fileName),
+        bytes: pick.bytes,
+        fileName: pick.fileName,
+      );
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final updated =
+            (res['contact'] as ContactItem?) ?? ContactsService.getCached(uid);
+        setState(() {
+          _contactEntry = updated;
+          _isInContacts = updated?.isContact == true;
+          _currentAvatarIndex = 0;
+          _syncPeerAvatarUrlsFromState();
+        });
+        _updateTopLuminance();
+        widget.onUpdate?.call();
+        _showToast(_tr(
+          l10n,
+          'contact_custom_photo_set',
+          'Индивидуальное фото установлено',
+        ));
+      } else {
+        _showToast(
+          res['message']?.toString() ?? 'Не удалось установить фото',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  Future<void> _suggestPhotoForPeer() async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty || _peerIsBot) return;
+    final l10n = context.l10n;
+
+    final AvatarPickResult? pick = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.suggestPhoto,
+      subjectName: _shortTargetName,
+    );
+    if (!mounted || pick == null || !pick.hasMedia) return;
+
+    setState(() => _isProcessing = true);
+    try {
+      final res = await ContactsService.suggestPhoto(
+        uid,
+        pick.file ?? File(pick.fileName),
+        bytes: pick.bytes,
+        fileName: pick.fileName,
+      );
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final chatId = (res['chat_id'] ?? res['chatId'] ?? '').toString().trim();
+        if (chatId.isNotEmpty && (_resolvedChatId == null || _resolvedChatId!.isEmpty)) {
+          _resolvedChatId = chatId;
+        }
+        _showToast(_tr(
+          l10n,
+          'contact_suggest_photo_sent',
+          'Предложение фото отправлено',
+        ));
+      } else {
+        _showToast(
+          res['message']?.toString() ?? 'Не удалось предложить фото',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  Future<void> _confirmResetPeerCustomAvatar({bool skipConfirm = false}) async {
+    final uid = widget.userId;
+    if (uid == null || uid.isEmpty) return;
+    final l10n = context.l10n;
+
+    if (!skipConfirm) {
+      final confirmed = await showTheavDialog<bool>(
+        context: context,
+        title: _tr(l10n, 'contact_reset_photo_confirm_title', 'Сбросить фото?'),
+        message: _tr(
+          l10n,
+          'contact_reset_photo_confirm_body',
+          'Вернуть исходное фото профиля для {name}?',
+        ).replaceAll('{name}', _shortTargetName),
+        actions: [
+          TheavDialogAction<bool>(
+            label: _tr(l10n, 'profile_cancel', 'Отмена'),
+            result: false,
+          ),
+          TheavDialogAction<bool>(
+            label: _tr(
+              l10n,
+              'contact_reset_original_photo',
+              'Вернуть исходное фото',
+            ),
+            result: true,
+            isDestructive: true,
+          ),
+        ],
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    HapticUtils.heavy();
+    setState(() => _isProcessing = true);
+    try {
+      final res = await ContactsService.resetCustomAvatar(uid);
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final updated =
+            (res['contact'] as ContactItem?) ?? ContactsService.getCached(uid);
+        setState(() {
+          _contactEntry = updated;
+          _isInContacts = updated?.isContact == true;
+          _currentAvatarIndex = 0;
+          _syncPeerAvatarUrlsFromState();
+        });
+        _updateTopLuminance();
+        widget.onUpdate?.call();
+        _showToast(_tr(
+          l10n,
+          'contact_custom_photo_reset',
+          'Исходное фото восстановлено',
+        ));
+      } else {
+        _showToast(
+          res['message']?.toString() ?? 'Не удалось сбросить фото',
+        );
       }
     } finally {
       if (mounted) {
@@ -4955,7 +5816,7 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _openEditProfile() async {
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
-      MaterialPageRoute(
+      SwipeBackPageRoute(
         builder: (_) => EditProfileScreen(
           initialName: _nameController.text,
           initialSurname: _surnameController.text,
@@ -4964,6 +5825,7 @@ class ProfileScreenState extends State<ProfileScreen>
           initialBio: _bio,
           initialBirthday: _birthday,
           initialEmail: _emailController.text,
+          initialAvatarUrl: _avatarUrl,
         ),
       ),
     );
@@ -4982,11 +5844,17 @@ class ProfileScreenState extends State<ProfileScreen>
         if (result.containsKey('birthday')) {
           _birthday = result['birthday'] as DateTime?;
         }
+        if (result['avatar_changed'] == true) {
+          _avatarUrl = result['avatar_url'] as String?;
+        }
         final updatedEmail = _accountManager.currentAccount?.email;
         if (updatedEmail != null && updatedEmail.isNotEmpty) {
           _emailController.text = updatedEmail;
         }
       });
+      if (result['avatar_changed'] == true) {
+        unawaited(_loadUserProfile());
+      }
       _saveSelfSnapshotToInstantCache();
       widget.onUpdate?.call();
 
@@ -5733,8 +6601,12 @@ class ProfileScreenState extends State<ProfileScreen>
     if (effectiveUrls.isEmpty) {
       if (_isSelf) {
         _pickImage();
+      } else if (_canEditGroupOrChannelAvatar) {
+        _pickGroupOrChannelAvatar();
       } else if (_canEditGroupOrChannel) {
         _openEditGroupOrChannel();
+      } else if (_isUser && !_peerIsBot) {
+        _pickCustomAvatarForPeer();
       }
       return;
     }
@@ -5764,13 +6636,45 @@ class ProfileScreenState extends State<ProfileScreen>
       });
     }
 
+    final l10n = context.l10n;
+    final bool peerHasCustomAvatar =
+        _isUser && !_peerIsBot && (_contactEntry?.hasCustomAvatar == true);
+
     await AvatarGalleryViewer.open(
       context,
       avatarUrls: effectiveUrls,
       initialIndex: currentIndex,
       displayName: _getDisplayName(),
-      onChoosePhoto: _isSelf ? _pickImage : null,
-      onDelete: _isSelf ? (_) => _deleteAvatar() : null,
+      firstIsCustomAvatar: peerHasCustomAvatar,
+      customAvatarBadgeText: _tr(
+        l10n,
+        'contact_custom_photo_badge',
+        'Персональное фото',
+      ),
+      customDeleteLabel: peerHasCustomAvatar
+          ? _tr(
+              l10n,
+              'contact_reset_original_photo',
+              'Вернуть исходное фото',
+            )
+          : null,
+      onChoosePhoto: _isSelf
+          ? _pickImage
+          : (_canEditGroupOrChannelAvatar
+              ? _pickGroupOrChannelAvatar
+              : ((_isUser && !_peerIsBot) ? _pickCustomAvatarForPeer : null)),
+      canDeleteAt: peerHasCustomAvatar ? (idx) => idx == 0 : null,
+      onDelete: _isSelf
+          ? (index) => _deleteAvatarAt(index)
+          : (_canEditGroupOrChannelAvatar
+              ? (index) => _deleteGroupOrChannelAvatarAt(index)
+              : (peerHasCustomAvatar
+                  ? (index) {
+                      if (index == 0) {
+                        _confirmResetPeerCustomAvatar();
+                      }
+                    }
+                  : null)),
       onPageChanged: (index) {
         setState(() {
           _currentAvatarIndex = index;
@@ -6267,6 +7171,19 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 _birthday, l10n),
                                             age: _calculateAge(_birthday)
                                                 ?.toString(),
+                                            note: (_isUser && !_peerIsBot)
+                                                ? _contactEntry?.note
+                                                : null,
+                                            noteLabel: _tr(
+                                              l10n,
+                                              'contact_note_placeholder',
+                                              'заметка',
+                                            ),
+                                            onNoteTap: (_isUser && !_peerIsBot)
+                                                ? () => _openContactEditor(
+                                                      autofocusNote: true,
+                                                    )
+                                                : null,
                                             onEmailTap: _isSelf
                                                 ? () async {
                                                     await Navigator.push(
@@ -6922,17 +7839,50 @@ class ProfileScreenState extends State<ProfileScreen>
         if (isPeerUser && _isInContacts) ...[
           _MorphMenuItemData(
             id: 'edit_contact',
-            label: 'Изменить имя контакта',
+            label: _tr(l10n, 'contact_edit_title', 'Изменить контакт'),
             iconBuilder: (color, size) =>
                 iconoir.EditPencil(color: color, width: size, height: size),
           ),
           _MorphMenuItemData(
             id: 'remove_contact',
-            label: 'Удалить из контактов',
+            label: _tr(l10n, 'contact_delete_button', 'Удалить контакт'),
             isDestructive: true,
             iconBuilder: (color, size) =>
                 iconoir.UserXmark(color: color, width: size, height: size),
           ),
+        ],
+        if (isPeerUser && !_peerIsBot) ...[
+          _MorphMenuItemData(
+            id: 'suggest_photo',
+            label: _tr(
+              l10n,
+              'avatar_editor_suggest_photo_cta',
+              'Предложить фото',
+            ),
+            iconBuilder: (color, size) =>
+                iconoir.Camera(color: color, width: size, height: size),
+          ),
+          _MorphMenuItemData(
+            id: 'set_custom_photo',
+            label: _tr(
+              l10n,
+              'avatar_editor_set_photo',
+              'Установить фото',
+            ),
+            iconBuilder: (color, size) =>
+                iconoir.MediaImagePlus(color: color, width: size, height: size),
+          ),
+          if (_contactEntry?.hasCustomAvatar == true)
+            _MorphMenuItemData(
+              id: 'reset_custom_photo',
+              label: _tr(
+                l10n,
+                'contact_reset_original_photo',
+                'Вернуть исходное фото',
+              ),
+              iconBuilder: (color, size) =>
+                  iconoir.Undo(color: color, width: size, height: size),
+            ),
         ],
         _MorphMenuItemData(
           id: 'search_chat',
@@ -7010,6 +7960,23 @@ class ProfileScreenState extends State<ProfileScreen>
           iconBuilder: (color, size) =>
               iconoir.EditPencil(color: color, width: size, height: size),
         ),
+      if (_canEditGroupOrChannelAvatar)
+        _MorphMenuItemData(
+          id: 'choose_photo',
+          label: _tr(l10n, 'avatar_choose_photo', 'Выбрать фото'),
+          iconBuilder: (color, size) =>
+              iconoir.Camera(color: color, width: size, height: size),
+        ),
+      if (_canEditGroupOrChannelAvatar &&
+          (_avatarUrls.isNotEmpty ||
+              (_avatarUrl != null && _avatarUrl!.isNotEmpty)))
+        _MorphMenuItemData(
+          id: 'delete_photo',
+          label: _tr(l10n, 'avatar_delete_photo', 'Удалить фото'),
+          isDestructive: true,
+          iconBuilder: (color, size) =>
+              iconoir.Trash(color: color, width: size, height: size),
+        ),
       _MorphMenuItemData(
         id: 'search_chat',
         label: _tr(l10n, 'chat_menu_search_messages', 'Поиск сообщений'),
@@ -7048,7 +8015,11 @@ class ProfileScreenState extends State<ProfileScreen>
         _openEditProfile();
         break;
       case 'choose_photo':
-        _pickImage();
+        if (_isSelf) {
+          _pickImage();
+        } else if (_canEditGroupOrChannelAvatar) {
+          _pickGroupOrChannelAvatar();
+        }
         break;
       case 'choose_music':
         _showMusicDialog();
@@ -7060,19 +8031,35 @@ class ProfileScreenState extends State<ProfileScreen>
         _openManageBadgeSheet();
         break;
       case 'add_contact':
-        unawaited(_openManageContactDialog(isEdit: false));
+        unawaited(_openContactEditor(isContact: false));
         break;
       case 'edit_contact':
-        unawaited(_openManageContactDialog(isEdit: true));
+        unawaited(_openContactEditor(isContact: true));
         break;
       case 'remove_contact':
         unawaited(_confirmRemoveContact());
+        break;
+      case 'suggest_photo':
+        unawaited(_suggestPhotoForPeer());
+        break;
+      case 'set_custom_photo':
+        unawaited(_pickCustomAvatarForPeer());
+        break;
+      case 'reset_custom_photo':
+        unawaited(_confirmResetPeerCustomAvatar());
         break;
       case 'copy_link':
         _copyProfileLink();
         break;
       case 'delete_photo':
-        _deleteAvatar();
+        if (_isSelf) {
+          _deleteAvatar();
+        } else if (_canEditGroupOrChannelAvatar) {
+          final targetIdx = _avatarUrls.isNotEmpty
+              ? _currentAvatarIndex.clamp(0, _avatarUrls.length - 1)
+              : 0;
+          unawaited(_deleteGroupOrChannelAvatarAt(targetIdx));
+        }
         break;
       case 'search_chat':
         _handleSearchInChat();
@@ -7124,86 +8111,56 @@ class ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  Future<void> _openManageContactDialog({required bool isEdit}) async {
+  Future<void> _openContactEditor({
+    bool? isContact,
+    bool autofocusNote = false,
+  }) async {
     final uid = widget.userId;
     if (uid == null || uid.isEmpty) return;
     HapticUtils.tap();
 
-    final firstNameCtrl = TextEditingController(
-      text: isEdit
-          ? (_contactEntry?.customFirstName.isNotEmpty == true
+    final resolvedOrigName = _originalDisplayName.isNotEmpty
+        ? _originalDisplayName
+        : '${_nameController.text.trim()} ${_surnameController.text.trim()}'
+            .trim();
+    final effectiveIsContact = isContact ?? _isInContacts;
+
+    final result = await Navigator.of(context).push<ContactEditResult>(
+      SwipeBackPageRoute(
+        builder: (_) => ContactEditScreen(
+          userId: uid,
+          isContact: effectiveIsContact,
+          initialContact: _contactEntry,
+          initialFirstName: _contactEntry?.customFirstName.isNotEmpty == true
               ? _contactEntry!.customFirstName
-              : _nameController.text.trim())
-          : _nameController.text.trim(),
-    );
-    final lastNameCtrl = TextEditingController(
-      text: isEdit
-          ? (_contactEntry?.customLastName.isNotEmpty == true
+              : _nameController.text.trim(),
+          initialLastName: _contactEntry?.customLastName.isNotEmpty == true
               ? _contactEntry!.customLastName
-              : _surnameController.text.trim())
-          : _surnameController.text.trim(),
-    );
-
-    final confirmed = await showTheavDialog<bool>(
-      context: context,
-      title: isEdit ? 'Изменить имя контакта' : 'Добавить в контакты',
-      content: TheavInsetGroup(
-        margin: EdgeInsets.zero,
-        dividerIndent: 16,
-        children: [
-          TheavInlineTextField(
-            controller: firstNameCtrl,
-            placeholder: 'Имя',
-            autofocus: true,
-          ),
-          TheavInlineTextField(
-            controller: lastNameCtrl,
-            placeholder: 'Фамилия',
-          ),
-        ],
-      ),
-      actions: [
-        const TheavDialogAction<bool>(label: 'Отмена', result: false),
-        TheavDialogAction<bool>(
-          label: isEdit ? 'Сохранить' : 'Добавить',
-          result: true,
-          isPrimary: true,
+              : _surnameController.text.trim(),
+          initialNote: _contactEntry?.note,
+          username: _usernameController.text.trim(),
+          originalDisplayName: resolvedOrigName,
+          originalAvatarUrl: _originalAvatarUrl,
+          customAvatarUrl: _contactEntry?.customAvatarUrl,
+          currentChatId: _resolvedChatId,
+          isOnline: _isOnline,
+          lastSeen: _lastSeen,
+          autofocusNote: autofocusNote,
         ),
-      ],
+      ),
     );
-
-    final firstName = firstNameCtrl.text.trim();
-    final lastName = lastNameCtrl.text.trim();
-    firstNameCtrl.dispose();
-    lastNameCtrl.dispose();
-
-    if (confirmed != true || !mounted) return;
-
-    final res = isEdit
-        ? await ContactsService.updateContact(
-            uid,
-            firstName: firstName,
-            lastName: lastName,
-          )
-        : await ContactsService.addContact(
-            userId: uid,
-            firstName: firstName,
-            lastName: lastName,
-          );
     if (!mounted) return;
 
-    if (res['success'] == true) {
-      final updated = ContactsService.getCached(uid);
-      setState(() {
-        _contactEntry = updated;
-        _isInContacts = true;
-      });
-      _showToast(isEdit ? 'Контакт обновлён' : 'Контакт добавлен');
+    final updated = ContactsService.getCached(uid);
+    setState(() {
+      _contactEntry = updated;
+      _isInContacts = updated?.isContact == true;
+      _syncPeerAvatarUrlsFromState();
+    });
+    _updateTopLuminance();
+    if (result != null) {
+      widget.onUpdate?.call();
       unawaited(_loadOtherUserProfile());
-    } else {
-      _showToast(
-        res['message']?.toString() ?? 'Не удалось сохранить контакт',
-      );
     }
   }
 
@@ -7212,15 +8169,22 @@ class ProfileScreenState extends State<ProfileScreen>
     if (uid == null || uid.isEmpty) return;
     HapticUtils.tap();
 
+    final l10n = context.l10n;
     final confirmed = await showTheavDialog<bool>(
       context: context,
-      title: 'Удалить из контактов?',
-      message:
-          'Контакт «${_getDisplayName()}» будет удалён из вашего списка контактов.',
-      actions: const [
-        TheavDialogAction<bool>(label: 'Отмена', result: false),
+      title: _tr(l10n, 'contact_delete_button', 'Удалить контакт'),
+      message: _tr(
+        l10n,
+        'contact_delete_confirm_body',
+        'Контакт «{name}» будет удалён из вашего списка контактов.',
+      ).replaceAll('{name}', _getDisplayName()),
+      actions: [
         TheavDialogAction<bool>(
-          label: 'Удалить',
+          label: _tr(l10n, 'profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _tr(l10n, 'profile_delete_action', 'Удалить'),
           result: true,
           isDestructive: true,
         ),
@@ -7232,11 +8196,14 @@ class ProfileScreenState extends State<ProfileScreen>
     if (!mounted) return;
 
     if (res['success'] == true) {
+      final remaining = ContactsService.getCached(uid);
       setState(() {
-        _contactEntry = null;
-        _isInContacts = false;
+        _contactEntry = remaining;
+        _isInContacts = remaining?.isContact == true;
+        _syncPeerAvatarUrlsFromState();
       });
       _showToast('Контакт удалён');
+      widget.onUpdate?.call();
       unawaited(_loadOtherUserProfile());
     } else {
       _showToast(
@@ -7246,6 +8213,10 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   String _getDisplayName() {
+    if (_isUser) {
+      final custom = _contactEntry?.customName.trim() ?? '';
+      if (custom.isNotEmpty) return custom;
+    }
     final name = _nameController.text.trim();
     final surname = _surnameController.text.trim();
     if (name.isEmpty && surname.isEmpty) {

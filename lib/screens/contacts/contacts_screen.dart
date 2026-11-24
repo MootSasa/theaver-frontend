@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
+import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
@@ -13,6 +14,7 @@ import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../chat/private_chat_screen.dart';
+import 'contact_edit_screen.dart';
 
 /// Telegram-style Contacts screen backed by `/api/contacts`, built with
 /// Theaver's Dual-Mode Liquid Glass / Material 3 Matte design system.
@@ -33,14 +35,26 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   void initState() {
     super.initState();
+    _contacts = ContactsService.getSavedContacts();
+    _isLoading = _contacts.isEmpty;
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _searchController.addListener(() {
       if (mounted) setState(() => _query = _searchController.text.trim());
     });
     _loadContacts(forceRefresh: true);
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    setState(() {
+      _contacts = ContactsService.getSavedContacts();
+      _isLoading = false;
+    });
+  }
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -61,7 +75,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
     return _contacts.where((c) {
       return c.effectiveName.toLowerCase().contains(q) ||
           c.username.toLowerCase().contains(q) ||
-          c.displayName.toLowerCase().contains(q);
+          c.displayName.toLowerCase().contains(q) ||
+          (c.originalDisplayName?.toLowerCase().contains(q) ?? false) ||
+          c.note.toLowerCase().contains(q);
     }).toList();
   }
 
@@ -77,13 +93,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
       if (!mounted) return;
       if (result['success'] == true) {
         final chat = result['chat'] as Chat;
+        final effectiveAvatar = contact.effectiveAvatarUrl;
         if (TilingLayoutController.instance.isWorkspaceMounted) {
           Navigator.of(context).pop();
           TilingLayoutController.instance.openChatInActiveTile(
             chatId: chat.id,
             chatType: 'private',
             chatName: contact.effectiveName,
-            avatarUrl: contact.avatarUrl,
+            avatarUrl: effectiveAvatar,
             otherUserId: contact.contactUserId,
           );
           return;
@@ -94,8 +111,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
               otherUserName: contact.effectiveName,
-              otherUserAvatar:
-                  contact.avatarUrl.isNotEmpty ? contact.avatarUrl : null,
+              otherUserAvatar: effectiveAvatar,
               otherUserOnline: contact.isOnline,
               otherUserId: contact.contactUserId,
             ),
@@ -170,52 +186,31 @@ class _ContactsScreenState extends State<ContactsScreen> {
     }
   }
 
-  Future<void> _showEditContactDialog(ContactItem contact) async {
-    final firstNameCtrl = TextEditingController(text: contact.customFirstName);
-    final lastNameCtrl = TextEditingController(text: contact.customLastName);
-    final confirmed = await showTheavDialog<bool>(
-      context: context,
-      title: 'Изменить контакт',
-      content: TheavInsetGroup(
-        margin: EdgeInsets.zero,
-        dividerIndent: 16,
-        children: [
-          TheavInlineTextField(
-            controller: firstNameCtrl,
-            placeholder: 'Имя',
-            autofocus: true,
-          ),
-          TheavInlineTextField(
-            controller: lastNameCtrl,
-            placeholder: 'Фамилия',
-          ),
-        ],
+  Future<void> _openEditContact(ContactItem contact) async {
+    HapticUtils.tap();
+    final result = await Navigator.of(context).push<ContactEditResult>(
+      SwipeBackPageRoute(
+        builder: (_) => ContactEditScreen(
+          userId: contact.contactUserId,
+          isContact: true,
+          initialContact: contact,
+          username: contact.username,
+          originalDisplayName:
+              contact.originalDisplayName ?? contact.displayName,
+          originalAvatarUrl: contact.originalAvatarUrl ??
+              (!contact.hasCustomAvatar && contact.avatarUrl.isNotEmpty
+                  ? contact.avatarUrl
+                  : null),
+          customAvatarUrl: contact.customAvatarUrl,
+          isOnline: contact.isOnline,
+          lastSeen: contact.lastSeen,
+          lastSeenStatus: contact.lastSeenStatus,
+        ),
       ),
-      actions: const [
-        TheavDialogAction<bool>(label: 'Отмена', result: false),
-        TheavDialogAction<bool>(label: 'Сохранить', result: true, isPrimary: true),
-      ],
-    );
-    final firstName = firstNameCtrl.text.trim();
-    final lastName = lastNameCtrl.text.trim();
-    firstNameCtrl.dispose();
-    lastNameCtrl.dispose();
-
-    if (confirmed != true || !mounted) return;
-    final res = await ContactsService.updateContact(
-      contact.contactUserId,
-      firstName: firstName,
-      lastName: lastName,
     );
     if (!mounted) return;
-    if (res['success'] == true) {
-      GlassToastService().show(context, 'Контакт обновлён');
+    if (result != null) {
       await _loadContacts(forceRefresh: true);
-    } else {
-      GlassToastService().showError(
-        context,
-        res['message']?.toString() ?? 'Не удалось обновить контакт',
-      );
     }
   }
 
@@ -274,7 +269,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   height: 20,
                   color: context.theav.primary,
                 ),
-                title: 'Изменить имя контакта',
+                title: context.trOr('contact_edit_title', 'Изменить контакт'),
                 onTap: () => Navigator.of(sheetCtx).pop('edit'),
               ),
               TheavListRow(
@@ -283,7 +278,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                   height: 20,
                   color: context.theav.error,
                 ),
-                title: 'Удалить из контактов',
+                title: context.trOr('contact_delete_button', 'Удалить контакт'),
                 isDestructive: true,
                 onTap: () => Navigator.of(sheetCtx).pop('delete'),
               ),
@@ -298,7 +293,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
         await _openContactChat(contact);
         break;
       case 'edit':
-        await _showEditContactDialog(contact);
+        await _openEditContact(contact);
         break;
       case 'delete':
         await _confirmRemoveContact(contact);
@@ -412,9 +407,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       onLongPress: () => _showContactActions(contact),
                       child: TheavListRow(
                         leading: AvatarWithStatus(
-                          avatarUrl: contact.avatarUrl.isNotEmpty
-                              ? contact.avatarUrl
-                              : null,
+                          userId: contact.contactUserId,
+                          avatarUrl: contact.effectiveAvatarUrl,
                           name: contact.effectiveName,
                           radius: 21,
                           isOnline: contact.isOnline,

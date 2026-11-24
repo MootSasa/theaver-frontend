@@ -5,12 +5,15 @@ import 'package:drift/drift.dart' show Value;
 import 'package:uuid/uuid.dart';
 import 'auth_service.dart';
 import 'avatar_sync_service.dart';
+import 'chat_instant_cache.dart';
 import 'chat_service.dart';
 import 'community_service.dart';
+import 'contacts_service.dart';
 import 'draft_service.dart';
 import 'file_service.dart';
 import 'media_cache_manager.dart';
 import 'peer_customization_cache.dart';
+import 'profile_instant_cache.dart';
 import 'websocket_service.dart';
 import 'database/app_database.dart';
 import '../models/profile_customization.dart';
@@ -35,6 +38,121 @@ class SyncService {
 
   static int _parseInt(dynamic raw, [int fallback = 0]) =>
       _parseNullableInt(raw) ?? fallback;
+
+  /// Syncs [ChatInstantCache] and [ProfileInstantCache] after [ContactsService.applyRemoteContactEvent].
+  static Future<void> syncInstantCachesAfterContactEvent(
+    WebSocketEventType type,
+    Map<String, dynamic> data,
+  ) async {
+    if (type == WebSocketEventType.contactUpdated) {
+      final rawMap = data['contact'] is Map
+          ? Map<String, dynamic>.from(data['contact'] as Map)
+          : data;
+      final uid = (rawMap['contact_user_id'] ??
+              rawMap['user_id'] ??
+              rawMap['id'] ??
+              '')
+          .toString()
+          .trim();
+      if (uid.isEmpty) return;
+      final item = ContactsService.getCached(uid);
+      if (item == null) return;
+      ChatInstantCache.instance.applyUserContactOverride(
+        uid,
+        effectiveName: item.effectiveName,
+        effectiveAvatarUrl: item.effectiveAvatarUrl,
+      );
+      ProfileInstantCache.instance.applyUserContactOverride(
+        uid,
+        customName: item.hasCustomName ? item.customName : '',
+        customAvatarUrl: item.hasCustomAvatar ? item.customAvatarUrl : '',
+        originalDisplayName: item.originalDisplayName ??
+            (item.displayName.trim().isNotEmpty ? item.displayName : null),
+        originalAvatarUrl: item.originalAvatarUrl ??
+            (!item.hasCustomAvatar && item.avatarUrl.trim().isNotEmpty
+                ? item.avatarUrl
+                : null),
+      );
+      return;
+    }
+
+    if (type == WebSocketEventType.contactDeleted) {
+      final uid = (data['contact_user_id'] ??
+              data['deleted_user_id'] ??
+              data['user_id'] ??
+              data['id'] ??
+              '')
+          .toString()
+          .trim();
+      if (uid.isEmpty) return;
+      final remaining = ContactsService.getCached(uid);
+      if (remaining != null) {
+        ChatInstantCache.instance.applyUserContactOverride(
+          uid,
+          effectiveName: remaining.effectiveName,
+          effectiveAvatarUrl: remaining.effectiveAvatarUrl,
+        );
+        ProfileInstantCache.instance.applyUserContactOverride(
+          uid,
+          customName: remaining.hasCustomName ? remaining.customName : '',
+          customAvatarUrl:
+              remaining.hasCustomAvatar ? remaining.customAvatarUrl : '',
+          originalDisplayName: remaining.originalDisplayName ??
+              (remaining.displayName.trim().isNotEmpty
+                  ? remaining.displayName
+                  : null),
+          originalAvatarUrl: remaining.originalAvatarUrl ??
+              (!remaining.hasCustomAvatar &&
+                      remaining.avatarUrl.trim().isNotEmpty
+                  ? remaining.avatarUrl
+                  : null),
+        );
+        return;
+      }
+
+      String origName =
+          (data['original_display_name'] ?? data['display_name'] ?? '')
+              .toString()
+              .trim();
+      if (origName.isEmpty) {
+        final rawUsername = (data['username'] ?? '').toString().trim();
+        if (rawUsername.isNotEmpty) {
+          origName = '@$rawUsername';
+        }
+      }
+      String origAvatar =
+          (data['original_avatar_url'] ?? data['avatar_url'] ?? '')
+              .toString()
+              .trim();
+      if (origName.isEmpty || origAvatar.isEmpty) {
+        try {
+          final dbChat = await AppDatabase().getPrivateChatWithUser(uid);
+          if (dbChat != null) {
+            if (origName.isEmpty && dbChat.name.trim().isNotEmpty) {
+              origName = dbChat.name.trim();
+            }
+            if (origAvatar.isEmpty &&
+                dbChat.avatarUrl != null &&
+                dbChat.avatarUrl!.trim().isNotEmpty) {
+              origAvatar = dbChat.avatarUrl!.trim();
+            }
+          }
+        } catch (_) {}
+      }
+      ChatInstantCache.instance.applyUserContactOverride(
+        uid,
+        effectiveName: origName.isNotEmpty ? origName : null,
+        effectiveAvatarUrl: origAvatar,
+      );
+      ProfileInstantCache.instance.applyUserContactOverride(
+        uid,
+        customName: '',
+        customAvatarUrl: '',
+        originalDisplayName: origName.isNotEmpty ? origName : null,
+        originalAvatarUrl: origAvatar.isNotEmpty ? origAvatar : null,
+      );
+    }
+  }
 
   /// Инициализация: открыть БД, запустить первичную синхронизацию
   Future<void> initialize() async {
@@ -263,6 +381,26 @@ class SyncService {
           await _db.updateUserCustomizationJson(targetUserId, cachedJson);
         }
         break;
+      case 'contact_updated':
+        await ContactsService.applyRemoteContactEvent(
+          WebSocketEventType.contactUpdated,
+          payload,
+        );
+        await syncInstantCachesAfterContactEvent(
+          WebSocketEventType.contactUpdated,
+          payload,
+        );
+        break;
+      case 'contact_deleted':
+        await ContactsService.applyRemoteContactEvent(
+          WebSocketEventType.contactDeleted,
+          payload,
+        );
+        await syncInstantCachesAfterContactEvent(
+          WebSocketEventType.contactDeleted,
+          payload,
+        );
+        break;
       case 'chat_settings_updated':
       case 'message_views_updated':
       case 'post_comments_updated':
@@ -406,12 +544,57 @@ class SyncService {
     final String? fwdAvatarUrl =
         (payload['forwarded_from_avatar_url'] ?? payload['forward_from_avatar_url'])
             ?.toString();
+    final String syncSenderId = payload['sender_id']?.toString() ?? '';
+    final bool syncIsAnon = payload['is_from_anonymous_admin'] == true ||
+        payload['is_from_anonymous_admin'] == 1;
+    final bool isHumanSyncSender = syncSenderId.isNotEmpty &&
+        syncSenderId != '0' &&
+        !syncIsAnon &&
+        parsedSenderChatId == null;
+    final String? resolvedSyncSenderName = isHumanSyncSender
+        ? ContactsService.resolveName(
+            syncSenderId,
+            payload['sender_name']?.toString() ?? '',
+          )
+        : payload['sender_name']?.toString();
+    final String? resolvedSyncSenderAvatar = isHumanSyncSender
+        ? ContactsService.resolveAvatarUrl(
+            syncSenderId,
+            payload['sender_avatar_url']?.toString(),
+          )
+        : payload['sender_avatar_url']?.toString();
+    final String? syncReplySenderId = payload['reply_to_sender_id']?.toString();
+    final String? resolvedSyncReplySenderName = (syncReplySenderId != null &&
+            syncReplySenderId.isNotEmpty &&
+            syncReplySenderId != '0')
+        ? ContactsService.resolveName(
+            syncReplySenderId,
+            payload['reply_to_sender_name']?.toString() ?? '',
+          )
+        : payload['reply_to_sender_name']?.toString();
+    final String? syncFwdId = (payload['forward_from_id'] ??
+            payload['forwarded_from_user_id'] ??
+            payload['forwarded_from_chat_id'])
+        ?.toString();
+    final bool isUserSyncFwd = payload['forwarded_from_chat_id'] == null &&
+        syncFwdId != null &&
+        syncFwdId.isNotEmpty &&
+        syncFwdId != '0';
+    final String? rawSyncFwdName =
+        (payload['forward_from_name'] ?? payload['forwarded_from_name'])
+            ?.toString();
+    final String? resolvedSyncFwdName = isUserSyncFwd && rawSyncFwdName != null
+        ? ContactsService.resolveName(syncFwdId, rawSyncFwdName)
+        : rawSyncFwdName;
+    final String? resolvedSyncFwdAvatar = isUserSyncFwd
+        ? ContactsService.resolveAvatarUrl(syncFwdId, fwdAvatarUrl)
+        : fwdAvatarUrl;
 
     await _db.saveMessage(MessagesCompanion(
       serverId: Value(serverId),
       localId: Value(_uuid.v4()),
       chatId: Value(chatId),
-      senderId: Value(payload['sender_id']?.toString() ?? ''),
+      senderId: Value(syncSenderId),
       content: Value(payload['content']?.toString() ?? ''),
       messageType: Value(payload['message_type']?.toString() ?? 'text'),
       fileUrl: Value(() {
@@ -427,16 +610,16 @@ class SyncService {
       quoteText: Value(payload['quote_text']?.toString()),
       quoteOffset: Value(payload['quote_offset'] as int? ?? 0),
       quoteLength: Value(payload['quote_length'] as int? ?? 0),
-      replyToSenderId: Value(payload['reply_to_sender_id']?.toString()),
-      replyToSenderName: Value(payload['reply_to_sender_name']?.toString()),
+      replyToSenderId: Value(syncReplySenderId),
+      replyToSenderName: Value(resolvedSyncReplySenderName),
       replyToContent: Value(payload['reply_to_content']?.toString()),
       replyToMessageType:
           Value(payload['reply_to_message_type']?.toString() ?? 'text'),
       isRead: const Value(false),
       isEdited: const Value(false),
       sendStatus: Value(MessageSendStatus.sent.index),
-      senderName: Value(payload['sender_name']?.toString()),
-      senderAvatarUrl: Value(payload['sender_avatar_url']?.toString()),
+      senderName: Value(resolvedSyncSenderName),
+      senderAvatarUrl: Value(resolvedSyncSenderAvatar),
       createdAt: Value(payload['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
       isForward: Value(payload['is_forward'] == true ||
@@ -448,14 +631,9 @@ class SyncService {
               payload['forward_from_name'].toString().isNotEmpty) ||
           (payload['forwarded_from_name'] != null &&
               payload['forwarded_from_name'].toString().isNotEmpty)),
-      forwardFromId: Value((payload['forward_from_id'] ??
-              payload['forwarded_from_user_id'] ??
-              payload['forwarded_from_chat_id'])
-          ?.toString()),
-      forwardFromName: Value(
-          (payload['forward_from_name'] ?? payload['forwarded_from_name'])
-              ?.toString()),
-      forwardFromAvatarUrl: Value(fwdAvatarUrl),
+      forwardFromId: Value(syncFwdId),
+      forwardFromName: Value(resolvedSyncFwdName),
+      forwardFromAvatarUrl: Value(resolvedSyncFwdAvatar),
       senderCustomizationJson: Value(senderCustJsonStr),
       entities: Value(entitiesStr),
       linkPreviewOptions: Value(linkPreviewOptionsStr),
@@ -548,8 +726,8 @@ class SyncService {
           isRound: isRound,
           fileUrl: payload['file_url']?.toString(),
           groupedId: groupedId,
-          senderId: payload['sender_id']?.toString(),
-          senderName: payload['sender_name']?.toString(),
+          senderId: syncSenderId.isNotEmpty ? syncSenderId : null,
+          senderName: resolvedSyncSenderName,
           incrementUnread: false,
         );
       }
@@ -559,17 +737,17 @@ class SyncService {
       await _db.saveChat(ChatsCompanion(
         chatId: Value(chatId),
         chatType: Value(stubChatType),
-        name: Value(payload['sender_name']?.toString() ?? 'Чат'),
-        avatarUrl: Value(payload['sender_avatar_url']?.toString()),
+        name: Value(resolvedSyncSenderName ?? 'Чат'),
+        avatarUrl: Value(resolvedSyncSenderAvatar),
         lastMessage: Value(content),
         lastMessageTime: Value(safeCreatedAt),
         lastMessageType: Value(messageType),
         lastMessageIsRound: Value(isRound),
         lastMessageFileUrl: Value(payload['file_url']?.toString()),
         lastMessageGroupedId: Value(groupedId),
-        lastMessageSenderId: Value(payload['sender_id']?.toString()),
-        lastMessageSenderName: Value(payload['sender_name']?.toString()),
-        otherUserId: Value(payload['sender_id']?.toString()),
+        lastMessageSenderId: Value(syncSenderId.isNotEmpty ? syncSenderId : null),
+        lastMessageSenderName: Value(resolvedSyncSenderName),
+        otherUserId: Value(syncSenderId.isNotEmpty ? syncSenderId : null),
         updatedAt: Value(safeCreatedAt),
         unreadCount: const Value(1),
         showAuthorProfiles: Value(stubChatType != 'channel'),
@@ -746,12 +924,24 @@ class SyncService {
     final reactions = ReactionSettings.fromChatJson(payload);
     final linkedChatId = payload['linked_chat_id']?.toString().trim();
 
+    final otherUid = payload['other_user_id']?.toString();
+    final isPrivatePeer =
+        chatType == 'private' && otherUid != null && otherUid.isNotEmpty;
+    final resolvedChatName =
+        isPrivatePeer ? ContactsService.resolveName(otherUid, name) : name;
+    final resolvedChatAvatar = isPrivatePeer
+        ? ContactsService.resolveAvatarUrl(
+            otherUid,
+            payload['avatar_url']?.toString(),
+          )
+        : payload['avatar_url']?.toString();
+
     await _db.saveChat(ChatsCompanion(
       chatId: Value(chatId),
       chatType: Value(chatType),
-      name: Value(name),
-      avatarUrl: Value(payload['avatar_url']?.toString()),
-      otherUserId: Value(payload['other_user_id']?.toString()),
+      name: Value(resolvedChatName),
+      avatarUrl: Value(resolvedChatAvatar),
+      otherUserId: Value(otherUid),
       updatedAt: Value(payload['updated_at']?.toString() ??
           DateTime.now().toIso8601String()),
       unreadCount: const Value(0),
@@ -801,15 +991,29 @@ class SyncService {
     final reactions = ReactionSettings.fromChatJson(payload);
     final rawLinked = payload['linked_chat_id']?.toString().trim();
 
+    final peerUid =
+        (payload['other_user_id'] ?? chat.otherUserId)?.toString();
+    final isPrivatePeer =
+        chat.chatType == 'private' && peerUid != null && peerUid.isNotEmpty;
+    final resolvedName = payload.containsKey('name')
+        ? (isPrivatePeer
+            ? ContactsService.resolveName(peerUid, payload['name'].toString())
+            : payload['name'].toString())
+        : chat.name;
+    final resolvedAvatar = payload.containsKey('avatar_url')
+        ? (isPrivatePeer
+            ? ContactsService.resolveAvatarUrl(
+                peerUid,
+                payload['avatar_url']?.toString(),
+              )
+            : payload['avatar_url']?.toString())
+        : chat.avatarUrl;
+
     // Build companion with only updated fields
     final companion = ChatsCompanion(
       chatId: Value(chatId),
-      name: payload.containsKey('name')
-          ? Value(payload['name'].toString())
-          : Value(chat.name),
-      avatarUrl: payload.containsKey('avatar_url')
-          ? Value(payload['avatar_url']?.toString())
-          : Value(chat.avatarUrl),
+      name: Value(resolvedName),
+      avatarUrl: Value(resolvedAvatar),
       unreadCount: payload.containsKey('unread_count')
           ? Value(payload['unread_count'] as int? ?? chat.unreadCount)
           : Value(chat.unreadCount),

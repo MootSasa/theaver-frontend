@@ -1,20 +1,21 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../services/account_manager.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
-import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/user/avatar_with_status.dart';
@@ -89,6 +90,9 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
 
   String? _avatarUrl;
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  String? _pickedAvatarFileName;
+  bool _deleteAvatarRequested = false;
   late bool _isPublic;
   late bool _historyForNew;
   late int _slowModeInterval;
@@ -387,19 +391,112 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     return 'Все';
   }
 
+  bool get _hasNewPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  bool get _hasActiveAvatarPreview {
+    if (_hasNewPickedAvatar) return true;
+    if (_deleteAvatarRequested) return false;
+    final valid = getValidAvatarUrl(_avatarUrl);
+    return valid != null && valid.isNotEmpty;
+  }
+
+  ImageProvider? get _previewAvatarImage {
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    if (_deleteAvatarRequested) return null;
+    final valid = getValidAvatarUrl(_avatarUrl);
+    if (valid == null || valid.isEmpty) return null;
+    return avatarImageProvider(valid, maxDecodeDimension: 288);
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      maxHeight: 1600,
-      imageQuality: 90,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.setPhoto,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : widget.initialName,
+      canDeleteCurrent: _hasActiveAvatarPreview,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarFileName = null;
+        _deleteAvatarRequested = true;
       });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarFileName = picked.fileName;
+        _deleteAvatarRequested = false;
+      });
+    }
+  }
+
+  Future<void> _confirmAndStageDeleteAvatar() async {
+    if (!_hasActiveAvatarPreview || _isSaving) return;
+    HapticUtils.heavy();
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: _tr('avatar_delete_photo', 'Удалить фото'),
+      message: _tr(
+        'avatar_delete_confirm_chat',
+        'Удалить текущее фото чата?',
+      ),
+      actions: [
+        TheavDialogAction<bool>(
+          label: _tr('profile_cancel', 'Отмена'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: _tr('avatar_delete_photo', 'Удалить фото'),
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (confirmed == true && mounted) {
+      setState(() {
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarFileName = null;
+        _deleteAvatarRequested = true;
+      });
+    }
+  }
+
+  Future<void> _syncChatAvatarLocalCaches(
+    String avatarUrl, {
+    List<ChatAvatarItem>? avatars,
+  }) async {
+    try {
+      await AppDatabase().updateChatAvatar(widget.chatId, avatarUrl);
+    } catch (_) {}
+    final snap = ChatInstantCache.instance.getSync(widget.chatId);
+    if (snap?.chat != null) {
+      ChatInstantCache.instance.putChatSummaries([
+        snap!.chat!.copyWith(avatarUrl: avatarUrl),
+      ]);
+    }
+    if (snap?.chatDetails != null) {
+      ChatInstantCache.instance.putChatDetails(
+        snap!.chatDetails!.copyWith(
+          avatarUrl: avatarUrl,
+          avatars: avatars,
+        ),
+      );
     }
   }
 
@@ -425,10 +522,58 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     setState(() => _isSaving = true);
 
     try {
-      String? finalAvatarUrl = _avatarUrl;
-      if (_pickedAvatarFile != null) {
-        final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-        finalAvatarUrl = uploadRes.url;
+      if (_deleteAvatarRequested && !_hasNewPickedAvatar) {
+        final hasServerAvatar = getValidAvatarUrl(_avatarUrl) != null;
+        if (hasServerAvatar) {
+          final delRes = await ChatService.deleteChatAvatar(widget.chatId);
+          if (!mounted) return;
+          if (delRes['success'] != true) {
+            GlassToastService().showError(
+              context,
+              delRes['message']?.toString() ?? 'Не удалось удалить фото',
+            );
+            return;
+          }
+          final nextUrl = delRes['avatar_url']?.toString().trim() ?? '';
+          _avatarUrl = nextUrl;
+          _deleteAvatarRequested = false;
+          await _syncChatAvatarLocalCaches(nextUrl);
+        } else {
+          _deleteAvatarRequested = false;
+        }
+      } else if (_hasNewPickedAvatar) {
+        final uploadFile = _pickedAvatarFile ??
+            File(
+              (_pickedAvatarFileName != null &&
+                      _pickedAvatarFileName!.trim().isNotEmpty)
+                  ? _pickedAvatarFileName!.trim()
+                  : 'avatar.jpg',
+            );
+        final uploadRes = await ChatService.uploadChatAvatar(
+          widget.chatId,
+          uploadFile,
+          bytes: _pickedAvatarBytes,
+          fileName: _pickedAvatarFileName,
+        );
+        if (!mounted) return;
+        if (uploadRes['success'] != true) {
+          GlassToastService().showError(
+            context,
+            uploadRes['message']?.toString() ?? 'Не удалось загрузить фото',
+          );
+          return;
+        }
+        final uploadedUrl = uploadRes['avatar_url']?.toString().trim() ?? '';
+        final List<ChatAvatarItem>? updatedAvatars =
+            uploadRes['avatars'] is List<ChatAvatarItem>
+                ? uploadRes['avatars'] as List<ChatAvatarItem>
+                : null;
+        _avatarUrl = uploadedUrl;
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarFileName = null;
+        _deleteAvatarRequested = false;
+        await _syncChatAvatarLocalCaches(uploadedUrl, avatars: updatedAvatars);
       }
 
       final cleanUsername = _cleanUsername;
@@ -436,7 +581,6 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           ? <String, dynamic>{
               'name': newName,
               'description': _descriptionController.text.trim(),
-              if (finalAvatarUrl != null) 'avatar_url': finalAvatarUrl,
               'is_public': _isPublic,
               'username': _isPublic ? cleanUsername : '',
               if (!widget.isChannel) 'history_for_new': _historyForNew,
@@ -455,7 +599,6 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           : <String, dynamic>{
               'name': newName,
               'description': _descriptionController.text.trim(),
-              if (finalAvatarUrl != null) 'avatar_url': finalAvatarUrl,
             };
 
       final res = await ChatService.updateGroupSettings(widget.chatId, payload);
@@ -471,14 +614,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         return;
       }
 
-      try {
-        if (finalAvatarUrl != null && finalAvatarUrl.isNotEmpty) {
-          await AppDatabase().updateChatAvatar(widget.chatId, finalAvatarUrl);
-        }
-      } catch (_) {}
-
       if (!mounted) return;
-      _avatarUrl = finalAvatarUrl;
       Navigator.pop<Map<String, dynamic>>(context, _buildResultMap());
     } catch (e) {
       if (!mounted) return;
@@ -946,7 +1082,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
   Widget build(BuildContext context) {
     final palette = context.theav;
     final disableAnim = MediaQuery.disableAnimationsOf(context);
-    final validAvatar = getValidAvatarUrl(_avatarUrl);
+    final previewAvatarImage = _previewAvatarImage;
     final slowBadge = _slowModeBadge(_slowModeInterval);
 
     return SwipeBackPopScope(
@@ -991,59 +1127,102 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
           ),
           children: [
             Center(
-              child: GestureDetector(
-                onTap: _pickAvatar,
-                child: Stack(
-                  children: [
-                    CircleAvatar(
-                      radius: 48,
-                      backgroundColor: palette.primary.withValues(alpha: 0.2),
-                      backgroundImage: _pickedAvatarFile != null
-                          ? FileImage(_pickedAvatarFile!) as ImageProvider
-                          : (validAvatar != null && validAvatar.isNotEmpty
-                              ? CachedNetworkImageProvider(validAvatar)
-                              : null),
-                      child: (_pickedAvatarFile == null &&
-                              (validAvatar == null || validAvatar.isEmpty))
-                          ? Text(
-                              _nameController.text.trim().isNotEmpty
-                                  ? _nameController.text.trim()[0].toUpperCase()
-                                  : (widget.isChannel ? 'C' : 'G'),
-                              style: TextStyle(
-                                fontSize: 34,
-                                fontWeight: FontWeight.w600,
-                                color: palette.primary,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    onTap: _pickAvatar,
+                    child: Stack(
+                      children: [
+                        CircleAvatar(
+                          radius: 48,
+                          backgroundColor: palette.primary.withValues(alpha: 0.2),
+                          backgroundImage: previewAvatarImage,
+                          child: previewAvatarImage == null
+                              ? Text(
+                                  _nameController.text.trim().isNotEmpty
+                                      ? _nameController.text
+                                          .trim()[0]
+                                          .toUpperCase()
+                                      : (widget.isChannel ? 'C' : 'G'),
+                                  style: TextStyle(
+                                    fontSize: 34,
+                                    fontWeight: FontWeight.w600,
+                                    color: palette.primary,
+                                  ),
+                                )
+                              : null,
+                        ),
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: palette.primary,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: palette.background,
+                                width: 2,
                               ),
-                            )
-                          : null,
-                    ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: palette.primary,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: palette.background,
-                            width: 2,
+                            ),
+                            alignment: Alignment.center,
+                            child: iconoir.Camera(
+                              width: 16,
+                              height: 16,
+                              color: palette.onPrimary,
+                            ),
                           ),
                         ),
-                        alignment: Alignment.center,
-                        child: iconoir.Camera(
-                          width: 16,
-                          height: 16,
-                          color: palette.onPrimary,
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      TextButton.icon(
+                        onPressed: _isSaving ? null : _pickAvatar,
+                        icon: iconoir.MediaImage(
+                          width: 15,
+                          height: 15,
+                          color: palette.primary,
+                        ),
+                        label: Text(
+                          _tr('avatar_choose_photo', 'Выбрать фото'),
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                            color: palette.primary,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                      if (_hasActiveAvatarPreview)
+                        TextButton.icon(
+                          onPressed:
+                              _isSaving ? null : _confirmAndStageDeleteAvatar,
+                          icon: iconoir.Trash(
+                            width: 15,
+                            height: 15,
+                            color: palette.error,
+                          ),
+                          label: Text(
+                            _tr('avatar_delete_photo', 'Удалить фото'),
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                              color: palette.error,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
 
             // Название и описание
             TheavInsetGroup(
