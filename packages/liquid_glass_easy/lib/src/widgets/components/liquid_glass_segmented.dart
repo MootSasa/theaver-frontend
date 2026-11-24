@@ -433,8 +433,11 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
 
         // ── labels (on top, tappable) ──
         Positioned.fill(
-          child: Padding(
-            padding: EdgeInsets.all(pad),
+          child: MetaData(
+            metaData: 'liquid_glass_horizontal_gesture',
+            behavior: HitTestBehavior.deferToChild,
+            child: Padding(
+              padding: EdgeInsets.all(pad),
             child: Material(
               type: MaterialType.transparency,
               child: Row(
@@ -475,7 +478,8 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
                         ),
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

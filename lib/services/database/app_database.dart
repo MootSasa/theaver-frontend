@@ -594,10 +594,17 @@ class AppDatabase extends _$AppDatabase {
       _isInitialized = true;
       debugPrint('AppDatabase: Initialized');
 
-      // 1. Очистка пустых приватных чатов-«призраков» (без сообщений, без черновиков, не закреплены, пустое имя)
+      // 1. Очистка пустых приватных чатов-«призраков» (без сообщений/медиа/даты, не закреплены, без непрочитанных, пустое имя)
       try {
         await customStatement(
-          "DELETE FROM chats WHERE chat_type = 'private' AND (name = '' OR name = '?' OR name IS NULL) AND (last_message IS NULL OR last_message = '') AND (is_pinned IS NULL OR is_pinned = 0)",
+          "DELETE FROM chats WHERE chat_type = 'private' "
+          "AND (name = '' OR name = '?' OR name IS NULL) "
+          "AND (last_message IS NULL OR last_message = '') "
+          "AND (last_message_type IS NULL OR last_message_type = '') "
+          "AND (last_message_file_url IS NULL OR last_message_file_url = '') "
+          "AND (last_message_time IS NULL OR last_message_time = '') "
+          "AND (is_pinned IS NULL OR is_pinned = 0) "
+          "AND (unread_count IS NULL OR unread_count = 0)",
         );
         await customStatement(
           "UPDATE chats SET name = 'Пользователь' WHERE (name = '' OR name = '?' OR name IS NULL) AND chat_type = 'private'",
@@ -644,11 +651,15 @@ class AppDatabase extends _$AppDatabase {
     if (!includeArchived) {
       query.where((t) => t.isArchived.equals(false));
     }
-    // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
+    // Скрываем пустые приватные чаты-«призраки» (сохраняем чаты с текстом, медиа без подписи, датой, закрепом или непрочитанными)
     query.where((t) =>
         t.chatType.isNotValue('private') |
         t.isPinned.equals(true) |
-        (t.lastMessage.isNotNull() & t.lastMessage.isNotValue('')));
+        t.unreadCount.isNotValue(0) |
+        (t.lastMessage.isNotNull() & t.lastMessage.isNotValue('')) |
+        (t.lastMessageType.isNotNull() & t.lastMessageType.isNotValue('')) |
+        (t.lastMessageFileUrl.isNotNull() & t.lastMessageFileUrl.isNotValue('')) |
+        (t.lastMessageTime.isNotNull() & t.lastMessageTime.isNotValue('')));
 
     if (filter == 1) {
       // Личные чаты (private и saved)
@@ -853,8 +864,8 @@ class AppDatabase extends _$AppDatabase {
     await ensureInitialized();
     final existing = await getChat(chatId);
     if (existing == null) return;
-    final newUnread =
-        incrementUnread ? existing.unreadCount + 1 : existing.unreadCount;
+    final baseUnread = existing.unreadCount < 0 ? 0 : existing.unreadCount;
+    final newUnread = incrementUnread ? baseUnread + 1 : existing.unreadCount;
     await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
       ChatsCompanion(
         lastMessage: Value(content),

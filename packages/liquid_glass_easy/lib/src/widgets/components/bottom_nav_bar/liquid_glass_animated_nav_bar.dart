@@ -1529,6 +1529,20 @@ class _LiquidGlassAnimatedNavBarState extends State<LiquidGlassAnimatedNavBar>
               ],
             ),
           ),
+          // Covers the entire visual bar capsule (including its padding rim)
+          // so horizontal drags starting on the pill bar never bleed through
+          // to ancestor route swipe-back detectors, without blocking the page body.
+          Positioned(
+            left: _barLeft,
+            bottom: _effBottomMargin,
+            width: layout.width,
+            height: layout.height,
+            child: const MetaData(
+              metaData: 'liquid_glass_horizontal_gesture',
+              behavior: HitTestBehavior.translucent,
+              child: SizedBox.expand(),
+            ),
+          ),
           // The gesture overlay, reading the raw pointer: a press lifts the
           // pill at once, a move past the drag threshold scrubs it, and the
           // release lands it on the tab nearest the finger.
@@ -1538,12 +1552,16 @@ class _LiquidGlassAnimatedNavBarState extends State<LiquidGlassAnimatedNavBar>
             bottom: _effBottomMargin + layout.padding,
             width: layout.width - 2 * layout.padding,
             height: layout.cellHeight,
-            child: Listener(
+            child: MetaData(
+              metaData: 'liquid_glass_horizontal_gesture',
               behavior: HitTestBehavior.opaque,
-              onPointerDown: _onPointerDown,
-              onPointerMove: _onPointerMove,
-              onPointerUp: (e) => _onPointerEnd(e.pointer),
-              onPointerCancel: (e) => _onPointerEnd(e.pointer, cancelled: true),
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: _onPointerDown,
+                onPointerMove: _onPointerMove,
+                onPointerUp: (e) => _onPointerEnd(e.pointer),
+                onPointerCancel: (e) => _onPointerEnd(e.pointer, cancelled: true),
+              ),
             ),
           ),
         ],

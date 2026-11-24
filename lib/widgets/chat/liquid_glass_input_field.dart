@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -163,7 +162,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   FocusNode get _effectiveFocusNode => widget.focusNode ?? _internalFocusNode;
 
   static bool get _isMobilePlatform =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   bool _computeShowItalic() {
     final richCtrl = widget.controller is RichTextEditingController
@@ -279,6 +280,11 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       _effectiveFocusNode.addListener(_onFocusChanged);
     }
     if (oldWidget.isEmojiPanelOpen != widget.isEmojiPanelOpen) {
+      if (!oldWidget.isEmojiPanelOpen &&
+          widget.isEmojiPanelOpen &&
+          _isMobilePlatform) {
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
       _onFocusChanged();
     }
   }
@@ -1047,7 +1053,7 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         focusNode: _effectiveFocusNode,
                         scrollController: _scrollController,
                         selectionControls: telegramTextSelectionControls,
-                        readOnly: false,
+                        readOnly: widget.isEmojiPanelOpen && _isMobilePlatform,
                         showCursor: isFocused,
                         cursorColor:
                             showItalicCursor ? Colors.transparent : cursorColor,

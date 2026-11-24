@@ -25,6 +25,16 @@ class SyncService {
   final WebSocketService _ws = WebSocketService();
   final _uuid = const Uuid();
 
+  static int? _parseNullableInt(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse(raw.toString().trim());
+  }
+
+  static int _parseInt(dynamic raw, [int fallback = 0]) =>
+      _parseNullableInt(raw) ?? fallback;
+
   /// Инициализация: открыть БД, запустить первичную синхронизацию
   Future<void> initialize() async {
     await _db.initialize();
@@ -51,8 +61,8 @@ class SyncService {
 
       final tooLong = result['too_long'] == true;
       final events = result['events'] as List<dynamic>? ?? [];
-      final maxUsn = (result['max_usn'] as num?)?.toInt() ??
-          (result['current_usn'] as num?)?.toInt() ??
+      final maxUsn = _parseNullableInt(result['max_usn']) ??
+          _parseNullableInt(result['current_usn']) ??
           lastUsn;
       final hasMore = result['has_more'] as bool? ?? false;
 
@@ -352,12 +362,8 @@ class SyncService {
       final s = v?.toString().trim();
       return (s == null || s.isEmpty) ? null : s;
     }
-    final int? parsedTopicId = (payload['topic_id'] as num?)?.toInt() ??
-        int.tryParse(payload['topic_id']?.toString() ?? '');
-    final int parsedForwardsCount =
-        (payload['forwards_count'] as num?)?.toInt() ??
-            int.tryParse(payload['forwards_count']?.toString() ?? '') ??
-            0;
+    final int? parsedTopicId = _parseNullableInt(payload['topic_id']);
+    final int parsedForwardsCount = _parseInt(payload['forwards_count']);
     final String? parsedSenderChatId = nonEmptyStr(payload['sender_chat_id']);
     final String? parsedSenderChatName =
         nonEmptyStr(payload['sender_chat_name']);
@@ -450,7 +456,7 @@ class SyncService {
       isRound: Value(payload['is_round'] == true ||
           payload['message_type'] == 'round'),
       groupedId: Value(groupedId),
-      viewsCount: Value((payload['views_count'] as num?)?.toInt() ?? 0),
+      viewsCount: Value(_parseInt(payload['views_count'])),
       authorSignature: Value(payload['author_signature']?.toString()),
       postAuthorId: Value(payload['post_author_id']?.toString()),
       senderRole: Value(payload['sender_role']?.toString()),
@@ -460,7 +466,7 @@ class SyncService {
             payload['is_from_anonymous_admin'] == 1,
       ),
       isSilent: Value(payload['is_silent'] == true || payload['is_silent'] == 1),
-      commentsCount: Value((payload['comments_count'] as num?)?.toInt() ?? 0),
+      commentsCount: Value(_parseInt(payload['comments_count'])),
       recentRepliersJson: Value(recentRepliersStr),
       threadRootMessageId: Value(isThreadComment ? rawThreadRootId : null),
       hasMediaSpoiler: Value(
@@ -469,9 +475,7 @@ class SyncService {
             mediaPayloadMap['has_media_spoiler'] == true,
       ),
       expiresAt: Value(payload['expires_at']?.toString()),
-      ttlSeconds: Value((payload['ttl_seconds'] as num?)?.toInt() ??
-          int.tryParse(payload['ttl_seconds']?.toString() ?? '') ??
-          0),
+      ttlSeconds: Value(_parseInt(payload['ttl_seconds'])),
       isViewOnce: Value(
         payload['is_view_once'] == true || payload['is_view_once'] == 1,
       ),

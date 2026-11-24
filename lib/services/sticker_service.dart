@@ -17,6 +17,16 @@ import 'auth_service.dart';
 import 'emoji_effect_cache_service.dart';
 import 'websocket_service.dart';
 
+int? _parseStickerNullableInt(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw.toString().trim());
+}
+
+int _parseStickerInt(dynamic raw, [int fallback = 0]) =>
+    _parseStickerNullableInt(raw) ?? fallback;
+
 /// Real-time progress snapshot for Telegram sticker/emoji pack import or custom pack upload.
 class StickerImportProgress {
   final int packId;
@@ -161,12 +171,8 @@ class StickerItem {
         : '';
 
     return StickerItem(
-      id: (json['id'] as num?)?.toInt() ??
-          int.tryParse(json['id']?.toString() ?? '') ??
-          0,
-      packId: (json['pack_id'] as num?)?.toInt() ??
-          int.tryParse(json['pack_id']?.toString() ?? '') ??
-          0,
+      id: _parseStickerInt(json['id']),
+      packId: _parseStickerInt(json['pack_id']),
       packShortName: json['pack_short_name']?.toString() ?? '',
       packTitle: json['pack_title']?.toString() ?? '',
       fileUrl: fileUrl,
@@ -175,10 +181,10 @@ class StickerItem {
       effectEmoji: verifiedEffectEmoji,
       effectAnimationUrl: json['effect_animation_url']?.toString() ?? '',
       format: json['format']?.toString() ?? 'webp',
-      width: (json['width'] as num?)?.toInt() ?? 512,
-      height: (json['height'] as num?)?.toInt() ?? 512,
-      fileSize: (json['file_size'] as num?)?.toInt() ?? 0,
-      orderIndex: (json['order_index'] as num?)?.toInt() ?? 0,
+      width: _parseStickerInt(json['width'], 512),
+      height: _parseStickerInt(json['height'], 512),
+      fileSize: _parseStickerInt(json['file_size']),
+      orderIndex: _parseStickerInt(json['order_index']),
       hasAlpha: json['has_alpha'] != false,
       isAdaptiveTextColor: json['is_adaptive_text_color'] == true,
       ocrText: json['ocr_text']?.toString() ?? '',
@@ -284,10 +290,8 @@ class StickerPack {
     }
 
     return StickerPack(
-      id: (json['id'] as num?)?.toInt() ??
-          int.tryParse(json['id']?.toString() ?? '') ??
-          0,
-      ownerId: (json['owner_id'] as num?)?.toInt(),
+      id: _parseStickerInt(json['id']),
+      ownerId: _parseStickerNullableInt(json['owner_id']),
       shortName: json['short_name']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
       isAnimated: json['is_animated'] == true,
@@ -296,9 +300,11 @@ class StickerPack {
       isOfficial: json['is_official'] == true,
       isInstalled: json['is_installed'] == true,
       thumbnailUrl: thumb,
-      stickersCount: (json['stickers_count'] as num?)?.toInt() ??
-          parsedStickers.length,
-      installedCount: (json['installed_count'] as num?)?.toInt() ?? 0,
+      stickersCount: _parseStickerInt(
+        json['stickers_count'],
+        parsedStickers.length,
+      ),
+      installedCount: _parseStickerInt(json['installed_count']),
       stickers: parsedStickers,
     );
   }
@@ -380,10 +386,10 @@ class GifItemModel {
       url: url,
       previewUrl: prev.isNotEmpty ? prev : url,
       mp4Url: json['mp4_url']?.toString() ?? '',
-      width: (json['width'] as num?)?.toInt() ?? 320,
-      height: (json['height'] as num?)?.toInt() ?? 240,
-      duration: (json['duration'] as num?)?.toInt() ?? 0,
-      useCount: (json['use_count'] as num?)?.toInt() ?? 1,
+      width: _parseStickerInt(json['width'], 320),
+      height: _parseStickerInt(json['height'], 240),
+      duration: _parseStickerInt(json['duration']),
+      useCount: _parseStickerInt(json['use_count'], 1),
       isSaved: json['is_saved'] == true,
     );
   }

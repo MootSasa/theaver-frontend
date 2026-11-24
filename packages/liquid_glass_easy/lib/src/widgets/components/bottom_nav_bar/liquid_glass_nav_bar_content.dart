@@ -62,65 +62,69 @@ class BottomNavBarContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final Color pillColor = LiquidGlassAdaptiveVerdictScope.resolve(
         context, selectionAdaptivity, selectionColor);
-    return Padding(
-      padding: EdgeInsets.all(itemPadding),
-      child: LayoutBuilder(builder: (context, constraints) {
-        final row = LiquidGlassTabBarLayout(
-          itemCount: items.length,
-          width: constraints.maxWidth,
-          padding: 0,
-          restPillWidth: pillWidth,
-        );
-        final cellWidth = row.pillWidth;
-        final cellHeight = constraints.maxHeight;
-        return Stack(
-          children: [
-            // Static selection pill — jumps instantly to the
-            // selected cell (no slide). Sits behind the icons.
-            if (showSelectionPill)
-              Positioned(
-                left: row.pillOffset(selectedIndex.toDouble()),
-                top: 0,
-                bottom: 0,
-                width: cellWidth,
-                child: Center(
-                  child: CustomPaint(
-                    size: Size(cellWidth, cellHeight),
-                    painter: LiquidGlassNavPillSurfacePainter(
-                      color: pillColor,
-                      shape: pillShape,
-                    ),
-                  ),
-                ),
-              ),
-            // Icon + label row with tap handling.
-            Stack(
-              children: [
-                for (int i = 0; i < items.length; i++)
-                  Positioned(
-                    left: row.pillOffset(i.toDouble()),
-                    width: cellWidth,
-                    top: 0,
-                    bottom: 0,
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(cellHeight / 2),
-                        onTap: () => onChanged(i),
-                        child: LiquidGlassNavTabCell(
-                          item: items[i],
-                          selected: i == selectedIndex,
-                          style: itemStyle,
-                          adaptive: adaptive,
-                        ),
+    return MetaData(
+      metaData: 'liquid_glass_horizontal_gesture',
+      behavior: HitTestBehavior.translucent,
+      child: Padding(
+        padding: EdgeInsets.all(itemPadding),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final row = LiquidGlassTabBarLayout(
+            itemCount: items.length,
+            width: constraints.maxWidth,
+            padding: 0,
+            restPillWidth: pillWidth,
+          );
+          final cellWidth = row.pillWidth;
+          final cellHeight = constraints.maxHeight;
+          return Stack(
+            children: [
+              // Static selection pill — jumps instantly to the
+              // selected cell (no slide). Sits behind the icons.
+              if (showSelectionPill)
+                Positioned(
+                  left: row.pillOffset(selectedIndex.toDouble()),
+                  top: 0,
+                  bottom: 0,
+                  width: cellWidth,
+                  child: Center(
+                    child: CustomPaint(
+                      size: Size(cellWidth, cellHeight),
+                      painter: LiquidGlassNavPillSurfacePainter(
+                        color: pillColor,
+                        shape: pillShape,
                       ),
                     ),
                   ),
-              ],
-            ),
-          ],
-        );
-      }),
+                ),
+              // Icon + label row with tap handling.
+              Stack(
+                children: [
+                  for (int i = 0; i < items.length; i++)
+                    Positioned(
+                      left: row.pillOffset(i.toDouble()),
+                      width: cellWidth,
+                      top: 0,
+                      bottom: 0,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(cellHeight / 2),
+                          onTap: () => onChanged(i),
+                          child: LiquidGlassNavTabCell(
+                            item: items[i],
+                            selected: i == selectedIndex,
+                            style: itemStyle,
+                            adaptive: adaptive,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          );
+        }),
+      ),
     );
   }
 }

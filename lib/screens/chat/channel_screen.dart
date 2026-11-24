@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/scheduler.dart';
@@ -144,7 +144,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   bool get _isMobilePlatform =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   bool _isLoading = true;
   bool _isSyncing = false;
@@ -1041,6 +1043,11 @@ class _ChannelScreenState extends State<ChannelScreen>
     final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     if (!_showEmojiPanel) {
+      if (!_messageController.selection.isValid) {
+        _messageController.selection = TextSelection.collapsed(
+          offset: _messageController.text.length,
+        );
+      }
       if (kbOpen) {
         _emojiPanelController.value = 1.0;
         setState(() {
@@ -1051,9 +1058,15 @@ class _ChannelScreenState extends State<ChannelScreen>
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
-        if (!_inputFocusNode.hasFocus) {
-          _inputFocusNode.requestFocus();
-        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _transitionTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted && _isKeyboardFalling) {
             setState(() => _isKeyboardFalling = false);
@@ -1065,12 +1078,18 @@ class _ChannelScreenState extends State<ChannelScreen>
           _isKeyboardFalling = false;
           _isKeyboardRising = false;
         });
-        if (!_inputFocusNode.hasFocus) {
-          _inputFocusNode.requestFocus();
-        }
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _emojiPanelController.forward(from: 0.0);
       }
     } else {

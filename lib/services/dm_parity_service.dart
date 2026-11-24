@@ -6,6 +6,13 @@ import '../config/app_config.dart';
 import 'auth_service.dart';
 import 'chat_service.dart';
 
+int _parseDmInt(dynamic raw, [int fallback = 0]) {
+  if (raw == null) return fallback;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw.toString().trim()) ?? fallback;
+}
+
 class SavedTagItem {
   final String tag;
   final String label;
@@ -21,9 +28,7 @@ class SavedTagItem {
     return SavedTagItem(
       tag: (json['tag'] ?? json['emoji'] ?? '').toString(),
       label: (json['label'] ?? '').toString(),
-      count: (json['count'] as num?)?.toInt() ??
-          int.tryParse(json['count']?.toString() ?? '') ??
-          0,
+      count: _parseDmInt(json['count']),
     );
   }
 
@@ -62,9 +67,7 @@ class SavedPeerItem {
       peerId: (json['peer_id'] ?? '').toString(),
       title: (json['title'] ?? '').toString(),
       avatarUrl: (json['avatar_url'] ?? '').toString(),
-      messageCount: (json['message_count'] as num?)?.toInt() ??
-          int.tryParse(json['message_count']?.toString() ?? '') ??
-          0,
+      messageCount: _parseDmInt(json['message_count']),
       lastMessageAt: (json['last_message_at'] ?? '').toString(),
       lastMessagePreview: (json['last_message_preview'] ?? '').toString(),
     );
@@ -108,9 +111,7 @@ class CommonGroupItem {
       username: (json['username'] ?? '').toString(),
       chatType: (json['chat_type'] ?? 'group').toString(),
       avatarUrl: (json['avatar_url'] ?? '').toString(),
-      participantsCount: (json['participants_count'] as num?)?.toInt() ??
-          int.tryParse(json['participants_count']?.toString() ?? '') ??
-          0,
+      participantsCount: _parseDmInt(json['participants_count']),
       updatedAt: (json['updated_at'] ?? '').toString(),
     );
   }
@@ -276,7 +277,7 @@ class DmParityService {
       return {
         'success': resp.statusCode == 200 && body['success'] == true,
         'message_auto_delete_time':
-            (body['message_auto_delete_time'] as num?)?.toInt() ?? ttlSeconds,
+            _parseDmInt(body['message_auto_delete_time'], ttlSeconds),
         if (body['message'] != null) 'message': body['message'],
       };
     } catch (e) {
@@ -303,7 +304,7 @@ class DmParityService {
         'is_burned': body['is_burned'] == true || resp.statusCode == 410,
         'viewed_at': body['viewed_at']?.toString(),
         'expires_at': body['expires_at']?.toString(),
-        'ttl_seconds': (body['ttl_seconds'] as num?)?.toInt() ?? 0,
+        'ttl_seconds': _parseDmInt(body['ttl_seconds']),
         if (body['message'] != null) 'message': body['message'],
       };
     } catch (e) {

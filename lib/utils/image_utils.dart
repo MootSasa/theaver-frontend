@@ -200,15 +200,18 @@ ImageProvider? avatarImageProvider(
     return null;
   }
 
-  return _maybeResizeAvatar(
-    CachedNetworkImageProvider(
-      validUrl,
-      errorListener: (e) {
-        debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
-      },
-    ),
-    maxDecodeDimension: maxDecodeDimension,
-    fullResolution: fullResolution,
+  final int? targetDim = (!fullResolution &&
+          maxDecodeDimension != null &&
+          maxDecodeDimension > 0)
+      ? maxDecodeDimension
+      : null;
+  return CachedNetworkImageProvider(
+    validUrl,
+    maxWidth: targetDim,
+    maxHeight: targetDim,
+    errorListener: (e) {
+      debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
+    },
   );
 }
 

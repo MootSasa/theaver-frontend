@@ -32,11 +32,15 @@ bool _parseBoolFlag(dynamic raw, {bool defaultValue = false}) {
   return defaultValue;
 }
 
-int _parseIntValue(dynamic raw, {int defaultValue = 0}) {
-  if (raw == null) return defaultValue;
+int? _parseNullableInt(dynamic raw) {
+  if (raw == null) return null;
   if (raw is int) return raw;
   if (raw is num) return raw.toInt();
-  return int.tryParse(raw.toString()) ?? defaultValue;
+  return int.tryParse(raw.toString().trim());
+}
+
+int _parseIntValue(dynamic raw, {int defaultValue = 0}) {
+  return _parseNullableInt(raw) ?? defaultValue;
 }
 
 List<int> _parseIntList(dynamic raw) {
@@ -1448,9 +1452,7 @@ class Chat {
             decoded['video_enabled'] == true ||
             decoded['is_video'] == true ||
             (decoded['call_type'] ?? '').toString().toLowerCase() == 'video';
-        final durationSec = (decoded['duration_seconds'] as num?)?.toInt() ??
-            int.tryParse((decoded['duration_seconds'] ?? '0').toString()) ??
-            0;
+        final durationSec = _parseIntValue(decoded['duration_seconds']);
         final isOutgoing =
             currentUserId != null &&
             currentUserId.isNotEmpty &&
@@ -1494,8 +1496,7 @@ class Chat {
         (json['is_round'] == true);
 
     Message? parsedPinnedMessage;
-    int? parsedPinnedMessageId = (json['pinned_message_id'] as num?)?.toInt() ??
-        int.tryParse(json['pinned_message_id']?.toString() ?? '');
+    int? parsedPinnedMessageId = _parseNullableInt(json['pinned_message_id']);
     if (json['pinned_message'] is Map) {
       try {
         parsedPinnedMessage = Message.fromJson(
@@ -1595,8 +1596,7 @@ class Chat {
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
       isArchived: json['is_archived'] == true || json['is_archived'] == 1,
-      communityId: (json['community_id'] as num?)?.toInt() ??
-          int.tryParse(json['community_id']?.toString() ?? ''),
+      communityId: _parseNullableInt(json['community_id']),
       showAuthorProfiles: parsedShowAuthorProfiles,
       signMessages: _parseBoolFlag(json['sign_messages']),
       linkedChatId: parsedLinkedChatId,
@@ -2070,8 +2070,8 @@ class MessageEntity {
   factory MessageEntity.fromJson(Map<String, dynamic> json) {
     return MessageEntity(
       type: json['type']?.toString() ?? 'bold',
-      offset: (json['offset'] as num?)?.toInt() ?? 0,
-      length: (json['length'] as num?)?.toInt() ?? 0,
+      offset: _parseIntValue(json['offset']),
+      length: _parseIntValue(json['length']),
       url: json['url']?.toString(),
       language: json['language']?.toString(),
       collapsed: json['collapsed'] as bool?,
@@ -2377,10 +2377,10 @@ class Message {
 
   String? get thumbBase64 => mediaPayload?['thumb_base64'] as String?;
   String? get thumbUrl => mediaPayload?['thumb_url'] as String? ?? mediaPayload?['thumbnail_url'] as String?;
-  int? get mediaWidth => (mediaPayload?['width'] as num?)?.toInt();
-  int? get mediaHeight => (mediaPayload?['height'] as num?)?.toInt();
-  int? get mediaDuration => (mediaPayload?['duration'] as num?)?.toInt();
-  int? get mediaFileSize => (mediaPayload?['file_size'] as num?)?.toInt();
+  int? get mediaWidth => _parseNullableInt(mediaPayload?['width']);
+  int? get mediaHeight => _parseNullableInt(mediaPayload?['height']);
+  int? get mediaDuration => _parseNullableInt(mediaPayload?['duration']);
+  int? get mediaFileSize => _parseNullableInt(mediaPayload?['file_size']);
 
   Map<String, dynamic>? get replyMarkup {
     final raw = mediaPayload?['reply_markup'];
@@ -2532,7 +2532,7 @@ class Message {
       for (final item in json['reactions']) {
         if (item is Map) {
           final emoji = item['emoji']?.toString() ?? '';
-          final count = (item['count'] as num?)?.toInt() ?? 0;
+          final count = _parseIntValue(item['count']);
           if (emoji.isNotEmpty && count > 0) {
             parsedReactions[emoji] = count;
           }
@@ -2544,7 +2544,7 @@ class Message {
     } else if (json['reactions'] is Map) {
       (json['reactions'] as Map).forEach((k, v) {
         final emoji = k.toString();
-        final count = (v as num?)?.toInt() ?? 0;
+        final count = _parseIntValue(v);
         if (emoji.isNotEmpty && count > 0) {
           parsedReactions[emoji] = count;
         }
@@ -2681,15 +2681,15 @@ class Message {
           (parsedMediaPayload?['is_quote'] == true),
       quoteText: json['quote_text']?.toString() ??
           parsedMediaPayload?['quote_text']?.toString(),
-      quoteOffset: (json['quote_offset'] as num?)?.toInt() ??
-          (parsedMediaPayload?['quote_offset'] as num?)?.toInt() ??
+      quoteOffset: _parseNullableInt(json['quote_offset']) ??
+          _parseNullableInt(parsedMediaPayload?['quote_offset']) ??
           0,
-      quoteLength: (json['quote_length'] as num?)?.toInt() ??
-          (parsedMediaPayload?['quote_length'] as num?)?.toInt() ??
+      quoteLength: _parseNullableInt(json['quote_length']) ??
+          _parseNullableInt(parsedMediaPayload?['quote_length']) ??
           0,
       replyInfo: replyInfo,
       localId: json['local_id']?.toString(),
-      sendStatus: (json['send_status'] as num?)?.toInt() ?? 1,
+      sendStatus: _parseIntValue(json['send_status'], defaultValue: 1),
       senderNameColorId: json['sender_name_color_id']?.toString(),
       senderReplyStripStyle: json['sender_reply_strip_style']?.toString(),
       isForward: (json['is_forward'] == true) ||
@@ -2786,8 +2786,7 @@ class Message {
       replyToChatType: parsedReplyToChatType,
       effectId: _nonEmptyString(json['effect_id']),
       savedTags: parsedSavedTags,
-      topicId: (json['topic_id'] as num?)?.toInt() ??
-          int.tryParse(json['topic_id']?.toString() ?? ''),
+      topicId: _parseNullableInt(json['topic_id']),
       forwardsCount: _parseIntValue(json['forwards_count']),
       senderChatId: _nonEmptyString(json['sender_chat_id']),
       senderChatName: _nonEmptyString(json['sender_chat_name']),
@@ -2835,7 +2834,7 @@ class Message {
           if (decoded['reactions'] is Map) {
             (decoded['reactions'] as Map).forEach((k, v) {
               final emoji = k.toString();
-              final count = (v as num?)?.toInt() ?? 0;
+              final count = _parseIntValue(v);
               if (emoji.isNotEmpty && count > 0) {
                 dbReactions[emoji] = count;
               }
@@ -2940,10 +2939,10 @@ class Message {
       quoteText: model.quoteText ?? dbMediaPayload?['quote_text']?.toString(),
       quoteOffset: model.quoteOffset != 0
           ? model.quoteOffset
-          : ((dbMediaPayload?['quote_offset'] as num?)?.toInt() ?? 0),
+          : _parseIntValue(dbMediaPayload?['quote_offset']),
       quoteLength: model.quoteLength != 0
           ? model.quoteLength
-          : ((dbMediaPayload?['quote_length'] as num?)?.toInt() ?? 0),
+          : _parseIntValue(dbMediaPayload?['quote_length']),
       replyInfo: replyInfo,
       localId: model.localId,
       sendStatus: model.sendStatus,
@@ -3573,8 +3572,7 @@ class ChatDetails {
       }
     }
     Message? parsedPinnedMessage;
-    int? parsedPinnedMessageId = (json['pinned_message_id'] as num?)?.toInt() ??
-        int.tryParse(json['pinned_message_id']?.toString() ?? '');
+    int? parsedPinnedMessageId = _parseNullableInt(json['pinned_message_id']);
     if (json['pinned_message'] is Map) {
       try {
         parsedPinnedMessage = Message.fromJson(
@@ -3965,10 +3963,15 @@ class ChatService {
         List<Chat> chats = [];
         if (data['chats'] != null && data['chats'] is List) {
           for (var chat in data['chats']) {
-            if (chat is Map && chat['community_id'] != null) {
+            if (chat is! Map) continue;
+            if (chat['community_id'] != null) {
               continue;
             }
-            chats.add(Chat.fromJson(chat));
+            try {
+              chats.add(Chat.fromJson(Map<String, dynamic>.from(chat)));
+            } catch (e) {
+              debugPrint('Skipping malformed chat item: $e');
+            }
           }
         }
         return {'success': true, 'chats': chats};
@@ -5739,8 +5742,8 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
-        final nextPinId = (data['pinned_message_id'] as num?)?.toInt() ??
-            int.tryParse(messageId);
+        final nextPinId =
+            _parseNullableInt(data['pinned_message_id']) ?? int.tryParse(messageId);
         final pinIds = _parseIntList(data['pinned_message_ids']);
         try {
           await AppDatabase().updateChatPinnedMessageId(
@@ -5789,7 +5792,7 @@ class ChatService {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
-        final nextPinId = (data['pinned_message_id'] as num?)?.toInt();
+        final nextPinId = _parseNullableInt(data['pinned_message_id']);
         final pinIds = _parseIntList(data['pinned_message_ids']);
         try {
           await AppDatabase().updateChatPinnedMessageId(
@@ -7436,7 +7439,7 @@ class ChatCalendarDayInfo {
     final rawBlurhash = json['preview_blurhash']?.toString();
     return ChatCalendarDayInfo(
       date: json['date']?.toString() ?? '',
-      messageCount: (json['message_count'] as num?)?.toInt() ?? 0,
+      messageCount: _parseIntValue(json['message_count']),
       firstMessageId: json['first_message_id']?.toString() ?? '',
       lastMessageId: json['last_message_id']?.toString() ?? '',
       firstCreatedAt: json['first_created_at']?.toString(),

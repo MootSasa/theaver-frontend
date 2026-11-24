@@ -127,8 +127,11 @@ class LiquidGlassSegmentedControl extends StatelessWidget {
           refraction: refraction,
         ).merge(style),
         visibility: visibility,
-        child: Padding(
-          padding: const EdgeInsets.all(3),
+        child: MetaData(
+          metaData: 'liquid_glass_horizontal_gesture',
+          behavior: HitTestBehavior.deferToChild,
+          child: Padding(
+            padding: const EdgeInsets.all(3),
           child: LayoutBuilder(builder: (context, constraints) {
             final segWidth = constraints.maxWidth / segments.length;
             return Stack(
@@ -188,6 +191,7 @@ class LiquidGlassSegmentedControl extends StatelessWidget {
           }),
         ),
       ),
-    );
+    ),
+  );
   }
 }

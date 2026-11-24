@@ -139,6 +139,7 @@ class _MainScreenState extends State<MainScreen>
   List<Chat> _chats = [];
   List<Chat> _archivedChats = [];
   List<Community> _communities = [];
+  final Set<String> _markedUnreadCommunityIds = <String>{};
   bool _isLoadingChats = true;
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
   StreamSubscription<List<DbChat>>? _archivedChatsStreamSubscription;
@@ -174,8 +175,12 @@ class _MainScreenState extends State<MainScreen>
         : (c.description.isNotEmpty
             ? c.description
             : '${c.memberCount} участн. • Сообщество');
+    final syntheticId = 'community_${c.id}';
+    final effectiveUnread = c.totalUnreadCount > 0
+        ? c.totalUnreadCount
+        : (_markedUnreadCommunityIds.contains(syntheticId) ? -1 : 0);
     return Chat(
-      id: 'community_${c.id}',
+      id: syntheticId,
       chatType: 'community',
       name: c.name,
       avatarUrl: c.avatarUrl,
@@ -183,9 +188,29 @@ class _MainScreenState extends State<MainScreen>
       lastMessageTime: c.createdAt.toIso8601String(),
       lastMessageType: 'text',
       updatedAt: c.createdAt.toIso8601String(),
-      unreadCount: c.totalUnreadCount,
+      unreadCount: effectiveUnread,
       otherUserId: c.id,
     );
+  }
+
+  static bool _isEmptyGhostPrivateChat(Chat chat) {
+    if (chat.chatType != 'private') return false;
+    final hasLastMsg =
+        chat.lastMessage != null && chat.lastMessage!.isNotEmpty;
+    final hasMediaType =
+        chat.lastMessageType != null && chat.lastMessageType!.isNotEmpty;
+    final hasMediaFile =
+        chat.lastMessageFileUrl != null && chat.lastMessageFileUrl!.isNotEmpty;
+    final hasLastTime =
+        chat.lastMessageTime != null && chat.lastMessageTime!.isNotEmpty;
+    final hasDraft = chat.draft != null && chat.draft!.text.isNotEmpty;
+    return !hasLastMsg &&
+        !hasMediaType &&
+        !hasMediaFile &&
+        !hasLastTime &&
+        !hasDraft &&
+        !chat.isPinned &&
+        chat.unreadCount == 0;
   }
 
   List<Chat> get _chatsWithCommunities {
@@ -272,11 +297,8 @@ class _MainScreenState extends State<MainScreen>
           if (hasSaved) continue;
           hasSaved = true;
         }
-        // Exclude empty private chats with no message, no draft, not pinned
-        if (chat.chatType == 'private' &&
-            (chat.lastMessage == null || chat.lastMessage!.isEmpty) &&
-            (chat.draft == null || chat.draft!.text.isEmpty) &&
-            !chat.isPinned) {
+        // Exclude empty private ghost chats with no text, media, draft, pin, or unread
+        if (_isEmptyGhostPrivateChat(chat)) {
           continue;
         }
         mappedChats.add(chat);
@@ -673,11 +695,8 @@ class _MainScreenState extends State<MainScreen>
         if (mounted) _loadCommunities();
         return;
       }
-      // Ignore empty private chats without messages or drafts that are not pinned
-      if (newChat.chatType == 'private' &&
-          (newChat.lastMessage == null || newChat.lastMessage!.isEmpty) &&
-          (newChat.draft == null || newChat.draft!.text.isEmpty) &&
-          !newChat.isPinned) {
+      // Ignore empty private ghost chats without text, media, drafts, pin, or unread
+      if (_isEmptyGhostPrivateChat(newChat)) {
         return;
       }
 
@@ -897,7 +916,10 @@ class _MainScreenState extends State<MainScreen>
   void _onUnreadCountUpdated(WebSocketEvent event) {
     debugPrint('Unread count updated: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
-    final unreadCount = event.data['unread_count'] as int? ?? 0;
+    final rawUnread = event.data['unread_count'];
+    final unreadCount = rawUnread is num
+        ? rawUnread.toInt()
+        : (int.tryParse(rawUnread?.toString() ?? '') ?? 0);
     final rawInboxHwm = event.data['last_read_inbox_message_id'];
     final inboxHwm = rawInboxHwm is num
         ? rawInboxHwm.toInt()
@@ -1067,6 +1089,7 @@ class _MainScreenState extends State<MainScreen>
       final provider = context.read<UnreadCountProvider>();
       bool changed = false;
       for (int i = 0; i < _chats.length; i++) {
+        if (!provider.hasAuthoritativeCount(_chats[i].id)) continue;
         final providerCount = provider.getCount(_chats[i].id);
         if (_chats[i].unreadCount != providerCount) {
           _chats[i] = _chats[i].copyWith(unreadCount: providerCount);
@@ -1447,6 +1470,7 @@ class _MainScreenState extends State<MainScreen>
       _activeFilter = 0;
       _chats = [];
       _communities = [];
+      _markedUnreadCommunityIds.clear();
       _isLoadingChats = true;
     });
     if (_currentIndex != 1) {
@@ -2941,7 +2965,7 @@ class _MainScreenState extends State<MainScreen>
             ],
           ),
         ),
-        if (chat.chatType != 'saved')
+        if (chat.chatType != 'saved' && chat.chatType != 'community')
           PopupMenuItem<String>(
             value: 'pin',
             child: Row(
@@ -3094,6 +3118,40 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _toggleReadChat(Chat chat) async {
+    if (chat.chatType == 'community') {
+      final commId = chat.otherUserId ??
+          (chat.id.startsWith('community_')
+              ? chat.id.substring('community_'.length)
+              : chat.id);
+      if (chat.unreadCount > 0 || chat.unreadCount == -1) {
+        final idx = _communities.indexWhere((c) => c.id == commId);
+        if (mounted) {
+          setState(() {
+            _markedUnreadCommunityIds.remove(chat.id);
+            if (idx != -1) {
+              final target = _communities[idx];
+              for (final ch in target.channels) {
+                if (ch.unreadCount > 0) {
+                  CommunityService.resetChannelUnread(ch.id);
+                  unawaited(ChatService.markMessagesAsRead(chatId: ch.id));
+                }
+              }
+              _communities[idx] = target.copyWith(
+                channels: [
+                  for (final ch in target.channels) ch.copyWith(unreadCount: 0),
+                ],
+              );
+            }
+          });
+        }
+      } else if (mounted) {
+        setState(() {
+          _markedUnreadCommunityIds.add(chat.id);
+        });
+      }
+      return;
+    }
+
     UnreadCountProvider? unreadProvider;
     try {
       unreadProvider = context.read<UnreadCountProvider>();
@@ -3115,9 +3173,9 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _togglePinChat(Chat chat) async {
-    if (chat.chatType == 'saved') return;
+    if (chat.chatType == 'saved' || chat.chatType == 'community') return;
     final newPinned = !chat.isPinned;
-    await AppDatabase().batchSetPinned([chat.id], newPinned);
+    await AppDatabase(_currentUserId).batchSetPinned([chat.id], newPinned);
     if (newPinned) {
       await ChatService.pinChat(chatId: chat.id);
     } else {
@@ -3431,20 +3489,52 @@ class _MainScreenState extends State<MainScreen>
 
     if (delRes.confirmed && mounted) {
       final db = AppDatabase(_currentUserId);
-      final ids = deletable.map((c) => c.id).toList();
+      final nonCommunityChats =
+          deletable.where((c) => c.chatType != 'community').toList();
+      final communityChats =
+          deletable.where((c) => c.chatType == 'community').toList();
+      final ids = nonCommunityChats.map((c) => c.id).toList();
 
       // Оптимистичное удаление из SQLite — стрим мгновенно обновит UI
-      await db.batchDeleteChats(ids);
+      if (ids.isNotEmpty) {
+        await db.batchDeleteChats(ids);
+      }
+      if (communityChats.isNotEmpty) {
+        final removedCommIds = <String>{};
+        for (final commChat in communityChats) {
+          _markedUnreadCommunityIds.remove(commChat.id);
+          final commId = commChat.otherUserId ??
+              (commChat.id.startsWith('community_')
+                  ? commChat.id.substring('community_'.length)
+                  : commChat.id);
+          removedCommIds.add(commId);
+        }
+        setState(() {
+          _communities.removeWhere((c) => removedCommIds.contains(c.id));
+        });
+      }
       _exitSelectMode();
 
       int deleted = 0;
       int failed = 0;
-      for (final chat in deletable) {
+      for (final chat in nonCommunityChats) {
         final result = await ChatService.deleteChat(
           chat.id,
           revoke: chat.chatType == 'private' && delRes.revoke,
         );
         if (result['success'] == true) {
+          deleted++;
+        } else {
+          failed++;
+        }
+      }
+      for (final commChat in communityChats) {
+        final commId = commChat.otherUserId ??
+            (commChat.id.startsWith('community_')
+                ? commChat.id.substring('community_'.length)
+                : commChat.id);
+        final left = await CommunityService.leaveCommunity(commId);
+        if (left) {
           deleted++;
         } else {
           failed++;
@@ -3487,6 +3577,9 @@ class _MainScreenState extends State<MainScreen>
         chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
 
     if (chat.chatType == 'community') {
+      if (_markedUnreadCommunityIds.remove(chat.id) && mounted) {
+        setState(() {});
+      }
       final rawCommId = chat.otherUserId ??
           (chat.id.startsWith('community_')
               ? chat.id.substring('community_'.length)

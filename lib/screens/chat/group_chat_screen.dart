@@ -76,7 +76,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:uuid/uuid.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:url_launcher/url_launcher.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:share_plus/share_plus.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/swipe_back_route.dart';
@@ -176,7 +176,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   bool get _isMobilePlatform =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   bool _isLoading = true;
   bool _isSyncing = false;
@@ -1003,6 +1005,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     if (!_showEmojiPanel) {
+      if (!_messageController.selection.isValid) {
+        _messageController.selection = TextSelection.collapsed(
+          offset: _messageController.text.length,
+        );
+      }
       if (kbOpen) {
         _emojiPanelController.value = 1.0;
         setState(() {
@@ -1013,9 +1020,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
-        if (!_inputFocusNode.hasFocus) {
-          _inputFocusNode.requestFocus();
-        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _transitionTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted && _isKeyboardFalling) {
             setState(() => _isKeyboardFalling = false);
@@ -1027,12 +1040,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _isKeyboardFalling = false;
           _isKeyboardRising = false;
         });
-        if (!_inputFocusNode.hasFocus) {
-          _inputFocusNode.requestFocus();
-        }
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _emojiPanelController.forward(from: 0.0);
       }
     } else {

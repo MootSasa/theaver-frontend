@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/swipe_back_route.dart';
 import '../design_system/theav_controls.dart';
 
 /// Адаптивный переключатель (Switch), использующий [LiquidGlassSwitch]
@@ -24,12 +25,14 @@ class AdaptiveSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TheavSwitch(
-      value: value,
-      onChanged: onChanged,
-      activeColor: activeColor,
-      inactiveColor: inactiveColor,
-      thumbColor: thumbColor,
+    return SwipeBackBlocker(
+      child: TheavSwitch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: activeColor,
+        inactiveColor: inactiveColor,
+        thumbColor: thumbColor,
+      ),
     );
   }
 }
@@ -86,52 +89,56 @@ class AdaptiveSlider extends StatelessWidget {
           inactiveColor ?? (isDark ? Colors.white24 : Colors.black12);
       final Color resolvedThumb = thumbColor ?? Colors.white;
 
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.hasBoundedWidth ? constraints.maxWidth : 280.0;
-          Widget slider = LiquidGlassSlider(
-            value: value.clamp(min, max).toDouble(),
-            onChanged: enabled ? (v) => onChanged!(_snapValue(v)) : (_) {},
-            onChangeStart: enabled ? onChangeStart : null,
-            onChangeEnd: enabled
-                ? (v) {
-                    onChangeEnd?.call(_snapValue(v));
-                  }
-                : null,
-            minimumValue: min,
-            maximumValue: max,
-            width: width,
-            activeColor: enabled
-                ? resolvedActive
-                : resolvedActive.withValues(alpha: 0.38),
-            inactiveColor: enabled
-                ? resolvedInactive
-                : (isDark ? Colors.white : Colors.black)
-                    .withValues(alpha: isDark ? 0.10 : 0.06),
-            thumbColor: enabled
-                ? resolvedThumb
-                : resolvedThumb.withValues(alpha: isDark ? 0.45 : 0.70),
-          );
-          if (!enabled) {
-            slider = IgnorePointer(
-              ignoring: true,
-              child: slider,
+      return SwipeBackBlocker(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.hasBoundedWidth ? constraints.maxWidth : 280.0;
+            Widget slider = LiquidGlassSlider(
+              value: value.clamp(min, max).toDouble(),
+              onChanged: enabled ? (v) => onChanged!(_snapValue(v)) : (_) {},
+              onChangeStart: enabled ? onChangeStart : null,
+              onChangeEnd: enabled
+                  ? (v) {
+                      onChangeEnd?.call(_snapValue(v));
+                    }
+                  : null,
+              minimumValue: min,
+              maximumValue: max,
+              width: width,
+              activeColor: enabled
+                  ? resolvedActive
+                  : resolvedActive.withValues(alpha: 0.38),
+              inactiveColor: enabled
+                  ? resolvedInactive
+                  : (isDark ? Colors.white : Colors.black)
+                      .withValues(alpha: isDark ? 0.10 : 0.06),
+              thumbColor: enabled
+                  ? resolvedThumb
+                  : resolvedThumb.withValues(alpha: isDark ? 0.45 : 0.70),
             );
-          }
-          return slider;
-        },
+            if (!enabled) {
+              slider = IgnorePointer(
+                ignoring: true,
+                child: slider,
+              );
+            }
+            return slider;
+          },
+        ),
       );
     }
-    return Slider(
-      value: value.clamp(min, max),
-      onChanged: onChanged,
-      onChangeStart: onChangeStart,
-      onChangeEnd: onChangeEnd,
-      min: min,
-      max: max,
-      divisions: divisions,
-      activeColor: activeColor ?? palette.primary,
-      label: label,
+    return SwipeBackBlocker(
+      child: Slider(
+        value: value.clamp(min, max),
+        onChanged: onChanged,
+        onChangeStart: onChangeStart,
+        onChangeEnd: onChangeEnd,
+        min: min,
+        max: max,
+        divisions: divisions,
+        activeColor: activeColor ?? palette.primary,
+        label: label,
+      ),
     );
   }
 }

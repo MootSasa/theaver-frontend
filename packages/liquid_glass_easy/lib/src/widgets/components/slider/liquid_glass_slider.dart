@@ -726,7 +726,11 @@ class _LiquidGlassSliderState extends State<LiquidGlassSlider>
             top: hitTop,
             width: _trackWidth,
             height: hitHeight,
-            child: gestureSurface,
+            child: MetaData(
+              metaData: 'liquid_glass_horizontal_gesture',
+              behavior: HitTestBehavior.opaque,
+              child: gestureSurface,
+            ),
           ),
         ],
       ),

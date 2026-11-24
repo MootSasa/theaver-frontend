@@ -120,6 +120,21 @@ class RenderSwipeBackBlocker extends RenderProxyBox {
   RenderSwipeBackBlocker({this.enabled = true});
 }
 
+/// Returns `true` when [context] has an enclosing active swipe-back
+/// route or interactive swipe-back detector that can currently claim a
+/// rightward drag.
+bool hasActiveSwipeBackAncestor(BuildContext context) {
+  final renderObj = context.findRenderObject();
+  RenderObject? current = renderObj?.parent;
+  while (current != null) {
+    if (current is _RenderSwipeBackTargetMarker && current.canClaimGetter()) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 class _RouteSwipeBackRegistry {
   final List<_SwipeBackPopScopeState> scopes = <_SwipeBackPopScopeState>[];
 }
@@ -1274,6 +1289,9 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
 
   bool _canHorizontalViewportScrollOnRightDrag(RenderViewportBase viewport) {
     final offset = viewport.offset;
+    if (offset is ScrollPosition && !offset.physics.allowUserScrolling) {
+      return false;
+    }
     if (!offset.hasPixels) return false;
     if (offset is ScrollMetrics) {
       final ScrollMetrics metrics = offset as ScrollMetrics;
@@ -1335,9 +1353,13 @@ class _BackGestureRecognizer extends HorizontalDragGestureRecognizer {
       if (target is RenderSwipeBackBlocker && target.enabled) {
         return true;
       }
+      if (target is RenderMetaData &&
+          target.metaData == 'liquid_glass_horizontal_gesture') {
+        return true;
+      }
       if (target is RenderBox) {
         final typeName = target.runtimeType.toString();
-        if (typeName.contains('Slider')) {
+        if (typeName.contains('Slider') || typeName.contains('Switch')) {
           return true;
         }
       }

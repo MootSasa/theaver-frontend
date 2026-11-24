@@ -810,19 +810,23 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
     final Widget control = SizedBox(
       width: l.width,
       height: l.height,
-      child: RawGestureDetector(
+      child: MetaData(
+        metaData: 'liquid_glass_horizontal_gesture',
         behavior: HitTestBehavior.opaque,
-        gestures: liquidGlassEagerPanGestures(
-          debugOwner: this,
-          onDown: _handleDown,
-          onMove: _handleMove,
-          onUp: _handleUp,
-          onCancel: _handleCancel,
-        ),
-        child: OverflowBox(
-          maxWidth: viewWidth,
-          maxHeight: viewHeight,
-          child: view,
+        child: RawGestureDetector(
+          behavior: HitTestBehavior.opaque,
+          gestures: liquidGlassEagerPanGestures(
+            debugOwner: this,
+            onDown: _handleDown,
+            onMove: _handleMove,
+            onUp: _handleUp,
+            onCancel: _handleCancel,
+          ),
+          child: OverflowBox(
+            maxWidth: viewWidth,
+            maxHeight: viewHeight,
+            child: view,
+          ),
         ),
       ),
     );

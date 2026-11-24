@@ -6,6 +6,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../settings/settings_floating_header.dart';
 
 /// Компактная высота верхней плавающей шапки и переключателя вкладок (`38px`).
@@ -242,11 +243,13 @@ class ProfileClassicTopSwitcher extends StatelessWidget {
       ),
     );
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(height / 2),
-      child: BackdropFilter.grouped(
-        filter: BlurUtils.createDownsampledBlur(15),
-        child: navContent,
+    return SwipeBackBlocker(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(height / 2),
+        child: BackdropFilter.grouped(
+          filter: BlurUtils.createDownsampledBlur(15),
+          child: navContent,
+        ),
       ),
     );
   }

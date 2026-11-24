@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, debugPrint;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
@@ -1735,6 +1736,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       return;
     }
 
+    final bool isMobilePlatform = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     _transitionTimer?.cancel();
 
@@ -1753,8 +1757,17 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _isKeyboardRising = true;
         // Keep _showEmojiPanel = true to prevent jump, will be hidden in build()
       });
-      _inputFocusNode.requestFocus();
-      SystemChannels.textInput.invokeMethod('TextInput.show');
+      // Request focus and show soft keyboard AFTER LiquidGlassInputField rebuilds
+      // with isEmojiPanelOpen: false (readOnly: false).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_inputFocusNode.hasFocus) {
+          _inputFocusNode.requestFocus();
+        }
+        if (isMobilePlatform) {
+          SystemChannels.textInput.invokeMethod('TextInput.show');
+        }
+      });
 
       // Safety for floating windows: if no inset change in 600ms, hide panel smoothly
       _transitionTimer = Timer(const Duration(milliseconds: 600), () {
@@ -1772,6 +1785,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       } else {
         _emojiPanelController.forward();
       }
+      if (!_textController.selection.isValid) {
+        _textController.selection = TextSelection.collapsed(
+          offset: _textController.text.length,
+        );
+      }
       setState(() {
         _showEmojiPanel = true;
         _isKeyboardRising = false;
@@ -1779,17 +1797,20 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _isKeyboardFalling = true;
         }
       });
-      if (!_textController.selection.isValid) {
-        _textController.selection = TextSelection.collapsed(
-          offset: _textController.text.length,
-        );
-      }
-      if (!_inputFocusNode.hasFocus) {
-        _inputFocusNode.requestFocus();
-      }
-      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      if (isMobilePlatform) {
         SystemChannels.textInput.invokeMethod('TextInput.hide');
       }
+      // Request focus AFTER build() sets readOnly: true so EditableTextState
+      // does not attach a TextInputConnection and pop up the soft keyboard.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+        if (!_inputFocusNode.hasFocus) {
+          _inputFocusNode.requestFocus();
+        }
+        if (isMobilePlatform) {
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        }
+      });
     }
   }
 

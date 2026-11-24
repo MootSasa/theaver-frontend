@@ -4,6 +4,13 @@ import 'call_models.dart';
 import 'profile_customization.dart';
 import '../services/peer_customization_cache.dart';
 
+int _parseCommunityInt(dynamic raw, [int fallback = 0]) {
+  if (raw == null) return fallback;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw.toString().trim()) ?? fallback;
+}
+
 /// Bitmask permissions for Community roles and channel overwrites,
 /// matching backend `permissions_community.go` 1-to-1.
 class CommunityPermissions {
@@ -173,7 +180,7 @@ class CommunityCategory {
       id: (json['id'] ?? '').toString(),
       communityId: (json['community_id'] ?? '').toString(),
       name: (json['name'] ?? 'Категория').toString(),
-      position: (json['position'] as num?)?.toInt() ?? 0,
+      position: _parseCommunityInt(json['position']),
       isPrivate: json['is_private'] == true,
     );
   }
@@ -282,11 +289,11 @@ class CommunityChannel {
               json['type'] ??
               'text')
           .toString(),
-      position: (json['position'] as num?)?.toInt() ?? 0,
-      slowModeSeconds: (json['slow_mode_seconds'] as num?)?.toInt() ?? 0,
-      voiceBitrateKbps: (json['voice_bitrate_kbps'] as num?)?.toInt() ?? 64,
-      voiceUserLimit: (json['voice_user_limit'] as num?)?.toInt() ?? 0,
-      unreadCount: (json['unread_count'] as num?)?.toInt() ?? 0,
+      position: _parseCommunityInt(json['position']),
+      slowModeSeconds: _parseCommunityInt(json['slow_mode_seconds']),
+      voiceBitrateKbps: _parseCommunityInt(json['voice_bitrate_kbps'], 64),
+      voiceUserLimit: _parseCommunityInt(json['voice_user_limit']),
+      unreadCount: _parseCommunityInt(json['unread_count']),
       activeVoiceParticipants: voiceList,
     );
   }
@@ -370,8 +377,8 @@ class CommunityRole {
       communityId: (json['community_id'] ?? '').toString(),
       name: roleName,
       colorHex: (json['color'] ?? json['color_hex'] ?? '#5C6BC0').toString(),
-      position: (json['position'] as num?)?.toInt() ?? 0,
-      permissions: (json['permissions'] as num?)?.toInt() ?? 0,
+      position: _parseCommunityInt(json['position']),
+      permissions: _parseCommunityInt(json['permissions']),
       isHoisted: json['is_hoisted'] == true,
       isMentionable: json['is_mentionable'] != false,
       isEveryone: json['is_everyone'] == true || roleName == '@everyone',
@@ -580,12 +587,14 @@ class Community {
       bannerUrl:
           (rawBanner != null && rawBanner.isNotEmpty) ? rawBanner : null,
       ownerId: (json['owner_id'] ?? '').toString(),
-      memberCount: (json['member_count'] as num?)?.toInt() ?? 1,
-      onlineCount: (json['online_count'] as num?)?.toInt() ?? 1,
+      memberCount: _parseCommunityInt(json['member_count'], 1),
+      onlineCount: _parseCommunityInt(json['online_count'], 1),
       isMember: json['is_member'] is bool ? (json['is_member'] as bool) : true,
       isPublic: json['is_public'] is bool ? (json['is_public'] as bool) : true,
-      myPermissions: (json['my_permissions'] as num?)?.toInt() ??
-          CommunityPermissions.defaultEveryone,
+      myPermissions: _parseCommunityInt(
+        json['my_permissions'],
+        CommunityPermissions.defaultEveryone,
+      ),
       categories: cats,
       channels: chans,
       roles: rList,
@@ -661,8 +670,8 @@ class CommunityPermissionOverwrite {
     return CommunityPermissionOverwrite(
       targetType: (json['target_type'] ?? 'role').toString(),
       targetId: (json['target_id'] ?? '').toString(),
-      allowBits: (json['allow_bits'] as num?)?.toInt() ?? 0,
-      denyBits: (json['deny_bits'] as num?)?.toInt() ?? 0,
+      allowBits: _parseCommunityInt(json['allow_bits']),
+      denyBits: _parseCommunityInt(json['deny_bits']),
     );
   }
 
@@ -740,8 +749,8 @@ class CommunityInvite {
       communityId: (json['community_id'] ?? '').toString(),
       creatorId: json['creator_id']?.toString(),
       code: (json['code'] ?? json['invite_code'] ?? '').toString(),
-      maxUses: (json['max_uses'] as num?)?.toInt() ?? 0,
-      uses: (json['uses'] as num?)?.toInt() ?? 0,
+      maxUses: _parseCommunityInt(json['max_uses']),
+      uses: _parseCommunityInt(json['uses']),
       expiresAt: json['expires_at'] != null
           ? DateTime.tryParse(json['expires_at'].toString())
           : null,

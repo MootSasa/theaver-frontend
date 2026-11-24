@@ -5,6 +5,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import 'theav_design_system.dart';
 
 /// Descriptor for one option inside [TheavSegmentedControl].
@@ -162,9 +163,10 @@ class TheavSegmentedControl<T> extends StatelessWidget {
     final int activeIdx = _selectedIndex();
 
     if (style.isGlass && style.glassProvider != null) {
-      return Padding(
-        padding: margin,
-        child: SizedBox(
+      return SwipeBackBlocker(
+        child: Padding(
+          padding: margin,
+          child: SizedBox(
           height: height,
           width: double.infinity,
           child: LayoutBuilder(
@@ -303,76 +305,79 @@ class TheavSegmentedControl<T> extends StatelessWidget {
             },
           ),
         ),
-      );
+      ),
+    );
     }
 
     final double alignmentX =
         n <= 1 ? 0.0 : -1.0 + (2.0 * activeIdx / (n - 1));
     const double mattePad = 3.0;
-    return Padding(
-      padding: margin,
-      child: SizedBox(
-        height: height,
-        width: double.infinity,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final double availW = constraints.maxWidth.isFinite &&
-                    constraints.maxWidth > 0
-                ? constraints.maxWidth
-                : 280.0;
-            final double barW =
-                expand ? availW : _measureCompactWidth(context, availW);
-            return Center(
-              child: SizedBox(
-                width: barW,
-                height: height,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: style.trackFill,
-                    borderRadius: BorderRadius.circular(height / 2),
-                  ),
-                  child: Stack(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(mattePad),
-                        child: AnimatedAlign(
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
-                          alignment: Alignment(alignmentX, 0.0),
-                          child: FractionallySizedBox(
-                            widthFactor: 1.0 / n,
-                            heightFactor: 1.0,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: palette.surface,
-                                borderRadius: BorderRadius.circular(
-                                  (height - mattePad * 2) / 2,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(
-                                      alpha: style.isDark ? 0.24 : 0.07,
-                                    ),
-                                    blurRadius: 6,
-                                    offset: const Offset(0, 1.5),
+    return SwipeBackBlocker(
+      child: Padding(
+        padding: margin,
+        child: SizedBox(
+          height: height,
+          width: double.infinity,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final double availW = constraints.maxWidth.isFinite &&
+                      constraints.maxWidth > 0
+                  ? constraints.maxWidth
+                  : 280.0;
+              final double barW =
+                  expand ? availW : _measureCompactWidth(context, availW);
+              return Center(
+                child: SizedBox(
+                  width: barW,
+                  height: height,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: style.trackFill,
+                      borderRadius: BorderRadius.circular(height / 2),
+                    ),
+                    child: Stack(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(mattePad),
+                          child: AnimatedAlign(
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeOutCubic,
+                            alignment: Alignment(alignmentX, 0.0),
+                            child: FractionallySizedBox(
+                              widthFactor: 1.0 / n,
+                              heightFactor: 1.0,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: palette.surface,
+                                  borderRadius: BorderRadius.circular(
+                                    (height - mattePad * 2) / 2,
                                   ),
-                                ],
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: style.isDark ? 0.24 : 0.07,
+                                      ),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 1.5),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      _buildSegmentRow(
-                        palette,
-                        pad: mattePad,
-                        cellH: math.max(12.0, height - mattePad * 2),
-                      ),
-                    ],
+                        _buildSegmentRow(
+                          palette,
+                          pad: mattePad,
+                          cellH: math.max(12.0, height - mattePad * 2),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         ),
       ),
     );
@@ -444,10 +449,12 @@ class TheavSwitch extends StatelessWidget {
           child: glassToggle,
         );
       }
-      return Center(
-        widthFactor: 1.0,
-        heightFactor: 1.0,
-        child: glassToggle,
+      return SwipeBackBlocker(
+        child: Center(
+          widthFactor: 1.0,
+          heightFactor: 1.0,
+          child: glassToggle,
+        ),
       );
     }
 
@@ -512,15 +519,17 @@ class TheavSwitch extends StatelessWidget {
       );
     }
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: enabled
-          ? () {
-              HapticUtils.selection();
-              onChanged!(!value);
-            }
-          : null,
-      child: toggle,
+    return SwipeBackBlocker(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled
+            ? () {
+                HapticUtils.selection();
+                onChanged!(!value);
+              }
+            : null,
+        child: toggle,
+      ),
     );
   }
 }
@@ -702,7 +711,7 @@ class TheavSteppedSlider extends StatelessWidget {
                     child: glassSlider,
                   );
                 }
-                return glassSlider;
+                return SwipeBackBlocker(child: glassSlider);
               }
               final double usableWidth = (totalWidth - 20.0).clamp(1.0, totalWidth);
               final double fraction = maxIdx > 0 ? safeIndex / maxIdx : 0.0;
@@ -718,90 +727,92 @@ class TheavSteppedSlider extends StatelessWidget {
                 }
               }
 
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTapDown: enabled ? (d) => pickFromDx(d.localPosition.dx) : null,
-                onHorizontalDragUpdate:
-                    enabled ? (d) => pickFromDx(d.localPosition.dx) : null,
-                child: SizedBox(
-                  height: 30,
-                  child: Stack(
-                    alignment: Alignment.centerLeft,
-                    children: [
-                      // Track
-                      Positioned(
-                        left: 10,
-                        right: 10,
-                        child: Container(
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: palette.onSurface.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                      // Active track
-                      Positioned(
-                        left: 10,
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 140),
-                          curve: Curves.easeOutCubic,
-                          width: activeWidth,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: enabled
-                                ? accent
-                                : accent.withValues(alpha: 0.42),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                      // Tick dots
-                      if (maxIdx > 0)
-                        for (int i = 0; i <= maxIdx; i++)
-                          Positioned(
-                            left: 10 + usableWidth * (i / maxIdx) - 3,
-                            child: Container(
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: i <= safeIndex
-                                    ? (enabled
-                                        ? accent
-                                        : accent.withValues(alpha: 0.42))
-                                    : palette.onSurface.withValues(alpha: 0.28),
-                              ),
+              return SwipeBackBlocker(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: enabled ? (d) => pickFromDx(d.localPosition.dx) : null,
+                  onHorizontalDragUpdate:
+                      enabled ? (d) => pickFromDx(d.localPosition.dx) : null,
+                  child: SizedBox(
+                    height: 30,
+                    child: Stack(
+                      alignment: Alignment.centerLeft,
+                      children: [
+                        // Track
+                        Positioned(
+                          left: 10,
+                          right: 10,
+                          child: Container(
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: palette.onSurface.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(2),
                             ),
                           ),
-                      // Thumb
-                      AnimatedPositioned(
-                        duration: const Duration(milliseconds: 140),
-                        curve: Curves.easeOutCubic,
-                        left: activeWidth,
-                        child: Container(
-                          width: 20,
-                          height: 20,
-                          decoration: BoxDecoration(
-                            color: palette.surface,
-                            shape: BoxShape.circle,
-                            border: Border.all(
+                        ),
+                        // Active track
+                        Positioned(
+                          left: 10,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 140),
+                            curve: Curves.easeOutCubic,
+                            width: activeWidth,
+                            height: 4,
+                            decoration: BoxDecoration(
                               color: enabled
                                   ? accent
                                   : accent.withValues(alpha: 0.42),
-                              width: 2.5,
+                              borderRadius: BorderRadius.circular(2),
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.16),
-                                blurRadius: 5,
-                                offset: const Offset(0, 1.5),
-                              ),
-                            ],
                           ),
                         ),
-                      ),
-                    ],
+                        // Tick dots
+                        if (maxIdx > 0)
+                          for (int i = 0; i <= maxIdx; i++)
+                            Positioned(
+                              left: 10 + usableWidth * (i / maxIdx) - 3,
+                              child: Container(
+                                width: 6,
+                                height: 6,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: i <= safeIndex
+                                      ? (enabled
+                                          ? accent
+                                          : accent.withValues(alpha: 0.42))
+                                      : palette.onSurface.withValues(alpha: 0.28),
+                                ),
+                              ),
+                            ),
+                        // Thumb
+                        AnimatedPositioned(
+                          duration: const Duration(milliseconds: 140),
+                          curve: Curves.easeOutCubic,
+                          left: activeWidth,
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              color: palette.surface,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: enabled
+                                    ? accent
+                                    : accent.withValues(alpha: 0.42),
+                                width: 2.5,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.16),
+                                  blurRadius: 5,
+                                  offset: const Offset(0, 1.5),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               );

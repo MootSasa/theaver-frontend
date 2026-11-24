@@ -16,6 +16,7 @@ import 'package:theaver/widgets/chat/chat_scaffold.dart';
 import 'package:theaver/widgets/chat/liquid_glass_screen_morph_launcher.dart';
 import 'package:theaver/widgets/chat/swipe_to_reply_wrapper.dart';
 import 'package:theaver/widgets/chat/swipeable_chat_tile.dart';
+import 'package:theaver/widgets/common/adaptive_switch.dart';
 import 'package:theaver/widgets/tiling/tile_viewport_scope.dart';
 
 class _ForcedGlassProvider extends LiquidGlassProvider {
@@ -34,6 +35,9 @@ class _ForcedGlassProvider extends LiquidGlassProvider {
 
   @override
   bool get isFull => _forcedMode == GlassMode.full;
+
+  @override
+  bool get isSupported => true;
 }
 
 void _expectNoTranslucentOpacityAboveGlass(WidgetTester tester) {
@@ -744,6 +748,306 @@ void main() {
 
         expect(find.text('ArchivedChatRow'), findsNothing);
         expect(find.text('MainList'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      '7. Liquid Glass pill tab bar, switch, and slider block route swipe-back while root-route SwipeableChatTile supports bidirectional swipes',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final navKey = GlobalKey<NavigatorState>();
+        final glassProvider = _ForcedGlassProvider(GlassMode.full);
+        final rootChat = Chat(
+          id: 'root_chat_1',
+          chatType: 'private',
+          name: 'Root Peer',
+          updatedAt: '2026-11-24T12:00:00Z',
+        );
+        final List<ChatSwipeAction> rootSwipeActions = <ChatSwipeAction>[];
+
+        int selectedTab = 0;
+        bool glassSwitchValue = false;
+        double glassSliderValue = 0.2;
+
+        await tester.pumpWidget(
+          ChangeNotifierProvider<LiquidGlassProvider>.value(
+            value: glassProvider,
+            child: MaterialApp(
+              navigatorKey: navKey,
+              theme: AppTheme.dark(),
+              home: Scaffold(
+                body: Center(
+                  child: SwipeableChatTile(
+                    chat: rootChat,
+                    overrideAction: ChatSwipeAction.read,
+                    onAction: (action) async {
+                      rootSwipeActions.add(action);
+                    },
+                    child: const SizedBox(
+                      key: ValueKey<String>('root_chat_row'),
+                      height: 72,
+                      width: double.infinity,
+                      child: Center(child: Text('RootChatRow')),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Issue 3A regression check: On root MainScreen (canPop == false),
+        // BOTH rightward and leftward swipes on SwipeableChatTile trigger onAction.
+        final rootRowCenter = tester.getCenter(
+          find.byKey(const ValueKey<String>('root_chat_row')),
+        );
+        final rootRightDrag = await tester.startGesture(
+          rootRowCenter,
+          kind: PointerDeviceKind.touch,
+        );
+        await rootRightDrag.moveBy(const Offset(24, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await rootRightDrag.moveBy(const Offset(120, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await rootRightDrag.up();
+        await tester.pumpAndSettle();
+
+        final rootLeftDrag = await tester.startGesture(
+          rootRowCenter,
+          kind: PointerDeviceKind.touch,
+        );
+        await rootLeftDrag.moveBy(const Offset(-24, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await rootLeftDrag.moveBy(const Offset(-120, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await rootLeftDrag.up();
+        await tester.pumpAndSettle();
+
+        expect(rootSwipeActions, equals([
+          ChatSwipeAction.read,
+          ChatSwipeAction.read,
+        ]));
+
+        // Issue 1 regression check: Push a SwipeBackPageRoute containing
+        // LiquidGlassTabBar.buildGlassPillBar (EmojiStickerPanel style),
+        // LiquidGlassSwitch, and AdaptiveSwitch / LiquidGlassSlider.
+        navKey.currentState!.push(
+          SwipeBackPageRoute<void>(
+            builder: (_) => StatefulBuilder(
+              builder: (ctx, setLocalState) {
+                final barStyle = glassProvider.createStyle(
+                  context: ctx,
+                  cornerRadius: 20,
+                  refractionIndex: 1.1,
+                  refractionWidth: 24,
+                );
+                final tabBar = LiquidGlassTabBar(
+                  items: [
+                    LiquidGlassTabBarItem(
+                      label: 'Em',
+                      iconBuilder: (_, __) => const SizedBox.shrink(),
+                    ),
+                    LiquidGlassTabBarItem(
+                      label: 'St',
+                      iconBuilder: (_, __) => const SizedBox.shrink(),
+                    ),
+                    LiquidGlassTabBarItem(
+                      label: 'Gf',
+                      iconBuilder: (_, __) => const SizedBox.shrink(),
+                    ),
+                  ],
+                  selectedIndex: selectedTab,
+                  onChanged: (idx) => setLocalState(() => selectedTab = idx),
+                  width: 240,
+                  height: 44,
+                  alignment: Alignment.bottomCenter,
+                  margin: const EdgeInsets.only(bottom: 24),
+                  itemPadding: 3,
+                  swell: null,
+                  style: barStyle,
+                  itemStyle: const LiquidGlassTabItemStyle(
+                    iconSize: 0,
+                    underGlassIconSize: 0,
+                    iconLabelGap: 0,
+                    labelFontSize: 13,
+                  ),
+                  pillStyle: const LiquidGlassTabPillStyle(
+                    mode: LiquidGlassPillMode.both,
+                    show: true,
+                    animated: true,
+                    growHeight: 7,
+                  ),
+                );
+
+                return Scaffold(
+                  key: const ValueKey<String>('glass_controls_scaffold'),
+                  body: tabBar.buildGlassPillBar(
+                    bottomInset: 0,
+                    pixelRatio: 1.0,
+                    useSync: true,
+                    batch: false,
+                    body: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          key: ValueKey<String>('unblocked_body_drag_zone'),
+                          width: double.infinity,
+                          height: 80,
+                          child: Center(child: Text('UnblockedBodyZone')),
+                        ),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: LiquidGlassSwitch(
+                            key: const ValueKey<String>('raw_lg_switch'),
+                            value: glassSwitchValue,
+                            onChanged: (v) =>
+                                setLocalState(() => glassSwitchValue = v),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: AdaptiveSwitch(
+                            key: const ValueKey<String>('adaptive_lg_switch'),
+                            value: glassSwitchValue,
+                            onChanged: (v) =>
+                                setLocalState(() => glassSwitchValue = v),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: LiquidGlassSlider(
+                            key: const ValueKey<String>('raw_lg_slider'),
+                            value: glassSliderValue,
+                            width: 240,
+                            onChanged: (v) =>
+                                setLocalState(() => glassSliderValue = v),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+        await tester.pump();
+        _expectNoTranslucentOpacityAboveGlass(tester);
+
+        // 1) Drag rightward across the LiquidGlassTabBar pill overlay.
+        final overlayRect = tester.getRect(
+          find.byKey(const ValueKey('lg-animated-nav-gesture-overlay')),
+        );
+        final pillDrag = await tester.startGesture(
+          Offset(overlayRect.left + 20, overlayRect.center.dy),
+          kind: PointerDeviceKind.touch,
+        );
+        await pillDrag.moveBy(const Offset(24, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await pillDrag.moveBy(const Offset(160, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+              )
+              .dx,
+          0.0,
+        );
+        await pillDrag.up();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(
+          find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+          findsOneWidget,
+        );
+        expect(selectedTab, greaterThan(0));
+
+        // 2) Drag rightward across LiquidGlassSwitch.
+        final switchRect = tester.getRect(
+          find.byKey(const ValueKey<String>('raw_lg_switch')),
+        );
+        final switchDrag = await tester.startGesture(
+          Offset(switchRect.left + 8, switchRect.center.dy),
+          kind: PointerDeviceKind.touch,
+        );
+        await switchDrag.moveBy(const Offset(24, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await switchDrag.moveBy(const Offset(120, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+              )
+              .dx,
+          0.0,
+        );
+        await switchDrag.up();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(
+          find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+          findsOneWidget,
+        );
+        expect(glassSwitchValue, isTrue);
+
+        // 3) Drag rightward across LiquidGlassSlider.
+        final sliderRect = tester.getRect(
+          find.byKey(const ValueKey<String>('raw_lg_slider')),
+        );
+        final sliderDrag = await tester.startGesture(
+          Offset(sliderRect.left + 32, sliderRect.center.dy),
+          kind: PointerDeviceKind.touch,
+        );
+        await sliderDrag.moveBy(const Offset(24, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await sliderDrag.moveBy(const Offset(120, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(
+          tester
+              .getTopLeft(
+                find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+              )
+              .dx,
+          0.0,
+        );
+        await sliderDrag.up();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(
+          find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+          findsOneWidget,
+        );
+        expect(glassSliderValue, greaterThan(0.3));
+
+        // 4) Dragging rightward on the non-blocked body zone still pops the route cleanly.
+        final bodyZone = tester.getCenter(
+          find.byKey(const ValueKey<String>('unblocked_body_drag_zone')),
+        );
+        final bodyPopDrag = await tester.startGesture(
+          bodyZone,
+          kind: PointerDeviceKind.touch,
+        );
+        await bodyPopDrag.moveBy(const Offset(24, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await bodyPopDrag.moveBy(const Offset(220, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+        await bodyPopDrag.up();
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey<String>('glass_controls_scaffold')),
+          findsNothing,
+        );
+        expect(find.text('RootChatRow'), findsOneWidget);
       },
     );
   });

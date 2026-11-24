@@ -14,6 +14,7 @@ import '../../theme/theav_theme.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import 'rich_text_editing_controller.dart';
 import 'sticker_item_widget.dart';
 
@@ -2784,9 +2785,11 @@ class _EmojiStickerPanelState extends State<EmojiStickerPanel>
           child: Stack(
             alignment: Alignment.center,
             children: [
-              SizedBox(
-                width: 220,
-                child: _buildClassicNav(isDark, theme),
+              SwipeBackBlocker(
+                child: SizedBox(
+                  width: 220,
+                  child: _buildClassicNav(isDark, theme),
+                ),
               ),
               Positioned(
                 right: 16,

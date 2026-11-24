@@ -62,13 +62,17 @@ class _LiquidGlassDraggableState extends State<LiquidGlassDraggable> {
 
     // Stable subtree: gesture + child are built once and reused as the
     // ValueListenableBuilder's `child`, so only the Transform rebuilds per pan.
-    final Widget stable = GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onPanUpdate: (d) {
-        _offset.value += d.delta;
-        widget.onChanged?.call(_offset.value);
-      },
-      child: widget.child,
+    final Widget stable = MetaData(
+      metaData: 'liquid_glass_horizontal_gesture',
+      behavior: HitTestBehavior.deferToChild,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: (d) {
+          _offset.value += d.delta;
+          widget.onChanged?.call(_offset.value);
+        },
+        child: widget.child,
+      ),
     );
 
     return ValueListenableBuilder<Offset>(

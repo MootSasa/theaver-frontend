@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -164,7 +164,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       'post_comments_${widget.channelId}_${widget.postMessage.id}';
 
   bool get _isMobilePlatform =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
   bool get _isSelectionMode => _selectedCommentIds.isNotEmpty;
 
   @override
@@ -1418,6 +1420,11 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     _transitionTimer?.cancel();
     final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
     if (!_showEmojiPanel) {
+      if (!_messageController.selection.isValid) {
+        _messageController.selection = TextSelection.collapsed(
+          offset: _messageController.text.length,
+        );
+      }
       if (kbOpen) {
         _emojiPanelController.value = 1.0;
         setState(() {
@@ -1428,6 +1435,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) _inputFocusNode.requestFocus();
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _transitionTimer = Timer(const Duration(milliseconds: 500), () {
           if (mounted && _isKeyboardFalling) {
             setState(() => _isKeyboardFalling = false);
@@ -1439,10 +1453,16 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           _isKeyboardFalling = false;
           _isKeyboardRising = false;
         });
-        if (!_inputFocusNode.hasFocus) _inputFocusNode.requestFocus();
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) _inputFocusNode.requestFocus();
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _emojiPanelController.forward(from: 0.0);
       }
     } else {

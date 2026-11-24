@@ -108,10 +108,11 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
 
   bool _hasAncestorRouteSwipeBack() {
     if (!mounted) return false;
-    return Navigator.maybeOf(context)?.canPop() ?? false;
+    return hasActiveSwipeBackAncestor(context);
   }
 
-  bool _canSwipeRight() => widget.onRightSwipe != null;
+  bool _canSwipeRight() =>
+      widget.onRightSwipe != null || !_hasAncestorRouteSwipeBack();
 
   void _promoteToWorkspaceDrag(Offset globalPosition, Offset delta) {
     final createPayload = widget.onCreateDragPayload;
@@ -179,7 +180,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
       }
     }
 
-    if (widget.onRightSwipe == null &&
+    if (!_canSwipeRight() &&
         (!canWorkspaceDrag || _hasAncestorRouteSwipeBack()) &&
         _rawDragOffset > 0.0) {
       _rawDragOffset = 0.0;
@@ -226,10 +227,9 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
     if (shouldTrigger) {
       final defaultAction = widget.overrideAction ?? ChatSwipeService().action;
       if (fromOffset > 0) {
-        if (widget.onRightSwipe != null) {
-          HapticUtils.impact();
-          widget.onRightSwipe!(widget.rightSwipeAction ?? defaultAction);
-        }
+        final handler = widget.onRightSwipe ?? widget.onAction;
+        HapticUtils.impact();
+        handler(widget.rightSwipeAction ?? defaultAction);
       } else {
         HapticUtils.impact();
         widget.onAction(defaultAction);
