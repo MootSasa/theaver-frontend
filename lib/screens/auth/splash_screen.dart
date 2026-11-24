@@ -99,17 +99,13 @@ class _SplashScreenState extends State<SplashScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             // App logo/icon
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: const Color(0xFF0088CC),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Icon(
-                Icons.chat_bubble_rounded,
-                size: 40,
-                color: Colors.white,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: Image.asset(
+                'assets/icons/app_icon.png',
+                width: 84,
+                height: 84,
+                filterQuality: FilterQuality.high,
               ),
             ),
             const SizedBox(height: 16),
