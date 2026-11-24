@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../config/app_config.dart';
 import '../account_manager.dart';
+import '../update_service.dart';
 import 'call_notifications.dart';
 import 'message_notification_presenter.dart';
 import 'notification_channels.dart';
@@ -175,9 +176,15 @@ Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
       final title = latestVersion.isNotEmpty
           ? 'Доступна версия $latestVersion'
           : 'Доступно обновление Theaver';
+      final langCode = Platform.localeName.toLowerCase().startsWith('ru') ? 'ru' : 'en';
       final rawNotes = data['release_notes']?.toString().trim() ?? '';
-      final body = rawNotes.isNotEmpty
-          ? rawNotes
+      final cleanNotes = AppUpdateInfo.extractPlainSummary(
+        rawNotes,
+        languageCode: langCode,
+        maxChars: 160,
+      );
+      final body = cleanNotes.isNotEmpty
+          ? cleanNotes
           : 'Нажмите, чтобы загрузить и установить обновление';
       await plugin.show(
         9402,

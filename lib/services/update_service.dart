@@ -86,6 +86,98 @@ class AppUpdateInfo {
     return '${mb.toStringAsFixed(1)} MB';
   }
 
+  static final RegExp _htmlCommentRe = RegExp(r'<!--[\s\S]*?-->');
+  static final RegExp _summaryCommentRe = RegExp(r'<!--\s*summary:\s*(.+?)\s*-->');
+  static final RegExp _shaSuffixRe = RegExp(r'\s*\(`?[0-9a-fA-F]{6,40}`?\)\s*$');
+
+  static String _normalizeLang(String languageCode) {
+    final lower = languageCode.trim().toLowerCase();
+    return lower.startsWith('ru') ? 'ru' : 'en';
+  }
+
+  static String? _extractLanguageSlice(String raw, String lang) {
+    final re = RegExp(
+      '<!--\\s*lang:$lang\\s*-->([\\s\\S]*?)<!--\\s*/lang:$lang\\s*-->',
+      caseSensitive: false,
+    );
+    final match = re.firstMatch(raw);
+    if (match == null) return null;
+    final group = match.group(1)?.trim() ?? '';
+    return group.isNotEmpty ? group : null;
+  }
+
+  /// Extracts localized Markdown release notes matching [languageCode] (`ru` or `en`),
+  /// falling back to the alternate language block or legacy un-tagged notes.
+  static String extractLocalizedNotes(
+    String raw, {
+    required String languageCode,
+  }) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final lang = _normalizeLang(languageCode);
+    final alt = lang == 'ru' ? 'en' : 'ru';
+    final slice = _extractLanguageSlice(trimmed, lang) ??
+        _extractLanguageSlice(trimmed, alt) ??
+        trimmed;
+    return slice.replaceAll(_htmlCommentRe, '').trim();
+  }
+
+  /// Extracts a clean single-line plain-text summary suitable for push and desktop notifications.
+  static String extractPlainSummary(
+    String raw, {
+    String languageCode = 'ru',
+    int maxChars = 160,
+  }) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    final lang = _normalizeLang(languageCode);
+    final alt = lang == 'ru' ? 'en' : 'ru';
+    final slice = _extractLanguageSlice(trimmed, lang) ??
+        _extractLanguageSlice(trimmed, alt) ??
+        trimmed;
+
+    String result = '';
+    final summaryMatch = _summaryCommentRe.firstMatch(slice);
+    if (summaryMatch != null) {
+      result = (summaryMatch.group(1) ?? '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+    }
+
+    if (result.isEmpty) {
+      final cleanedLines = <String>[];
+      for (final rawLine in slice.replaceAll(_htmlCommentRe, '').split(RegExp(r'\r?\n'))) {
+        final line = rawLine.trim();
+        if (line.isEmpty || line.startsWith('#')) continue;
+        final cleaned = line
+            .replaceFirst(RegExp(r'^[-*•]\s+'), '')
+            .replaceAll(_shaSuffixRe, '')
+            .replaceAllMapped(RegExp(r'\*\*([^*\n]+)\*\*'), (m) => m.group(1) ?? '')
+            .replaceAllMapped(RegExp(r'__([^_\n]+)__'), (m) => m.group(1) ?? '')
+            .replaceAllMapped(RegExp(r'`([^`\n]+)`'), (m) => m.group(1) ?? '')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        if (cleaned.isNotEmpty) {
+          cleanedLines.add(cleaned);
+        }
+      }
+      result = cleanedLines.join(' • ').trim();
+    }
+
+    if (maxChars > 1 && result.length > maxChars) {
+      return '${result.substring(0, maxChars - 1).trimRight()}…';
+    }
+    return result;
+  }
+
+  /// Release notes Markdown localized for the active client [languageCode].
+  String localizedNotes(String languageCode) =>
+      extractLocalizedNotes(releaseNotes, languageCode: languageCode);
+
+  /// Clean one-line plain-text summary for update notifications.
+  String plainSummary({String languageCode = 'ru', int maxChars = 160}) =>
+      extractPlainSummary(releaseNotes, languageCode: languageCode, maxChars: maxChars);
+
   Map<String, dynamic> toJson() => {
         'has_update': hasUpdate,
         'latest_version': latestVersion,

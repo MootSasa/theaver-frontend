@@ -1,0 +1,32 @@
+name: Feature Request
+description: Suggest an improvement or new capability for the Theaver client.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What workflow is missing or frustrating today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Behavior
+      description: Describe how you would expect this feature to work.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platforms
+    attributes:
+      label: Target Platforms
+      options:
+        - label: Android
+        - label: iOS
+        - label: Windows
+        - label: macOS
+        - label: Linux
+        - label: Web

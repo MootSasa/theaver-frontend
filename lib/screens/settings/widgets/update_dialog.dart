@@ -169,8 +169,9 @@ class _UpdateDialogState extends State<UpdateDialog> {
     final isForce = widget.update.forceUpdate;
     final hasSha = widget.update.sha256.trim().length >= 8;
     final shortSha = hasSha ? widget.update.sha256.trim().substring(0, 8) : '';
-    final notes = widget.update.releaseNotes.trim().isNotEmpty
-        ? widget.update.releaseNotes.trim()
+    final localizedNotes = widget.update.localizedNotes(l10n.locale.languageCode);
+    final notes = localizedNotes.isNotEmpty
+        ? localizedNotes
         : _tr(
             l10n,
             'update_default_notes',

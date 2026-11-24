@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../config/app_config.dart';
+import '../l10n/app_localizations.dart';
 import '../screens/chat/channel_screen.dart';
 import '../screens/chat/group_chat_screen.dart';
 import '../screens/chat/private_chat_screen.dart';
@@ -1075,10 +1076,11 @@ class NotificationService with WidgetsBindingObserver {
     final title = update.forceUpdate
         ? 'Требуется обновление Theaver v${update.latestVersion}'
         : 'Доступно обновление Theaver v${update.latestVersion}';
-    final cleanNotes = update.releaseNotes.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final langCode = AppLocalizations.current?.locale.languageCode ?? 'ru';
+    final cleanNotes = update.plainSummary(languageCode: langCode, maxChars: 140);
     final sizeInfo = update.formattedSize.isNotEmpty ? ' (${update.formattedSize})' : '';
     final body = cleanNotes.isNotEmpty
-        ? 'Сборка #${update.latestBuild}$sizeInfo: ${cleanNotes.length > 140 ? '${cleanNotes.substring(0, 140)}…' : cleanNotes}'
+        ? 'Сборка #${update.latestBuild}$sizeInfo: $cleanNotes'
         : 'Доступна новая сборка #${update.latestBuild}$sizeInfo. Нажмите, чтобы установить обновление.';
     final payload = <String, dynamic>{...update.toJson(), 'type': 'app_update'};
 
@@ -1102,7 +1104,7 @@ class NotificationService with WidgetsBindingObserver {
           'download_url': update.downloadUrl,
           'apk_size_bytes': update.apkSizeBytes.toString(),
           'sha256': update.sha256,
-          'release_notes': update.releaseNotes,
+          'release_notes': cleanNotes,
           'architecture': update.architecture,
           'channel': update.channel,
         });

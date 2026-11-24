@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Community Discussions
+    url: https://github.com/MootSasa/theaver-frontend/discussions
+    about: Ask usage questions, share feedback, or discuss ideas before opening an issue.
+  - name: Report a Security Vulnerability (Private)
+    url: https://github.com/MootSasa/theaver-frontend/security/advisories/new
+    about: Submit security reports privately instead of opening a public issue.

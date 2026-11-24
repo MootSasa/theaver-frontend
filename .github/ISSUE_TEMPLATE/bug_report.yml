@@ -1,0 +1,81 @@
+name: Bug Report
+description: Report a crash, UI glitch, sync problem, or unexpected behavior in Theaver.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an issue. Please avoid posting private tokens, passwords, or personal email addresses.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Which platform are you running Theaver on?
+      options:
+        - Android
+        - iOS
+        - Windows
+        - macOS
+        - Linux
+        - Web (app.theaver.app)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Release Channel
+      options:
+        - beta
+        - stable
+        - alpha
+        - built from source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: App Version & Build
+      description: Found in Settings -> About Theaver (for example, 1.20.3-beta.429).
+      placeholder: "1.20.3-beta.429"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe what went wrong cleanly and concisely.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can someone else reproduce this?
+      placeholder: |
+        1. Open...
+        2. Tap...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screenshots or Relevant Logs
+      description: Paste any non-sensitive log snippets or attach screenshots here.
+      render: text
+    validations:
+      required: false
