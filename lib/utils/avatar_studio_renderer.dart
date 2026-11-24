@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/avatar_editor_models.dart';
 import '../services/sticker_service.dart';
 import '../utils/emoji_utils.dart';
+import '../utils/image_utils.dart' show AvatarCropSpec;
 import '../widgets/chat/sticker_item_widget.dart';
 
 /// Output returned by [AvatarStudioRenderer].
@@ -24,6 +25,8 @@ class AvatarRenderedOutput {
   final int width;
   final int height;
   final bool preservedAnimation;
+  final AvatarCropSpec? miniCrop;
+  final Uint8List? previewBytes;
 
   const AvatarRenderedOutput({
     this.file,
@@ -32,6 +35,8 @@ class AvatarRenderedOutput {
     required this.width,
     required this.height,
     this.preservedAnimation = false,
+    this.miniCrop,
+    this.previewBytes,
   });
 }
 
@@ -189,6 +194,55 @@ class AvatarStudioGeometry {
     final double clampedX = rx * cosPos - ry * sinPos;
     final double clampedY = rx * sinPos + ry * cosPos;
     return Offset(clampedX / stageSide, clampedY / stageSide);
+  }
+
+  /// Computes the square miniature circle/squircle rect (in local `[0..cropSize.width] x [0..cropSize.height]`
+  /// coordinates) inside [cropSize].
+  static Rect effectiveMiniRectInCrop(AvatarStudioState state, Size cropSize) {
+    final double cropW = math.max(1.0, cropSize.width);
+    final double cropH = math.max(1.0, cropSize.height);
+    final double minSide = math.min(cropW, cropH);
+    final double frac =
+        state.miniSizeFrac.clamp(AvatarStudioState.minMiniSizeFraction, 1.0).toDouble();
+    final double diameter = (minSide * frac).clamp(1.0, minSide).toDouble();
+    final double half = diameter * 0.5;
+    final double cx =
+        (state.miniCenterNorm.dx * cropW).clamp(half, math.max(half, cropW - half)).toDouble();
+    final double cy =
+        (state.miniCenterNorm.dy * cropH).clamp(half, math.max(half, cropH - half)).toDouble();
+    return Rect.fromCenter(center: Offset(cx, cy), width: diameter, height: diameter);
+  }
+
+  /// Clamps normalized `[0..1] x [0..1]` miniature circle center inside [cropSize].
+  static Offset clampMiniCenterNorm(AvatarStudioState state, Size cropSize) {
+    final double cropW = math.max(1.0, cropSize.width);
+    final double cropH = math.max(1.0, cropSize.height);
+    final Rect mini = effectiveMiniRectInCrop(state, Size(cropW, cropH));
+    return Offset(
+      (mini.center.dx / cropW).clamp(0.0, 1.0).toDouble(),
+      (mini.center.dy / cropH).clamp(0.0, 1.0).toDouble(),
+    );
+  }
+
+  /// Computes normalized [AvatarCropSpec] relative to the exported outer image
+  /// (`outSize`), returning `null` if the miniature circle fills the entire 1:1 square.
+  static AvatarCropSpec? effectiveAvatarCropSpec(
+    AvatarStudioState state,
+    Size rawImageSize, {
+    Size? exportedSize,
+  }) {
+    final Size refSize =
+        exportedSize ?? effectiveCropNormRect(state, rawImageSize).size;
+    final double safeW = math.max(1e-6, refSize.width);
+    final double safeH = math.max(1e-6, refSize.height);
+    final Rect mini = effectiveMiniRectInCrop(state, Size(safeW, safeH));
+    final spec = AvatarCropSpec(
+      nx: (mini.left / safeW).clamp(0.0, 0.95).toDouble(),
+      ny: (mini.top / safeH).clamp(0.0, 0.95).toDouble(),
+      nw: (mini.width / safeW).clamp(0.05, 1.0).toDouble(),
+      nh: (mini.height / safeH).clamp(0.05, 1.0).toDouble(),
+    );
+    return spec.isFullSquare ? null : spec;
   }
 
   static bool _isFullRect(Rect r) {
@@ -618,6 +672,19 @@ class AvatarStudioRenderer {
       final ui.Image probe = await decodeImage(sourceBytes);
       final int w = probe.width;
       final int h = probe.height;
+      final AvatarCropSpec? miniCrop =
+          AvatarStudioGeometry.effectiveAvatarCropSpec(
+        state,
+        Size(w.toDouble(), h.toDouble()),
+        exportedSize: Size(w.toDouble(), h.toDouble()),
+      );
+      Uint8List? previewBytes;
+      if (miniCrop != null) {
+        previewBytes = await _renderMiniPreviewPng(
+          image: probe,
+          crop: miniCrop,
+        );
+      }
       probe.dispose();
 
       final String ext =
@@ -632,6 +699,8 @@ class AvatarStudioRenderer {
         width: w,
         height: h,
         preservedAnimation: true,
+        miniCrop: miniCrop,
+        previewBytes: previewBytes,
       );
     }
 
@@ -754,8 +823,22 @@ class AvatarStudioRenderer {
         picture.dispose();
       }
 
+      final AvatarCropSpec? miniCrop =
+          AvatarStudioGeometry.effectiveAvatarCropSpec(
+        state,
+        rawSize,
+        exportedSize: Size(outW.toDouble(), outH.toDouble()),
+      );
+      Uint8List? previewBytes;
+
       late final Uint8List pngBytes;
       try {
+        if (miniCrop != null) {
+          previewBytes = await _renderMiniPreviewPng(
+            image: rendered,
+            crop: miniCrop,
+          );
+        }
         final ByteData? bd =
             await rendered.toByteData(format: ui.ImageByteFormat.png);
         if (bd == null) {
@@ -778,12 +861,58 @@ class AvatarStudioRenderer {
         fileName: encoded.fileName,
         width: outW,
         height: outH,
+        miniCrop: miniCrop,
+        previewBytes: previewBytes,
       );
     } finally {
       sourceImage.dispose();
       for (final ui.Image img in ownedStickerImages) {
         img.dispose();
       }
+    }
+  }
+
+  /// Renders a crisp 320x320 PNG preview of the miniature circle/squircle crop.
+  static Future<Uint8List?> _renderMiniPreviewPng({
+    required ui.Image image,
+    required AvatarCropSpec crop,
+    int outSide = 320,
+  }) async {
+    try {
+      final double w = image.width.toDouble();
+      final double h = image.height.toDouble();
+      final double sx = (crop.nx * w).clamp(0.0, math.max(0.0, w - 1.0));
+      final double sy = (crop.ny * h).clamp(0.0, math.max(0.0, h - 1.0));
+      final double sw = (crop.nw * w).clamp(1.0, w - sx);
+      final double sh = (crop.nh * h).clamp(1.0, h - sy);
+      final Rect dst = Rect.fromLTWH(0.0, 0.0, outSide.toDouble(), outSide.toDouble());
+
+      final ui.PictureRecorder rec = ui.PictureRecorder();
+      final Canvas canvas = Canvas(rec, dst);
+      canvas.drawImageRect(
+        image,
+        Rect.fromLTWH(sx, sy, sw, sh),
+        dst,
+        Paint()
+          ..isAntiAlias = true
+          ..filterQuality = FilterQuality.high,
+      );
+      final ui.Picture pic = rec.endRecording();
+      late final ui.Image miniImg;
+      try {
+        miniImg = await pic.toImage(outSide, outSide);
+      } finally {
+        pic.dispose();
+      }
+      try {
+        final ByteData? bd =
+            await miniImg.toByteData(format: ui.ImageByteFormat.png);
+        return bd?.buffer.asUint8List();
+      } finally {
+        miniImg.dispose();
+      }
+    } catch (_) {
+      return null;
     }
   }
 

@@ -79,6 +79,10 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
   // Corner handle resize state
   Rect _cornerStartNormRect = AvatarStudioState.fullRect;
 
+  // Independent miniature circle drag state
+  bool _isDraggingMiniCircle = false;
+  Offset _startMiniCenter = AvatarStudioState.defaultMiniCenter;
+
   void _setInteracting(bool value) {
     if (_isInteracting != value) {
       setState(() => _isInteracting = value);
@@ -158,13 +162,24 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
     widget.onCommitHistory(committed);
   }
 
-  void _handleBgScaleStart(ScaleStartDetails details) {
+  void _handleBgScaleStart(
+    ScaleStartDetails details,
+    Rect cropRect,
+    Rect miniRect,
+  ) {
     if (widget.selectedLayerId != null) {
       widget.onSelectLayer?.call(null);
     }
     _startScale = widget.state.scale;
     _startPan = widget.state.panOffset;
     _startFocal = details.focalPoint;
+    final bool canMoveMini = miniRect.width < cropRect.width - 1.5 ||
+        miniRect.height < cropRect.height - 1.5;
+    _isDraggingMiniCircle = widget.activeTab == AvatarEditorTab.crop &&
+        canMoveMini &&
+        details.pointerCount <= 1 &&
+        miniRect.inflate(8.0).contains(details.localFocalPoint);
+    _startMiniCenter = widget.state.miniCenterNorm;
     _setInteracting(true);
   }
 
@@ -175,6 +190,29 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
   ) {
     final ui.Image? img = widget.image;
     if (img == null) return;
+    if (_isDraggingMiniCircle) {
+      if (details.pointerCount >= 2 || (details.scale - 1.0).abs() > 0.02) {
+        _isDraggingMiniCircle = false;
+        _startScale = widget.state.scale;
+        _startPan = widget.state.panOffset;
+        _startFocal = details.focalPoint;
+      } else {
+        final Offset delta = details.focalPoint - _startFocal;
+        final Offset rawCenter = Offset(
+          _startMiniCenter.dx + delta.dx / math.max(1.0, cropRect.width),
+          _startMiniCenter.dy + delta.dy / math.max(1.0, cropRect.height),
+        );
+        final AvatarStudioState candidate =
+            widget.state.copyWith(miniCenterNorm: rawCenter);
+        final Offset clampedCenter = AvatarStudioGeometry.clampMiniCenterNorm(
+          candidate,
+          cropRect.size,
+        );
+        widget.onStateChanged(candidate.copyWith(miniCenterNorm: clampedCenter));
+        return;
+      }
+    }
+
     final Size rawSize = Size(img.width.toDouble(), img.height.toDouble());
     final double nextScale = (_startScale * details.scale).clamp(1.0, 5.0);
     final Offset delta = details.focalPoint - _startFocal;
@@ -195,6 +233,7 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
   }
 
   void _handleBgScaleEnd(ScaleEndDetails details) {
+    _isDraggingMiniCircle = false;
     _setInteracting(false);
     widget.onCommitHistory(widget.state);
   }
@@ -397,10 +436,20 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
 
           final Rect stageSquare = _computeStageSquare(viewportSize);
           final Rect cropRect = _computeCropRect(stageSquare);
+          final Rect miniRect = AvatarStudioGeometry.effectiveMiniRectInCrop(
+            widget.state,
+            cropRect.size,
+          ).shift(cropRect.topLeft);
           final bool showHandles =
               widget.image != null &&
               widget.state.aspectMode != AvatarCropAspectMode.square1x1 &&
               widget.activeTab != AvatarEditorTab.markup;
+          final bool showMiniControl =
+              widget.image != null && widget.activeTab == AvatarEditorTab.crop;
+          final bool showMiniBadge =
+              widget.image != null &&
+              (miniRect.width < cropRect.width - 2.0 ||
+                  miniRect.height < cropRect.height - 2.0);
           final bool showGrid = _isInteracting || widget.forceShowThirdsGrid;
 
           final List<AvatarBrushStroke> renderStrokes = <AvatarBrushStroke>[
@@ -414,12 +463,13 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // Background gesture surface for pan / pinch-zoom / double-tap
+                // Background gesture surface for pan / pinch-zoom / double-tap / mini-circle drag
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onDoubleTap: () =>
                       _handleDoubleTap(stageSquare.width, cropRect),
-                  onScaleStart: _handleBgScaleStart,
+                  onScaleStart: (d) =>
+                      _handleBgScaleStart(d, cropRect, miniRect),
                   onScaleUpdate: (d) =>
                       _handleBgScaleUpdate(d, stageSquare.width, cropRect),
                   onScaleEnd: _handleBgScaleEnd,
@@ -455,11 +505,12 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
                   ),
                 ),
 
-                // Scrim & Frame Cutout
+                // Two-tier Scrim & Independent Miniature Cutout
                 IgnorePointer(
                   child: CustomPaint(
                     painter: _AvatarMaskOverlayPainter(
                       cropRect: cropRect,
+                      miniRect: miniRect,
                       maskShape: widget.maskShape,
                       aspectMode: widget.state.aspectMode,
                     ),
@@ -494,6 +545,52 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
 
                 // Draggable 4-corner resize handles for Original / Free crop modes
                 if (showHandles) ..._buildCornerHandles(cropRect, stageSquare),
+
+                // Interactive miniature circle/squircle rim resize handle
+                if (showMiniControl)
+                  _buildMiniResizeHandle(cropRect, miniRect),
+
+                // Live miniature preview badge when outer photo differs from miniature circle
+                if (showMiniBadge)
+                  Positioned(
+                    top: widget.viewportPadding.top + 8.0,
+                    left: 18.0,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 48.0,
+                        height: 48.0,
+                        decoration: BoxDecoration(
+                          borderRadius: widget.maskShape.borderRadiusForSize(48.0),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.88),
+                            width: 1.5,
+                          ),
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.45),
+                              blurRadius: 10.0,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: ClipRRect(
+                          borderRadius:
+                              widget.maskShape.borderRadiusForSize(48.0),
+                          child: CustomPaint(
+                            size: const Size(48.0, 48.0),
+                            painter: _MiniCirclePreviewPainter(
+                              image: widget.image!,
+                              state: widget.state,
+                              stageSide: stageSquare.width,
+                              cropRect: cropRect,
+                              miniRect: miniRect,
+                              strokes: renderStrokes,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
 
                 // Drag-to-delete trash pill at bottom of crop area
                 if (_draggingLayerId != null)
@@ -777,6 +874,93 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
     );
   }
 
+  Offset _miniResizeHandleCenter(Rect miniRect) {
+    if (widget.maskShape == AvatarShapeMask.circle) {
+      final double r = math.min(miniRect.width, miniRect.height) * 0.5;
+      const double diag = 0.7071067811865475;
+      return miniRect.center + Offset(r * diag, r * diag);
+    }
+    return miniRect.bottomRight -
+        Offset(miniRect.width * 0.088, miniRect.height * 0.088);
+  }
+
+  void _handleMiniResizeUpdate(DragUpdateDetails details, Rect cropRect) {
+    final RenderObject? ro = context.findRenderObject();
+    if (ro is! RenderBox) return;
+    final Offset localPos = ro.globalToLocal(details.globalPosition);
+    final Rect curMini = AvatarStudioGeometry.effectiveMiniRectInCrop(
+      widget.state,
+      cropRect.size,
+    ).shift(cropRect.topLeft);
+    final double dist = (localPos - curMini.center).distance;
+    final double newDiameter = widget.maskShape == AvatarShapeMask.circle
+        ? dist * 2.0
+        : dist / 0.5826;
+    final double minCropSide =
+        math.max(1.0, math.min(cropRect.width, cropRect.height));
+    final double nextFrac = (newDiameter / minCropSide)
+        .clamp(AvatarStudioState.minMiniSizeFraction, 1.0)
+        .toDouble();
+    final AvatarStudioState candidate =
+        widget.state.copyWith(miniSizeFrac: nextFrac);
+    final Offset clampedCenter = AvatarStudioGeometry.clampMiniCenterNorm(
+      candidate,
+      cropRect.size,
+    );
+    widget.onStateChanged(candidate.copyWith(miniCenterNorm: clampedCenter));
+  }
+
+  Widget _buildMiniResizeHandle(Rect cropRect, Rect miniRect) {
+    const double hitSize = 40.0;
+    final Offset handleCenter = _miniResizeHandleCenter(miniRect);
+    return Positioned(
+      left: handleCenter.dx - hitSize * 0.5,
+      top: handleCenter.dy - hitSize * 0.5,
+      width: hitSize,
+      height: hitSize,
+      child: GestureDetector(
+        key: const ValueKey<String>('avatar_mini_circle_resize_handle'),
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (_) => _setInteracting(true),
+        onPanUpdate: (DragUpdateDetails d) => _handleMiniResizeUpdate(d, cropRect),
+        onPanEnd: (_) {
+          _setInteracting(false);
+          widget.onCommitHistory(widget.state);
+        },
+        onPanCancel: () {
+          _setInteracting(false);
+          widget.onCommitHistory(widget.state);
+        },
+        child: Center(
+          child: Container(
+            width: 22.0,
+            height: 22.0,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.black.withValues(alpha: 0.45),
+                width: 1.5,
+              ),
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.40),
+                  blurRadius: 6.0,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.open_in_full_rounded,
+              size: 12.0,
+              color: Colors.black87,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   List<Widget> _buildCornerHandles(Rect cropRect, Rect stageSquare) {
     const double hitSize = 36.0;
     final entries = <(_CropCorner, Offset)>[
@@ -892,13 +1076,75 @@ class _SingleTextLayerPainter extends CustomPainter {
   }
 }
 
+class _MiniCirclePreviewPainter extends CustomPainter {
+  final ui.Image image;
+  final AvatarStudioState state;
+  final double stageSide;
+  final Rect cropRect;
+  final Rect miniRect;
+  final List<AvatarBrushStroke> strokes;
+
+  _MiniCirclePreviewPainter({
+    required this.image,
+    required this.state,
+    required this.stageSide,
+    required this.cropRect,
+    required this.miniRect,
+    required this.strokes,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.black);
+    final Rect localMini = miniRect.shift(-cropRect.topLeft);
+    final double scale = size.width / math.max(1.0, localMini.width);
+    final Rect scaledCrop =
+        Rect.fromLTWH(0.0, 0.0, cropRect.width, cropRect.height);
+
+    canvas.save();
+    canvas.scale(scale, scale);
+    canvas.translate(-localMini.left, -localMini.top);
+    AvatarStudioPaint.paintPhotoLayer(
+      canvas: canvas,
+      image: image,
+      cropRect: scaledCrop,
+      stageSide: stageSide,
+      state: state,
+      filterQuality: FilterQuality.medium,
+    );
+    AvatarStudioPaint.paintVignette(
+      canvas: canvas,
+      cropRect: scaledCrop,
+      vignette: state.adjustments.vignette,
+    );
+    AvatarStudioPaint.paintBrushStrokes(
+      canvas: canvas,
+      bounds: scaledCrop,
+      strokes: strokes,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniCirclePreviewPainter oldDelegate) {
+    return !identical(oldDelegate.image, image) ||
+        oldDelegate.state != state ||
+        oldDelegate.stageSide != stageSide ||
+        oldDelegate.cropRect != cropRect ||
+        oldDelegate.miniRect != miniRect ||
+        !listEquals(oldDelegate.strokes, strokes);
+  }
+}
+
 class _AvatarMaskOverlayPainter extends CustomPainter {
   final Rect cropRect;
+  final Rect miniRect;
   final AvatarShapeMask maskShape;
   final AvatarCropAspectMode aspectMode;
 
   _AvatarMaskOverlayPainter({
     required this.cropRect,
+    required this.miniRect,
     required this.maskShape,
     required this.aspectMode,
   });
@@ -906,46 +1152,38 @@ class _AvatarMaskOverlayPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final Rect full = Offset.zero & size;
-    final RRect cutout = aspectMode == AvatarCropAspectMode.square1x1
-        ? maskShape.shapeRRect(cropRect)
-        : RRect.fromRectAndRadius(cropRect, const Radius.circular(2.0));
+    final RRect cropRRect =
+        RRect.fromRectAndRadius(cropRect, const Radius.circular(2.0));
+    final RRect miniCutout = maskShape.shapeRRect(miniRect);
 
-    final Path scrimPath = Path()
+    // Tier 1: Heavy dim outside outer cropRect
+    final Path outerScrim = Path()
       ..fillType = PathFillType.evenOdd
       ..addRect(full)
-      ..addRRect(cutout);
-
+      ..addRRect(cropRRect);
     canvas.drawPath(
-      scrimPath,
-      Paint()..color = Colors.black.withValues(alpha: 0.62),
+      outerScrim,
+      Paint()..color = Colors.black.withValues(alpha: 0.72),
     );
 
-    // Crisp 1dp white cutout ring / frame
-    canvas.drawRRect(
-      cutout,
-      Paint()
-        ..color = Colors.white.withValues(alpha: 0.86)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.1
-        ..isAntiAlias = true,
+    // Tier 2: Softer dim inside cropRect around miniature circle/squircle cutout
+    final Path innerScrim = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(cropRect)
+      ..addRRect(miniCutout);
+    canvas.drawPath(
+      innerScrim,
+      Paint()..color = Colors.black.withValues(alpha: 0.40),
     );
 
+    // Outer photo frame outline
     if (aspectMode != AvatarCropAspectMode.square1x1) {
-      // Inscribed circular/squircle avatar preview outline inside non-square frame
-      final double minSide = math.min(cropRect.width, cropRect.height);
-      final Rect inscribed = Rect.fromCenter(
-        center: cropRect.center,
-        width: minSide,
-        height: minSide,
-      );
-      final Path previewPath = maskShape.shapePath(inscribed);
-      _drawDashedPath(
-        canvas,
-        previewPath,
+      canvas.drawRRect(
+        cropRRect,
         Paint()
-          ..color = Colors.white.withValues(alpha: 0.44)
+          ..color = Colors.white.withValues(alpha: 0.55)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.1
+          ..strokeWidth = 1.0
           ..isAntiAlias = true,
       );
 
@@ -956,37 +1194,31 @@ class _AvatarMaskOverlayPainter extends CustomPainter {
         ..strokeWidth = 3.0
         ..strokeCap = StrokeCap.square;
       const double arm = 18.0;
-      // Top-left
       canvas.drawLine(cropRect.topLeft, cropRect.topLeft + const Offset(arm, 0), bracketPaint);
       canvas.drawLine(cropRect.topLeft, cropRect.topLeft + const Offset(0, arm), bracketPaint);
-      // Top-right
       canvas.drawLine(cropRect.topRight, cropRect.topRight + const Offset(-arm, 0), bracketPaint);
       canvas.drawLine(cropRect.topRight, cropRect.topRight + const Offset(0, arm), bracketPaint);
-      // Bottom-left
       canvas.drawLine(cropRect.bottomLeft, cropRect.bottomLeft + const Offset(arm, 0), bracketPaint);
       canvas.drawLine(cropRect.bottomLeft, cropRect.bottomLeft + const Offset(0, -arm), bracketPaint);
-      // Bottom-right
       canvas.drawLine(cropRect.bottomRight, cropRect.bottomRight + const Offset(-arm, 0), bracketPaint);
       canvas.drawLine(cropRect.bottomRight, cropRect.bottomRight + const Offset(0, -arm), bracketPaint);
     }
-  }
 
-  void _drawDashedPath(Canvas canvas, Path path, Paint paint) {
-    const double dash = 5.0;
-    const double gap = 4.0;
-    for (final ui.PathMetric metric in path.computeMetrics()) {
-      double distance = 0.0;
-      while (distance < metric.length) {
-        final double next = math.min(distance + dash, metric.length);
-        canvas.drawPath(metric.extractPath(distance, next), paint);
-        distance = next + gap;
-      }
-    }
+    // Crisp 1.6dp ring around the miniature avatar cutout
+    canvas.drawRRect(
+      miniCutout,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.92)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.6
+        ..isAntiAlias = true,
+    );
   }
 
   @override
   bool shouldRepaint(covariant _AvatarMaskOverlayPainter oldDelegate) {
     return oldDelegate.cropRect != cropRect ||
+        oldDelegate.miniRect != miniRect ||
         oldDelegate.maskShape != maskShape ||
         oldDelegate.aspectMode != aspectMode;
   }

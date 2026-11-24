@@ -650,6 +650,7 @@ class ContactsService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
     String fallbackError = 'Failed to upload photo',
   }) async {
     try {
@@ -663,6 +664,9 @@ class ContactsService {
         Uri.parse('${AppConfig.baseUrl}$urlPath'),
       );
       request.headers['Authorization'] = 'Bearer $token';
+      if (avatarCrop != null && avatarCrop.trim().isNotEmpty) {
+        request.fields['avatar_crop'] = avatarCrop.trim();
+      }
 
       if (bytes != null) {
         final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
@@ -989,12 +993,14 @@ class ContactsService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
   }) async {
     final res = await _sendAvatarMultipart(
       '/api/contacts/$userId/avatar',
       file,
       bytes: bytes,
       fileName: fileName,
+      avatarCrop: avatarCrop,
       fallbackError: 'Failed to set contact photo',
     );
     if (res['success'] != true) return res;
@@ -1141,12 +1147,14 @@ class ContactsService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
   }) async {
     final res = await _sendAvatarMultipart(
       '/api/contacts/$userId/suggest-photo',
       file,
       bytes: bytes,
       fileName: fileName,
+      avatarCrop: avatarCrop,
       fallbackError: 'Failed to suggest photo',
     );
     if (res['success'] != true) return res;

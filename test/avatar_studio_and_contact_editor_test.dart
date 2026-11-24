@@ -21,6 +21,7 @@ import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/websocket_service.dart';
 import 'package:theaver/theme/app_theme.dart';
 import 'package:theaver/utils/avatar_studio_renderer.dart';
+import 'package:theaver/utils/image_utils.dart';
 import 'package:theaver/utils/swipe_back_route.dart';
 import 'package:theaver/widgets/avatar_editor/avatar_crop_canvas.dart';
 import 'package:theaver/widgets/avatar_editor/avatar_emoji_constructor_view.dart';
@@ -28,6 +29,7 @@ import 'package:theaver/widgets/avatar_editor/avatar_rotation_dial.dart';
 import 'package:theaver/widgets/avatar_editor/theav_avatar_editor_screen.dart';
 import 'package:theaver/widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import 'package:theaver/widgets/chat/suggested_photo_bubble_card.dart';
+import 'package:theaver/widgets/profile/expandable_avatar.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
 
 class _SyncAppLocalizationsDelegate
@@ -279,6 +281,46 @@ Future<Uint8List> _createSyntheticPng({int width = 120, int height = 80}) async 
   return data!.buffer.asUint8List();
 }
 
+Future<Uint8List> _createSplitPng({int width = 240, int height = 120}) async {
+  final ui.PictureRecorder recorder = ui.PictureRecorder();
+  final Canvas canvas = Canvas(recorder);
+  canvas.drawRect(
+    Rect.fromLTWH(0, 0, width * 0.5, height.toDouble()),
+    Paint()..color = const Color(0xFF2563EB),
+  );
+  canvas.drawRect(
+    Rect.fromLTWH(width * 0.5, 0, width * 0.5, height.toDouble()),
+    Paint()..color = const Color(0xFFEF4444),
+  );
+  final ui.Picture pic = recorder.endRecording();
+  final ui.Image img = await pic.toImage(width, height);
+  final ByteData? data = await img.toByteData(format: ui.ImageByteFormat.png);
+  img.dispose();
+  return data!.buffer.asUint8List();
+}
+
+Future<ui.Image> _resolveProviderImage(ImageProvider provider) {
+  final Completer<ui.Image> completer = Completer<ui.Image>();
+  final ImageStream stream = provider.resolve(ImageConfiguration.empty);
+  late ImageStreamListener listener;
+  listener = ImageStreamListener(
+    (ImageInfo info, bool _) {
+      if (!completer.isCompleted) {
+        completer.complete(info.image.clone());
+      }
+      stream.removeListener(listener);
+    },
+    onError: (Object err, StackTrace? st) {
+      if (!completer.isCompleted) {
+        completer.completeError(err, st);
+      }
+      stream.removeListener(listener);
+    },
+  );
+  stream.addListener(listener);
+  return completer.future;
+}
+
 Future<void> _pumpFrames(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 350));
@@ -412,8 +454,18 @@ void main() {
         findsOneWidget,
       );
       _expectNoTranslucentOpacityAboveGlass(tester);
+      expect(
+        find.byKey(const ValueKey<String>('avatar_editor_mini_circle_slider')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('avatar_mini_circle_resize_handle')),
+        findsOneWidget,
+      );
 
-      // Verify aspect modes render cleanly.
+      // Verify aspect modes render cleanly (default is Оригинал; switch to 1:1 and Свободно).
+      await tester.tap(find.text('1:1'));
+      await _pumpFrames(tester);
       await tester.tap(find.text('Оригинал'));
       await _pumpFrames(tester);
       await tester.tap(find.text('Свободно'));
@@ -631,6 +683,120 @@ void main() {
         <String, dynamic>{'contact_user_id': '99'},
       );
       expect(ContactsService.getCached('99'), isNull);
+    });
+  });
+
+  group('5. Dual-Level Avatar Framing (#acrop=...)', () {
+    test('AvatarCropSpec & getValidAvatarUrl preserve #acrop=... across normalization and strip clean URLs', () {
+      const url = 'https://cdn.example.com/avatars/u/photo.jpg#acrop=0.5500,0.1000,0.4000,0.8000';
+      final split = AvatarCropSpec.split(url);
+      expect(split.cleanUrl, 'https://cdn.example.com/avatars/u/photo.jpg');
+      expect(split.crop, isNotNull);
+      expect(split.crop!.imageAspectRatio, closeTo(2.0, 1e-4));
+      expect(stripAvatarCropFragment(url), 'https://cdn.example.com/avatars/u/photo.jpg');
+
+      final rel = getValidAvatarUrl('/avatars/1/pic.jpg#acrop=0.25,0.1,0.4,0.3');
+      expect(rel, isNotNull);
+      expect(rel!, endsWith('/avatars/1/pic.jpg#acrop=0.2500,0.1000,0.4000,0.3000'));
+
+      final badSplit = AvatarCropSpec.split('https://cdn.example.com/avatars/u/photo.jpg#acrop=0.9,0.9,0.5,0.5');
+      expect(badSplit.crop, isNull);
+    });
+
+    test('AvatarSubregionImageProvider renders cropped coral square while avatarFullImageProvider preserves full 240x120 image', () async {
+      final Uint8List splitBytes = await _createSplitPng(width: 240, height: 120);
+      final Directory tmpDir = Directory.systemTemp.createTempSync('theaver_acrop_test_');
+      try {
+        final File imgFile = File('${tmpDir.path}/split.png');
+        await imgFile.writeAsBytes(splitBytes, flush: true);
+        final String taggedUrl = '${imgFile.path}#acrop=0.5500,0.1000,0.4000,0.8000';
+
+        final ImageProvider? miniProvider =
+            avatarImageProvider(taggedUrl, maxDecodeDimension: 120);
+        final ImageProvider? fullProvider = avatarFullImageProvider(taggedUrl);
+        expect(miniProvider, isA<AvatarSubregionImageProvider>());
+        expect(fullProvider, isNotNull);
+
+        final ui.Image miniImg = await _resolveProviderImage(miniProvider!);
+        final ui.Image fullImg = await _resolveProviderImage(fullProvider!);
+        try {
+          expect(miniImg.width, miniImg.height);
+          expect(fullImg.width, 240);
+          expect(fullImg.height, 120);
+
+          final ByteData? rgba =
+              await miniImg.toByteData(format: ui.ImageByteFormat.rawRgba);
+          expect(rgba, isNotNull);
+          final int cx = miniImg.width ~/ 2;
+          final int cy = miniImg.height ~/ 2;
+          final int offset = (cy * miniImg.width + cx) * 4;
+          final int r = rgba!.getUint8(offset);
+          final int b = rgba.getUint8(offset + 2);
+          // Sampled strictly from the right coral half (#EF4444), not the left blue half (#2563EB).
+          expect(r, greaterThan(200));
+          expect(b, lessThan(80));
+        } finally {
+          miniImg.dispose();
+          fullImg.dispose();
+        }
+      } finally {
+        if (await tmpDir.exists()) {
+          await tmpDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test('AvatarStudioRenderer preserves big outer photo and emits miniCrop + previewBytes when circle is shrunk', () async {
+      final Uint8List splitBytes = await _createSplitPng(width: 240, height: 120);
+      final rendered = await AvatarStudioRenderer.renderEditedAvatar(
+        sourceBytes: splitBytes,
+        sourceFileName: 'wide.png',
+        state: const AvatarStudioState(
+          aspectMode: AvatarCropAspectMode.original,
+          miniCenterNorm: Offset(0.75, 0.35),
+          miniSizeFrac: 0.40,
+        ),
+        maxDimension: 480,
+      );
+      try {
+        expect(rendered.width, greaterThan(rendered.height));
+        expect(rendered.miniCrop, isNotNull);
+        expect(rendered.miniCrop!.imageAspectRatio, closeTo(2.0, 0.03));
+        expect(rendered.miniCrop!.nw, closeTo(0.20, 0.02));
+        expect(rendered.miniCrop!.nh, closeTo(0.40, 0.02));
+        expect(rendered.previewBytes, isNotNull);
+        expect(rendered.previewBytes!, isNotEmpty);
+      } finally {
+        if (rendered.file != null && await rendered.file!.exists()) {
+          await rendered.file!.delete();
+        }
+      }
+    });
+
+    testWidgets('ExpandableAvatar renders #acrop=... seamlessly across expandFactor 0.0, 0.5, and 1.0', (tester) async {
+      const taggedUrl =
+          'https://example.com/full.jpg#acrop=0.2500,0.1000,0.4000,0.3000';
+      for (final double factor in <double>[0.0, 0.5, 1.0]) {
+        await tester.pumpWidget(
+          _wrapTestApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 400,
+                height: 800,
+                child: Center(
+                  child: ExpandableAvatar(
+                    avatarUrls: const <String>[taggedUrl],
+                    expandFactor: factor,
+                    displayName: 'Test',
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await _pumpFrames(tester);
+        expect(tester.takeException(), isNull);
+      }
     });
   });
 }

@@ -33,7 +33,9 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
 
   File? _pickedAvatarFile;
   Uint8List? _pickedAvatarBytes;
+  Uint8List? _pickedAvatarPreviewBytes;
   String? _pickedAvatarFileName;
+  String? _pickedAvatarCrop;
   bool _isPublic = true;
   bool _enableSignatures = false;
   bool _enableComments = true;
@@ -98,6 +100,10 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
 
   ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarPreviewBytes != null &&
+        _pickedAvatarPreviewBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarPreviewBytes!);
+    }
     if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
       return MemoryImage(_pickedAvatarBytes!);
     }
@@ -122,7 +128,9 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       setState(() {
         _pickedAvatarFile = null;
         _pickedAvatarBytes = null;
+        _pickedAvatarPreviewBytes = null;
         _pickedAvatarFileName = null;
+        _pickedAvatarCrop = null;
       });
       return;
     }
@@ -130,7 +138,9 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       setState(() {
         _pickedAvatarFile = picked.file;
         _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarPreviewBytes = picked.effectivePreviewBytes;
         _pickedAvatarFileName = picked.fileName;
+        _pickedAvatarCrop = picked.miniCrop?.toCompactParam();
       });
     }
   }
@@ -173,6 +183,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
             uploadFile,
             bytes: _pickedAvatarBytes,
             fileName: _pickedAvatarFileName,
+            avatarCrop: _pickedAvatarCrop,
           );
         } catch (e) {
           debugPrint('[CreateChannelScreen] Avatar upload error: $e');

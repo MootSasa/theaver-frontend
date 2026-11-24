@@ -178,8 +178,6 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
         return;
       }
 
-      final bool isAnim =
-          AvatarStudioRenderer.isAnimatedMediaBytes(bytes, widget.fileName);
       final ui.Image decoded = await AvatarStudioRenderer.decodeImage(bytes);
       if (!mounted) {
         decoded.dispose();
@@ -188,9 +186,9 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
 
       final AvatarCropAspectMode effectiveStartAspect =
           widget.initialAspectMode ??
-              (isAnim
-                  ? AvatarCropAspectMode.original
-                  : AvatarCropAspectMode.square1x1);
+              (widget.isFromConstructor
+                  ? AvatarCropAspectMode.square1x1
+                  : AvatarCropAspectMode.original);
 
       setState(() {
         _sourceBytes = bytes;
@@ -293,7 +291,14 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
         rawImageSize: rawSize,
         state: next,
       );
-      next = next.copyWith(panOffset: clamped);
+      final Offset clampedMini = AvatarStudioGeometry.clampMiniCenterNorm(
+        next,
+        norm.size,
+      );
+      next = next.copyWith(
+        panOffset: clamped,
+        miniCenterNorm: clampedMini,
+      );
     }
     _commitHistory(next);
   }
@@ -316,6 +321,14 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
       freeRectNormalized: nextFreeRect,
       panOffset: Offset.zero,
     );
+    if (img != null) {
+      final Size rawSize = Size(img.width.toDouble(), img.height.toDouble());
+      final Rect norm = AvatarStudioGeometry.effectiveCropNormRect(next, rawSize);
+      next = next.copyWith(
+        miniCenterNorm:
+            AvatarStudioGeometry.clampMiniCenterNorm(next, norm.size),
+      );
+    }
     _commitHistory(next);
   }
 
@@ -382,6 +395,8 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
           maskShape: widget.maskShape,
           aspectMode: _state.aspectMode,
           isFromConstructor: widget.isFromConstructor,
+          miniCrop: rendered.miniCrop,
+          previewBytes: rendered.previewBytes,
         ),
       );
     } catch (e) {
@@ -629,7 +644,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
     final bool isWide = mq.size.width >= 640;
     final double topHudPad = mq.padding.top + (isWide ? 64.0 : 112.0);
     final double bottomHudPad =
-        math.min(mq.size.height * 0.42, mq.padding.bottom + 240.0);
+        math.min(mq.size.height * 0.44, mq.padding.bottom + 264.0);
 
     return Stack(
       fit: StackFit.expand,
@@ -941,7 +956,91 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
             _updateLiveState(next);
           },
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 6),
+        SwipeBackBlocker(
+          child: SizedBox(
+            height: 28,
+            child: Row(
+              children: [
+                Text(
+                  context.trOr('avatar_editor_circle_size', 'Кружок'),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.78),
+                    fontSize: 12.0,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      activeTrackColor: palette.primary,
+                      inactiveTrackColor: Colors.white.withValues(alpha: 0.16),
+                      thumbColor: Colors.white,
+                      trackHeight: 3.0,
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 12),
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 6.5),
+                    ),
+                    child: Slider(
+                      key: const ValueKey<String>(
+                        'avatar_editor_mini_circle_slider',
+                      ),
+                      value: _state.miniSizeFrac.clamp(
+                        AvatarStudioState.minMiniSizeFraction,
+                        1.0,
+                      ),
+                      min: AvatarStudioState.minMiniSizeFraction,
+                      max: 1.0,
+                      onChanged: (double frac) {
+                        final ui.Image? img = _decodedImage;
+                        AvatarStudioState next =
+                            _state.copyWith(miniSizeFrac: frac);
+                        if (img != null) {
+                          final Size rawSize = Size(
+                            img.width.toDouble(),
+                            img.height.toDouble(),
+                          );
+                          final Rect norm =
+                              AvatarStudioGeometry.effectiveCropNormRect(
+                            next,
+                            rawSize,
+                          );
+                          next = next.copyWith(
+                            miniCenterNorm:
+                                AvatarStudioGeometry.clampMiniCenterNorm(
+                              next,
+                              norm.size,
+                            ),
+                          );
+                        }
+                        _updateLiveState(next);
+                      },
+                      onChangeEnd: (_) => _commitHistory(_state),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 38,
+                  child: Text(
+                    '${(_state.miniSizeFrac * 100).round()}%',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: <FontFeature>[
+                        FontFeature.tabularFigures(),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [

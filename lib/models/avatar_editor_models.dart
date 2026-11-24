@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import '../utils/image_utils.dart' show AvatarCropSpec;
+
 /// Target visual mask shape used for previewing avatar framing.
 enum AvatarShapeMask {
   circle,
@@ -97,6 +99,8 @@ class AvatarPickResult {
   final AvatarShapeMask maskShape;
   final AvatarCropAspectMode aspectMode;
   final bool isFromConstructor;
+  final AvatarCropSpec? miniCrop;
+  final Uint8List? previewBytes;
 
   const AvatarPickResult({
     this.file,
@@ -106,6 +110,8 @@ class AvatarPickResult {
     this.maskShape = AvatarShapeMask.circle,
     this.aspectMode = AvatarCropAspectMode.square1x1,
     this.isFromConstructor = false,
+    this.miniCrop,
+    this.previewBytes,
   });
 
   const AvatarPickResult.deleted({
@@ -115,7 +121,11 @@ class AvatarPickResult {
         fileName = '',
         deletedCurrent = true,
         aspectMode = AvatarCropAspectMode.square1x1,
-        isFromConstructor = false;
+        isFromConstructor = false,
+        miniCrop = null,
+        previewBytes = null;
+
+  Uint8List? get effectivePreviewBytes => previewBytes ?? bytes;
 
   bool get hasMedia =>
       !deletedCurrent &&
@@ -678,6 +688,8 @@ class AvatarEmojiConstructorConfig {
 @immutable
 class AvatarStudioState {
   static const Rect fullRect = Rect.fromLTWH(0.0, 0.0, 1.0, 1.0);
+  static const Offset defaultMiniCenter = Offset(0.5, 0.5);
+  static const double minMiniSizeFraction = 0.18;
 
   final AvatarCropAspectMode aspectMode;
   final double scale;
@@ -686,6 +698,8 @@ class AvatarStudioState {
   final double fineAngleDegrees;
   final bool flipHorizontal;
   final Rect freeRectNormalized;
+  final Offset miniCenterNorm;
+  final double miniSizeFrac;
   final AvatarColorAdjustments adjustments;
   final List<AvatarBrushStroke> strokes;
   final List<AvatarStickerLayer> stickers;
@@ -699,6 +713,8 @@ class AvatarStudioState {
     this.fineAngleDegrees = 0.0,
     this.flipHorizontal = false,
     this.freeRectNormalized = fullRect,
+    this.miniCenterNorm = defaultMiniCenter,
+    this.miniSizeFrac = 1.0,
     this.adjustments = const AvatarColorAdjustments(),
     this.strokes = const <AvatarBrushStroke>[],
     this.stickers = const <AvatarStickerLayer>[],
@@ -711,7 +727,9 @@ class AvatarStudioState {
       (quarterTurns % 4) == 0 &&
       fineAngleDegrees.abs() <= 0.05 &&
       !flipHorizontal &&
-      _rectsNearlyEqual(freeRectNormalized, fullRect);
+      _rectsNearlyEqual(freeRectNormalized, fullRect) &&
+      (miniCenterNorm - defaultMiniCenter).distance <= 1e-3 &&
+      (miniSizeFrac - 1.0).abs() <= 1e-3;
 
   bool get isModified =>
       aspectMode != AvatarCropAspectMode.square1x1 ||
@@ -723,7 +741,8 @@ class AvatarStudioState {
 
   /// Returns `true` when edits require rasterizing animated GIF/WebP frames.
   ///
-  /// When `false`, the original animated bytes can be preserved verbatim.
+  /// When `false`, the original animated bytes can be preserved verbatim (even
+  /// if the user moved or resized the independent `#acrop=...` miniature circle).
   bool get hasEditsForAnimationPreservation =>
       (scale - 1.0).abs() > 1e-3 ||
       panOffset.distance > 1e-3 ||
@@ -746,6 +765,8 @@ class AvatarStudioState {
       fineAngleDegrees: 0.0,
       flipHorizontal: false,
       freeRectNormalized: fullRect,
+      miniCenterNorm: defaultMiniCenter,
+      miniSizeFrac: 1.0,
     );
   }
 
@@ -763,6 +784,8 @@ class AvatarStudioState {
     double? fineAngleDegrees,
     bool? flipHorizontal,
     Rect? freeRectNormalized,
+    Offset? miniCenterNorm,
+    double? miniSizeFrac,
     AvatarColorAdjustments? adjustments,
     List<AvatarBrushStroke>? strokes,
     List<AvatarStickerLayer>? stickers,
@@ -777,6 +800,9 @@ class AvatarStudioState {
           (fineAngleDegrees ?? this.fineAngleDegrees).clamp(-45.0, 45.0).toDouble(),
       flipHorizontal: flipHorizontal ?? this.flipHorizontal,
       freeRectNormalized: freeRectNormalized ?? this.freeRectNormalized,
+      miniCenterNorm: miniCenterNorm ?? this.miniCenterNorm,
+      miniSizeFrac:
+          (miniSizeFrac ?? this.miniSizeFrac).clamp(minMiniSizeFraction, 1.0).toDouble(),
       adjustments: adjustments ?? this.adjustments,
       strokes: strokes ?? this.strokes,
       stickers: stickers ?? this.stickers,
@@ -802,6 +828,8 @@ class AvatarStudioState {
         fineAngleDegrees != other.fineAngleDegrees ||
         flipHorizontal != other.flipHorizontal ||
         freeRectNormalized != other.freeRectNormalized ||
+        miniCenterNorm != other.miniCenterNorm ||
+        miniSizeFrac != other.miniSizeFrac ||
         adjustments != other.adjustments ||
         strokes.length != other.strokes.length ||
         stickers.length != other.stickers.length ||
@@ -829,6 +857,8 @@ class AvatarStudioState {
         fineAngleDegrees,
         flipHorizontal,
         freeRectNormalized,
+        miniCenterNorm,
+        miniSizeFrac,
         adjustments,
         Object.hashAll(strokes),
         Object.hashAll(stickers),

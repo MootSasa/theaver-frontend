@@ -685,6 +685,7 @@ class FileService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
   }) async {
     final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
         ? path.basename(fileName.trim())
@@ -709,12 +710,22 @@ class FileService {
         contentType: MediaType.parse(mimeType),
       );
     }
-    return FormData.fromMap({'avatar': part});
+    return FormData.fromMap({
+      'avatar': part,
+      if (avatarCrop != null && avatarCrop.trim().isNotEmpty)
+        'avatar_crop': avatarCrop.trim(),
+    });
   }
 
   /// Upload an avatar image
-  Future<String> uploadAvatar(File file) async {
-    final formData = await _buildAvatarFormData(file);
+  Future<String> uploadAvatar(
+    File file, {
+    String? avatarCrop,
+  }) async {
+    final formData = await _buildAvatarFormData(
+      file,
+      avatarCrop: avatarCrop,
+    );
 
     try {
       final headers = await _getHeaders();
@@ -744,12 +755,14 @@ class FileService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
   }) async {
     try {
       final formData = await _buildAvatarFormData(
         file,
         bytes: bytes,
         fileName: fileName,
+        avatarCrop: avatarCrop,
       );
       final headers = await _getHeaders();
       final response = await _dio.post(

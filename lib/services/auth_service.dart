@@ -22,6 +22,7 @@ import 'notification_service.dart';
 import 'settings_service.dart';
 import '../screens/auth/login_screen.dart';
 import '../widgets/bot/mini_app_webview_sheet.dart';
+import '../utils/image_utils.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
 
@@ -908,6 +909,7 @@ class AuthService {
       String filePath, {
       Uint8List? bytes,
       String? fileName,
+      String? avatarCrop,
     }) async {
       try {
         debugPrint('[uploadAvatar] Step 1: Getting token...');
@@ -921,9 +923,10 @@ class AuthService {
         }
         debugPrint('[uploadAvatar] Step 1-ok: token obtained (length=${token.length})');
 
+        final cleanFilePath = stripAvatarCropFragment(filePath) ?? filePath;
         final resolvedFileName = (fileName != null && fileName.trim().isNotEmpty)
             ? path.basename(fileName.trim())
-            : (filePath.isNotEmpty ? path.basename(filePath) : 'avatar.jpg');
+            : (cleanFilePath.isNotEmpty ? path.basename(cleanFilePath) : 'avatar.jpg');
 
         // Use the new MinIO-based avatar upload endpoint
         debugPrint('[uploadAvatar] Step 3: Creating MultipartRequest to ${AppConfig.baseUrl}/api/files/upload-avatar');
@@ -933,6 +936,11 @@ class AuthService {
         );
 
         request.headers['Authorization'] = 'Bearer $token';
+        final cleanCrop = avatarCrop?.trim() ??
+            AvatarCropSpec.split(filePath).crop?.toCompactParam();
+        if (cleanCrop != null && cleanCrop.isNotEmpty) {
+          request.fields['avatar_crop'] = cleanCrop;
+        }
         if (bytes != null) {
           debugPrint('[uploadAvatar] Step 4: Adding MultipartFile fromBytes (${bytes.length} bytes)...');
           request.files.add(
@@ -943,8 +951,8 @@ class AuthService {
             ),
           );
         } else {
-          debugPrint('[uploadAvatar] Step 2: Checking file exists at $filePath');
-          final file = File(filePath);
+          debugPrint('[uploadAvatar] Step 2: Checking file exists at $cleanFilePath');
+          final file = File(cleanFilePath);
           if (!await file.exists()) {
             debugPrint('[uploadAvatar] Step 2-fail: file not found');
             return {
@@ -959,7 +967,7 @@ class AuthService {
           request.files.add(
             await http.MultipartFile.fromPath(
               'avatar',
-              filePath,
+              cleanFilePath,
               filename: resolvedFileName,
             ),
           );

@@ -1,10 +1,304 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show immutable, kIsWeb;
 import 'package:flutter/material.dart';
 import '../config/app_config.dart';
+
+/// Normalized `[0..1] x [0..1]` square subregion specifying which part of a full
+/// avatar image is framed as the miniature circular/squircle icon across chats,
+/// contacts, and collapsed profiles.
+@immutable
+class AvatarCropSpec {
+  final double nx;
+  final double ny;
+  final double nw;
+  final double nh;
+
+  const AvatarCropSpec({
+    required this.nx,
+    required this.ny,
+    required this.nw,
+    required this.nh,
+  });
+
+  double get cx => nx + nw * 0.5;
+  double get cy => ny + nh * 0.5;
+
+  /// Full outer image `width / height` inferred from a square pixel crop
+  /// (`nw * imgW == nh * imgH` -> `imgW / imgH == nh / nw`).
+  double get imageAspectRatio => nw > 1e-6 ? (nh / nw) : 1.0;
+
+  bool get isFullSquare =>
+      nx <= 0.002 && ny <= 0.002 && nw >= 0.998 && nh >= 0.998;
+
+  String toCompactParam() =>
+      '${nx.toStringAsFixed(4)},${ny.toStringAsFixed(4)},${nw.toStringAsFixed(4)},${nh.toStringAsFixed(4)}';
+
+  String attachToUrl(String base) {
+    final clean = stripAvatarCropFragment(base) ?? base;
+    if (clean.isEmpty || isFullSquare) return clean;
+    return '$clean#acrop=${toCompactParam()}';
+  }
+
+  static AvatarCropSpec? tryParseParam(String? raw) {
+    if (raw == null) return null;
+    String s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('#')) s = s.substring(1);
+    if (s.startsWith('acrop=')) s = s.substring(6);
+    final parts = s.split(',');
+    if (parts.length != 4) return null;
+
+    final List<double> vals = <double>[];
+    for (final part in parts) {
+      final double? v = double.tryParse(part.trim());
+      if (v == null || v.isNaN || v.isInfinite) return null;
+      vals.add(v);
+    }
+
+    double nx = vals[0];
+    double ny = vals[1];
+    double nw = vals[2];
+    double nh = vals[3];
+    if (nx < -0.001 ||
+        ny < -0.001 ||
+        nw < 0.05 ||
+        nh < 0.05 ||
+        nx + nw > 1.002 ||
+        ny + nh > 1.002) {
+      return null;
+    }
+    nx = nx.clamp(0.0, 0.95).toDouble();
+    ny = ny.clamp(0.0, 0.95).toDouble();
+    nw = nw.clamp(0.05, 1.0 - nx).toDouble();
+    nh = nh.clamp(0.05, 1.0 - ny).toDouble();
+
+    final spec = AvatarCropSpec(nx: nx, ny: ny, nw: nw, nh: nh);
+    return spec.isFullSquare ? null : spec;
+  }
+
+  static ({String? cleanUrl, AvatarCropSpec? crop}) split(String? url) {
+    if (url == null || url.isEmpty || url.startsWith('data:')) {
+      return (cleanUrl: url, crop: null);
+    }
+    final int idx = url.indexOf('#acrop=');
+    if (idx < 0) {
+      return (cleanUrl: url, crop: null);
+    }
+    final String clean = url.substring(0, idx);
+    final String rawParam = url.substring(idx + 7);
+    return (cleanUrl: clean, crop: tryParseParam(rawParam));
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AvatarCropSpec &&
+          runtimeType == other.runtimeType &&
+          (nx - other.nx).abs() < 1e-4 &&
+          (ny - other.ny).abs() < 1e-4 &&
+          (nw - other.nw).abs() < 1e-4 &&
+          (nh - other.nh).abs() < 1e-4;
+
+  @override
+  int get hashCode => Object.hash(
+        (nx * 10000).round(),
+        (ny * 10000).round(),
+        (nw * 10000).round(),
+        (nh * 10000).round(),
+      );
+}
+
+/// Removes any `#acrop=...` fragment from [url] when fetching or reading the
+/// underlying full-resolution file or network object.
+String? stripAvatarCropFragment(String? url) => AvatarCropSpec.split(url).cleanUrl;
+
+@immutable
+class AvatarSubregionImageKey {
+  final Object baseKey;
+  final int nx10k;
+  final int ny10k;
+  final int nw10k;
+  final int nh10k;
+  final int targetDimension;
+
+  const AvatarSubregionImageKey({
+    required this.baseKey,
+    required this.nx10k,
+    required this.ny10k,
+    required this.nw10k,
+    required this.nh10k,
+    required this.targetDimension,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AvatarSubregionImageKey &&
+          runtimeType == other.runtimeType &&
+          baseKey == other.baseKey &&
+          nx10k == other.nx10k &&
+          ny10k == other.ny10k &&
+          nw10k == other.nw10k &&
+          nh10k == other.nh10k &&
+          targetDimension == other.targetDimension;
+
+  @override
+  int get hashCode => Object.hash(
+        baseKey,
+        nx10k,
+        ny10k,
+        nw10k,
+        nh10k,
+        targetDimension,
+      );
+}
+
+/// Renders a crisp square miniature image from the normalized [crop] subregion
+/// of [baseProvider], keeping the stored source image full-size.
+class AvatarSubregionImageProvider
+    extends ImageProvider<AvatarSubregionImageKey> {
+  final ImageProvider baseProvider;
+  final AvatarCropSpec crop;
+  final int targetDimension;
+
+  const AvatarSubregionImageProvider({
+    required this.baseProvider,
+    required this.crop,
+    this.targetDimension = 240,
+  });
+
+  @override
+  Future<AvatarSubregionImageKey> obtainKey(
+    ImageConfiguration configuration,
+  ) async {
+    final Object baseKey = await baseProvider.obtainKey(configuration);
+    return AvatarSubregionImageKey(
+      baseKey: baseKey,
+      nx10k: (crop.nx * 10000).round(),
+      ny10k: (crop.ny * 10000).round(),
+      nw10k: (crop.nw * 10000).round(),
+      nh10k: (crop.nh * 10000).round(),
+      targetDimension: targetDimension,
+    );
+  }
+
+  @override
+  ImageStreamCompleter loadImage(
+    AvatarSubregionImageKey key,
+    ImageDecoderCallback decode,
+  ) {
+    return _SubregionImageStreamCompleter(
+      baseProvider: baseProvider,
+      crop: crop,
+      targetDimension: targetDimension,
+    );
+  }
+}
+
+class _SubregionImageStreamCompleter extends ImageStreamCompleter {
+  final ImageProvider baseProvider;
+  final AvatarCropSpec crop;
+  final int targetDimension;
+
+  ImageStream? _baseStream;
+  late final ImageStreamListener _baseListener;
+  bool _subscribed = false;
+  bool _disposed = false;
+  int _cropGeneration = 0;
+
+  _SubregionImageStreamCompleter({
+    required this.baseProvider,
+    required this.crop,
+    required this.targetDimension,
+  }) {
+    _baseListener = ImageStreamListener(
+      _handleBaseImage,
+      onChunk: reportImageChunkEvent,
+      onError: (Object err, StackTrace? st) {
+        if (!_disposed) {
+          reportError(exception: err, stack: st);
+        }
+      },
+    );
+  }
+
+  void _ensureSubscribed() {
+    if (_subscribed || _disposed) return;
+    _subscribed = true;
+    final ImageStream stream = baseProvider.resolve(ImageConfiguration.empty);
+    _baseStream = stream;
+    stream.addListener(_baseListener);
+  }
+
+  @override
+  void addListener(ImageStreamListener listener) {
+    _ensureSubscribed();
+    super.addListener(listener);
+  }
+
+  @override
+  void onDisposed() {
+    _disposed = true;
+    _cropGeneration++;
+    _baseStream?.removeListener(_baseListener);
+    _baseStream = null;
+    super.onDisposed();
+  }
+
+  void _handleBaseImage(ImageInfo baseInfo, bool synchronousCall) {
+    if (_disposed) return;
+    final int gen = ++_cropGeneration;
+    final ui.Image srcImg = baseInfo.image;
+    final double w = srcImg.width.toDouble();
+    final double h = srcImg.height.toDouble();
+    if (w < 1.0 || h < 1.0) return;
+
+    final double srcX = (crop.nx * w).clamp(0.0, math.max(0.0, w - 1.0));
+    final double srcY = (crop.ny * h).clamp(0.0, math.max(0.0, h - 1.0));
+    final double srcW = (crop.nw * w).clamp(1.0, w - srcX);
+    final double srcH = (crop.nh * h).clamp(1.0, h - srcY);
+    final Rect srcRect = Rect.fromLTWH(srcX, srcY, srcW, srcH);
+
+    final int outSide = math
+        .min(
+          targetDimension.clamp(32, 1024),
+          math.max(srcW, srcH).round().clamp(32, 1024),
+        )
+        .clamp(32, 1024);
+
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(recorder);
+    canvas.drawImageRect(
+      srcImg,
+      srcRect,
+      Rect.fromLTWH(0.0, 0.0, outSide.toDouble(), outSide.toDouble()),
+      Paint()
+        ..isAntiAlias = true
+        ..filterQuality = FilterQuality.high,
+    );
+    final ui.Picture picture = recorder.endRecording();
+
+    picture.toImage(outSide, outSide).then((ui.Image cropped) {
+      picture.dispose();
+      if (_disposed || gen != _cropGeneration) {
+        cropped.dispose();
+        return;
+      }
+      setImage(ImageInfo(image: cropped, scale: 1.0));
+    }, onError: (Object err, StackTrace st) {
+      picture.dispose();
+      if (!_disposed && gen == _cropGeneration) {
+        reportError(exception: err, stack: st);
+      }
+    });
+  }
+}
 
 final Map<String, ({bool exists, int checkedAtMs})> _localFileExistsCache = {};
 const int _kLocalFileExistsTtlMs = 5000;
@@ -12,27 +306,32 @@ const int _kLocalFileExistsTtlMs = 5000;
 /// Invalidates cached `File.existsSync()` lookups for local avatar paths.
 void invalidateLocalAvatarCache([String? path]) {
   if (path != null && path.isNotEmpty) {
+    final clean = stripAvatarCropFragment(path);
     _localFileExistsCache.remove(path);
+    if (clean != null && clean.isNotEmpty) {
+      _localFileExistsCache.remove(clean);
+    }
   } else {
     _localFileExistsCache.clear();
   }
 }
 
 bool _localFileExistsCached(String filePath) {
-  if (kIsWeb || filePath.isEmpty) return false;
+  final String lookupPath = stripAvatarCropFragment(filePath) ?? filePath;
+  if (kIsWeb || lookupPath.isEmpty) return false;
   final now = DateTime.now().millisecondsSinceEpoch;
-  final cached = _localFileExistsCache[filePath];
+  final cached = _localFileExistsCache[lookupPath];
   if (cached != null && (now - cached.checkedAtMs) < _kLocalFileExistsTtlMs) {
     return cached.exists;
   }
   bool exists = false;
   try {
-    exists = File(filePath).existsSync();
+    exists = File(lookupPath).existsSync();
   } catch (_) {}
   if (_localFileExistsCache.length > 512) {
     _localFileExistsCache.clear();
   }
-  _localFileExistsCache[filePath] = (exists: exists, checkedAtMs: now);
+  _localFileExistsCache[lookupPath] = (exists: exists, checkedAtMs: now);
   return exists;
 }
 
@@ -45,51 +344,63 @@ String? getValidAvatarUrl(String? url) {
   // data: URLs are valid (base64 encoded avatars)
   if (url.startsWith('data:')) return url;
 
+  final ({String? cleanUrl, AvatarCropSpec? crop}) split =
+      AvatarCropSpec.split(url);
+  String? working = split.cleanUrl;
+  if (working == null || working.isEmpty) return null;
+
+  String withCrop(String resolved) =>
+      split.crop != null ? split.crop!.attachToUrl(resolved) : resolved;
+
   // Rewrite internal/local MinIO URLs (localhost:9000 / 127.0.0.1:9000 / minio:9000) to public storageUrl
-  if (url.startsWith('http://localhost:9000') ||
-      url.startsWith('http://127.0.0.1:9000') ||
-      url.startsWith('http://minio:9000') ||
-      url.startsWith('https://localhost:9000') ||
-      url.startsWith('https://127.0.0.1:9000') ||
-      url.startsWith('https://minio:9000')) {
+  if (working.startsWith('http://localhost:9000') ||
+      working.startsWith('http://127.0.0.1:9000') ||
+      working.startsWith('http://minio:9000') ||
+      working.startsWith('https://localhost:9000') ||
+      working.startsWith('https://127.0.0.1:9000') ||
+      working.startsWith('https://minio:9000')) {
     final base = AppConfig.storageUrl.replaceAll(RegExp(r'/+$'), '');
-    final parsed = Uri.tryParse(url);
+    final parsed = Uri.tryParse(working);
     if (parsed != null) {
-      url = '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
+      working =
+          '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
     }
   }
-  
+
   // Local file path or file:// URI
-  if (!kIsWeb && url.startsWith('file://')) {
+  if (!kIsWeb && working.startsWith('file://')) {
     try {
-      if (_localFileExistsCached(Uri.parse(url).toFilePath())) return url;
+      if (_localFileExistsCached(Uri.parse(working).toFilePath())) {
+        return withCrop(working);
+      }
     } catch (_) {}
-  } else if (!kIsWeb && (url.contains(':\\') || url.contains(':/'))) {
-    if (_localFileExistsCached(url)) return url;
-  } else if (url.startsWith('/')) {
-    if (!kIsWeb && _localFileExistsCached(url)) {
-      return url;
+  } else if (!kIsWeb && (working.contains(':\\') || working.contains(':/'))) {
+    if (_localFileExistsCached(working)) return withCrop(working);
+  } else if (working.startsWith('/')) {
+    if (!kIsWeb && _localFileExistsCached(working)) {
+      return withCrop(working);
     }
     // Relative URL on storage or backend (e.g. /avatars/xyz.jpg or /api/...)
-    final base = url.startsWith('/avatars/')
+    final base = working.startsWith('/avatars/')
         ? AppConfig.storageUrl
         : AppConfig.baseUrl;
-    final cleanBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
-    return '$cleanBase$url';
+    final cleanBase =
+        base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+    return withCrop('$cleanBase$working');
   }
-  
+
   try {
-    final uri = Uri.parse(url);
+    final uri = Uri.parse(working);
     if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
-      return url;
+      return withCrop(working);
     }
-    if (!kIsWeb && _localFileExistsCached(url)) {
-      return url;
+    if (!kIsWeb && _localFileExistsCached(working)) {
+      return withCrop(working);
     }
     return null;
   } catch (e) {
-    if (!kIsWeb && _localFileExistsCached(url)) {
-      return url;
+    if (!kIsWeb && _localFileExistsCached(working)) {
+      return withCrop(working);
     }
     return null;
   }
@@ -113,24 +424,24 @@ ImageProvider _maybeResizeAvatar(
   );
 }
 
-/// Creates a thumbnail [ImageProvider] from an avatar URL or local file path.
-/// Uses [ResizeImagePolicy.fit] when [fullResolution] is false to cut VRAM usage
-/// while preserving non-square photo aspect ratios without stretching.
-ImageProvider? avatarImageProvider(
-  String? url, {
-  String? localFallbackPath,
+ImageProvider? _buildRawAvatarImageProvider(
+  String? cleanUrl, {
+  String? cleanFallbackPath,
   int? maxDecodeDimension = 200,
   bool fullResolution = false,
 }) {
-  if ((url == null || url.isEmpty) && (localFallbackPath == null || localFallbackPath.isEmpty)) {
+  if ((cleanUrl == null || cleanUrl.isEmpty) &&
+      (cleanFallbackPath == null || cleanFallbackPath.isEmpty)) {
     return null;
   }
 
   // If URL is missing, try fallback local path
-  if (url == null || url.isEmpty) {
-    if (!kIsWeb && localFallbackPath != null && _localFileExistsCached(localFallbackPath)) {
+  if (cleanUrl == null || cleanUrl.isEmpty) {
+    if (!kIsWeb &&
+        cleanFallbackPath != null &&
+        _localFileExistsCached(cleanFallbackPath)) {
       return _maybeResizeAvatar(
-        FileImage(File(localFallbackPath)),
+        FileImage(File(cleanFallbackPath)),
         maxDecodeDimension: maxDecodeDimension,
         fullResolution: fullResolution,
       );
@@ -139,19 +450,19 @@ ImageProvider? avatarImageProvider(
   }
 
   // Handle data: URLs (base64 encoded avatars stored in DB)
-  if (url.startsWith('data:')) {
-    var cached = _dataUrlMemoryImageCache[url];
+  if (cleanUrl.startsWith('data:')) {
+    var cached = _dataUrlMemoryImageCache[cleanUrl];
     if (cached == null) {
       try {
-        final commaIndex = url.indexOf(',');
+        final commaIndex = cleanUrl.indexOf(',');
         if (commaIndex == -1) return null;
-        final base64Str = url.substring(commaIndex + 1);
+        final base64Str = cleanUrl.substring(commaIndex + 1);
         final bytes = base64Decode(base64Str);
         cached = MemoryImage(bytes);
         if (_dataUrlMemoryImageCache.length > 64) {
           _dataUrlMemoryImageCache.remove(_dataUrlMemoryImageCache.keys.first);
         }
-        _dataUrlMemoryImageCache[url] = cached;
+        _dataUrlMemoryImageCache[cleanUrl] = cached;
       } catch (_) {
         return null;
       }
@@ -165,9 +476,9 @@ ImageProvider? avatarImageProvider(
 
   // Handle local file paths or file:// URIs on non-Web platforms
   if (!kIsWeb) {
-    if (url.startsWith('file://')) {
+    if (cleanUrl.startsWith('file://')) {
       try {
-        final filePath = Uri.parse(url).toFilePath();
+        final filePath = Uri.parse(cleanUrl).toFilePath();
         if (_localFileExistsCached(filePath)) {
           return _maybeResizeAvatar(
             FileImage(File(filePath)),
@@ -178,9 +489,9 @@ ImageProvider? avatarImageProvider(
       } catch (_) {}
     }
 
-    if (_localFileExistsCached(url)) {
+    if (_localFileExistsCached(cleanUrl)) {
       return _maybeResizeAvatar(
-        FileImage(File(url)),
+        FileImage(File(cleanUrl)),
         maxDecodeDimension: maxDecodeDimension,
         fullResolution: fullResolution,
       );
@@ -188,11 +499,14 @@ ImageProvider? avatarImageProvider(
   }
 
   // Network URL or relative backend path
-  final validUrl = getValidAvatarUrl(url);
-  if (validUrl == null || (!validUrl.startsWith('http://') && !validUrl.startsWith('https://'))) {
-    if (!kIsWeb && localFallbackPath != null && _localFileExistsCached(localFallbackPath)) {
+  final validUrl = stripAvatarCropFragment(getValidAvatarUrl(cleanUrl));
+  if (validUrl == null ||
+      (!validUrl.startsWith('http://') && !validUrl.startsWith('https://'))) {
+    if (!kIsWeb &&
+        cleanFallbackPath != null &&
+        _localFileExistsCached(cleanFallbackPath)) {
       return _maybeResizeAvatar(
-        FileImage(File(localFallbackPath)),
+        FileImage(File(cleanFallbackPath)),
         maxDecodeDimension: maxDecodeDimension,
         fullResolution: fullResolution,
       );
@@ -200,11 +514,10 @@ ImageProvider? avatarImageProvider(
     return null;
   }
 
-  final int? targetDim = (!fullResolution &&
-          maxDecodeDimension != null &&
-          maxDecodeDimension > 0)
-      ? maxDecodeDimension
-      : null;
+  final int? targetDim =
+      (!fullResolution && maxDecodeDimension != null && maxDecodeDimension > 0)
+          ? maxDecodeDimension
+          : null;
   return CachedNetworkImageProvider(
     validUrl,
     maxWidth: targetDim,
@@ -212,6 +525,64 @@ ImageProvider? avatarImageProvider(
     errorListener: (e) {
       debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
     },
+  );
+}
+
+/// Creates a thumbnail [ImageProvider] from an avatar URL or local file path.
+/// When [url] carries an `#acrop=...` subregion fragment and [fullResolution] is
+/// `false`, wraps the decoded full photo in [AvatarSubregionImageProvider].
+ImageProvider? avatarImageProvider(
+  String? url, {
+  String? localFallbackPath,
+  int? maxDecodeDimension = 200,
+  bool fullResolution = false,
+}) {
+  final ({String? cleanUrl, AvatarCropSpec? crop}) primarySplit =
+      AvatarCropSpec.split(url);
+  final ({String? cleanUrl, AvatarCropSpec? crop}) fallbackSplit =
+      AvatarCropSpec.split(localFallbackPath);
+
+  final String? cleanPrimary = primarySplit.cleanUrl;
+  final String? cleanFallback = fallbackSplit.cleanUrl;
+
+  if (fullResolution) {
+    return _buildRawAvatarImageProvider(
+      cleanPrimary,
+      cleanFallbackPath: cleanFallback,
+      fullResolution: true,
+    );
+  }
+
+  final bool usingPrimary = cleanPrimary != null && cleanPrimary.isNotEmpty;
+  final AvatarCropSpec? effectiveCrop =
+      usingPrimary ? primarySplit.crop : fallbackSplit.crop;
+
+  if (effectiveCrop == null) {
+    return _buildRawAvatarImageProvider(
+      cleanPrimary,
+      cleanFallbackPath: cleanFallback,
+      maxDecodeDimension: maxDecodeDimension,
+      fullResolution: false,
+    );
+  }
+
+  final int targetOutDim = (maxDecodeDimension ?? 240).clamp(64, 720);
+  final double minFrac =
+      math.min(effectiveCrop.nw, effectiveCrop.nh).clamp(0.05, 1.0);
+  final int baseDecodeDim = (targetOutDim / minFrac).round().clamp(240, 1600);
+
+  final ImageProvider? baseProvider = _buildRawAvatarImageProvider(
+    cleanPrimary,
+    cleanFallbackPath: cleanFallback,
+    maxDecodeDimension: baseDecodeDim,
+    fullResolution: false,
+  );
+  if (baseProvider == null) return null;
+
+  return AvatarSubregionImageProvider(
+    baseProvider: baseProvider,
+    crop: effectiveCrop,
+    targetDimension: targetOutDim,
   );
 }
 

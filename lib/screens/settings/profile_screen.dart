@@ -5044,6 +5044,10 @@ class ProfileScreenState extends State<ProfileScreen>
           Uri.parse('${AppConfig.baseUrl}/api/files/upload-avatar'),
         );
         request.headers['Authorization'] = 'Bearer $token';
+        final cropParam = pick.miniCrop?.toCompactParam();
+        if (cropParam != null && cropParam.isNotEmpty) {
+          request.fields['avatar_crop'] = cropParam;
+        }
         request.files.add(
           http.MultipartFile.fromBytes(
             'avatar',
@@ -5110,6 +5114,7 @@ class ProfileScreenState extends State<ProfileScreen>
       final permanentPath = await AvatarSyncService().setLocalAvatar(
         account.userId,
         sourcePath,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
       setState(() {
@@ -5176,13 +5181,15 @@ class ProfileScreenState extends State<ProfileScreen>
       final safeIdx =
           _avatarUrls.isNotEmpty ? index.clamp(0, _avatarUrls.length - 1) : -1;
       final targetAvatar = safeIdx >= 0 ? _avatarUrls[safeIdx] : _avatarUrl;
-      final isLocalAvatar = targetAvatar != null &&
+      final cleanTargetAvatar =
+          targetAvatar != null ? (stripAvatarCropFragment(targetAvatar) ?? targetAvatar) : null;
+      final isLocalAvatar = cleanTargetAvatar != null &&
           !kIsWeb &&
-          (targetAvatar.startsWith('/') ||
-              targetAvatar.startsWith('file:') ||
-              File(targetAvatar).existsSync());
+          (cleanTargetAvatar.startsWith('/') ||
+              cleanTargetAvatar.startsWith('file:') ||
+              File(cleanTargetAvatar).existsSync());
 
-      if (isLocalAvatar && account != null) {
+      if (isLocalAvatar && account != null && targetAvatar != null) {
         await AvatarSyncService().removeAvatar(account.userId, targetAvatar);
         if (!mounted) return;
         setState(() {
@@ -5333,6 +5340,7 @@ class ProfileScreenState extends State<ProfileScreen>
         pick.file ?? File(pick.fileName),
         bytes: pick.bytes,
         fileName: pick.fileName,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
 
@@ -5567,6 +5575,7 @@ class ProfileScreenState extends State<ProfileScreen>
         pick.file ?? File(pick.fileName),
         bytes: pick.bytes,
         fileName: pick.fileName,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
       if (res['success'] == true) {
@@ -5617,6 +5626,7 @@ class ProfileScreenState extends State<ProfileScreen>
         pick.file ?? File(pick.fileName),
         bytes: pick.bytes,
         fileName: pick.fileName,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
       if (res['success'] == true) {
@@ -6771,10 +6781,23 @@ class ProfileScreenState extends State<ProfileScreen>
     // В развёрнутом режиме (_isAvatarExpanded == true) активный сдвиг вверх равен _collapseSlideUp;
     // в момент пересечения порога сворачивания (_isAvatarExpanded == false) стартовая высота прямоугольника
     // фиксируется через _collapseMorphStartSlideUp, обеспечивая 0.0px скачка между Фазой 1 (уход вверх) и Фазой 2 (сжатие в круг).
+    final String? activeHeaderUrl =
+        (_avatarUrls.isNotEmpty && _currentAvatarIndex < _avatarUrls.length)
+            ? _avatarUrls[_currentAvatarIndex]
+            : _avatarUrl;
+    final AvatarCropSpec? activeHeaderCrop =
+        AvatarCropSpec.split(activeHeaderUrl).crop;
+    final double fullExpandedBaseHeight =
+        (activeHeaderCrop != null && activeHeaderCrop.imageAspectRatio < 0.98)
+            ? (screenWidth / activeHeaderCrop.imageAspectRatio).clamp(
+                screenWidth,
+                math.min(screenWidth * 1.33, screenHeight * 0.56),
+              )
+            : screenWidth;
     final activeExpandedSlideUp =
         _isAvatarExpanded ? _collapseSlideUp : _collapseMorphStartSlideUp;
     final expandedTargetHeight =
-        math.max(110.0, screenWidth - activeExpandedSlideUp);
+        math.max(110.0, fullExpandedBaseHeight - activeExpandedSlideUp);
 
     final collapsedAnchorCenter =
         metaballTargetGeom.avatarCenter + Offset(0.0, previewDownShift);

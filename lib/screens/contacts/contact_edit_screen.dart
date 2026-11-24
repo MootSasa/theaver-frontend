@@ -324,6 +324,7 @@ class _ContactEditScreenState extends State<ContactEditScreen> {
         pick.file ?? File(pick.fileName),
         bytes: pick.bytes,
         fileName: pick.fileName,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
 
@@ -417,6 +418,7 @@ class _ContactEditScreenState extends State<ContactEditScreen> {
         pick.file ?? File(pick.fileName),
         bytes: pick.bytes,
         fileName: pick.fileName,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
 

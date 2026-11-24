@@ -11,6 +11,7 @@ import '../../utils/image_utils.dart';
 /// Downloads (or returns a cached copy of) an image for use in notifications.
 /// Returns a local file path or null. Never throws.
 Future<String?> downloadOrGetCachedImage(String? url, {String prefix = 'notif_img'}) async {
+  url = stripAvatarCropFragment(url);
   if (kIsWeb || url == null || url.isEmpty) return null;
   try {
     // 1. Data URLs (Base64 avatar string from backend/database)

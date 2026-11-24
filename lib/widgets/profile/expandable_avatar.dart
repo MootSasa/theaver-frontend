@@ -735,17 +735,61 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Alignment imgAlignment = Alignment.center,
     bool enableHero = true,
   ]) {
+    final ({String? cleanUrl, AvatarCropSpec? crop}) split =
+        AvatarCropSpec.split(url);
+    final String cleanUrl = split.cleanUrl ?? url;
+    final AvatarCropSpec? miniCrop = split.crop;
+    final bool hasSubCrop = miniCrop != null && !miniCrop.isFullSquare;
+
+    final double safeW = math.max(1.0, width);
+    final double safeH = math.max(1.0, height);
+    double wRender = safeW;
+    double hRender = safeH;
+    double xRender = 0.0;
+    double yRender = 0.0;
+
+    if (hasSubCrop) {
+      final double imgAspect = miniCrop.imageAspectRatio.clamp(0.2, 5.0);
+      final double boxAspect = safeW / safeH;
+      final double wCover =
+          imgAspect >= boxAspect ? safeH * imgAspect : safeW;
+      final double hCover =
+          imgAspect >= boxAspect ? safeH : safeW / imgAspect;
+      final double miniSideAtCover =
+          math.max(1e-6, miniCrop.nw * wCover);
+      final double zoom0 =
+          math.max(1.0, math.max(safeW, safeH) / miniSideAtCover);
+      final double t = widget.expandFactor.clamp(0.0, 1.0);
+      final double invZoom = lerpDouble(1.0 / zoom0, 1.0, t);
+      final double zoom = invZoom > 1e-6 ? (1.0 / invZoom) : 1.0;
+      wRender = wCover * zoom;
+      hRender = hCover * zoom;
+      final double x1 =
+          (safeW * 0.5 - miniCrop.cx * wCover).clamp(safeW - wCover, 0.0);
+      final double y1 =
+          (safeH * 0.5 - miniCrop.cy * hCover).clamp(safeH - hCover, 0.0);
+      final double cx1 = (safeW * 0.5 - x1) / math.max(1e-6, wCover);
+      final double cy1 = (safeH * 0.5 - y1) / math.max(1e-6, hCover);
+      final double focusX = lerpDouble(miniCrop.cx, cx1, t);
+      final double focusY = lerpDouble(miniCrop.cy, cy1, t);
+      xRender = (safeW * 0.5 - focusX * wRender).clamp(safeW - wRender, 0.0);
+      yRender = (safeH * 0.5 - focusY * hRender).clamp(safeH - hRender, 0.0);
+    }
+
+    final BoxFit imageFit = hasSubCrop ? BoxFit.fill : BoxFit.cover;
+    final Alignment resolvedAlign =
+        hasSubCrop ? Alignment.center : imgAlignment;
     Widget imageWidget;
 
-    if (url.startsWith('data:')) {
-      final provider = avatarFullImageProvider(url);
+    if (cleanUrl.startsWith('data:')) {
+      final provider = avatarFullImageProvider(cleanUrl);
       if (provider != null) {
         imageWidget = Image(
           image: provider,
-          fit: BoxFit.cover,
-          alignment: imgAlignment,
-          width: width,
-          height: height,
+          fit: imageFit,
+          alignment: resolvedAlign,
+          width: wRender,
+          height: hRender,
           gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) =>
               _avatarErrorWidget(bgColor, iconSize, isDark),
@@ -753,17 +797,17 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       } else {
         return _avatarErrorWidget(bgColor, iconSize, isDark);
       }
-    } else if (!kIsWeb && url.startsWith('file://')) {
+    } else if (!kIsWeb && cleanUrl.startsWith('file://')) {
       try {
-        final filePath = Uri.parse(url).toFilePath();
+        final filePath = Uri.parse(cleanUrl).toFilePath();
         final file = File(filePath);
         if (file.existsSync()) {
           imageWidget = Image.file(
             file,
-            fit: BoxFit.cover,
-            alignment: imgAlignment,
-            width: width,
-            height: height,
+            fit: imageFit,
+            alignment: resolvedAlign,
+            width: wRender,
+            height: hRender,
             gaplessPlayback: true,
             errorBuilder: (context, error, stackTrace) =>
                 _avatarErrorWidget(bgColor, iconSize, isDark),
@@ -775,31 +819,33 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
       }
     } else {
-      if (!kIsWeb && File(url).existsSync()) {
+      if (!kIsWeb && File(cleanUrl).existsSync()) {
         imageWidget = Image.file(
-          File(url),
-          fit: BoxFit.cover,
-          alignment: imgAlignment,
-          width: width,
-          height: height,
+          File(cleanUrl),
+          fit: imageFit,
+          alignment: resolvedAlign,
+          width: wRender,
+          height: hRender,
           gaplessPlayback: true,
           errorBuilder: (context, error, stackTrace) =>
               _avatarErrorWidget(bgColor, iconSize, isDark),
         );
       } else {
-        final validUrl = getValidAvatarUrl(url);
-        if (validUrl != null && (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
+        final validUrl = stripAvatarCropFragment(getValidAvatarUrl(cleanUrl));
+        if (validUrl != null &&
+            (validUrl.startsWith('http://') ||
+                validUrl.startsWith('https://'))) {
           imageWidget = CachedNetworkImage(
             imageUrl: validUrl,
-            fit: BoxFit.cover,
-            alignment: imgAlignment,
-            width: width,
-            height: height,
+            fit: imageFit,
+            alignment: resolvedAlign,
+            width: wRender,
+            height: hRender,
             fadeInDuration: Duration.zero,
             fadeOutDuration: Duration.zero,
             placeholder: (context, _) => Container(
-              width: width,
-              height: height,
+              width: wRender,
+              height: hRender,
               color: bgColor,
             ),
             errorWidget: (context, _, __) =>
@@ -809,6 +855,27 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
           imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
         }
       }
+    }
+
+    if (hasSubCrop) {
+      imageWidget = SizedBox(
+        width: safeW,
+        height: safeH,
+        child: ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                left: xRender,
+                top: yRender,
+                width: wRender,
+                height: hRender,
+                child: imageWidget,
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
     if (!enableHero) {
@@ -847,7 +914,11 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
               borderRadius: BorderRadius.circular(currentRadius),
               child: Material(
                 type: MaterialType.transparency,
-                child: SizedBox.expand(child: imageWidget),
+                child: SizedBox.expand(
+                  child: hasSubCrop
+                      ? FittedBox(fit: BoxFit.cover, child: imageWidget)
+                      : imageWidget,
+                ),
               ),
             );
           },

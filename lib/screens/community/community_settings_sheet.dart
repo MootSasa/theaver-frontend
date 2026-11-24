@@ -387,6 +387,7 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
         uploadFile,
         bytes: picked.bytes,
         fileName: picked.fileName,
+        avatarCrop: picked.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
       if (updated == null) {

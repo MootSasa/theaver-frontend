@@ -40,7 +40,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   File? _pickedAvatarFile;
   Uint8List? _pickedAvatarBytes;
+  Uint8List? _pickedAvatarPreviewBytes;
   String? _pickedAvatarFileName;
+  String? _pickedAvatarCrop;
   List<SearchResultUser> _allUsers = [];
   List<SearchResultUser> _filteredUsers = [];
   final List<SearchResultUser> _selectedMembers = [];
@@ -116,6 +118,10 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
 
   ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarPreviewBytes != null &&
+        _pickedAvatarPreviewBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarPreviewBytes!);
+    }
     if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
       return MemoryImage(_pickedAvatarBytes!);
     }
@@ -140,7 +146,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       setState(() {
         _pickedAvatarFile = null;
         _pickedAvatarBytes = null;
+        _pickedAvatarPreviewBytes = null;
         _pickedAvatarFileName = null;
+        _pickedAvatarCrop = null;
       });
       return;
     }
@@ -148,7 +156,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       setState(() {
         _pickedAvatarFile = picked.file;
         _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarPreviewBytes = picked.effectivePreviewBytes;
         _pickedAvatarFileName = picked.fileName;
+        _pickedAvatarCrop = picked.miniCrop?.toCompactParam();
       });
     }
   }
@@ -372,6 +382,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
             uploadFile,
             bytes: _pickedAvatarBytes,
             fileName: _pickedAvatarFileName,
+            avatarCrop: _pickedAvatarCrop,
           );
         } catch (e) {
           debugPrint('[CreateGroupScreen] Avatar upload error: $e');

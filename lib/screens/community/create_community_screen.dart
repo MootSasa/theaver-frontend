@@ -217,7 +217,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
   String _selectedTemplateId = 'standard';
   File? _pickedAvatarFile;
   Uint8List? _pickedAvatarBytes;
+  Uint8List? _pickedAvatarPreviewBytes;
   String? _pickedAvatarFileName;
+  String? _pickedAvatarCrop;
   bool _isSubmitting = false;
 
   @override
@@ -247,6 +249,10 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
       (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
 
   ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarPreviewBytes != null &&
+        _pickedAvatarPreviewBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarPreviewBytes!);
+    }
     if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
       return MemoryImage(_pickedAvatarBytes!);
     }
@@ -271,7 +277,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
       setState(() {
         _pickedAvatarFile = null;
         _pickedAvatarBytes = null;
+        _pickedAvatarPreviewBytes = null;
         _pickedAvatarFileName = null;
+        _pickedAvatarCrop = null;
       });
       return;
     }
@@ -279,7 +287,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
       setState(() {
         _pickedAvatarFile = picked.file;
         _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarPreviewBytes = picked.effectivePreviewBytes;
         _pickedAvatarFileName = picked.fileName;
+        _pickedAvatarCrop = picked.miniCrop?.toCompactParam();
       });
     }
   }
@@ -425,6 +435,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
             uploadFile,
             bytes: _pickedAvatarBytes,
             fileName: _pickedAvatarFileName,
+            avatarCrop: _pickedAvatarCrop,
           );
         } catch (e) {
           debugPrint('[CreateCommunityScreen] Avatar upload error: $e');

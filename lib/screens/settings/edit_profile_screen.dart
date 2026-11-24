@@ -275,6 +275,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           Uri.parse('${AppConfig.baseUrl}/api/files/upload-avatar'),
         );
         request.headers['Authorization'] = 'Bearer $token';
+        final cropParam = pick.miniCrop?.toCompactParam();
+        if (cropParam != null && cropParam.isNotEmpty) {
+          request.fields['avatar_crop'] = cropParam;
+        }
         request.files.add(
           http.MultipartFile.fromBytes(
             'avatar',
@@ -336,6 +340,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       final permanentPath = await AvatarSyncService().setLocalAvatar(
         account.userId,
         sourcePath,
+        avatarCrop: pick.miniCrop?.toCompactParam(),
       );
       if (!mounted) return;
       setState(() {

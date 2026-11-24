@@ -377,7 +377,8 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
   }
 
   Future<Uint8List?> _downloadPhotoBytes() async {
-    final url = widget.resolvedPhotoUrl.trim();
+    final rawUrl = widget.resolvedPhotoUrl.trim();
+    final url = (stripAvatarCropFragment(rawUrl) ?? rawUrl).trim();
     if (url.isEmpty) return null;
 
     if (url.startsWith('data:')) {
@@ -464,6 +465,7 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
           '',
           bytes: uploadBytes,
           fileName: edited.fileName,
+          avatarCrop: edited.miniCrop?.toCompactParam(),
         );
         if (!mounted) return;
         if (uploadRes['success'] == true) {
@@ -506,8 +508,11 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
         return;
       }
 
-      final permanentPath =
-          await AvatarSyncService().setLocalAvatar(uid, localPath);
+      final permanentPath = await AvatarSyncService().setLocalAvatar(
+        uid,
+        localPath,
+        avatarCrop: edited.miniCrop?.toCompactParam(),
+      );
       ProfileInstantCache.instance.updateUserAvatar(uid, permanentPath);
       widget.onPhotoApplied?.call();
       if (mounted) {
@@ -526,10 +531,12 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = avatarImageProvider(
-      widget.resolvedPhotoUrl,
-      fullResolution: true,
-    );
+    final provider = _circlePreview
+        ? avatarImageProvider(
+            widget.resolvedPhotoUrl,
+            maxDecodeDimension: 720,
+          )
+        : avatarFullImageProvider(widget.resolvedPhotoUrl);
     final palette = context.theav;
 
     return Scaffold(

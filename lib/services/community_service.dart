@@ -472,6 +472,7 @@ class CommunityService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
   }) async {
     final cleanId = communityId.startsWith('community_')
         ? communityId.substring('community_'.length)
@@ -487,6 +488,9 @@ class CommunityService {
         Uri.parse('${AppConfig.baseUrl}/api/communities/$cleanId/avatar'),
       );
       request.headers['Authorization'] = 'Bearer $token';
+      if (avatarCrop != null && avatarCrop.trim().isNotEmpty) {
+        request.fields['avatar_crop'] = avatarCrop.trim();
+      }
 
       if (bytes != null) {
         final resolvedName = (fileName != null && fileName.trim().isNotEmpty)

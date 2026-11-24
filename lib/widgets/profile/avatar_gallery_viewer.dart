@@ -197,20 +197,21 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
 
   Future<File?> _getLocalImageFile(String url) async {
     try {
-      if (url.startsWith('file://')) {
-        final filePath = Uri.parse(url).toFilePath();
+      final cleanInput = stripAvatarCropFragment(url) ?? url;
+      if (cleanInput.startsWith('file://')) {
+        final filePath = Uri.parse(cleanInput).toFilePath();
         final file = File(filePath);
         if (await file.exists()) return file;
       }
-      final localFile = File(url);
+      final localFile = File(cleanInput);
       if (await localFile.exists()) {
         return localFile;
       }
 
       // Если это data: URL (base64)
-      if (url.startsWith('data:')) {
-        final commaIndex = url.indexOf(',');
-        final base64Str = url.substring(commaIndex + 1);
+      if (cleanInput.startsWith('data:')) {
+        final commaIndex = cleanInput.indexOf(',');
+        final base64Str = cleanInput.substring(commaIndex + 1);
         final bytes = Uri.parse('data:;base64,$base64Str').data!.contentAsBytes();
         final tempDir = await getTemporaryDirectory();
         final file = File('${tempDir.path}/avatar_temp_${DateTime.now().millisecondsSinceEpoch}.jpg');
@@ -219,7 +220,8 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
       }
 
       // Проверка локального кэша CachedNetworkImage/DefaultCacheManager
-      final validUrl = getValidAvatarUrl(url) ?? url;
+      final validUrl =
+          stripAvatarCropFragment(getValidAvatarUrl(cleanInput)) ?? cleanInput;
       try {
         final cached = await DefaultCacheManager().getFileFromCache(validUrl);
         if (cached != null && await cached.file.exists()) {
@@ -474,7 +476,9 @@ class _AvatarGalleryViewerState extends State<AvatarGalleryViewer> {
                       scrollPhysics: const BouncingScrollPhysics(),
                       builder: (context, index) {
                         final url = widget.avatarUrls[index];
-                        final provider = avatarFullImageProvider(url) ?? NetworkImage(url);
+                        final cleanUrl = stripAvatarCropFragment(url) ?? url;
+                        final provider =
+                            avatarFullImageProvider(url) ?? NetworkImage(cleanUrl);
                         final tag = widget.heroTagPrefix != null ? '${widget.heroTagPrefix}_$url' : 'avatar_hero_$url';
                         return PhotoViewGalleryPageOptions(
                           imageProvider: provider,

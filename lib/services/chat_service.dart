@@ -7570,6 +7570,7 @@ class ChatService {
     File file, {
     Uint8List? bytes,
     String? fileName,
+    String? avatarCrop,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -7582,6 +7583,9 @@ class ChatService {
         Uri.parse('${AppConfig.baseUrl}/api/chats/$chatId/avatar'),
       );
       request.headers['Authorization'] = 'Bearer $token';
+      if (avatarCrop != null && avatarCrop.trim().isNotEmpty) {
+        request.fields['avatar_crop'] = avatarCrop.trim();
+      }
 
       if (bytes != null) {
         final resolvedName = (fileName != null && fileName.trim().isNotEmpty)

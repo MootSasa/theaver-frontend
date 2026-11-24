@@ -25,13 +25,18 @@ class AvatarSyncService extends ChangeNotifier {
 
   /// Устанавливает новое фото профиля локально и добавляет его в очередь фоновой загрузки.
   /// Поддерживает добавление нескольких аватарок подряд.
-  Future<String> setLocalAvatar(String userId, String sourcePath) async {
+  Future<String> setLocalAvatar(
+    String userId,
+    String sourcePath, {
+    String? avatarCrop,
+  }) async {
     debugPrint('[AvatarSyncService] Setting local avatar for userId=$userId from path=$sourcePath');
     final prefs = await SharedPreferences.getInstance();
 
-    final sourceFile = File(sourcePath);
+    final cleanSourcePath = stripAvatarCropFragment(sourcePath) ?? sourcePath;
+    final sourceFile = File(cleanSourcePath);
     if (!await sourceFile.exists()) {
-      throw Exception('Source avatar file does not exist: $sourcePath');
+      throw Exception('Source avatar file does not exist: $cleanSourcePath');
     }
 
     // 1. Сохраняем файл в постоянную директорию приложения
@@ -56,24 +61,32 @@ class AvatarSyncService extends ChangeNotifier {
     invalidateLocalAvatarCache(permanentPath);
     invalidateLocalAvatarCache(currentLocalFile.path);
 
+    final AvatarCropSpec? cropSpec = AvatarCropSpec.tryParseParam(avatarCrop) ??
+        AvatarCropSpec.split(sourcePath).crop;
+    final String permanentEntry =
+        cropSpec != null ? cropSpec.attachToUrl(permanentPath) : permanentPath;
+    final String currentEntry = cropSpec != null
+        ? cropSpec.attachToUrl(currentLocalFile.path)
+        : currentLocalFile.path;
+
     // 2. Добавляем путь в очередь отложенной загрузки
     final pendingList = prefs.getStringList(_pendingKey(userId)) ?? [];
-    if (!pendingList.contains(permanentPath)) {
-      pendingList.add(permanentPath);
+    if (!pendingList.contains(permanentEntry)) {
+      pendingList.add(permanentEntry);
       await prefs.setStringList(_pendingKey(userId), pendingList);
     }
 
     // 3. Обновляем локальную историю аватарок (новейшая первая)
     final historyList = prefs.getStringList(_historyKey(userId)) ?? [];
-    historyList.remove(permanentPath);
-    historyList.insert(0, permanentPath);
+    historyList.remove(permanentEntry);
+    historyList.insert(0, permanentEntry);
     await prefs.setStringList(_historyKey(userId), historyList);
 
     // 4. Мгновенно обновляем текущий аватар в AccountManager
     await _accountManager.updateAccountProfile(
       userId,
-      avatarUrl: permanentPath,
-      localAvatarPath: currentLocalFile.path,
+      avatarUrl: permanentEntry,
+      localAvatarPath: currentEntry,
     );
 
     notifyListeners();
@@ -81,7 +94,7 @@ class AvatarSyncService extends ChangeNotifier {
     // 5. Запускаем фоновую очередированную синхронизацию с сервером
     syncPendingAvatar(userId);
 
-    return permanentPath;
+    return permanentEntry;
   }
 
   /// Возвращает список всех несинхронизированных локальных путей аватарок.
@@ -91,7 +104,8 @@ class AvatarSyncService extends ChangeNotifier {
     final list = prefs.getStringList(_pendingKey(userId)) ?? [];
     final existing = <String>[];
     for (final p in list) {
-      if (await File(p).exists()) {
+      final clean = stripAvatarCropFragment(p) ?? p;
+      if (await File(clean).exists()) {
         existing.add(p);
       }
     }
@@ -104,7 +118,11 @@ class AvatarSyncService extends ChangeNotifier {
     final list = prefs.getStringList(_historyKey(userId)) ?? [];
     final validList = <String>[];
     for (final p in list) {
-      if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('data:') || (!kIsWeb && await File(p).exists())) {
+      final clean = stripAvatarCropFragment(p) ?? p;
+      if (clean.startsWith('http://') ||
+          clean.startsWith('https://') ||
+          clean.startsWith('data:') ||
+          (!kIsWeb && await File(clean).exists())) {
         validList.add(p);
       }
     }
@@ -114,25 +132,34 @@ class AvatarSyncService extends ChangeNotifier {
   /// Удаляет аватар из локальной истории, очереди и с диска (если это локальный файл).
   Future<void> removeAvatar(String userId, String avatarUrlOrPath) async {
     final prefs = await SharedPreferences.getInstance();
+    final cleanTarget = stripAvatarCropFragment(avatarUrlOrPath) ?? avatarUrlOrPath;
     final pendingList = prefs.getStringList(_pendingKey(userId)) ?? [];
-    if (pendingList.remove(avatarUrlOrPath)) {
+    final prevPendingLen = pendingList.length;
+    pendingList.removeWhere(
+      (item) => item == avatarUrlOrPath || (stripAvatarCropFragment(item) ?? item) == cleanTarget,
+    );
+    if (pendingList.length != prevPendingLen) {
       await prefs.setStringList(_pendingKey(userId), pendingList);
     }
     final historyList = prefs.getStringList(_historyKey(userId)) ?? [];
-    if (historyList.remove(avatarUrlOrPath)) {
+    final prevHistoryLen = historyList.length;
+    historyList.removeWhere(
+      (item) => item == avatarUrlOrPath || (stripAvatarCropFragment(item) ?? item) == cleanTarget,
+    );
+    if (historyList.length != prevHistoryLen) {
       await prefs.setStringList(_historyKey(userId), historyList);
     }
     if (!kIsWeb &&
-        !avatarUrlOrPath.startsWith('http://') &&
-        !avatarUrlOrPath.startsWith('https://') &&
-        !avatarUrlOrPath.startsWith('data:') &&
-        avatarUrlOrPath.contains('/avatars/')) {
+        !cleanTarget.startsWith('http://') &&
+        !cleanTarget.startsWith('https://') &&
+        !cleanTarget.startsWith('data:') &&
+        cleanTarget.contains('/avatars/')) {
       try {
-        final f = File(avatarUrlOrPath);
+        final f = File(cleanTarget);
         if (await f.exists()) {
           await f.delete();
         }
-        invalidateLocalAvatarCache(avatarUrlOrPath);
+        invalidateLocalAvatarCache(cleanTarget);
       } catch (_) {}
     }
     notifyListeners();
@@ -180,18 +207,23 @@ class AvatarSyncService extends ChangeNotifier {
 
     try {
       while (pendingList.isNotEmpty) {
-        final pendingPath = pendingList.first;
-        final pendingFile = File(pendingPath);
+        final pendingEntry = pendingList.first;
+        final pendingSplit = AvatarCropSpec.split(pendingEntry);
+        final cleanPendingPath = pendingSplit.cleanUrl ?? pendingEntry;
+        final pendingFile = File(cleanPendingPath);
 
         if (!await pendingFile.exists()) {
-          debugPrint('[AvatarSyncService] Pending file missing, skipping: $pendingPath');
+          debugPrint('[AvatarSyncService] Pending file missing, skipping: $cleanPendingPath');
           pendingList.removeAt(0);
           await prefs.setStringList(_pendingKey(userId), pendingList);
           continue;
         }
 
-        debugPrint('[AvatarSyncService] Uploading avatar in queue: $pendingPath');
-        final uploadResult = await AuthService.uploadAvatar(pendingPath);
+        debugPrint('[AvatarSyncService] Uploading avatar in queue: $pendingEntry');
+        final uploadResult = await AuthService.uploadAvatar(
+          cleanPendingPath,
+          avatarCrop: pendingSplit.crop?.toCompactParam(),
+        );
         debugPrint('[AvatarSyncService] uploadAvatar result: $uploadResult');
 
         if (uploadResult['success'] == true) {
@@ -203,19 +235,23 @@ class AvatarSyncService extends ChangeNotifier {
 
             final normalizedRemoteUrl =
                 getValidAvatarUrl(remoteAvatarUrl) ?? remoteAvatarUrl;
+            final cleanRemoteUrl =
+                stripAvatarCropFragment(normalizedRemoteUrl) ?? normalizedRemoteUrl;
+            final cleanRawRemoteUrl =
+                stripAvatarCropFragment(remoteAvatarUrl) ?? remoteAvatarUrl;
 
             // Кэшируем байты в DefaultCacheManager, чтобы CachedNetworkImageProvider
             // мог мгновенно отображать аватарку оффлайн
             try {
               final bytes = await pendingFile.readAsBytes();
               await DefaultCacheManager().putFile(
-                normalizedRemoteUrl,
+                cleanRemoteUrl,
                 bytes,
                 fileExtension: 'jpg',
               );
-              if (normalizedRemoteUrl != remoteAvatarUrl) {
+              if (cleanRemoteUrl != cleanRawRemoteUrl) {
                 await DefaultCacheManager().putFile(
-                  remoteAvatarUrl,
+                  cleanRawRemoteUrl,
                   bytes,
                   fileExtension: 'jpg',
                 );
@@ -226,7 +262,7 @@ class AvatarSyncService extends ChangeNotifier {
 
             // Обновляем историю: заменяем локальный путь на серверный URL
             final historyList = prefs.getStringList(_historyKey(userId)) ?? [];
-            final idx = historyList.indexOf(pendingPath);
+            final idx = historyList.indexOf(pendingEntry);
             if (idx != -1) {
               historyList[idx] = normalizedRemoteUrl;
               await prefs.setStringList(_historyKey(userId), historyList);
@@ -234,11 +270,14 @@ class AvatarSyncService extends ChangeNotifier {
 
             // Если этот аватар был текущим в AccountManager, обновляем его
             final currentAcc = _accountManager.currentAccount;
-            if (currentAcc != null && (currentAcc.avatarUrl == pendingPath || pendingList.isEmpty)) {
+            if (currentAcc != null &&
+                (currentAcc.avatarUrl == pendingEntry ||
+                    currentAcc.avatarUrl == cleanPendingPath ||
+                    pendingList.isEmpty)) {
               await _accountManager.updateAccountProfile(
                 userId,
                 avatarUrl: normalizedRemoteUrl,
-                localAvatarPath: pendingPath,
+                localAvatarPath: pendingEntry,
               );
             }
 
