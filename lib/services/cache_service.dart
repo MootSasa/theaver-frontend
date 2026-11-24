@@ -500,6 +500,7 @@ class CacheService {
       await prefs.remove('${userId}_chat_wallpaper_url');
       await prefs.remove('${userId}_cached_custom_themes');
       await prefs.remove('${userId}_theme_overrides');
+      await prefs.remove('chat_drafts_v2_$userId');
 
       if (!kIsWeb) {
         if (localWallpaperPath != null &&

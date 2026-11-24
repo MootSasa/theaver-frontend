@@ -1436,50 +1436,6 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
-    if (onThreadRootTap != null &&
-        message.threadRootMessageId != null &&
-        message.threadRootMessageId!.isNotEmpty) {
-      final Color tagColor = isMe
-          ? bubbleSubtextColor
-          : effectivePreset.primaryColor;
-      final Widget threadTag = GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onThreadRootTap,
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 4.0),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              iconoir.ChatLines(
-                width: 12,
-                height: 12,
-                color: tagColor,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'Комментарий к посту',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: tagColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-      replyWidget = replyWidget == null
-          ? threadTag
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                threadTag,
-                replyWidget,
-              ],
-            );
-    }
-
     if (message.isViaBot &&
         message.viaBotUsername != null &&
         message.viaBotUsername!.isNotEmpty) {

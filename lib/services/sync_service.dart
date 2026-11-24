@@ -7,6 +7,7 @@ import 'auth_service.dart';
 import 'avatar_sync_service.dart';
 import 'chat_service.dart';
 import 'community_service.dart';
+import 'draft_service.dart';
 import 'file_service.dart';
 import 'media_cache_manager.dart';
 import 'peer_customization_cache.dart';
@@ -213,6 +214,13 @@ class SyncService {
         }
         break;
       case 'draft_updated':
+        final draftChatId = payload['chat_id']?.toString() ?? chatId ?? '';
+        if (draftChatId.isNotEmpty) {
+          DraftService().applyServerDraftSyncEvent(
+            draftChatId,
+            payload['draft'],
+          );
+        }
         break;
       case 'message_burned':
         final burnMsgId = payload['message_id']?.toString();
@@ -508,9 +516,6 @@ class SyncService {
       if (chat != null) {
         await _db.deleteChat(chatId);
       }
-      return;
-    }
-    if (isThreadComment) {
       return;
     }
 

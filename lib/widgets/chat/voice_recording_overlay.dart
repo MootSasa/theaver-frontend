@@ -555,7 +555,10 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     TheavPalette p,
     LiquidGlassProvider? glassProvider,
   ) {
-    final senderName = widget.replyToMessage?.senderName ?? 'User';
+    final replyMsg = widget.replyToMessage;
+    final senderName = replyMsg != null
+        ? replyMsg.resolveEffectiveAuthorTitle()
+        : 'Сообщение';
     final preview = widget.isQuote && widget.quoteText != null
         ? widget.quoteText!
         : (widget.replyToMessage?.content ?? '');

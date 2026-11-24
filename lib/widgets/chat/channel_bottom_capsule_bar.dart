@@ -346,6 +346,8 @@ class _ChannelBottomCapsuleBarState extends State<ChannelBottomCapsuleBar> {
         forwardPreviewBanner: widget.forwardPreviewBanner,
         scheduledCount: widget.scheduledCount,
         onOpenScheduled: widget.onOpenScheduled,
+        isChannelChat: true,
+        replyFallbackAuthorName: widget.channelName,
       );
     }
 

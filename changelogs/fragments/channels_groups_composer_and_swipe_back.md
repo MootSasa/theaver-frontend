@@ -1,15 +1,15 @@
 ---
 type: improved
-summary_ru: Обновлённое поле ввода в каналах и группах, выбор имени отправки и плавный свайп назад
-summary_en: Redesigned channel and group composer, Send As identity switcher, and smoother swipe-back navigation
+summary_ru: Единые комментарии под постами, корректное отображение канала в ответах, надёжные черновики и плавный свайп назад
+summary_en: Unified post comments, accurate channel attribution in replies, reliable drafts, and smoother swipe-back navigation
 ---
 
 ### ru
-- **Публикации и отправка от имени:** переключатель беззвучной публикации в каналах и выбор профиля отправки (личный аккаунт, анонимно от имени группы или публичный канал) теперь встроены прямо в поле ввода с плавным всплывающим меню.
-- **Жест возврата назад:** свайп назад теперь плавно работает по всей высоте экрана во всех разделах приложения с естественным смещением предыдущего экрана и без задержек при быстрых переходах.
-- **Каналы, группы и альбомы:** устранены обрезания элементов на узких экранах, добавлены реакции и ответы для медиа-альбомов в группах, а беззвучные публикации больше не воспроизводят звук и вибрацию.
+- **Публикации, комментарии и отправка от имени:** переключатель беззвучной публикации в каналах и выбор профиля отправки теперь встроены прямо в поле ввода, а ответы на пост в привязанной группе и в ветке комментариев работают единообразно и всегда корректно указывают канал автором.
+- **Черновики:** устранены зависающие черновики с «...» и случайная потеря набранного текста при редактировании или отправке медиа, а также добавлено раздельное сохранение черновиков по аккаунтам, темам и комментариям.
+- **Жест возврата и интерфейс:** свайп назад теперь плавно работает по всей высоте экрана без ложных срабатываний, исправлено отображение медиа-альбомов в группах, а кнопка навигации на главном экране в стиле Material возвращает список в начало.
 
 ### en
-- **Channel & group composer:** the silent broadcast toggle in channels and the Send As identity selector (personal account, anonymous group admin, or public channel) now live directly inside the message field with a floating picker menu.
-- **Full-screen swipe back:** swiping back now works smoothly across the full height of every screen with natural parallax and instant consecutive back gestures.
-- **Channels, groups & albums:** fixed layout clipping on narrow screens, added reactions and replies on group media albums, and ensured silent broadcasts never trigger sound or vibration.
+- **Posts, comments & Send As:** the channel silent toggle and Send As identity selector now live directly inside the input field, while replying to a channel post in the linked discussion group or in the comments thread behaves consistently and always credits the channel.
+- **Drafts:** eliminated sticky `"..."` drafts and accidental draft loss when editing or sending media, with clean per-account, per-topic, and per-comment-thread isolation.
+- **Back gesture & UI:** full-screen swipe-back now tracks smoothly without false triggers, group media albums support replies and reactions cleanly, and tapping the navigation pill scrolls the chat list to the top in Material mode too.

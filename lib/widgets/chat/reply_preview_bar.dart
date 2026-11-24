@@ -28,6 +28,8 @@ class ReplyPreviewBar extends StatelessWidget {
   final bool enabled;
   final bool isLite;
   final String? currentUserId;
+  final bool isChannelPost;
+  final String? fallbackAuthorName;
 
   const ReplyPreviewBar({
     Key? key,
@@ -41,6 +43,8 @@ class ReplyPreviewBar extends StatelessWidget {
     this.enabled = false,
     this.isLite = false,
     this.currentUserId,
+    this.isChannelPost = false,
+    this.fallbackAuthorName,
   }) : super(key: key);
 
   /// Get icon for message type
@@ -165,10 +169,20 @@ class ReplyPreviewBar extends StatelessWidget {
     final theme = Theme.of(context);
     final profileTheme = context.watch<ProfileThemeProvider>();
 
-    final isSenderMe = currentUserId != null && replyToMessage.senderId == currentUserId;
-    final displayName = isSenderMe
+    final bool isPersonaOrChannel =
+        isChannelPost || replyToMessage.isChannelOrPersonaAuthored;
+    final bool isSenderMe = !isPersonaOrChannel &&
+        currentUserId != null &&
+        currentUserId!.isNotEmpty &&
+        replyToMessage.senderId.isNotEmpty &&
+        replyToMessage.senderId != '0' &&
+        replyToMessage.senderId == currentUserId;
+    final String displayName = isSenderMe
         ? context.l10n.translate('chat_reply_you')
-        : (replyToMessage.senderName.isNotEmpty ? replyToMessage.senderName : 'Сообщение');
+        : replyToMessage.resolveEffectiveAuthorTitle(
+            chatName: fallbackAuthorName,
+            chatType: isChannelPost ? 'channel' : null,
+          );
 
     // Telegram-style: Color and style of original message in reply preview match what that user selected in their settings
     final NameColorPreset authorPreset;
@@ -176,14 +190,16 @@ class ReplyPreviewBar extends StatelessWidget {
     if (isSenderMe) {
       authorPreset = profileTheme.currentNameColorPreset;
       authorStripStyle = profileTheme.currentStripStyle;
-    } else if (replyToMessage.senderNameColorId != null && replyToMessage.senderNameColorId!.isNotEmpty) {
+    } else if (!isPersonaOrChannel &&
+        replyToMessage.senderNameColorId != null &&
+        replyToMessage.senderNameColorId!.isNotEmpty) {
       authorPreset = NameColorPresets.getById(replyToMessage.senderNameColorId!);
       authorStripStyle = ReplyStripStyle.values.firstWhere(
         (s) => s.name == replyToMessage.senderReplyStripStyle,
         orElse: () => ReplyStripStyle.solid,
       );
     } else {
-      // Replying to another user whose preset is not explicitly set: use default author preset, NOT viewer's preset
+      // Replying to a channel/persona or user without explicit preset: use default preset, NOT viewer's or admin's preset
       authorPreset = NameColorPresets.getById('name_red');
       authorStripStyle = ReplyStripStyle.solid;
     }
@@ -192,10 +208,13 @@ class ReplyPreviewBar extends StatelessWidget {
     final ReplyEmojiData? authorReplyEmoji;
     if (isSenderMe) {
       authorReplyEmoji = profileTheme.currentReplyEmoji;
+    } else if (isPersonaOrChannel ||
+        replyToMessage.senderId.isEmpty ||
+        replyToMessage.senderId == '0') {
+      authorReplyEmoji = null;
     } else {
-      final cachedPeer = replyToMessage.senderId.isNotEmpty
-          ? PeerCustomizationCache.instance.getSync(replyToMessage.senderId)
-          : null;
+      final cachedPeer =
+          PeerCustomizationCache.instance.getSync(replyToMessage.senderId);
       authorReplyEmoji =
           cachedPeer?.replyEmoji ?? replyToMessage.senderCustomization?.replyEmoji;
     }

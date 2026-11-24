@@ -12,6 +12,7 @@ import 'browser_vault_auth_gate.dart';
 import 'browser_vault_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
+import 'draft_service.dart';
 import 'liquid_glass_provider.dart';
 import 'notification_service.dart';
 import 'notification_settings_provider.dart';
@@ -124,6 +125,7 @@ class AccountSwitchOrchestrator {
 
       await _accountManager.setCurrentAccount(account.userId);
       AppDatabase.setActiveUser(account.userId);
+      await DraftService().switchAccount(account.userId);
       await SettingsService().reloadForUser(account.userId);
       await PowerSavingProvider.instance.reloadForUser();
       await _accountManager.registerDeviceSession(account.userId);

@@ -196,15 +196,30 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
 
   List<Chat> _sortArchivedChats(List<Chat> input) {
     final sorted = List<Chat>.from(input);
+    DateTime effectiveSortTime(Chat chat) {
+      DateTime dt =
+          DateTimeUtils.parseUtcDateTime(chat.updatedAt) ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bool canShowDraft =
+          chat.chatType != 'channel' ||
+          chat.canPostInChannel ||
+          chat.myRole == 'owner' ||
+          chat.myRole == 'admin' ||
+          chat.myRole == 'moderator';
+      if (canShowDraft) {
+        final draft = DraftService().getPublishedDraft(chat.id);
+        if (draft != null && draft.isNotEmpty && draft.updatedAt.isAfter(dt)) {
+          dt = draft.updatedAt;
+        }
+      }
+      return dt;
+    }
+
     sorted.sort((a, b) {
       if (a.isPinned != b.isPinned) {
         return a.isPinned ? -1 : 1;
       }
-      final dtA = DateTimeUtils.parseUtcDateTime(a.updatedAt) ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      final dtB = DateTimeUtils.parseUtcDateTime(b.updatedAt) ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      return dtB.compareTo(dtA);
+      return effectiveSortTime(b).compareTo(effectiveSortTime(a));
     });
     return sorted;
   }
@@ -421,6 +436,9 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
 
     final db = _db();
     final ids = deletable.map((c) => c.id).toList();
+    for (final id in ids) {
+      DraftService().cancelPendingPublish(id);
+    }
     await db.batchDeleteChats(ids);
     if (_isSelectMode) _exitSelectMode();
 

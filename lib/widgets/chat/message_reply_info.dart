@@ -381,9 +381,13 @@ class MessageReplyInfo extends StatelessWidget {
     // Retrieve profile theme for fallback
     final profileTheme = context.watch<ProfileThemeProvider>();
 
-    final bool isReplyingToMe =
-        (replyInfo != null && currentUserId != null && replyInfo!.senderId == currentUserId) ||
-        (replyInfo == null && isMe);
+    final bool isReplyingToMe = (replyInfo != null &&
+            currentUserId != null &&
+            currentUserId!.isNotEmpty &&
+            replyInfo!.senderId.isNotEmpty &&
+            replyInfo!.senderId != '0' &&
+            replyInfo!.senderId == currentUserId) ||
+        (replyInfo == null && titleOverride == null && isMe);
 
     // Telegram-style: Color and style of original message in reply preview match what that user selected in their settings
     final NameColorPreset preset;
@@ -558,7 +562,7 @@ class MessageReplyInfo extends StatelessWidget {
       if (isReplyingToMe) {
         effectiveReplyEmoji = profileTheme.currentReplyEmoji;
       } else {
-        final cachedPeer = replyInfo!.senderId.isNotEmpty
+        final cachedPeer = (replyInfo!.senderId.isNotEmpty && replyInfo!.senderId != '0')
             ? PeerCustomizationCache.instance.getSync(replyInfo!.senderId)
             : null;
         effectiveReplyEmoji = cachedPeer?.replyEmoji ?? replyInfo!.replyEmoji;

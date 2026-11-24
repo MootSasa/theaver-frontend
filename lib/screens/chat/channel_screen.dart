@@ -18,6 +18,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import '../../models/chat_draft.dart';
 import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
 import '../../services/auth_service.dart';
@@ -29,7 +30,6 @@ import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
-import '../../services/profile_theme_provider.dart';
 import '../../utils/haptic_utils.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
@@ -423,6 +423,23 @@ class _ChannelScreenState extends State<ChannelScreen>
         (_isAdmin && (chat.myAdminPermissions?.canPinMessages ?? true));
     if (!_canPostInChannel) {
       _isSilentBroadcast = false;
+      if (!fromInitialCache && !_isEditing && !_userEditedComposer) {
+        _pendingDraftReplyId = null;
+        if (_messageController.text.isNotEmpty || _replyToMessage != null) {
+          _suppressDraftSave = true;
+          try {
+            _messageController.clear();
+            _replyToMessage = null;
+            _isQuote = false;
+            _quoteText = null;
+            _quoteOffset = 0;
+            _quoteLength = 0;
+          } finally {
+            _suppressDraftSave = false;
+          }
+        }
+        DraftService().cancelPendingPublish(_draftKey);
+      }
     } else if (_savedSilentBroadcastPref != null) {
       _isSilentBroadcast = _savedSilentBroadcastPref!;
     }
@@ -584,6 +601,22 @@ class _ChannelScreenState extends State<ChannelScreen>
   bool _isEditing = false;
   String? _editingMessageId;
 
+  // Draft lifecycle state
+  String get _draftKey => widget.channelId;
+  bool _suppressDraftSave = false;
+  bool _userEditedComposer = false;
+  String? _pendingDraftReplyId;
+  StreamSubscription<({String chatId, ChatDraft? draft})>? _draftRemoteSub;
+  ({
+    String text,
+    List<MessageEntity> entities,
+    Message? replyTo,
+    bool isQuote,
+    String? quoteText,
+    int quoteOffset,
+    int quoteLength,
+  })? _stashedDraftBeforeEdit;
+
   // File upload & voice/video note recording state
   final FileService _fileService = FileService();
   final ImagePicker _imagePicker = ImagePicker();
@@ -714,14 +747,31 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
 
     // Restore draft if exists
-    final draft = DraftService().getDraft(widget.channelId);
-    if (draft != null && draft.isNotEmpty) {
+    final draft = DraftService().getDraft(_draftKey);
+    if (draft != null &&
+        draft.isNotEmpty &&
+        (_canPostInChannel || !_seededFromChatDetails)) {
+      _suppressDraftSave = true;
       _messageController.loadMessage(draft.text, draft.entities);
+      _suppressDraftSave = false;
+      if (_replyToMessage == null &&
+          draft.replyToMessageId != null &&
+          draft.replyToMessageId!.isNotEmpty) {
+        _pendingDraftReplyId = draft.replyToMessageId;
+      }
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
+        _quoteOffset = draft.quoteOffset;
+        _quoteLength = draft.quoteLength;
       }
+      _resolvePendingDraftReply();
     }
+    _draftRemoteSub = DraftService().remoteUpdatesStream.listen((event) {
+      if (event.chatId == _draftKey) {
+        _applyRemoteDraft(event.draft);
+      }
+    });
     _messageController.addListener(_onInputTextChanged);
     DeepLinkService.pendingInlinePrefill.addListener(
       _onPendingInlinePrefillChanged,
@@ -965,8 +1015,11 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
-    } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
-      DraftService().flushDraft(widget.channelId);
+    } else if (!_inputFocusNode.hasFocus &&
+        !_showEmojiPanel &&
+        !_isEditing &&
+        _canPostInChannel) {
+      DraftService().flushDraft(_draftKey);
     }
   }
 
@@ -1009,20 +1062,48 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
   }
 
+  void _enterEditMode(Message message) {
+    if (!_isEditing) {
+      _stashedDraftBeforeEdit = (
+        text: _messageController.cleanText,
+        entities: List<MessageEntity>.from(_messageController.entities),
+        replyTo: _replyToMessage,
+        isQuote: _isQuote,
+        quoteText: _quoteText,
+        quoteOffset: _quoteOffset,
+        quoteLength: _quoteLength,
+      );
+    }
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = true;
+        _editingMessageId = message.id;
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _messageController.loadMessage(message.content, message.entities);
+        _messageController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _messageController.text.length),
+        );
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _focusInputField();
+  }
+
   void _editLastOwnMessage() {
-    if (!_isAdmin) return;
+    if (!_isAdmin && !_canPostInChannel) return;
     for (final msg in _messages) {
-      if ((msg.senderId == _currentUserId || _isAdmin) &&
+      if (_canEditChannelPost(msg) &&
           msg.messageType == 'text' &&
           !msg.isRound &&
           msg.content.trim().isNotEmpty) {
-        setState(() {
-          _cancelReply();
-          _messageController.loadMessage(msg.content, msg.entities);
-          _isEditing = true;
-          _editingMessageId = msg.id;
-        });
-        _focusInputField();
+        _enterEditMode(msg);
         return;
       }
     }
@@ -1953,6 +2034,7 @@ class _ChannelScreenState extends State<ChannelScreen>
             _updateFeedItems();
           });
         }
+        _resolvePendingDraftReply(serverLoaded: true);
 
         try {
           db.saveMessages(
@@ -1986,6 +2068,21 @@ class _ChannelScreenState extends State<ChannelScreen>
     if (deletedIds.isEmpty) return;
 
     if (mounted) {
+      final bool replyDeleted =
+          _replyToMessage != null && deletedIds.contains(_replyToMessage!.id);
+      if (_stashedDraftBeforeEdit?.replyTo != null &&
+          deletedIds.contains(_stashedDraftBeforeEdit!.replyTo!.id)) {
+        final s = _stashedDraftBeforeEdit!;
+        _stashedDraftBeforeEdit = (
+          text: s.text,
+          entities: s.entities,
+          replyTo: null,
+          isQuote: false,
+          quoteText: null,
+          quoteOffset: 0,
+          quoteLength: 0,
+        );
+      }
       setState(() {
         _messages.removeWhere((m) => deletedIds.contains(m.id));
         _detachedLatestBackup.removeWhere((m) => deletedIds.contains(m.id));
@@ -1994,8 +2091,19 @@ class _ChannelScreenState extends State<ChannelScreen>
           _myReactions.remove(id);
           _selectedMessageIds.remove(id);
         }
+        if (replyDeleted) {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        }
         _updateFeedItems();
       });
+      if (replyDeleted) {
+        _saveCurrentDraft();
+      }
     }
 
     try {
@@ -2372,6 +2480,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
 
       if (_highlightMessageId != null && !_hasScrolledToHighlight) {
         _scrollToMessage(_highlightMessageId!);
@@ -2453,6 +2562,7 @@ class _ChannelScreenState extends State<ChannelScreen>
               _updateFeedItems();
             });
           }
+          _resolvePendingDraftReply(serverLoaded: true);
 
           try {
             db.saveMessages(
@@ -3170,6 +3280,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     bool isSilent = false,
     bool hasMediaSpoiler = false,
     bool asDocument = false,
+    bool preserveComposerDraft = false,
   }) async {
     final String controllerCleanText = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
@@ -3214,9 +3325,8 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     if (_isEditing && _editingMessageId != null) {
       final editingId = _editingMessageId!;
+      _cancelEditing();
       setState(() {
-        _isEditing = false;
-        _editingMessageId = null;
         final index = _messages.indexWhere((m) => m.id == editingId);
         if (index != -1) {
           _messages[index] = _messages[index].copyWith(
@@ -3227,7 +3337,6 @@ class _ChannelScreenState extends State<ChannelScreen>
           _updateFeedItems();
         }
       });
-      _messageController.clear();
       try {
         await AppDatabase().updateMessageContent(
           editingId,
@@ -3257,24 +3366,36 @@ class _ChannelScreenState extends State<ChannelScreen>
         linkPreviewOptions ?? _linkPreviewOptions;
     final bool effectiveInvert = invertMedia || _invertMedia;
 
-    _messageController.clear();
-    DraftService().deleteDraft(widget.channelId);
-    setState(() {
-      _attachedFiles.clear();
-      _attachedFileNames.clear();
-      _linkPreviewOptions = null;
-      _invertMedia = false;
-      _replyToMessage = null;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-      if (filesToSend.isEmpty) {
-        _isSending = true;
-      } else {
-        _isUploading = true;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _attachedFiles.clear();
+        _attachedFileNames.clear();
+        _linkPreviewOptions = null;
+        _invertMedia = false;
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        if (filesToSend.isEmpty) {
+          _isSending = true;
+        } else {
+          _isUploading = true;
+        }
+      });
+      if (!preserveComposerDraft) {
+        _messageController.clear();
       }
-    });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    if (!preserveComposerDraft) {
+      DraftService().clearLocalDraftOnSend(_draftKey);
+    } else if (replyTo != null) {
+      _saveCurrentDraft(immediate: true);
+    }
     _scrollToBottom();
 
     // Multi / single file or album publishing path
@@ -3496,29 +3617,24 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     if (pendingMsg != null && mounted) {
       pendingLocalId = pendingMsg.localId;
-      final profileTheme = context.read<ProfileThemeProvider>();
       var message = Message.fromDbMessage(pendingMsg);
       if (replyTo != null) {
-        final isReplyToMe = replyTo.senderId == _currentUserId;
+        final channelTitle =
+            _channelName.isNotEmpty ? _channelName : widget.channelName;
         message = message.copyWith(
           replyInfo: ReplyInfo(
             messageId: replyTo.id,
-            senderId: replyTo.senderId,
-            senderName: replyTo.senderName,
+            senderId: '0',
+            senderName: replyTo.resolveEffectiveAuthorTitle(
+              chatName: channelTitle,
+              chatType: 'channel',
+            ),
             content: replyTo.content,
             messageType: replyTo.messageType,
             entities: replyTo.entities,
-            nameColorPresetId: isReplyToMe
-                ? profileTheme.currentNameColorPreset.id
-                : (replyTo.senderNameColorId ?? 'name_red'),
-            replyStripStyle: isReplyToMe
-                ? profileTheme.currentStripStyle.name
-                : (replyTo.senderReplyStripStyle ?? 'solid'),
-            replyEmoji: isReplyToMe
-                ? profileTheme.currentReplyEmoji
-                : PeerCustomizationCache.instance
-                    .getSync(replyTo.senderId)
-                    ?.replyEmoji,
+            nameColorPresetId: 'name_red',
+            replyStripStyle: 'solid',
+            replyEmoji: null,
           ),
         );
       }
@@ -3788,14 +3904,14 @@ class _ChannelScreenState extends State<ChannelScreen>
         _attachedFiles.add(file);
         _attachedFileNames.add(p.basename(file.path));
       }
-      if (result.caption != null && result.caption!.isNotEmpty) {
-        _messageController.text = result.caption!;
-      }
     });
     _sendMessage(
+      cleanText: result.caption ?? '',
+      entities: const [],
       isSilent: result.isSilent,
       hasMediaSpoiler: result.hasMediaSpoiler,
       asDocument: result.asDocument,
+      preserveComposerDraft: true,
     );
   }
 
@@ -4227,15 +4343,106 @@ class _ChannelScreenState extends State<ChannelScreen>
     _inputFocusNode.requestFocus();
   }
 
-  void _onInputTextChanged() {
+  void _saveCurrentDraft({bool immediate = false}) {
+    if (_suppressDraftSave || _isEditing || !_canPostInChannel) return;
     DraftService().saveDraft(
-      widget.channelId,
+      _draftKey,
       text: _messageController.cleanText,
       entities: _messageController.entities,
       replyToMessageId: _replyToMessage?.id,
       quoteText: _quoteText,
       isQuote: _isQuote,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
+      immediate: immediate,
     );
+  }
+
+  void _applyRemoteDraft(ChatDraft? draft) {
+    if (!mounted ||
+        _isEditing ||
+        _inputFocusNode.hasFocus ||
+        !_canPostInChannel) {
+      return;
+    }
+    _suppressDraftSave = true;
+    try {
+      if (draft == null || draft.isEmpty) {
+        _messageController.clear();
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      } else {
+        _messageController.loadMessage(draft.text, draft.entities);
+        Message? resolvedReply;
+        if (draft.replyToMessageId != null &&
+            draft.replyToMessageId!.isNotEmpty) {
+          for (final m in _messages) {
+            if (m.id == draft.replyToMessageId) {
+              resolvedReply = m;
+              break;
+            }
+          }
+        }
+        setState(() {
+          _replyToMessage = resolvedReply;
+          _pendingDraftReplyId =
+              resolvedReply == null ? draft.replyToMessageId : null;
+          _isQuote =
+              draft.isQuote &&
+              draft.quoteText != null &&
+              draft.quoteText!.isNotEmpty;
+          _quoteText = _isQuote ? draft.quoteText : null;
+          _quoteOffset = _isQuote ? draft.quoteOffset : 0;
+          _quoteLength = _isQuote ? draft.quoteLength : 0;
+        });
+      }
+    } finally {
+      _suppressDraftSave = false;
+    }
+  }
+
+  void _resolvePendingDraftReply({bool serverLoaded = false}) {
+    final pendingId = _pendingDraftReplyId;
+    if (pendingId == null || pendingId.isEmpty) return;
+    Message? found;
+    for (final m in _messages) {
+      if (m.id == pendingId) {
+        found = m;
+        break;
+      }
+    }
+    if (found != null) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && _replyToMessage == null && mounted) {
+        setState(() => _replyToMessage = found);
+      }
+      return;
+    }
+    if (serverLoaded) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && mounted && (_isQuote || _quoteText != null)) {
+        setState(() {
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _saveCurrentDraft(immediate: true);
+    }
+  }
+
+  void _onInputTextChanged() {
+    if (!_suppressDraftSave && !_isEditing) {
+      _userEditedComposer = true;
+    }
+    _saveCurrentDraft();
     if (_canPostInChannel) {
       _inlineQueryController.onTextChanged(
         _messageController.text,
@@ -4247,49 +4454,60 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _startReply(Message message) {
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _messageController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
-    DraftService().saveDraft(
-      widget.channelId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-      replyToMessageId: message.id,
-      isQuote: false,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInputField();
   }
 
   void _startQuote(Message message, String selectedText, int offset, int length) {
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _messageController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = true;
-      _quoteText = selectedText;
-      _quoteOffset = offset;
-      _quoteLength = length;
-    });
-    DraftService().saveDraft(
-      widget.channelId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-      replyToMessageId: message.id,
-      quoteText: selectedText,
-      isQuote: true,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = true;
+        _quoteText = selectedText;
+        _quoteOffset = offset;
+        _quoteLength = length;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _messageController.selection = TextSelection.collapsed(
       offset: _messageController.text.length,
     );
@@ -4299,24 +4517,37 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _cancelReply() {
     setState(() {
       _replyToMessage = null;
+      _pendingDraftReplyId = null;
       _isQuote = false;
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
     });
-    DraftService().saveDraft(
-      widget.channelId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-    );
+    _saveCurrentDraft(immediate: true);
   }
 
   void _cancelEditing() {
-    setState(() {
-      _isEditing = false;
-      _editingMessageId = null;
-      _messageController.clear();
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = false;
+        _editingMessageId = null;
+        if (stashed != null) {
+          _messageController.loadMessage(stashed.text, stashed.entities);
+          _replyToMessage = stashed.replyTo;
+          _isQuote = stashed.isQuote;
+          _quoteText = stashed.quoteText;
+          _quoteOffset = stashed.quoteOffset;
+          _quoteLength = stashed.quoteLength;
+        } else {
+          _messageController.clear();
+        }
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
   }
 
   String _formatTime(String timestamp) {
@@ -4339,7 +4570,10 @@ class _ChannelScreenState extends State<ChannelScreen>
     if (!_isDetachedHistoryWindow && _messages.isNotEmpty) {
       ChatInstantCache.instance.putMessages(widget.channelId, _messages);
     }
-    DraftService().flushDraft(widget.channelId);
+    if (!_isEditing && _canPostInChannel) {
+      DraftService().flushDraft(_draftKey);
+    }
+    _draftRemoteSub?.cancel();
     StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _messageController.removeListener(_onInputTextChanged);
     _inlineQueryController.dispose();
@@ -5614,8 +5848,23 @@ class _ChannelScreenState extends State<ChannelScreen>
         isSilent: _isSilentBroadcast,
       );
     }
-    _messageController.clear();
-    DraftService().deleteDraft(widget.channelId);
+    _suppressDraftSave = true;
+    try {
+      if (_replyToMessage != null && mounted) {
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _messageController.clear();
+    } finally {
+      _suppressDraftSave = false;
+    }
+    DraftService().clearLocalDraftOnSend(_draftKey);
     unawaited(_loadScheduledCount());
     if (mounted) {
       GlassToastService().show(context, 'Публикация запланирована');
@@ -5694,22 +5943,7 @@ class _ChannelScreenState extends State<ChannelScreen>
               !isVideoNote &&
               !isVoiceNote &&
               !isPoll)
-          ? () {
-              setState(() {
-                _replyToMessage = null;
-                _isQuote = false;
-                _quoteText = null;
-                _quoteOffset = 0;
-                _quoteLength = 0;
-                _isEditing = true;
-                _editingMessageId = message.id;
-                _messageController.loadMessage(message.content, message.entities);
-                _messageController.selection = TextSelection.fromPosition(
-                  TextPosition(offset: _messageController.text.length),
-                );
-              });
-              _focusInputField();
-            }
+          ? () => _enterEditMode(message)
           : null,
       onViewStats: _isAdmin
           ? () => showPostStatsSheet(
@@ -6318,9 +6552,24 @@ class _ChannelScreenState extends State<ChannelScreen>
                 );
                 if (!ctx.mounted) return;
                 if (ok) {
-                  _messageController.clear();
-                  _inlineQueryController.clear();
-                  if (_replyToMessage != null) _cancelReply();
+                  _suppressDraftSave = true;
+                  try {
+                    if (_replyToMessage != null && mounted) {
+                      setState(() {
+                        _replyToMessage = null;
+                        _pendingDraftReplyId = null;
+                        _isQuote = false;
+                        _quoteText = null;
+                        _quoteOffset = 0;
+                        _quoteLength = 0;
+                      });
+                    }
+                    _messageController.clear();
+                    _inlineQueryController.clear();
+                  } finally {
+                    _suppressDraftSave = false;
+                  }
+                  DraftService().clearLocalDraftOnSend(_draftKey);
                 } else {
                   GlassToastService().show(
                     ctx,
@@ -6603,33 +6852,28 @@ class _ChannelScreenState extends State<ChannelScreen>
 
       if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
-        final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
           waveform: result.waveform,
           duration: result.duration.inSeconds,
           isSilent: _isSilentBroadcast,
         );
         if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
+          final channelTitle =
+              _channelName.isNotEmpty ? _channelName : widget.channelName;
           message = message.copyWith(
             replyInfo: ReplyInfo(
               messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
+              senderId: '0',
+              senderName: replyTo.resolveEffectiveAuthorTitle(
+                chatName: channelTitle,
+                chatType: 'channel',
+              ),
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
-              nameColorPresetId: isReplyToMe
-                  ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
-              replyStripStyle: isReplyToMe
-                  ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
-              replyEmoji: isReplyToMe
-                  ? profileTheme.currentReplyEmoji
-                  : PeerCustomizationCache.instance
-                      .getSync(replyTo.senderId)
-                      ?.replyEmoji,
+              nameColorPresetId: 'name_red',
+              replyStripStyle: 'solid',
+              replyEmoji: null,
             ),
           );
         }
@@ -6800,31 +7044,26 @@ class _ChannelScreenState extends State<ChannelScreen>
 
       if (pendingMsg != null && mounted) {
         pendingLocalId = pendingMsg.localId;
-        final profileTheme = context.read<ProfileThemeProvider>();
         var message = Message.fromDbMessage(pendingMsg).copyWith(
           duration: recordedDurationSec,
         );
         if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
+          final channelTitle =
+              _channelName.isNotEmpty ? _channelName : widget.channelName;
           message = message.copyWith(
             replyInfo: ReplyInfo(
               messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
+              senderId: '0',
+              senderName: replyTo.resolveEffectiveAuthorTitle(
+                chatName: channelTitle,
+                chatType: 'channel',
+              ),
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
-              nameColorPresetId: isReplyToMe
-                  ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
-              replyStripStyle: isReplyToMe
-                  ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
-              replyEmoji: isReplyToMe
-                  ? profileTheme.currentReplyEmoji
-                  : PeerCustomizationCache.instance
-                      .getSync(replyTo.senderId)
-                      ?.replyEmoji,
+              nameColorPresetId: 'name_red',
+              replyStripStyle: 'solid',
+              replyEmoji: null,
             ),
           );
         }

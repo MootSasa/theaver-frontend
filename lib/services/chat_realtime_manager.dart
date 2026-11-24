@@ -695,7 +695,7 @@ class ChatRealtimeManager {
           isPinned: const drift.Value(false),
           showAuthorProfiles: drift.Value(chatType != 'channel'),
         ));
-      } else if (existing != null && !isThreadComment) {
+      } else if (existing != null) {
         await AppDatabase().updateChatLastMessage(
           chatId: chatId,
           content: content,

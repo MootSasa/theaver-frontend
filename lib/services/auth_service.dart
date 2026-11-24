@@ -14,6 +14,7 @@ import 'browser_vault_service.dart';
 import 'cache_service.dart';
 import 'database/app_database.dart';
 import 'deep_link_service.dart';
+import 'draft_service.dart';
 import 'websocket_service.dart';
 import 'notification_service.dart';
 import 'settings_service.dart';
@@ -240,6 +241,7 @@ class AuthService {
       if (currentUserId != null) {
         await CacheService().clearUserPermanentData(currentUserId);
       }
+      await DraftService().clearAllLocalDrafts(userId: currentUserId);
       try {
         if (accountManager.accounts.isEmpty) {
           await AppDatabase.deleteAllDatabases();

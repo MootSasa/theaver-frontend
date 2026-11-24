@@ -1483,13 +1483,10 @@ class AppDatabase extends _$AppDatabase {
         .go();
   }
 
-  /// Получить последнее сообщение основной ленты чата
+  /// Получить последнее сообщение основной ленты чата (включая ответы/комментарии в группе обсуждений)
   Future<DbMessage?> getLastMessageForChat(String chatId) async {
     return (select(messages)
-          ..where((t) =>
-              t.chatId.equals(chatId) &
-              (t.threadRootMessageId.isNull() |
-                  t.threadRootMessageId.equals('')))
+          ..where((t) => t.chatId.equals(chatId))
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
           ..limit(1))
         .getSingleOrNull();

@@ -444,7 +444,7 @@ class _RoundVideoRecordingOverlayState extends State<RoundVideoRecordingOverlay>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      reply.senderName.isNotEmpty ? reply.senderName : 'Сообщение',
+                      reply.resolveEffectiveAuthorTitle(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

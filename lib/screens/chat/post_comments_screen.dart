@@ -23,6 +23,7 @@ import '../../services/chat_instant_cache.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
+import '../../services/draft_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
@@ -159,6 +160,21 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   bool _isEditing = false;
   String? _editingCommentId;
 
+  // Local-only draft lifecycle for this post's comments thread
+  String get _draftKey =>
+      DraftService.commentsKey(widget.channelId, widget.postMessage.id);
+  bool _suppressDraftSave = false;
+  String? _pendingDraftReplyId;
+  ({
+    String text,
+    List<MessageEntity> entities,
+    Message? replyTo,
+    bool isQuote,
+    String? quoteText,
+    int quoteOffset,
+    int quoteLength,
+  })? _stashedDraftBeforeEdit;
+
   // Attachments
   final List<File> _attachedFiles = [];
   final List<String> _attachedFileNames = [];
@@ -237,6 +253,24 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     _inputFocusNode.addListener(_onFocusChanged);
     _scrollController.addListener(_onScroll);
 
+    final draft = DraftService().getDraft(_draftKey);
+    if (draft != null && draft.isNotEmpty) {
+      _suppressDraftSave = true;
+      _messageController.loadMessage(draft.text, draft.entities);
+      _suppressDraftSave = false;
+      if (draft.replyToMessageId != null &&
+          draft.replyToMessageId!.isNotEmpty) {
+        _pendingDraftReplyId = draft.replyToMessageId;
+      }
+      if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+        _isQuote = draft.isQuote;
+        _quoteText = draft.quoteText;
+        _quoteOffset = draft.quoteOffset;
+        _quoteLength = draft.quoteLength;
+      }
+    }
+    _messageController.addListener(_onControllerDraftSync);
+
     _loadCachedKeyboardHeight();
     _initChannelSubscription();
     _bindLinkedGroupSubscription();
@@ -246,6 +280,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   @override
   void dispose() {
     _transitionTimer?.cancel();
+    if (!_isEditing) {
+      DraftService().flushDraft(_draftKey);
+    }
+    _messageController.removeListener(_onControllerDraftSync);
     StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);
@@ -447,6 +485,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
+    } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
+      DraftService().flushDraft(_draftKey);
     }
   }
 
@@ -535,7 +575,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         _commentsCount = updatedCount;
         _rootPost = _rootPost.copyWith(
           commentsCount: updatedCount,
-          recentRepliers: updatedRepliers.isNotEmpty
+          recentRepliers: (updatedRepliers.isNotEmpty || updatedCount == 0)
               ? updatedRepliers
               : _rootPost.recentRepliers,
         );
@@ -601,6 +641,20 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   void _onLinkedGroupMessageDeleted(WebSocketEvent event) {
     final msgId = event.data['message_id']?.toString();
     if (msgId == null || !mounted) return;
+    final bool replyDeleted =
+        _replyToComment != null && _replyToComment!.id == msgId;
+    if (_stashedDraftBeforeEdit?.replyTo?.id == msgId) {
+      final s = _stashedDraftBeforeEdit!;
+      _stashedDraftBeforeEdit = (
+        text: s.text,
+        entities: s.entities,
+        replyTo: null,
+        isQuote: false,
+        quoteText: null,
+        quoteOffset: 0,
+        quoteLength: 0,
+      );
+    }
     setState(() {
       final before = _comments.length;
       _comments.removeWhere((c) => c.id == msgId);
@@ -608,7 +662,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         _commentsCount--;
         _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
       }
+      if (replyDeleted) {
+        _replyToComment = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      }
     });
+    if (replyDeleted) {
+      _saveCurrentDraft();
+    }
   }
 
   void _onLinkedGroupReactionUpdated(WebSocketEvent event) {
@@ -847,6 +912,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             _sortCommentsAscending();
             _isLoading = false;
           });
+          _resolvePendingDraftReply();
         }
       } catch (_) {}
     }
@@ -894,6 +960,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         _errorMessage = res.errorMessage;
       }
     });
+    if (res.success) {
+      _resolvePendingDraftReply(serverLoaded: true);
+    }
     _bindLinkedGroupSubscription();
     unawaited(_syncProtectionFromDb());
     if (_canComment && _linkedChatId != null && _linkedChatId!.isNotEmpty) {
@@ -958,6 +1027,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     bool invertMedia = false,
     bool hasMediaSpoiler = false,
     bool asDocument = false,
+    bool preserveComposerDraft = false,
   }) async {
     if (!_canComment) return;
     final String controllerClean = _messageController.cleanText.trimRight();
@@ -1018,18 +1088,31 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             : (widget.channelName ?? 'Обсуждение'));
 
     final List<File> filesToSend = List<File>.from(_attachedFiles);
-    _attachedFiles.clear();
-    _attachedFileNames.clear();
-    _messageController.clear();
-    setState(() {
-      _isSending = true;
-      _isUploading = filesToSend.isNotEmpty;
-      _replyToComment = null;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _attachedFiles.clear();
+        _attachedFileNames.clear();
+        _isSending = true;
+        _isUploading = filesToSend.isNotEmpty;
+        _replyToComment = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      });
+      if (!preserveComposerDraft) {
+        _messageController.clear();
+      }
+    } finally {
+      _suppressDraftSave = false;
+    }
+    if (!preserveComposerDraft) {
+      DraftService().clearLocalDraftOnSend(_draftKey);
+    } else if (replyTo != null) {
+      _saveCurrentDraft(immediate: true);
+    }
 
     try {
       String resolveMimeMessageType(String mimeType) {
@@ -1097,8 +1180,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               replyInfo: replyTo != null
                   ? ReplyInfo(
                       messageId: replyTo.id,
-                      senderId: replyTo.senderId,
-                      senderName: replyTo.senderName,
+                      senderId: (replyTo.isChannelOrPersonaAuthored ||
+                              replyTo.id == _rootMessageId ||
+                              replyTo.id == widget.postMessage.id)
+                          ? '0'
+                          : replyTo.senderId,
+                      senderName: replyTo.resolveEffectiveAuthorTitle(
+                        chatName: widget.channelName,
+                        chatType: (replyTo.id == widget.postMessage.id ||
+                                replyTo.id == _rootMessageId)
+                            ? 'channel'
+                            : null,
+                      ),
                       content: replyTo.content,
                       messageType: replyTo.messageType,
                       entities: replyTo.entities,
@@ -1200,8 +1293,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         replyInfo: replyTo != null
             ? ReplyInfo(
                 messageId: replyTo.id,
-                senderId: replyTo.senderId,
-                senderName: replyTo.senderName,
+                senderId: (replyTo.isChannelOrPersonaAuthored ||
+                        replyTo.id == _rootMessageId ||
+                        replyTo.id == widget.postMessage.id)
+                    ? '0'
+                    : replyTo.senderId,
+                senderName: replyTo.resolveEffectiveAuthorTitle(
+                  chatName: widget.channelName,
+                  chatType: (replyTo.id == widget.postMessage.id ||
+                          replyTo.id == _rootMessageId)
+                      ? 'channel'
+                      : null,
+                ),
                 content: replyTo.content,
                 messageType: replyTo.messageType,
                 entities: replyTo.entities,
@@ -1458,16 +1561,116 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     }
   }
 
+  void _saveCurrentDraft({bool immediate = false}) {
+    if (_suppressDraftSave || _isEditing || !_canComment) return;
+    DraftService().saveDraft(
+      _draftKey,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
+      replyToMessageId: _replyToComment?.id,
+      quoteText: _quoteText,
+      isQuote: _isQuote,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
+      immediate: immediate,
+    );
+  }
+
+  void _onControllerDraftSync() {
+    _saveCurrentDraft();
+  }
+
+  void _resolvePendingDraftReply({bool serverLoaded = false}) {
+    final pendingId = _pendingDraftReplyId;
+    if (pendingId == null || pendingId.isEmpty) return;
+    Message? found;
+    for (final c in _comments) {
+      if (c.id == pendingId) {
+        found = c;
+        break;
+      }
+    }
+    if (found != null) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && _replyToComment == null && mounted) {
+        setState(() => _replyToComment = found);
+      }
+      return;
+    }
+    if (serverLoaded) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && mounted && (_isQuote || _quoteText != null)) {
+        setState(() {
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _saveCurrentDraft(immediate: true);
+    }
+  }
+
+  void _enterEditMode(Message comment) {
+    if (!_isEditing) {
+      _stashedDraftBeforeEdit = (
+        text: _messageController.cleanText,
+        entities: List<MessageEntity>.from(_messageController.entities),
+        replyTo: _replyToComment,
+        isQuote: _isQuote,
+        quoteText: _quoteText,
+        quoteOffset: _quoteOffset,
+        quoteLength: _quoteLength,
+      );
+    }
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _replyToComment = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _isEditing = true;
+        _editingCommentId = comment.id;
+        _messageController.loadMessage(
+          comment.content,
+          comment.entities,
+        );
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _focusInput();
+  }
+
   void _startReply(Message comment) {
-    setState(() {
-      _isEditing = false;
-      _editingCommentId = null;
-      _replyToComment = comment;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingCommentId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToComment = comment;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInput();
   }
 
@@ -1477,34 +1680,68 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     int offset,
     int length,
   ) {
-    setState(() {
-      _isEditing = false;
-      _editingCommentId = null;
-      _replyToComment = comment;
-      _isQuote = true;
-      _quoteText = selectedText;
-      _quoteOffset = offset;
-      _quoteLength = length;
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingCommentId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToComment = comment;
+        _pendingDraftReplyId = null;
+        _isQuote = true;
+        _quoteText = selectedText;
+        _quoteOffset = offset;
+        _quoteLength = length;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInput();
   }
 
   void _cancelReply() {
     setState(() {
       _replyToComment = null;
+      _pendingDraftReplyId = null;
       _isQuote = false;
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
     });
+    _saveCurrentDraft(immediate: true);
   }
 
   void _cancelEditing() {
-    setState(() {
-      _isEditing = false;
-      _editingCommentId = null;
-      _messageController.clear();
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = false;
+        _editingCommentId = null;
+        if (stashed != null) {
+          _messageController.loadMessage(stashed.text, stashed.entities);
+          _replyToComment = stashed.replyTo;
+          _isQuote = stashed.isQuote;
+          _quoteText = stashed.quoteText;
+          _quoteOffset = stashed.quoteOffset;
+          _quoteLength = stashed.quoteLength;
+        } else {
+          _messageController.clear();
+        }
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
   }
 
   void _focusInput() {
@@ -1666,7 +1903,11 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             _attachedFileNames.add(p.basename(file.path));
           }
         });
-        await _sendComment();
+        await _sendComment(
+          cleanText: '',
+          entities: const [],
+          preserveComposerDraft: true,
+        );
       } else {
         final mediaRes = await Navigator.push<MediaSendResult>(
           context,
@@ -1683,13 +1924,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               _attachedFiles.add(file);
               _attachedFileNames.add(p.basename(file.path));
             }
-            if (mediaRes.caption != null && mediaRes.caption!.isNotEmpty) {
-              _messageController.text = mediaRes.caption!;
-            }
           });
           await _sendComment(
+            cleanText: mediaRes.caption ?? '',
+            entities: const [],
             hasMediaSpoiler: mediaRes.hasMediaSpoiler,
             asDocument: mediaRes.asDocument,
+            preserveComposerDraft: true,
           );
         }
       }
@@ -1762,6 +2003,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                 sendAsMode: _effectiveSendAsMode,
                 sendAsChatId: _effectiveSendAsChannelId,
                 sendAsAnonymous: _effectiveSendAsAnon,
+                replyToMessageId: _replyToComment?.id ?? _rootMessageId,
               ),
             ),
           );
@@ -2073,18 +2315,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
               );
             },
       onEdit: (_canComment && isMe && comment.messageType == 'text')
-          ? () {
-              setState(() {
-                _replyToComment = null;
-                _isEditing = true;
-                _editingCommentId = comment.id;
-                _messageController.loadMessage(
-                  comment.content,
-                  comment.entities,
-                );
-              });
-              _focusInput();
-            }
+          ? () => _enterEditMode(comment)
           : null,
       onDelete: (isMe || _canDeleteOthers) ? _confirmDeleteComment : null,
       onReaction: (msgId, emoji) => _toggleCommentReaction(msgId, emoji),
@@ -2393,6 +2624,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                       ? ChatInputBar(
                           controller: _messageController,
                           focusNode: _inputFocusNode,
+                          replyFallbackAuthorName: widget.channelName,
                           hintText: _effectiveSendAsAnon
                               ? context.trOr(
                                   'send_as_anonymous_hint',

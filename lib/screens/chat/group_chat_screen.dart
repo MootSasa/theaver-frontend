@@ -18,6 +18,7 @@ import 'scheduled_messages_screen.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
 import '../../services/chat_service.dart';
+import '../../models/chat_draft.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/auth_service.dart';
@@ -367,6 +368,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   bool _isEditing = false;
   String? _editingMessageId;
 
+  // Draft lifecycle state (uses :topic: scope key when inside a forum topic)
+  String get _draftKey => _activeTopicId != null
+      ? DraftService.topicKey(widget.chatId, _activeTopicId!)
+      : widget.chatId;
+  bool _suppressDraftSave = false;
+  String? _pendingDraftReplyId;
+  StreamSubscription<({String chatId, ChatDraft? draft})>? _draftRemoteSub;
+  ({
+    String text,
+    List<MessageEntity> entities,
+    Message? replyTo,
+    bool isQuote,
+    String? quoteText,
+    int quoteOffset,
+    int quoteLength,
+  })? _stashedDraftBeforeEdit;
+
   // Video Note («Кружочки») state
   final FileService _fileService = FileService();
   final VideoNoteRecorderService _videoRecorderService = VideoNoteRecorderService();
@@ -639,13 +657,188 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     _uploadProgressNotifier.value = 0.0;
   }
 
+  void _saveCurrentDraft({bool immediate = false}) {
+    if (_suppressDraftSave || _isEditing || !_canSendMessages) return;
+    DraftService().saveDraft(
+      _draftKey,
+      text: _messageController.cleanText,
+      entities: _messageController.entities,
+      replyToMessageId: _replyToMessage?.id,
+      quoteText: _quoteText,
+      isQuote: _isQuote,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
+      immediate: immediate,
+    );
+  }
+
+  void _applyRemoteDraft(ChatDraft? draft) {
+    if (!mounted || _isEditing || _inputFocusNode.hasFocus) return;
+    _suppressDraftSave = true;
+    try {
+      if (draft == null || draft.isEmpty) {
+        _messageController.clear();
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      } else {
+        _messageController.loadMessage(draft.text, draft.entities);
+        Message? resolvedReply;
+        if (draft.replyToMessageId != null &&
+            draft.replyToMessageId!.isNotEmpty) {
+          for (final m in _messages) {
+            if (m.id == draft.replyToMessageId) {
+              resolvedReply = m;
+              break;
+            }
+          }
+        }
+        setState(() {
+          _replyToMessage = resolvedReply;
+          _pendingDraftReplyId =
+              resolvedReply == null ? draft.replyToMessageId : null;
+          _isQuote =
+              draft.isQuote &&
+              draft.quoteText != null &&
+              draft.quoteText!.isNotEmpty;
+          _quoteText = _isQuote ? draft.quoteText : null;
+          _quoteOffset = _isQuote ? draft.quoteOffset : 0;
+          _quoteLength = _isQuote ? draft.quoteLength : 0;
+        });
+      }
+    } finally {
+      _suppressDraftSave = false;
+    }
+  }
+
+  void _resolvePendingDraftReply({bool serverLoaded = false}) {
+    final pendingId = _pendingDraftReplyId;
+    if (pendingId == null || pendingId.isEmpty) return;
+    Message? found;
+    for (final m in _messages) {
+      if (m.id == pendingId) {
+        found = m;
+        break;
+      }
+    }
+    if (found != null) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && _replyToMessage == null && mounted) {
+        setState(() => _replyToMessage = found);
+      }
+      return;
+    }
+    if (serverLoaded) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && mounted && (_isQuote || _quoteText != null)) {
+        setState(() {
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _saveCurrentDraft(immediate: true);
+    }
+  }
+
+  void _restoreDraftForCurrentScope() {
+    final draft = DraftService().getDraft(_draftKey);
+    _suppressDraftSave = true;
+    try {
+      if (draft != null && draft.isNotEmpty) {
+        _messageController.loadMessage(draft.text, draft.entities);
+        _replyToMessage = null;
+        _pendingDraftReplyId =
+            (draft.replyToMessageId != null &&
+                    draft.replyToMessageId!.isNotEmpty)
+                ? draft.replyToMessageId
+                : null;
+        if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
+          _isQuote = draft.isQuote;
+          _quoteText = draft.quoteText;
+          _quoteOffset = draft.quoteOffset;
+          _quoteLength = draft.quoteLength;
+        } else {
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        }
+      } else {
+        _messageController.clear();
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      }
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _resolvePendingDraftReply();
+  }
+
+  void _enterEditMode(Message message) {
+    if (!_isEditing) {
+      _stashedDraftBeforeEdit = (
+        text: _messageController.cleanText,
+        entities: List<MessageEntity>.from(_messageController.entities),
+        replyTo: _replyToMessage,
+        isQuote: _isQuote,
+        quoteText: _quoteText,
+        quoteOffset: _quoteOffset,
+        quoteLength: _quoteLength,
+      );
+    }
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = true;
+        _editingMessageId = message.id;
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _messageController.loadMessage(message.content, message.entities);
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _focusInputField();
+  }
+
   void _cancelEditing() {
     _stopMyTyping();
-    setState(() {
-      _isEditing = false;
-      _editingMessageId = null;
-      _messageController.clear();
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = false;
+        _editingMessageId = null;
+        if (stashed != null) {
+          _messageController.loadMessage(stashed.text, stashed.entities);
+          _replyToMessage = stashed.replyTo;
+          _isQuote = stashed.isQuote;
+          _quoteText = stashed.quoteText;
+          _quoteOffset = stashed.quoteOffset;
+          _quoteLength = stashed.quoteLength;
+        } else {
+          _messageController.clear();
+        }
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
   }
 
   UnreadCountProvider? _unreadCountProvider;
@@ -759,14 +952,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     }
 
     // Restore draft if exists
-    final draft = DraftService().getDraft(widget.chatId);
+    final draft = DraftService().getDraft(_draftKey);
     if (draft != null && draft.isNotEmpty) {
+      _suppressDraftSave = true;
       _messageController.loadMessage(draft.text, draft.entities);
+      _suppressDraftSave = false;
+      if (_replyToMessage == null &&
+          draft.replyToMessageId != null &&
+          draft.replyToMessageId!.isNotEmpty) {
+        _pendingDraftReplyId = draft.replyToMessageId;
+      }
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
+        _quoteOffset = draft.quoteOffset;
+        _quoteLength = draft.quoteLength;
       }
+      _resolvePendingDraftReply();
     }
+    _draftRemoteSub = DraftService().remoteUpdatesStream.listen((event) {
+      if (event.chatId == _draftKey) {
+        _applyRemoteDraft(event.draft);
+      }
+    });
     _messageController.addListener(_onControllerDraftSync);
     DeepLinkService.pendingInlinePrefill.addListener(
       _onPendingInlinePrefillChanged,
@@ -1023,7 +1231,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
     } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
-      DraftService().flushDraft(widget.chatId);
+      DraftService().flushDraft(_draftKey);
     }
   }
 
@@ -1072,13 +1280,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           msg.messageType == 'text' &&
           !msg.isRound &&
           msg.content.trim().isNotEmpty) {
-        setState(() {
-          _cancelReply();
-          _messageController.loadMessage(msg.content, msg.entities);
-          _isEditing = true;
-          _editingMessageId = msg.id;
-        });
-        _focusInputField();
+        _enterEditMode(msg);
         return;
       }
     }
@@ -1882,6 +2084,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
 
   Future<void> _switchToTopic(ForumTopic topic) async {
     if (_activeTopic?.id == topic.id) return;
+    if (_isEditing) {
+      _cancelEditing();
+    } else {
+      DraftService().flushDraft(_draftKey);
+    }
     setState(() {
       _activeTopic = topic;
       _messages.clear();
@@ -1893,12 +2100,18 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _hasMoreNewerMessages = false;
       _updateFeedItems();
     });
+    _restoreDraftForCurrentScope();
     _updateTopBannerHeight();
     await _loadMessages();
   }
 
   Future<void> _switchToFlatMessages() async {
     if (_activeTopic == null) return;
+    if (_isEditing) {
+      _cancelEditing();
+    } else {
+      DraftService().flushDraft(_draftKey);
+    }
     setState(() {
       _activeTopic = null;
       _messages.clear();
@@ -1910,6 +2123,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _hasMoreNewerMessages = false;
       _updateFeedItems();
     });
+    _restoreDraftForCurrentScope();
     _updateTopBannerHeight();
     await _loadMessages();
   }
@@ -2272,6 +2486,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             _updateFeedItems();
           });
         }
+        _resolvePendingDraftReply(serverLoaded: true);
 
         try {
           db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
@@ -2377,11 +2592,37 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (deletedIds.isEmpty) return;
 
     if (mounted) {
+      final bool replyDeleted =
+          _replyToMessage != null && deletedIds.contains(_replyToMessage!.id);
+      if (_stashedDraftBeforeEdit?.replyTo != null &&
+          deletedIds.contains(_stashedDraftBeforeEdit!.replyTo!.id)) {
+        final s = _stashedDraftBeforeEdit!;
+        _stashedDraftBeforeEdit = (
+          text: s.text,
+          entities: s.entities,
+          replyTo: null,
+          isQuote: false,
+          quoteText: null,
+          quoteOffset: 0,
+          quoteLength: 0,
+        );
+      }
       setState(() {
         _messages.removeWhere((m) => deletedIds.contains(m.id));
         _selectedMessageIds.removeAll(deletedIds);
+        if (replyDeleted) {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        }
         _updateFeedItems();
       });
+      if (replyDeleted) {
+        _saveCurrentDraft();
+      }
     }
 
     try {
@@ -2857,30 +3098,12 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _onControllerDraftSync() {
-    if (!_isEditing) {
-      DraftService().saveDraft(
-        widget.chatId,
-        text: _messageController.cleanText,
-        entities: _messageController.entities,
-        replyToMessageId: _replyToMessage?.id,
-        quoteText: _quoteText,
-        isQuote: _isQuote,
-      );
-    }
+    _saveCurrentDraft();
     _updateMentionAutocompleteState();
   }
 
   void _onInputTextChanged(String text) {
-    if (!_isEditing) {
-      DraftService().saveDraft(
-        widget.chatId,
-        text: _messageController.cleanText,
-        entities: _messageController.entities,
-        replyToMessageId: _replyToMessage?.id,
-        quoteText: _quoteText,
-        isQuote: _isQuote,
-      );
-    }
+    _saveCurrentDraft();
 
     if (_groupBotCommands.isNotEmpty) {
       final shouldShowCommands =
@@ -3144,6 +3367,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       localMessages = await db.getMessages(
         widget.chatId,
         limit: 50,
+        includeThreadComments: true,
         topicId: _activeTopicId,
       );
     } catch (e) {
@@ -3189,6 +3413,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
       if (!hadInitialMessages &&
           widget.initialMessageId == null &&
           (_firstUnreadMessageId == null || _unreadCount == 0)) {
@@ -3287,6 +3512,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               _updateFeedItems();
             });
           }
+          _resolvePendingDraftReply(serverLoaded: true);
 
           // Сохранить в Drift для оффлайн-доступа
           try {
@@ -3383,6 +3609,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         widget.chatId,
         beforeCreatedAt: lastMessage?.createdAt,
         limit: 50,
+        includeThreadComments: true,
         topicId: _activeTopicId,
       );
 
@@ -3433,6 +3660,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     bool isSilent = false,
     bool hasMediaSpoiler = false,
     bool asDocument = false,
+    bool preserveComposerDraft = false,
   }) async {
     final String controllerCleanText = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
@@ -3554,29 +3782,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final replyQuoteLength = _quoteLength;
 
     _stopMyTyping();
-    DraftService().deleteDraft(widget.chatId);
-    _messageController.clear();
-    if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
-      _messages
-        ..clear()
-        ..addAll(_detachedLatestBackup);
-      _hasMoreMessages = _detachedBackupHasMoreOlder;
-      _isDetachedHistoryWindow = false;
-      _hasMoreNewerMessages = false;
-      _detachedLatestBackup = [];
+    _suppressDraftSave = true;
+    try {
+      if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+      }
+      setState(() {
+        _isSending = true;
+        _isUploading = _attachedFiles.isNotEmpty;
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _showUnreadDivider = false;
+        _firstUnreadMessageId = null;
+        _firstUnreadFeedIndex = -1;
+      });
+      if (!preserveComposerDraft) {
+        _messageController.clear();
+      }
+    } finally {
+      _suppressDraftSave = false;
     }
-    setState(() {
-      _isSending = true;
-      _isUploading = _attachedFiles.isNotEmpty;
-      _replyToMessage = null;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-      _showUnreadDivider = false;
-      _firstUnreadMessageId = null;
-      _firstUnreadFeedIndex = -1;
-    });
+    if (!preserveComposerDraft) {
+      DraftService().clearLocalDraftOnSend(_draftKey);
+    } else if (replyTo != null) {
+      _saveCurrentDraft(immediate: true);
+    }
     _scrollToBottom();
 
     try {
@@ -3973,26 +4213,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           isOwn: true,
         );
         if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
+          final isPersonaOrChannel = replyTo.isChannelOrPersonaAuthored;
+          final isReplyToMe = !isPersonaOrChannel &&
+              replyTo.senderId.isNotEmpty &&
+              replyTo.senderId != '0' &&
+              replyTo.senderId == _currentUserId;
+          final fallbackTitle = _groupName.isNotEmpty
+              ? _groupName
+              : widget.groupName;
           message = message.copyWith(
             replyInfo: ReplyInfo(
               messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
+              senderId: isPersonaOrChannel ? '0' : replyTo.senderId,
+              senderName: replyTo.resolveEffectiveAuthorTitle(
+                chatName: fallbackTitle,
+              ),
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
+                  : (isPersonaOrChannel
+                        ? 'name_red'
+                        : (replyTo.senderNameColorId ?? 'name_red')),
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
+                  : (isPersonaOrChannel
+                        ? 'solid'
+                        : (replyTo.senderReplyStripStyle ?? 'solid')),
               replyEmoji: isReplyToMe
                   ? profileTheme.currentReplyEmoji
-                  : PeerCustomizationCache.instance
-                      .getSync(replyTo.senderId)
-                      ?.replyEmoji,
+                  : (isPersonaOrChannel
+                        ? null
+                        : PeerCustomizationCache.instance
+                              .getSync(replyTo.senderId)
+                              ?.replyEmoji),
             ),
           );
         }
@@ -4225,6 +4480,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               sendAsMode: _effectiveSendAsMode,
               sendAsChatId: _effectiveSendAsChannelId,
               sendAsAnonymous: _effectiveSendAsAnon,
+              replyToMessageId: _replyToMessage?.id,
             ),
           ),
         );
@@ -4301,6 +4557,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               sendAsMode: _effectiveSendAsMode,
               sendAsChatId: _effectiveSendAsChannelId,
               sendAsAnonymous: _effectiveSendAsAnon,
+              replyToMessageId: _replyToMessage?.id,
             ),
           ),
         );
@@ -4414,14 +4671,14 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         _attachedFiles.add(file);
         _attachedFileNames.add(p.basename(file.path));
       }
-      if (result.caption != null && result.caption!.isNotEmpty) {
-        _messageController.text = result.caption!;
-      }
     });
     _sendMessage(
+      cleanText: result.caption ?? '',
+      entities: const [],
       isSilent: result.isSilent,
       hasMediaSpoiler: result.hasMediaSpoiler,
       asDocument: result.asDocument,
+      preserveComposerDraft: true,
     );
   }
 
@@ -5303,25 +5560,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
       return;
     }
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _messageController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
-    DraftService().saveDraft(
-      widget.chatId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-      replyToMessageId: message.id,
-      isQuote: false,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInputField();
   }
 
@@ -5340,26 +5603,31 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
       return;
     }
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _messageController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = true;
-      _quoteText = selectedText;
-      _quoteOffset = offset;
-      _quoteLength = length;
-    });
-    DraftService().saveDraft(
-      widget.chatId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-      replyToMessageId: message.id,
-      quoteText: selectedText,
-      isQuote: true,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = true;
+        _quoteText = selectedText;
+        _quoteOffset = offset;
+        _quoteLength = length;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _messageController.selection = TextSelection.collapsed(
       offset: _messageController.text.length,
     );
@@ -5369,16 +5637,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   void _cancelReply() {
     setState(() {
       _replyToMessage = null;
+      _pendingDraftReplyId = null;
       _isQuote = false;
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
     });
-    DraftService().saveDraft(
-      widget.chatId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-    );
+    _saveCurrentDraft(immediate: true);
   }
 
   String _formatTime(String timestamp) {
@@ -5412,8 +5677,9 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       ChatInstantCache.instance.putMessages(widget.chatId, _messages);
     }
     if (!_isEditing) {
-      DraftService().flushDraft(widget.chatId);
+      DraftService().flushDraft(_draftKey);
     }
+    _draftRemoteSub?.cancel();
 
     _showScrollDownFabNotifier.dispose();
     _uploadProgressNotifier.dispose();
@@ -6772,7 +7038,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               : (isAnonMsg
                     ? _openGroupInfo
                     : () => _openSenderProfile(message)));
-    final String? resolvedAdminTitle = hasSenderChat
+    final String? resolvedAdminTitle = (hasSenderChat || message.isMirroredChannelPost)
         ? 'канал'
         : (isAnonMsg &&
                 (message.senderAdminTitle == null ||
@@ -6782,7 +7048,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     message.senderAdminTitle!.trim().isNotEmpty)
                 ? message.senderAdminTitle
                 : participant?.adminTitle));
-    final String? resolvedRole = (hasSenderChat || isAnonMsg)
+    final String? resolvedRole = (hasSenderChat || message.isMirroredChannelPost || isAnonMsg)
         ? null
         : ((message.senderRole != null && message.senderRole!.trim().isNotEmpty)
             ? message.senderRole
@@ -7139,7 +7405,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               : (isAnonMsg
                     ? _openGroupInfo
                     : () => _openSenderProfile(message)));
-    final String? resolvedAdminTitle = hasSenderChat
+    final String? resolvedAdminTitle = (hasSenderChat || message.isMirroredChannelPost)
         ? 'канал'
         : (isAnonMsg &&
                 (message.senderAdminTitle == null ||
@@ -7149,7 +7415,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                     message.senderAdminTitle!.trim().isNotEmpty)
                 ? message.senderAdminTitle
                 : participant?.adminTitle));
-    final String? resolvedRole = (hasSenderChat || isAnonMsg)
+    final String? resolvedRole = (hasSenderChat || message.isMirroredChannelPost || isAnonMsg)
         ? null
         : ((message.senderRole != null && message.senderRole!.trim().isNotEmpty)
             ? message.senderRole
@@ -7195,10 +7461,6 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       hasAvatarGutter: showGroupSenderAvatar,
       isFirstInCluster: firstInCluster,
       isLastInCluster: lastInCluster,
-      onThreadRootTap: (message.threadRootMessageId != null &&
-              message.threadRootMessageId!.isNotEmpty)
-          ? () => _scrollToMessage(message.threadRootMessageId!)
-          : null,
       chatType: 'group',
       chatTitle: widget.groupName,
       isHighlighted: isHighlighted,
@@ -7631,8 +7893,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         sendAsAnonymous: _effectiveSendAsAnon,
       );
     }
-    _messageController.clear();
-    DraftService().deleteDraft(widget.chatId);
+    _suppressDraftSave = true;
+    try {
+      if (_replyToMessage != null && mounted) {
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _messageController.clear();
+    } finally {
+      _suppressDraftSave = false;
+    }
+    DraftService().clearLocalDraftOnSend(_draftKey);
     unawaited(_loadScheduledCount());
     if (mounted) {
       GlassToastService().show(context, 'Сообщение запланировано');
@@ -7664,6 +7941,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 sendAsMode: _effectiveSendAsMode,
                 sendAsChatId: _effectiveSendAsChannelId,
                 sendAsAnonymous: _effectiveSendAsAnon,
+                replyToMessageId: _replyToMessage?.id,
               ),
             ),
           );
@@ -7917,9 +8195,24 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                 );
                 if (!ctx.mounted) return;
                 if (ok) {
-                  _messageController.clear();
-                  _inlineQueryController.clear();
-                  if (_replyToMessage != null) _cancelReply();
+                  _suppressDraftSave = true;
+                  try {
+                    if (_replyToMessage != null && mounted) {
+                      setState(() {
+                        _replyToMessage = null;
+                        _pendingDraftReplyId = null;
+                        _isQuote = false;
+                        _quoteText = null;
+                        _quoteOffset = 0;
+                        _quoteLength = 0;
+                      });
+                    }
+                    _messageController.clear();
+                    _inlineQueryController.clear();
+                  } finally {
+                    _suppressDraftSave = false;
+                  }
+                  DraftService().clearLocalDraftOnSend(_draftKey);
                 } else {
                   GlassToastService().show(
                     ctx,
@@ -7977,6 +8270,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         ChatInputBar(
           controller: _messageController,
           focusNode: _inputFocusNode,
+          replyFallbackAuthorName:
+              _groupName.isNotEmpty ? _groupName : widget.groupName,
           hintText: _effectiveSendAsAnon
               ? context.trOr(
                   'send_as_anonymous_hint',
@@ -8120,6 +8415,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                       sendAsMode: _effectiveSendAsMode,
                       sendAsChatId: _effectiveSendAsChannelId,
                       sendAsAnonymous: _effectiveSendAsAnon,
+                      replyToMessageId: _replyToMessage?.id,
                     ),
                   ),
                 );
@@ -8430,26 +8726,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           isOwn: true,
         );
         if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
+          final isPersonaOrChannel = replyTo.isChannelOrPersonaAuthored;
+          final isReplyToMe = !isPersonaOrChannel &&
+              replyTo.senderId.isNotEmpty &&
+              replyTo.senderId != '0' &&
+              replyTo.senderId == _currentUserId;
+          final fallbackTitle = _groupName.isNotEmpty
+              ? _groupName
+              : widget.groupName;
           message = message.copyWith(
             replyInfo: ReplyInfo(
               messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
+              senderId: isPersonaOrChannel ? '0' : replyTo.senderId,
+              senderName: replyTo.resolveEffectiveAuthorTitle(
+                chatName: fallbackTitle,
+              ),
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
+                  : (isPersonaOrChannel
+                        ? 'name_red'
+                        : (replyTo.senderNameColorId ?? 'name_red')),
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
+                  : (isPersonaOrChannel
+                        ? 'solid'
+                        : (replyTo.senderReplyStripStyle ?? 'solid')),
               replyEmoji: isReplyToMe
                   ? profileTheme.currentReplyEmoji
-                  : PeerCustomizationCache.instance
-                      .getSync(replyTo.senderId)
-                      ?.replyEmoji,
+                  : (isPersonaOrChannel
+                        ? null
+                        : PeerCustomizationCache.instance
+                              .getSync(replyTo.senderId)
+                              ?.replyEmoji),
             ),
           );
         }
@@ -8675,26 +8986,41 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           isOwn: true,
         );
         if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
+          final isPersonaOrChannel = replyTo.isChannelOrPersonaAuthored;
+          final isReplyToMe = !isPersonaOrChannel &&
+              replyTo.senderId.isNotEmpty &&
+              replyTo.senderId != '0' &&
+              replyTo.senderId == _currentUserId;
+          final fallbackTitle = _groupName.isNotEmpty
+              ? _groupName
+              : widget.groupName;
           message = message.copyWith(
             replyInfo: ReplyInfo(
               messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
+              senderId: isPersonaOrChannel ? '0' : replyTo.senderId,
+              senderName: replyTo.resolveEffectiveAuthorTitle(
+                chatName: fallbackTitle,
+              ),
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
               nameColorPresetId: isReplyToMe
                   ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
+                  : (isPersonaOrChannel
+                        ? 'name_red'
+                        : (replyTo.senderNameColorId ?? 'name_red')),
               replyStripStyle: isReplyToMe
                   ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
+                  : (isPersonaOrChannel
+                        ? 'solid'
+                        : (replyTo.senderReplyStripStyle ?? 'solid')),
               replyEmoji: isReplyToMe
                   ? profileTheme.currentReplyEmoji
-                  : PeerCustomizationCache.instance
-                      .getSync(replyTo.senderId)
-                      ?.replyEmoji,
+                  : (isPersonaOrChannel
+                        ? null
+                        : PeerCustomizationCache.instance
+                              .getSync(replyTo.senderId)
+                              ?.replyEmoji),
             ),
           );
         }
@@ -9360,15 +9686,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
           : () => _forwardMessagesToPickedChat(targetIds),
       onEdit: (!isMe || !_canSendMessages || isVideoNote || isVoiceNote || isPoll)
           ? null
-          : () {
-              setState(() {
-                _cancelReply();
-                _messageController.loadMessage(message.content, message.entities);
-                _isEditing = true;
-                _editingMessageId = message.id;
-              });
-              _focusInputField();
-            },
+          : () => _enterEditMode(message),
       onSelect: () => _enterSelectionMode(message),
       onTranslate: message.content.trim().isNotEmpty
           ? () => unawaited(_toggleTranslateMessage(message))

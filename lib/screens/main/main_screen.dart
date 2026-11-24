@@ -203,7 +203,9 @@ class _MainScreenState extends State<MainScreen>
         chat.lastMessageFileUrl != null && chat.lastMessageFileUrl!.isNotEmpty;
     final hasLastTime =
         chat.lastMessageTime != null && chat.lastMessageTime!.isNotEmpty;
-    final hasDraft = chat.draft != null && chat.draft!.text.isNotEmpty;
+    final hasDraft =
+        (chat.draft != null && chat.draft!.isNotEmpty) ||
+        (DraftService().getPublishedDraft(chat.id)?.isNotEmpty ?? false);
     return !hasLastMsg &&
         !hasMediaType &&
         !hasMediaFile &&
@@ -753,16 +755,12 @@ class _MainScreenState extends State<MainScreen>
             parsedMsg = Message.fromJson(messageData);
           } catch (_) {}
         }
-        if (parsedMsg != null &&
-            (parsedMsg.threadRootMessageId == null ||
-                parsedMsg.threadRootMessageId!.isEmpty)) {
+        if (parsedMsg != null) {
           ChatInstantCache.instance.upsertMessage(chatId, parsedMsg);
         }
-        final isThreadComment = parsedMsg?.threadRootMessageId != null &&
-            parsedMsg!.threadRootMessageId!.isNotEmpty;
 
         Chat? updatedChat;
-        if (!isThreadComment) {
+        {
           final msgEntities = parsedMsg?.entities ?? const <MessageEntity>[];
           final senderId = parsedMsg?.senderId ??
               messageData?['sender_id']?.toString();
@@ -1174,7 +1172,7 @@ class _MainScreenState extends State<MainScreen>
           final serverChats = (result['chats'] as List<Chat>)
               .where((c) => !c.isCommunityChannel)
               .toList();
-          DraftService().populateFromChats(serverChats);
+          DraftService().populateFromChats(serverChats, authoritative: true);
           ChatInstantCache.instance.putChatSummaries(serverChats);
 
           for (final chat in serverChats) {
@@ -3497,6 +3495,9 @@ class _MainScreenState extends State<MainScreen>
 
       // Оптимистичное удаление из SQLite — стрим мгновенно обновит UI
       if (ids.isNotEmpty) {
+        for (final id in ids) {
+          DraftService().cancelPendingPublish(id);
+        }
         await db.batchDeleteChats(ids);
       }
       if (communityChats.isNotEmpty) {
@@ -3739,8 +3740,25 @@ class _MainScreenState extends State<MainScreen>
         return a.isPinned ? -1 : 1;
       }
 
-      // Then by precomputed updatedAtEpochMs to ensure accurate chronological ordering
-      return b.updatedAtEpochMs.compareTo(a.updatedAtEpochMs);
+      // Then by precomputed updatedAtEpochMs (or active published draft time)
+      int effectiveEpochMs(Chat chat) {
+        int ts = chat.updatedAtEpochMs;
+        final bool canShowDraft =
+            chat.chatType != 'channel' ||
+            chat.canPostInChannel ||
+            chat.myRole == 'owner' ||
+            chat.myRole == 'admin' ||
+            chat.myRole == 'moderator';
+        if (canShowDraft) {
+          final draft = DraftService().getPublishedDraft(chat.id);
+          if (draft != null && draft.isNotEmpty) {
+            ts = math.max(ts, draft.updatedAt.millisecondsSinceEpoch);
+          }
+        }
+        return ts;
+      }
+
+      return effectiveEpochMs(b).compareTo(effectiveEpochMs(a));
     });
   }
 

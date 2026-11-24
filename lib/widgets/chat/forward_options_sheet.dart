@@ -55,7 +55,7 @@ class ForwardPreviewBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.theav;
     final senders = payload.messages
-        .map((m) => m.senderName.trim())
+        .map((m) => m.resolveEffectiveAuthorTitle().trim())
         .where((s) => s.isNotEmpty)
         .toSet()
         .toList();

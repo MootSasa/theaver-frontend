@@ -19,6 +19,7 @@ class PollCreateScreen extends StatefulWidget {
   final String? sendAsMode;
   final bool sendAsAnonymous;
   final bool isSilent;
+  final String? replyToMessageId;
 
   const PollCreateScreen({
     super.key,
@@ -29,6 +30,7 @@ class PollCreateScreen extends StatefulWidget {
     this.sendAsMode,
     this.sendAsAnonymous = false,
     this.isSilent = false,
+    this.replyToMessageId,
   });
 
   @override
@@ -154,6 +156,9 @@ class _PollCreateScreenState extends State<PollCreateScreen> {
           'send_as_anonymous': widget.sendAsAnonymous,
           'send_as_chat_id': widget.sendAsChatId ?? '',
           'topic_id': widget.topicId,
+          if (widget.replyToMessageId != null &&
+              widget.replyToMessageId!.trim().isNotEmpty)
+            'reply_to_message_id': widget.replyToMessageId!.trim(),
         },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );

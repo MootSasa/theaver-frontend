@@ -90,6 +90,8 @@ class ChatInputBar extends StatefulWidget {
   final int scheduledCount;
   final VoidCallback? onOpenScheduled;
   final Widget? sendAsLeadingWidget;
+  final bool isChannelChat;
+  final String? replyFallbackAuthorName;
 
   const ChatInputBar({
     Key? key,
@@ -158,6 +160,8 @@ class ChatInputBar extends StatefulWidget {
     this.scheduledCount = 0,
     this.onOpenScheduled,
     this.sendAsLeadingWidget,
+    this.isChannelChat = false,
+    this.replyFallbackAuthorName,
   }) : super(key: key);
 
   @override
@@ -639,6 +643,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   enabled: glassEnabled,
                   isLite: isLite,
                   currentUserId: widget.currentUserId,
+                  isChannelPost: widget.isChannelChat,
+                  fallbackAuthorName: widget.replyFallbackAuthorName,
                 )
               : null,
         ),

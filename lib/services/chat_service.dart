@@ -7,6 +7,7 @@ import 'package:drift/drift.dart' as drift;
 import '../config/app_config.dart';
 import 'auth_service.dart';
 import 'database/app_database.dart';
+import 'draft_service.dart';
 import 'notification_service.dart';
 import 'websocket_service.dart';
 import '../utils/date_time_utils.dart';
@@ -1388,6 +1389,12 @@ class Chat {
     this.mySendAsMode,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
+  bool get canPostInChannel =>
+      chatType != 'channel' ||
+      myRole == 'owner' ||
+      myRole == 'admin' ||
+      myRole == 'moderator';
+
   /// Whether this chat belongs to a community channel
   bool get isCommunityChannel =>
       (communityId != null && communityId! > 0) ||
@@ -1582,8 +1589,8 @@ class Chat {
       otherUserId: parsedOtherUserId,
       lastMessageGroupedId: json['last_message_grouped_id']?.toString(),
       lastMessageEntities: parsedLastEntities,
-      draft: json['draft'] != null && json['draft'] is Map<String, dynamic>
-          ? ChatDraft.fromJson(json['draft'] as Map<String, dynamic>)
+      draft: json['draft'] is Map
+          ? ChatDraft.fromJson(Map<String, dynamic>.from(json['draft'] as Map))
           : null,
       lastReadInboxMessageId:
           _parseIntValue(json['last_read_inbox_message_id']),
@@ -2346,6 +2353,42 @@ class Message {
 
   /// Whether this message has a reply or quote
   bool get hasReply => replyToMessageId != null && replyToMessageId!.isNotEmpty;
+
+  /// True when this discussion-group message mirrors a channel post.
+  bool get isMirroredChannelPost =>
+      channelPostId != null && channelPostId!.trim().isNotEmpty;
+
+  /// True when this message is authored as a channel, mirrored channel post,
+  /// send-as-channel persona, or anonymous group admin.
+  bool get isChannelOrPersonaAuthored {
+    if (messageType == 'system') return false;
+    final hasSenderChat = senderChatId != null &&
+        senderChatId!.trim().isNotEmpty &&
+        senderChatId!.trim() != '0';
+    return isMirroredChannelPost || isFromAnonymousAdmin || hasSenderChat;
+  }
+
+  /// Resolves the author display title appropriate for reply headers and forwards,
+  /// crediting the channel or group persona rather than an individual user.
+  String resolveEffectiveAuthorTitle({String? chatName, String? chatType}) {
+    final trimmedSenderChat = senderChatName?.trim() ?? '';
+    if (trimmedSenderChat.isNotEmpty) return trimmedSenderChat;
+    final trimmedChat = chatName?.trim() ?? '';
+    final isChannel = chatType == 'channel' || isMirroredChannelPost;
+    if ((isChannel || isFromAnonymousAdmin) && trimmedChat.isNotEmpty) {
+      if (isChannel) return trimmedChat;
+      final trimmedSender = senderName.trim();
+      if (trimmedSender.isEmpty ||
+          trimmedSender == 'You' ||
+          trimmedSender == 'Вы') {
+        return trimmedChat;
+      }
+    }
+    final trimmedSender = senderName.trim();
+    if (trimmedSender.isNotEmpty) return trimmedSender;
+    if (trimmedChat.isNotEmpty) return trimmedChat;
+    return isChannel ? 'Канал' : 'Сообщение';
+  }
 
   /// True if this message type is unsupported in the current app version.
   bool get isUnsupported {
@@ -4868,6 +4911,8 @@ class ChatService {
     String? replyToMessageId,
     String? quoteText,
     bool isQuote = false,
+    int quoteOffset = 0,
+    int quoteLength = 0,
   }) async {
     try {
       final token = await AuthService.getToken();
@@ -4888,6 +4933,8 @@ class ChatService {
           'reply_to_message_id': replyToMessageId,
           'quote_text': quoteText,
           'is_quote': isQuote,
+          if (isQuote && quoteOffset > 0) 'quote_offset': quoteOffset,
+          if (isQuote && quoteLength > 0) 'quote_length': quoteLength,
         }),
       );
 
@@ -5428,6 +5475,7 @@ class ChatService {
 
       final data = json.decode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
+        DraftService().cancelPendingPublish(chatId);
         return {'success': true};
       } else {
         return {
@@ -6385,6 +6433,7 @@ class ChatService {
       );
       final data = _tryDecodeJson(response.body);
       if (response.statusCode == 200 && data is Map && data['success'] == true) {
+        DraftService().cancelPendingPublish(chatId);
         try {
           await AppDatabase().deleteChat(chatId);
           await AppDatabase().deleteMessagesForChat(chatId);

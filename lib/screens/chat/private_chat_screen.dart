@@ -20,6 +20,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../services/chat_service.dart';
+import '../../models/chat_draft.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/auth_service.dart';
@@ -377,6 +378,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String? _editingMessageId;
   bool _editingHasMedia = false;
 
+  // Draft lifecycle state
+  String get _draftKey => widget.chatId;
+  bool _suppressDraftSave = false;
+  String? _pendingDraftReplyId;
+  StreamSubscription<({String chatId, ChatDraft? draft})>? _draftRemoteSub;
+  ({
+    String text,
+    List<MessageEntity> entities,
+    Message? replyTo,
+    bool isQuote,
+    String? quoteText,
+    int quoteOffset,
+    int quoteLength,
+    String? replyToChatId,
+    String? replyToChatName,
+  })? _stashedDraftBeforeEdit;
+
   // Wave 2B DM & Saved Messages Parity state
   int _autoDeleteSeconds = 0;
   ChatAppearanceConfig? _chatAppearance;
@@ -579,14 +597,29 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
 
     // Restore draft if exists
-    final draft = DraftService().getDraft(widget.chatId);
+    final draft = DraftService().getDraft(_draftKey);
     if (draft != null && draft.isNotEmpty) {
+      _suppressDraftSave = true;
       _textController.loadMessage(draft.text, draft.entities);
+      _suppressDraftSave = false;
+      if (_replyToMessage == null &&
+          draft.replyToMessageId != null &&
+          draft.replyToMessageId!.isNotEmpty) {
+        _pendingDraftReplyId = draft.replyToMessageId;
+      }
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
+        _quoteOffset = draft.quoteOffset;
+        _quoteLength = draft.quoteLength;
       }
+      _resolvePendingDraftReply();
     }
+    _draftRemoteSub = DraftService().remoteUpdatesStream.listen((event) {
+      if (event.chatId == _draftKey) {
+        _applyRemoteDraft(event.draft);
+      }
+    });
     _textController.addListener(_onControllerDraftSync);
     DeepLinkService.pendingInlinePrefill.addListener(
       _onPendingInlinePrefillChanged,
@@ -941,6 +974,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _updateFeedItems();
           });
         }
+        _resolvePendingDraftReply(serverLoaded: true);
 
         try {
           db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
@@ -1005,7 +1039,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       StickerService.instance.registerInputTarget(_stickerInputTarget);
     }
     if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
-      DraftService().flushDraft(widget.chatId);
+      DraftService().flushDraft(_draftKey);
     }
   }
 
@@ -1358,11 +1392,40 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (deletedIds.isEmpty) return;
 
     if (mounted) {
+      final bool replyDeleted =
+          _replyToMessage != null && deletedIds.contains(_replyToMessage!.id);
+      if (_stashedDraftBeforeEdit?.replyTo != null &&
+          deletedIds.contains(_stashedDraftBeforeEdit!.replyTo!.id)) {
+        final s = _stashedDraftBeforeEdit!;
+        _stashedDraftBeforeEdit = (
+          text: s.text,
+          entities: s.entities,
+          replyTo: null,
+          isQuote: false,
+          quoteText: null,
+          quoteOffset: 0,
+          quoteLength: 0,
+          replyToChatId: null,
+          replyToChatName: null,
+        );
+      }
       setState(() {
         _messages.removeWhere((m) => deletedIds.contains(m.id));
         _selectedMessageIds.removeAll(deletedIds);
+        if (replyDeleted) {
+          _replyToMessage = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+          _replyToChatId = null;
+          _replyToChatName = null;
+        }
         _updateFeedItems();
       });
+      if (replyDeleted) {
+        _saveCurrentDraft();
+      }
     }
 
     try {
@@ -1527,6 +1590,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
       return;
     }
 
@@ -1685,6 +1749,41 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _textController.selection = TextSelection.collapsed(offset: len);
   }
 
+  void _enterEditMode(Message message, {bool hasMedia = false}) {
+    if (!_isEditing) {
+      _stashedDraftBeforeEdit = (
+        text: _textController.cleanText,
+        entities: List<MessageEntity>.from(_textController.entities),
+        replyTo: _replyToMessage,
+        isQuote: _isQuote,
+        quoteText: _quoteText,
+        quoteOffset: _quoteOffset,
+        quoteLength: _quoteLength,
+        replyToChatId: _replyToChatId,
+        replyToChatName: _replyToChatName,
+      );
+    }
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = true;
+        _editingMessageId = message.id;
+        _editingHasMedia = hasMedia;
+        _replyToMessage = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _replyToChatId = null;
+        _replyToChatName = null;
+        _textController.loadMessage(message.content, message.entities);
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _focusInputField();
+  }
+
   void _editLastOwnMessage() {
     if (_isEditing || _currentUserId == null) return;
     for (final m in _messages) {
@@ -1693,13 +1792,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           m.messageType != 'voice' &&
           m.messageType != 'poll' &&
           m.content.trim().isNotEmpty) {
-        setState(() {
-          _cancelReply();
-          _textController.loadMessage(m.content, m.entities);
-          _isEditing = true;
-          _editingMessageId = m.id;
-        });
-        _focusInputField();
+        _enterEditMode(
+          m,
+          hasMedia: m.fileUrl != null && m.fileUrl!.isNotEmpty,
+        );
         break;
       }
     }
@@ -1971,6 +2067,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
     }
   }
 
@@ -2056,6 +2153,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
     }
   }
 
@@ -2174,31 +2272,105 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _onInputTextChanged(updated);
   }
 
-  void _onControllerDraftSync() {
-    if (!_isEditing) {
-      DraftService().saveDraft(
-        widget.chatId,
-        text: _textController.cleanText,
-        entities: _textController.entities,
-        replyToMessageId: _replyToMessage?.id,
-        quoteText: _quoteText,
-        isQuote: _isQuote,
-      );
+  void _saveCurrentDraft({bool immediate = false}) {
+    if (_suppressDraftSave || _isEditing) return;
+    DraftService().saveDraft(
+      _draftKey,
+      text: _textController.cleanText,
+      entities: _textController.entities,
+      replyToMessageId: _replyToMessage?.id,
+      quoteText: _quoteText,
+      isQuote: _isQuote,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
+      immediate: immediate,
+    );
+  }
+
+  void _applyRemoteDraft(ChatDraft? draft) {
+    if (!mounted || _isEditing || _inputFocusNode.hasFocus) return;
+    _suppressDraftSave = true;
+    try {
+      if (draft == null || draft.isEmpty) {
+        _textController.clear();
+        setState(() {
+          _replyToMessage = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+          _replyToChatId = null;
+          _replyToChatName = null;
+          _pendingDraftReplyId = null;
+        });
+      } else {
+        _textController.loadMessage(draft.text, draft.entities);
+        Message? resolvedReply;
+        if (draft.replyToMessageId != null &&
+            draft.replyToMessageId!.isNotEmpty) {
+          for (final m in _messages) {
+            if (m.id == draft.replyToMessageId) {
+              resolvedReply = m;
+              break;
+            }
+          }
+        }
+        setState(() {
+          _replyToMessage = resolvedReply;
+          _pendingDraftReplyId =
+              resolvedReply == null ? draft.replyToMessageId : null;
+          _isQuote =
+              draft.isQuote &&
+              draft.quoteText != null &&
+              draft.quoteText!.isNotEmpty;
+          _quoteText = _isQuote ? draft.quoteText : null;
+          _quoteOffset = _isQuote ? draft.quoteOffset : 0;
+          _quoteLength = _isQuote ? draft.quoteLength : 0;
+        });
+      }
+    } finally {
+      _suppressDraftSave = false;
     }
+  }
+
+  void _resolvePendingDraftReply({bool serverLoaded = false}) {
+    final pendingId = _pendingDraftReplyId;
+    if (pendingId == null || pendingId.isEmpty) return;
+    Message? found;
+    for (final m in _messages) {
+      if (m.id == pendingId) {
+        found = m;
+        break;
+      }
+    }
+    if (found != null) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && _replyToMessage == null && mounted) {
+        setState(() => _replyToMessage = found);
+      }
+      return;
+    }
+    if (serverLoaded) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && mounted && (_isQuote || _quoteText != null)) {
+        setState(() {
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _saveCurrentDraft(immediate: true);
+    }
+  }
+
+  void _onControllerDraftSync() {
+    _saveCurrentDraft();
     _updateMentionAutocompleteState();
   }
 
   void _onInputTextChanged(String text) {
-    if (!_isEditing) {
-      DraftService().saveDraft(
-        widget.chatId,
-        text: _textController.cleanText,
-        entities: _textController.entities,
-        replyToMessageId: _replyToMessage?.id,
-        quoteText: _quoteText,
-        isQuote: _isQuote,
-      );
-    }
+    _saveCurrentDraft();
 
     if (_isBot && (_botInfo?.commands.isNotEmpty ?? false)) {
       final shouldShowCommands =
@@ -2380,6 +2552,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
 
       if (markedCount > 0) {
         _wsService.sendMessageRead(widget.chatId, markedCount: markedCount);
@@ -2429,50 +2602,63 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Start a reply to a message (full message reply)
   void _startReply(Message message) {
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _textController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
-    DraftService().saveDraft(
-      widget.chatId,
-      text: _textController.cleanText,
-      entities: _textController.entities,
-      replyToMessageId: message.id,
-      isQuote: false,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          _editingHasMedia = false;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _textController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _textController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInputField();
   }
 
   /// Start a quote reply (partial text)
   void _startQuote(Message message, String selectedText, int offset, int length) {
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _textController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = true;
-      _quoteText = selectedText;
-      _quoteOffset = offset;
-      _quoteLength = length;
-    });
-    DraftService().saveDraft(
-      widget.chatId,
-      text: _textController.cleanText,
-      entities: _textController.entities,
-      replyToMessageId: message.id,
-      quoteText: selectedText,
-      isQuote: true,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          _editingHasMedia = false;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _textController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _textController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = true;
+        _quoteText = selectedText;
+        _quoteOffset = offset;
+        _quoteLength = length;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInputField();
   }
 
@@ -2480,6 +2666,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   void _cancelReply() {
     setState(() {
       _replyToMessage = null;
+      _pendingDraftReplyId = null;
       _isQuote = false;
       _quoteText = null;
       _quoteOffset = 0;
@@ -2487,22 +2674,36 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _replyToChatId = null;
       _replyToChatName = null;
     });
-    DraftService().saveDraft(
-      widget.chatId,
-      text: _textController.cleanText,
-      entities: _textController.entities,
-    );
+    _saveCurrentDraft(immediate: true);
   }
 
   /// Cancel current message editing
   void _cancelEditing() {
     _stopMyTyping();
-    setState(() {
-      _isEditing = false;
-      _editingMessageId = null;
-      _editingHasMedia = false;
-      _textController.clear();
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = false;
+        _editingMessageId = null;
+        _editingHasMedia = false;
+        if (stashed != null) {
+          _textController.loadMessage(stashed.text, stashed.entities);
+          _replyToMessage = stashed.replyTo;
+          _isQuote = stashed.isQuote;
+          _quoteText = stashed.quoteText;
+          _quoteOffset = stashed.quoteOffset;
+          _quoteLength = stashed.quoteLength;
+          _replyToChatId = stashed.replyToChatId;
+          _replyToChatName = stashed.replyToChatName;
+        } else {
+          _textController.clear();
+        }
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
   }
 
   int _findFeedIndexForMessage(String messageId) {
@@ -3487,6 +3688,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           _updateFeedItems();
         });
       }
+      _resolvePendingDraftReply();
 
       if (!hadInitialMessages &&
           widget.initialMessageId == null &&
@@ -3581,6 +3783,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _updateFeedItems();
           });
         }
+        _resolvePendingDraftReply(serverLoaded: true);
 
         // Сохранить в Drift для оффлайн-доступа
         try {
@@ -3874,6 +4077,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     bool isViewOnce = false,
     int ttlSeconds = 0,
     String? effectId,
+    bool preserveComposerDraft = false,
   }) async {
     final String controllerCleanText = _textController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _textController.entities;
@@ -4000,35 +4204,47 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final replyChatName = _replyToChatName;
 
     _stopMyTyping();
-    DraftService().deleteDraft(widget.chatId);
-    _textController.clear();
-    setState(() {
-      if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
-        _messages
-          ..clear()
-          ..addAll(_detachedLatestBackup);
-        _sortMessagesDescending(_messages);
-        _hasMoreMessages = _detachedBackupHasMoreOlder;
-        _isDetachedHistoryWindow = false;
-        _hasMoreNewerMessages = false;
-        _detachedLatestBackup = [];
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+          _messages
+            ..clear()
+            ..addAll(_detachedLatestBackup);
+          _sortMessagesDescending(_messages);
+          _hasMoreMessages = _detachedBackupHasMoreOlder;
+          _isDetachedHistoryWindow = false;
+          _hasMoreNewerMessages = false;
+          _detachedLatestBackup = [];
+        }
+        _isSending = true;
+        _isUploading = _attachedFiles.isNotEmpty;
+        // Clear unread banner on user sending a message (Telegram behavior)
+        _showUnreadDivider = false;
+        _firstUnreadMessageId = null;
+        _firstUnreadFeedIndex = -1;
+        // Clear reply state BEFORE clearing text controller so no reply-only draft is saved
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _replyToChatId = null;
+        _replyToChatName = null;
+        _updateFeedItems();
+      });
+      if (!preserveComposerDraft) {
+        _textController.clear();
       }
-      _isSending = true;
-      _isUploading = _attachedFiles.isNotEmpty;
-      // Clear unread banner on user sending a message (Telegram behavior)
-      _showUnreadDivider = false;
-      _firstUnreadMessageId = null;
-      _firstUnreadFeedIndex = -1;
-      // Clear reply state
-      _replyToMessage = null;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-      _replyToChatId = null;
-      _replyToChatName = null;
-      _updateFeedItems();
-    });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    if (!preserveComposerDraft) {
+      DraftService().clearLocalDraftOnSend(_draftKey);
+    } else if (replyTo != null) {
+      _saveCurrentDraft(immediate: true);
+    }
     _scrollToBottom();
 
     bool sentUploadTypingAction = false;
@@ -6073,8 +6289,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         entities: entities.isNotEmpty ? entities : null,
       );
     }
-    _textController.clear();
-    DraftService().deleteDraft(widget.chatId);
+    _suppressDraftSave = true;
+    try {
+      if (_replyToMessage != null && mounted) {
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+          _replyToChatId = null;
+          _replyToChatName = null;
+        });
+      }
+      _textController.clear();
+    } finally {
+      _suppressDraftSave = false;
+    }
+    DraftService().clearLocalDraftOnSend(_draftKey);
     unawaited(_loadScheduledCount());
     if (mounted) {
       GlassToastService().show(
@@ -6143,9 +6376,26 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 );
                 if (!ctx.mounted) return;
                 if (ok) {
-                  _textController.clear();
-                  _inlineQueryController.clear();
-                  if (_replyToMessage != null) _cancelReply();
+                  _suppressDraftSave = true;
+                  try {
+                    if (_replyToMessage != null && mounted) {
+                      setState(() {
+                        _replyToMessage = null;
+                        _pendingDraftReplyId = null;
+                        _isQuote = false;
+                        _quoteText = null;
+                        _quoteOffset = 0;
+                        _quoteLength = 0;
+                        _replyToChatId = null;
+                        _replyToChatName = null;
+                      });
+                    }
+                    _textController.clear();
+                    _inlineQueryController.clear();
+                  } finally {
+                    _suppressDraftSave = false;
+                  }
+                  DraftService().clearLocalDraftOnSend(_draftKey);
                 } else {
                   GlassToastService().show(
                     ctx,
@@ -6986,6 +7236,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             _updateFeedItems();
           });
         }
+        _resolvePendingDraftReply(serverLoaded: true);
       },
     );
   }
@@ -7249,16 +7500,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _attachedFiles.add(file);
         _attachedFileNames.add(p.basename(file.path));
       }
-      if (result.caption != null && result.caption!.isNotEmpty) {
-        _textController.text = result.caption!;
-      }
     });
     _sendMessage(
+      cleanText: result.caption ?? '',
+      entities: const [],
       isSilent: result.isSilent,
       hasMediaSpoiler: result.hasMediaSpoiler,
       asDocument: result.asDocument,
       isViewOnce: result.isViewOnce,
       ttlSeconds: result.ttlSeconds,
+      preserveComposerDraft: true,
     );
   }
 
@@ -7744,8 +7995,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       ChatInstantCache.instance.putMessages(widget.chatId, _messages);
     }
     if (!_isEditing) {
-      DraftService().flushDraft(widget.chatId);
+      DraftService().flushDraft(_draftKey);
     }
+    _draftRemoteSub?.cancel();
 
     _textController.dispose();
     _inlineQueryController.dispose();
@@ -8421,17 +8673,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       onPin: () => _togglePinMessage(message),
       isPinned: _pinnedMessage?.id == message.id,
       onForward: () => _forwardMessagesToPickedChat([message.id]),
-      onEdit: (isVideoNote || isVoiceNote || isPoll) ? null : () {
-        setState(() {
-          _cancelReply();
-          _textController.loadMessage(message.content, message.entities);
-          _isEditing = true;
-          _editingMessageId = message.id;
-          _editingHasMedia =
-              message.fileUrl != null && message.fileUrl!.isNotEmpty;
-        });
-        _focusInputField();
-      },
+      onEdit: (isVideoNote || isVoiceNote || isPoll)
+          ? null
+          : () => _enterEditMode(
+                message,
+                hasMedia:
+                    message.fileUrl != null && message.fileUrl!.isNotEmpty,
+              ),
       onSelect: () => _enterSelectionMode(message),
       onTranslate: message.content.trim().isNotEmpty
           ? () => unawaited(_toggleTranslateMessage(message))

@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/chat_draft.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
@@ -83,6 +84,7 @@ class ChatListTileItem extends StatelessWidget {
       currentUserId != null &&
       currentUserId!.isNotEmpty &&
       chat.lastMessageSenderId != null &&
+      chat.lastMessageSenderId != '0' &&
       chat.lastMessageSenderId == currentUserId;
 
   @override
@@ -253,14 +255,30 @@ class ChatListTileItem extends StatelessWidget {
         ? Colors.white
         : (themeExt?.palette.unreadBadgeText ?? theme.colorScheme.onPrimary);
 
+    final ChatDraft? rawDraft =
+        _canShowDraft ? DraftService().getPublishedDraft(chat.id) : null;
+    final ChatDraft? activeDraft =
+        (rawDraft != null && rawDraft.isNotEmpty) ? rawDraft : null;
+
     final bool showOutgoingStatus =
-        _isLastMessageOutgoing && !isChannel && chat.chatType != 'saved';
+        activeDraft == null &&
+        _isLastMessageOutgoing &&
+        !isChannel &&
+        chat.chatType != 'saved';
+
+    String? displayTimeIso = chat.lastMessageTime;
+    if (activeDraft != null) {
+      final lastDt = DateTimeUtils.parseUtcDateTime(chat.lastMessageTime);
+      if (lastDt == null || activeDraft.updatedAt.isAfter(lastDt)) {
+        displayTimeIso = activeDraft.updatedAt.toUtc().toIso8601String();
+      }
+    }
 
     final Widget trailingWidget = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        if (chat.lastMessageTime != null)
+        if (displayTimeIso != null)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -273,7 +291,7 @@ class ChatListTileItem extends StatelessWidget {
                 const SizedBox(width: 3),
               ],
               Text(
-                _formatChatTime(context, chat.lastMessageTime!),
+                _formatChatTime(context, displayTimeIso),
                 style: TextStyle(
                   fontSize: 12,
                   color: (hasUnread && !isMuted) ? primaryColor : Colors.grey[500],
@@ -513,6 +531,13 @@ class ChatListTileItem extends StatelessWidget {
     );
   }
 
+  bool get _canShowDraft =>
+      chat.chatType != 'channel' ||
+      chat.canPostInChannel ||
+      chat.myRole == 'owner' ||
+      chat.myRole == 'admin' ||
+      chat.myRole == 'moderator';
+
   Widget _buildFallbackIcon() {
     switch (chat.chatType) {
       case 'private':
@@ -615,11 +640,13 @@ class ChatListTileItem extends StatelessWidget {
       );
     }
 
-    final draft = DraftService().getPublishedDraft(chat.id);
-    if (draft != null && draft.isNotEmpty) {
+    final ChatDraft? rawDraft =
+        _canShowDraft ? DraftService().getPublishedDraft(chat.id) : null;
+    final ChatDraft? draft =
+        (rawDraft != null && rawDraft.isNotEmpty) ? rawDraft : null;
+    if (draft != null) {
       final draftPrefix = loc?.translate('chat_draft') ?? 'Черновик';
-      final hasDraftText = draft.text.trim().isNotEmpty;
-      final draftText = hasDraftText ? draft.text : '...';
+      final draftText = draft.text;
       final draftStyle = TextStyle(
         color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
         fontSize: 14,
@@ -640,7 +667,7 @@ class ChatListTileItem extends StatelessWidget {
             EmojiUtils.buildPreviewWithCustomEmojis(
               draftText,
               style: draftStyle,
-              entities: hasDraftText ? draft.entities : const [],
+              entities: draft.entities,
               emojiSize: 16.0,
             ),
           ],
