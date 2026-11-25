@@ -1952,5 +1952,10 @@
   "media_viewer_protected_content": "Saving and forwarding restricted",
   "media_viewer_more": "more",
   "media_viewer_file_unavailable": "File unavailable",
-  "profile_tab_gifs": "GIFs"
+  "profile_tab_gifs": "GIFs",
+  "upload_cancel": "アップロードを中止",
+  "upload_progress_of": "{sent} / {total}",
+  "upload_retry": "再送信",
+  "video_load_error": "動画を読み込めませんでした",
+  "video_retry": "再試行"
 }

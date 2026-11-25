@@ -6,7 +6,9 @@ import '../../models/theav_theme.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import 'message_status_widget.dart';
+import 'telegram_upload_progress.dart';
 
 /// Full Telegram-style voice message player widget inside message bubbles.
 /// Features:
@@ -18,6 +20,7 @@ import 'message_status_widget.dart';
 /// - Send time & delivery status checkmarks.
 class VoiceMessageWidget extends StatefulWidget {
   final String messageId;
+  final String? localId;
   final String audioUrl;
   final Duration? duration;
   final List<int>? waveform;
@@ -28,6 +31,7 @@ class VoiceMessageWidget extends StatefulWidget {
   final String? timeText;
   final String? senderName;
   final int? fileSize;
+  final VoidCallback? onCancelUpload;
   final VoidCallback? onRetry;
   final String? chatId;
   final String? chatType;
@@ -37,6 +41,7 @@ class VoiceMessageWidget extends StatefulWidget {
   const VoiceMessageWidget({
     Key? key,
     required this.messageId,
+    this.localId,
     required this.audioUrl,
     this.duration,
     this.waveform,
@@ -47,6 +52,7 @@ class VoiceMessageWidget extends StatefulWidget {
     this.timeText,
     this.senderName,
     this.fileSize,
+    this.onCancelUpload,
     this.onRetry,
     this.chatId,
     this.chatType,
@@ -352,23 +358,51 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // 1. Play / Pause Button
-              GestureDetector(
-                onTap: _handlePlayPause,
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: widget.isMe
-                        ? Colors.white.withValues(alpha: 0.22)
-                        : btnColor.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
+              // 1. Play / Pause Button OR inline upload radial indicator
+              if (widget.sendStatus != 1 &&
+                  (widget.localId ?? widget.messageId).isNotEmpty)
+                ValueListenableBuilder<OutgoingUploadProgress>(
+                  valueListenable: MediaSendCoordinator.instance.progressFor(
+                    widget.localId ?? widget.messageId,
+                    chatId: widget.chatId,
+                    totalBytes: widget.fileSize,
+                    sendStatus: widget.sendStatus,
                   ),
-                  child: Center(
-                    child: _buildButtonIcon(btnColor),
+                  builder: (context, progress, _) {
+                    final effId = widget.localId ?? widget.messageId;
+                    return TelegramRadialUploadIndicator(
+                      progress: progress,
+                      size: 44,
+                      badgeColor: widget.isMe
+                          ? Colors.white.withValues(alpha: 0.22)
+                          : btnColor.withValues(alpha: 0.18),
+                      strokeColor: widget.isMe ? Colors.white : btnColor,
+                      onCancel: widget.onCancelUpload ??
+                          () => MediaSendCoordinator.instance
+                              .cancelUpload(effId),
+                      onRetry: widget.onRetry ??
+                          () => MediaSendCoordinator.instance
+                              .retryMessage(effId),
+                    );
+                  },
+                )
+              else
+                GestureDetector(
+                  onTap: _handlePlayPause,
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: widget.isMe
+                          ? Colors.white.withValues(alpha: 0.22)
+                          : btnColor.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: _buildButtonIcon(btnColor),
+                    ),
                   ),
                 ),
-              ),
               const SizedBox(width: 10),
 
               // 2. Waveform & Controls

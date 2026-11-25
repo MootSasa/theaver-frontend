@@ -33,10 +33,12 @@ import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
 import 'media_spoiler_overlay.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
 import 'call_message_widget.dart';
+import 'telegram_upload_progress.dart';
 import 'unsupported_message_widget.dart';
 import 'contact_message_widget.dart';
 import 'location_message_widget.dart';
@@ -2420,9 +2422,11 @@ class MessageBubble extends StatelessWidget {
 
     if (_isRoundVideo) {
       final double circleSize = math.min(240.0, TileViewportScope.widthOf(context) * 0.68);
+      final String itemLocalId = message.localId ?? message.id;
       Widget buildRoundWidget(String? effectiveSender) => VideoMessageWidget(
-        key: ValueKey('vmsg_${message.id}'),
+        key: ValueKey('vmsg_$itemLocalId'),
         messageId: message.id,
+        localId: itemLocalId,
         videoUrl: resolvedUrl,
         size: circleSize,
         duration: message.duration != null && message.duration! > 0
@@ -2437,6 +2441,8 @@ class MessageBubble extends StatelessWidget {
         timeText: formatTime(message.createdAt),
         senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        onCancelUpload: () =>
+            MediaSendCoordinator.instance.cancelUpload(itemLocalId),
         chatId: message.chatId,
         chatType: chatType,
         chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
@@ -2451,9 +2457,11 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (_isVoice) {
+      final String itemLocalId = message.localId ?? message.id;
       Widget buildVoiceWidget(String? effectiveSender) => VoiceMessageWidget(
-        key: ValueKey('voice_${message.id}'),
+        key: ValueKey('voice_$itemLocalId'),
         messageId: message.id,
+        localId: itemLocalId,
         audioUrl: resolvedUrl,
         duration: message.duration != null && message.duration! > 0
             ? Duration(seconds: message.duration!)
@@ -2467,6 +2475,8 @@ class MessageBubble extends StatelessWidget {
         timeText: formatTime(message.createdAt),
         senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        onCancelUpload: () =>
+            MediaSendCoordinator.instance.cancelUpload(itemLocalId),
         chatId: message.chatId,
         chatType: chatType,
         chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
@@ -2481,6 +2491,7 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (_isImage) {
+      final String itemLocalId = message.localId ?? message.id;
       final heroTag = TheavMediaItem.heroTagForMessage(
         messageId: message.id,
         rawOrResolvedUrl: resolvedUrl,
@@ -2500,7 +2511,10 @@ class MessageBubble extends StatelessWidget {
         hasSpoiler: message.hasMediaSpoiler,
         borderRadius: effectiveRadius,
         child: _SingleMediaBubbleWidget(
-          key: ValueKey('single_img_${message.id}_$resolvedUrl'),
+          key: ValueKey('single_img_$itemLocalId'),
+          localId: itemLocalId,
+          chatId: message.chatId,
+          sendStatus: message.sendStatus,
           url: resolvedUrl,
           thumbBase64: thumbBase64,
           fileSize: message.mediaFileSize,
@@ -2509,6 +2523,9 @@ class MessageBubble extends StatelessWidget {
           height: mediaHeight,
           autoDownload: autoDownload,
           heroTag: heroTag,
+          onCancelUpload: () =>
+              MediaSendCoordinator.instance.cancelUpload(itemLocalId),
+          onRetry: onRetry != null ? () => onRetry!(message) : null,
           onTap: ([localPath]) {
             if (onMediaTap != null) {
               onMediaTap!(message, localFilePath: localPath);
@@ -2530,6 +2547,7 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (_isVideo) {
+      final String itemLocalId = message.localId ?? message.id;
       final heroTag = TheavMediaItem.heroTagForMessage(
         messageId: message.id,
         rawOrResolvedUrl: resolvedUrl,
@@ -2548,7 +2566,10 @@ class MessageBubble extends StatelessWidget {
         hasSpoiler: message.hasMediaSpoiler,
         borderRadius: effectiveRadius,
         child: _SingleMediaBubbleWidget(
-          key: ValueKey('single_vid_${message.id}_$resolvedUrl'),
+          key: ValueKey('single_vid_$itemLocalId'),
+          localId: itemLocalId,
+          chatId: message.chatId,
+          sendStatus: message.sendStatus,
           url: resolvedUrl,
           thumbBase64: message.thumbBase64,
           thumbUrl: message.thumbUrl,
@@ -2559,6 +2580,9 @@ class MessageBubble extends StatelessWidget {
           height: mediaHeight,
           autoDownload: autoDownload,
           heroTag: heroTag,
+          onCancelUpload: () =>
+              MediaSendCoordinator.instance.cancelUpload(itemLocalId),
+          onRetry: onRetry != null ? () => onRetry!(message) : null,
           onTap: ([localPath]) {
             if (onMediaTap != null) {
               onMediaTap!(message, localFilePath: localPath);
@@ -2581,9 +2605,11 @@ class MessageBubble extends StatelessWidget {
 
     if (_isAudio) {
       final effectiveDurSec = message.duration ?? message.mediaDuration;
+      final String itemLocalId = message.localId ?? message.id;
       Widget buildAudioWidget(String? effectiveSender) => VoiceMessageWidget(
-        key: ValueKey('audio_${message.id}'),
+        key: ValueKey('audio_$itemLocalId'),
         messageId: message.id,
+        localId: itemLocalId,
         audioUrl: resolvedUrl,
         title: message.fileName ?? 'Audio',
         duration: effectiveDurSec != null && effectiveDurSec > 0
@@ -2598,6 +2624,8 @@ class MessageBubble extends StatelessWidget {
         timeText: _hasCaption ? null : formatTime(message.createdAt),
         senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        onCancelUpload: () =>
+            MediaSendCoordinator.instance.cancelUpload(itemLocalId),
         chatId: message.chatId,
         chatType: chatType,
         chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
@@ -2612,11 +2640,17 @@ class MessageBubble extends StatelessWidget {
     }
 
     // Default: Document / File
+    final String docLocalId = message.localId ?? message.id;
     return DocumentMessageWidget(
       fileUrl: resolvedUrl,
       fileName: message.fileName ??
           (message.content.trim().isNotEmpty ? message.content.trim() : 'file'),
       fileSize: (message.mediaFileSize ?? 0).toDouble(),
+      localId: docLocalId,
+      sendStatus: message.sendStatus,
+      onCancelUpload: () =>
+          MediaSendCoordinator.instance.cancelUpload(docLocalId),
+      onRetry: onRetry != null ? () => onRetry!(message) : null,
     );
   }
 
@@ -2709,6 +2743,9 @@ class MessageBubble extends StatelessWidget {
 
 class _SingleMediaBubbleWidget extends StatefulWidget {
   final String url;
+  final String? localId;
+  final String? chatId;
+  final int sendStatus;
   final String? thumbBase64;
   final String? thumbUrl;
   final int? fileSize;
@@ -2718,11 +2755,16 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
   final double height;
   final bool autoDownload;
   final String heroTag;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onRetry;
   final void Function([String? localPath]) onTap;
 
   const _SingleMediaBubbleWidget({
     Key? key,
     required this.url,
+    this.localId,
+    this.chatId,
+    this.sendStatus = 1,
     this.thumbBase64,
     this.thumbUrl,
     this.fileSize,
@@ -2732,6 +2774,8 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
     this.height = 220.0,
     required this.autoDownload,
     required this.heroTag,
+    this.onCancelUpload,
+    this.onRetry,
     required this.onTap,
   }) : super(key: key);
 
@@ -2832,14 +2876,15 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final double effectiveRadius = math.max(4.0, (themeExt?.bubbleRadius ?? 16.0) - 2.0);
 
+    final bool isUploadingOrFailed = widget.sendStatus != 1;
     final bool hasOpaqueMedia = (!widget.isVideo && _cachedFile != null) ||
-        (widget.isVideo && isCached && _cachedFirstFrame != null);
+        (widget.isVideo && _cachedFirstFrame != null);
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     final int targetCacheWidth = (widget.maxWidth * dpr).round().clamp(240, 1080);
 
     return GestureDetector(
       onTap: () {
-        if (!isCached) {
+        if (!isUploadingOrFailed && !isCached) {
           // While not downloaded, tapping anywhere on the bubble starts/cancels download
           _downloadButtonKey.currentState?.handleTap();
           return;
@@ -2862,8 +2907,8 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                   fit: BoxFit.cover,
                 ),
 
-              // 2. Real first frame for video ONLY after the video file is cached
-              if (widget.isVideo && isCached)
+              // 2. Real video thumbnail rendered immediately (cached frame or authenticated remote thumbnail)
+              if (widget.isVideo)
                 Hero(
                   tag: widget.heroTag,
                   child: _cachedFirstFrame != null
@@ -2875,25 +2920,15 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                           filterQuality: FilterQuality.low,
                           gaplessPlayback: true,
                         )
-                      : (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty
-                          ? Image.network(
-                              resolvedThumbUrl,
-                              width: widget.maxWidth,
-                              height: widget.height,
-                              fit: BoxFit.cover,
-                              cacheWidth: targetCacheWidth,
-                              filterQuality: FilterQuality.low,
-                              loadingBuilder: (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return const SizedBox.shrink();
-                              },
-                              errorBuilder: (_, __, ___) =>
-                                  const SizedBox.shrink(),
-                            )
-                          : const SizedBox.shrink()),
+                      : RemoteVideoThumbnailImage(
+                          thumbUrl: resolvedThumbUrl,
+                          width: widget.maxWidth,
+                          height: widget.height,
+                          cacheWidth: targetCacheWidth,
+                        ),
                 ),
 
-              // 3. Full image ONLY after the photo file is cached on disk
+              // 3. Full image when cached or local file exists
               if (!widget.isVideo && _cachedFile != null)
                 Hero(
                   tag: widget.heroTag,
@@ -2908,8 +2943,22 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                   ),
                 ),
 
-              // 4. Download button / progress / size pill overlay
-              if (widget.url.isNotEmpty && (!isCached || widget.isVideo))
+              // 4a. Inline Telegram upload progress overlay when sending or failed
+              if (isUploadingOrFailed &&
+                  widget.localId != null &&
+                  widget.localId!.isNotEmpty)
+                TelegramMediaUploadOverlay(
+                  localId: widget.localId!,
+                  chatId: widget.chatId,
+                  fileSize: widget.fileSize,
+                  sendStatus: widget.sendStatus,
+                  onCancel: widget.onCancelUpload,
+                  onRetry: widget.onRetry,
+                )
+              // 4b. Download button / progress / size pill overlay for settled messages
+              else if (!isUploadingOrFailed &&
+                  widget.url.isNotEmpty &&
+                  (!isCached || widget.isVideo))
                 MediaDownloadButton(
                   key: _downloadButtonKey,
                   url: widget.url,
@@ -2921,7 +2970,8 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                 ),
 
               // 5. Video duration badge
-              if (widget.isVideo &&
+              if (!isUploadingOrFailed &&
+                  widget.isVideo &&
                   widget.duration != null &&
                   widget.duration! > 0)
                 Positioned(

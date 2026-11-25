@@ -1595,7 +1595,7 @@ class AppDatabase extends _$AppDatabase {
   /// Обновить статус отправки: заменить localId на serverId
   Future<void> updateMessageSendStatus(
       String localId, String serverId, int status,
-      {String? fileUrl}) async {
+      {String? fileUrl, String? mediaPayload}) async {
     await ensureInitialized();
     if (serverId.isNotEmpty) {
       // Удаляем возможный дубликат, если сообщение уже успело прийти по WebSocket/Sync с localId == serverId
@@ -1610,7 +1610,64 @@ class AppDatabase extends _$AppDatabase {
       serverId: Value(serverId),
       sendStatus: Value(status),
       fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
+      mediaPayload:
+          mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
     ));
+  }
+
+  /// Update pending/failed local message fields (e.g. saving remote URL of a completed
+  /// album item, downgrading an album when siblings are cancelled, or transferring caption).
+  Future<void> updateLocalMessageFields(
+    String localId, {
+    String? fileUrl,
+    String? mediaPayload,
+    Value<String?> groupedId = const Value.absent(),
+    int? sendStatus,
+    String? content,
+  }) async {
+    await ensureInitialized();
+    await (update(messages)..where((t) => t.localId.equals(localId))).write(
+      MessagesCompanion(
+        fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
+        mediaPayload:
+            mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
+        groupedId: groupedId,
+        sendStatus:
+            sendStatus != null ? Value(sendStatus) : const Value.absent(),
+        content: content != null ? Value(content) : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Returns all DB rows belonging to [groupedId] inside [chatId], ordered oldest-first.
+  Future<List<DbMessage>> getMessagesByGroupedId(
+    String chatId,
+    String groupedId,
+  ) async {
+    await ensureInitialized();
+    return (select(messages)
+          ..where(
+            (t) => t.chatId.equals(chatId) & t.groupedId.equals(groupedId),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .get();
+  }
+
+  /// Marks leftover unsent (`sendStatus == 0`) rows from prior killed sessions as
+  /// failed (`sendStatus == 2`) so the user can retry or cancel them.
+  Future<void> markInterruptedPendingMessagesFailed({
+    Set<String> activeLocalIds = const {},
+  }) async {
+    await ensureInitialized();
+    final query = update(messages)
+      ..where((t) {
+        var pred = t.sendStatus.equals(0) & t.serverId.isNull();
+        if (activeLocalIds.isNotEmpty) {
+          pred = pred & t.localId.isNotIn(activeLocalIds);
+        }
+        return pred;
+      });
+    await query.write(const MessagesCompanion(sendStatus: Value(2)));
   }
 
   /// Обновить только статус отправки (без serverId)

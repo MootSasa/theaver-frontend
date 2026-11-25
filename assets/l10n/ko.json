@@ -1952,5 +1952,10 @@
   "media_viewer_protected_content": "Saving and forwarding restricted",
   "media_viewer_more": "more",
   "media_viewer_file_unavailable": "File unavailable",
-  "profile_tab_gifs": "GIFs"
+  "profile_tab_gifs": "GIFs",
+  "upload_cancel": "업로드 취소",
+  "upload_progress_of": "{sent} / {total}",
+  "upload_retry": "다시 보내기",
+  "video_load_error": "동영상을 불러오지 못했습니다",
+  "video_retry": "다시 시도"
 }

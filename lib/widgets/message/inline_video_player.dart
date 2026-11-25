@@ -63,9 +63,22 @@ class _InlineVideoPlayerState extends State<InlineVideoPlayer> {
       final cachedFile = await MediaCacheManager.instance.getCachedFile(currentUrl);
       if (!mounted || widget.url != currentUrl) return;
 
-      final controller = cachedFile != null && await cachedFile.exists()
-          ? VideoPlayerController.file(cachedFile)
-          : VideoPlayerController.networkUrl(Uri.parse(currentUrl));
+      final VideoPlayerController controller;
+      if (cachedFile != null && await cachedFile.exists()) {
+        controller = VideoPlayerController.file(cachedFile);
+      } else {
+        final target =
+            await MediaCacheManager.instance.resolveStreamableVideoTarget(
+          currentUrl,
+        );
+        if (!mounted || widget.url != currentUrl) return;
+        controller = target != null
+            ? VideoPlayerController.networkUrl(
+                target.uri,
+                httpHeaders: target.headers,
+              )
+            : VideoPlayerController.networkUrl(Uri.parse(currentUrl));
+      }
 
       if (!mounted || widget.url != currentUrl) {
         controller.dispose();

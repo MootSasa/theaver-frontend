@@ -3226,7 +3226,7 @@ class Message {
           _parseNullableInt(parsedMediaPayload?['quote_length']) ??
           0,
       replyInfo: replyInfo,
-      localId: json['local_id']?.toString(),
+      localId: (json['local_id'] ?? json['client_message_id'])?.toString(),
       sendStatus: _parseIntValue(json['send_status'], defaultValue: 1),
       senderNameColorId: json['sender_name_color_id']?.toString(),
       senderReplyStripStyle: json['sender_reply_strip_style']?.toString(),
@@ -7165,6 +7165,10 @@ class ChatService {
     String messageType = 'text',
     bool hasMediaSpoiler = false,
     String? groupedId,
+    Map<String, dynamic>? mediaPayload,
+    bool isRound = false,
+    int? duration,
+    List<int>? waveform,
     String? sendAsChatId,
     String? sendAsMode,
     bool sendAsAnonymous = false,
@@ -7195,6 +7199,11 @@ class ChatService {
         if (fileName != null && fileName.isNotEmpty) 'file_name': fileName,
         if (hasMediaSpoiler) 'has_media_spoiler': true,
         if (groupedId != null && groupedId.isNotEmpty) 'grouped_id': groupedId,
+        if (mediaPayload != null && mediaPayload.isNotEmpty)
+          'media_payload': mediaPayload,
+        if (isRound) 'is_round': true,
+        if (duration != null && duration > 0) 'duration': duration,
+        if (waveform != null && waveform.isNotEmpty) 'waveform': waveform,
         if (isSilent) 'is_silent': true,
       };
       _applySendAsPayload(
@@ -7219,9 +7228,15 @@ class ChatService {
         final rawMsg = data['comment'] ?? data['message'];
         if (rawMsg is Map) {
           final parsed = Message.fromJson(Map<String, dynamic>.from(rawMsg));
-          final normalized = (trimmedLocalId != null && trimmedLocalId.isNotEmpty)
-              ? parsed.copyWith(localId: trimmedLocalId)
-              : parsed;
+          final normalized = parsed.copyWith(
+            localId: (trimmedLocalId != null && trimmedLocalId.isNotEmpty)
+                ? trimmedLocalId
+                : parsed.localId,
+            mediaPayload: (parsed.mediaPayload != null &&
+                    parsed.mediaPayload!.isNotEmpty)
+                ? parsed.mediaPayload
+                : mediaPayload,
+          );
           try {
             await AppDatabase().saveMessage(normalized.toCompanion());
             if (data['comments_count'] != null) {

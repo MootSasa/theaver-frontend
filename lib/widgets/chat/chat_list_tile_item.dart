@@ -15,6 +15,7 @@ import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/contacts_service.dart';
 import '../../services/draft_service.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/power_saving_provider.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -292,14 +293,28 @@ class ChatListTileItem extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (showOutgoingStatus) ...[
-                MessageStatusWidget(
-                  isRead: lastMessageIsRead ?? (chat.lastReadOutboxMessageId > 0),
-                  isOutgoing: true,
-                  accentColor: primaryColor,
+              if (showOutgoingStatus)
+                ValueListenableBuilder<int>(
+                  valueListenable: MediaSendCoordinator.instance.revisionNotifier,
+                  builder: (context, _, __) {
+                    final sendOverride = MediaSendCoordinator.instance
+                        .getChatSendStatusOverride(chat.id);
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MessageStatusWidget(
+                          isRead: sendOverride == null &&
+                              (lastMessageIsRead ??
+                                  (chat.lastReadOutboxMessageId > 0)),
+                          isOutgoing: true,
+                          sendStatus: sendOverride ?? 1,
+                          accentColor: primaryColor,
+                        ),
+                        const SizedBox(width: 3),
+                      ],
+                    );
+                  },
                 ),
-                const SizedBox(width: 3),
-              ],
               Text(
                 _formatChatTime(context, displayTimeIso),
                 style: TextStyle(

@@ -1952,5 +1952,10 @@
   "media_viewer_protected_content": "Saving and forwarding restricted",
   "media_viewer_more": "more",
   "media_viewer_file_unavailable": "File unavailable",
-  "profile_tab_gifs": "GIFs"
+  "profile_tab_gifs": "GIFs",
+  "upload_cancel": "Upload abbrechen",
+  "upload_progress_of": "{sent} von {total}",
+  "upload_retry": "Erneut senden",
+  "video_load_error": "Video konnte nicht geladen werden",
+  "video_retry": "Wiederholen"
 }

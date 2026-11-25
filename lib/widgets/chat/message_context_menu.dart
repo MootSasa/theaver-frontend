@@ -1759,7 +1759,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
     double maxHeight, {
     bool showAbove = false,
   }) {
-    final bool isSending = widget.sendStatus == 0;
+    final bool isSending = widget.sendStatus == 0 || widget.sendStatus == 2;
     final BuildContext navContext = widget.messageKey?.currentContext ??
         Navigator.maybeOf(context)?.context ??
         context;

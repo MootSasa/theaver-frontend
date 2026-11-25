@@ -13,10 +13,12 @@ import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../config/app_config.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import 'blurred_media_placeholder.dart';
 import 'message_status_widget.dart';
+import 'telegram_upload_progress.dart';
 import '../tiling/tile_viewport_scope.dart';
 
 /// Static LRU pool for caching active video note controllers to avoid re-initialization
@@ -116,6 +118,7 @@ class VideoNoteControllerPool {
 class VideoMessageWidget extends StatefulWidget {
   final String videoUrl;
   final String? messageId;
+  final String? localId;
   final double size;
   final String? senderAvatarUrl;
   final Duration? duration;
@@ -127,6 +130,7 @@ class VideoMessageWidget extends StatefulWidget {
   final int sendStatus;
   final String? timeText;
   final String? senderName;
+  final VoidCallback? onCancelUpload;
   final VoidCallback? onRetry;
   final String? chatId;
   final String? chatType;
@@ -136,6 +140,7 @@ class VideoMessageWidget extends StatefulWidget {
     Key? key,
     required this.videoUrl,
     this.messageId,
+    this.localId,
     this.size = 230.0,
     this.senderAvatarUrl,
     this.duration,
@@ -147,6 +152,7 @@ class VideoMessageWidget extends StatefulWidget {
     this.sendStatus = 1,
     this.timeText,
     this.senderName,
+    this.onCancelUpload,
     this.onRetry,
     this.chatId,
     this.chatType,
@@ -447,7 +453,17 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
 
   Future<void> _initControllerFromNetwork(Uri uri, int session) async {
     try {
-      final controller = VideoPlayerController.networkUrl(uri);
+      final target =
+          await MediaCacheManager.instance.resolveStreamableVideoTarget(
+        widget.videoUrl,
+      );
+      if (!mounted || session != _initSession) return;
+      final controller = target != null
+          ? VideoPlayerController.networkUrl(
+              target.uri,
+              httpHeaders: target.headers,
+            )
+          : VideoPlayerController.networkUrl(uri);
       await controller.initialize();
       await controller.setLooping(true);
       await controller.setVolume(0.0);
@@ -994,8 +1010,32 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                         ),
                       ),
 
+                      // Outgoing upload progress overlay (circular ring + cancel/retry)
+                      if (widget.sendStatus != 1 &&
+                          (widget.localId ?? widget.messageId ?? '').isNotEmpty)
+                        ValueListenableBuilder<OutgoingUploadProgress>(
+                          valueListenable: MediaSendCoordinator.instance.progressFor(
+                            widget.localId ?? widget.messageId!,
+                            chatId: widget.chatId,
+                            totalBytes: widget.fileSize,
+                            sendStatus: widget.sendStatus,
+                          ),
+                          builder: (context, progress, _) {
+                            final effId = widget.localId ?? widget.messageId!;
+                            return TelegramRadialUploadIndicator(
+                              progress: progress,
+                              size: 50,
+                              onCancel: widget.onCancelUpload ??
+                                  () => MediaSendCoordinator.instance
+                                      .cancelUpload(effId),
+                              onRetry: widget.onRetry ??
+                                  () => MediaSendCoordinator.instance
+                                      .retryMessage(effId),
+                            );
+                          },
+                        )
                       // Downloading Spinner Overlay
-                      if (!_isCached && isInitialized && !_isScrubbing)
+                      else if (!_isCached && isInitialized && !_isScrubbing)
                         Container(
                           width: 48,
                           height: 48,

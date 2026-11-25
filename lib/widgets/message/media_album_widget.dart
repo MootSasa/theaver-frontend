@@ -11,6 +11,7 @@ import '../../models/theav_theme.dart';
 import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../media_viewer/theav_media_viewer.dart';
 import 'blurred_media_placeholder.dart';
 import 'bubble_tail_painter.dart';
@@ -21,6 +22,7 @@ import 'media_spoiler_overlay.dart';
 import 'message_bubble.dart';
 import 'message_interactive_state.dart';
 import 'message_status_widget.dart';
+import 'telegram_upload_progress.dart';
 import 'text_message_widget.dart';
 import '../chat/reactions_panel.dart';
 import '../tiling/tile_viewport_scope.dart';
@@ -577,8 +579,9 @@ class MediaAlbumWidget extends StatelessWidget {
     AlbumTilePosition pos,
     int index,
   ) {
+    final stableId = item.message.localId ?? item.id;
     return _AlbumTileWidget(
-      key: ValueKey('album_tile_${item.id}_${item.fileUrl}'),
+      key: ValueKey('album_tile_$stableId'),
       item: item,
       pos: pos,
       index: index,
@@ -731,6 +734,8 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
     final item = widget.item;
     final pos = widget.pos;
     final isCached = _cachedFile != null;
+    final bool isUploadingOrFailed = item.message.sendStatus != 1;
+    final String itemLocalId = item.message.localId ?? item.id;
     final rawUrl = item.fileUrl ?? '';
     final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
     final rawThumbUrl = item.thumbUrl ?? '';
@@ -753,14 +758,14 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
         children: [
           // 1. Blurred placeholder (only mounted until opaque media is ready)
           if (!((!item.isVideo && _cachedFile != null) ||
-              (item.isVideo && isCached && _cachedFirstFrame != null)))
+              (item.isVideo && _cachedFirstFrame != null)))
             BlurredMediaPlaceholder(
               thumbBase64: item.thumbBase64,
               aspectRatio: item.aspectRatio,
             ),
 
-          // 2. Real first frame for video ONLY after video is cached locally
-          if (item.isVideo && isCached) ...[
+          // 2. Real first frame / thumbnail for video (immediate, even before video cache finishes)
+          if (item.isVideo) ...[
             if (_cachedFirstFrame != null)
               Image.memory(
                 _cachedFirstFrame!,
@@ -769,20 +774,13 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                 gaplessPlayback: true,
               )
             else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
-              Image.network(
-                resolvedThumbUrl,
-                fit: BoxFit.cover,
+              RemoteVideoThumbnailImage(
+                thumbUrl: resolvedThumbUrl,
                 cacheWidth: 600,
-                filterQuality: FilterQuality.low,
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return const SizedBox.shrink();
-                },
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
               ),
           ],
 
-          // 3. Display photo ONLY after file is cached locally on disk
+          // 3. Display photo when cached or local file exists
           if (!item.isVideo && _cachedFile != null)
             Image.file(
               _cachedFile!,
@@ -806,7 +804,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
           color: const Color(0xFF181818),
           child: GestureDetector(
             onTap: () {
-              if (!isCached) {
+              if (!isUploadingOrFailed && !isCached) {
                 _downloadButtonKey.currentState?.handleTap();
                 return;
               }
@@ -817,8 +815,32 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
               children: [
                 visualLayer,
 
-                // 4. Download button / progress / size pill
-                if (resolvedUrl.isNotEmpty && (!isCached || item.isVideo))
+                // 4a. Inline Telegram upload progress overlay per album tile
+                if (isUploadingOrFailed)
+                  TelegramMediaUploadOverlay(
+                    localId: itemLocalId,
+                    chatId: item.message.chatId,
+                    groupedId: item.message.groupedId,
+                    fileSize: item.fileSize,
+                    sendStatus: item.message.sendStatus,
+                    indicatorSize: 40.0,
+                    showSizeBadge: false,
+                    onCancel: () =>
+                        MediaSendCoordinator.instance.cancelUpload(itemLocalId),
+                    onRetry: () {
+                      final gid = item.message.groupedId;
+                      if (gid != null && gid.isNotEmpty) {
+                        MediaSendCoordinator.instance.retryAlbum(
+                          item.message.chatId,
+                          gid,
+                        );
+                      } else {
+                        MediaSendCoordinator.instance.retryMessage(itemLocalId);
+                      }
+                    },
+                  )
+                // 4b. Download button / progress / size pill
+                else if (resolvedUrl.isNotEmpty && (!isCached || item.isVideo))
                   MediaDownloadButton(
                     key: _downloadButtonKey,
                     url: resolvedUrl,
@@ -830,7 +852,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
                   ),
 
                 // 5. Video duration badge (top-left)
-                if (item.isVideo)
+                if (!isUploadingOrFailed && item.isVideo)
                   Positioned(
                     top: 6,
                     left: 6,

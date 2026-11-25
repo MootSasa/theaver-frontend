@@ -11,7 +11,6 @@ import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:uuid/uuid.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
@@ -28,10 +27,12 @@ import '../../services/draft_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/screen_protection_service.dart';
 import '../../services/sticker_service.dart';
+import '../../services/sync_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/date_time_utils.dart';
@@ -194,6 +195,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   // Realtime subscriptions
   ChatSubscription? _channelSubscription;
   ChatSubscription? _groupSubscription;
+  StreamSubscription<MediaSendEvent>? _mediaSendSub;
 
   // Wave 3B parity state
   bool _canComment = true;
@@ -276,6 +278,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     _loadCachedKeyboardHeight();
     _initChannelSubscription();
     _bindLinkedGroupSubscription();
+    _mediaSendSub = MediaSendCoordinator.instance.events.listen(
+      _onMediaSendEvent,
+    );
     _loadInitial();
   }
 
@@ -295,6 +300,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     _scrollController.dispose();
     _uploadProgressNotifier.dispose();
     _showScrollDownFabNotifier.dispose();
+    _mediaSendSub?.cancel();
     _channelSubscription?.cancel();
     _groupSubscription?.cancel();
     unawaited(ScreenProtectionService.instance.release(_screenProtectionKey));
@@ -593,6 +599,129 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     });
   }
 
+  void _onMediaSendEvent(MediaSendEvent event) {
+    if (!mounted) return;
+    if (event.chatId != widget.channelId ||
+        event.threadRootMessageId != widget.postMessage.id) {
+      return;
+    }
+
+    switch (event.type) {
+      case MediaSendEventType.inserted:
+        setState(() {
+          for (final msg in event.messages) {
+            final keyId = (msg.localId != null && msg.localId!.isNotEmpty)
+                ? msg.localId!
+                : msg.id;
+            final exists = _comments.any((c) =>
+                (c.localId != null && c.localId == keyId) ||
+                c.id == msg.id ||
+                c.id == keyId);
+            if (!exists) {
+              _comments.add(msg);
+            }
+          }
+          _dedupeCommentsInPlace();
+          _sortCommentsAscending();
+        });
+        if (event.messages.isNotEmpty) {
+          _scrollToBottom();
+        }
+        break;
+
+      case MediaSendEventType.updated:
+      case MediaSendEventType.replacedWithServer:
+      case MediaSendEventType.failed:
+      case MediaSendEventType.albumDowngradedToSingle:
+        setState(() {
+          final maxLen = math.max(event.localIds.length, event.messages.length);
+          for (int i = 0; i < maxLen; i++) {
+            final targetLocalId = i < event.localIds.length
+                ? event.localIds[i]
+                : event.messages[i].localId;
+            final incoming = i < event.messages.length ? event.messages[i] : null;
+            if (targetLocalId == null && incoming == null) continue;
+
+            final matchIdx = _comments.indexWhere((c) =>
+                (targetLocalId != null &&
+                    targetLocalId.isNotEmpty &&
+                    ((c.localId != null && c.localId == targetLocalId) ||
+                        c.id == targetLocalId)) ||
+                (incoming != null && c.id == incoming.id));
+
+            if (matchIdx != -1) {
+              final existing = _comments[matchIdx];
+              if (incoming != null) {
+                _promoteCommentKey(
+                  fromLocalId: existing.localId ?? targetLocalId,
+                  toId: incoming.id,
+                );
+                final resolvedLocalId =
+                    (incoming.localId != null && incoming.localId!.isNotEmpty)
+                        ? incoming.localId
+                        : (existing.localId ?? targetLocalId);
+                _comments[matchIdx] = incoming.copyWith(
+                  localId: resolvedLocalId,
+                  sendStatus: event.type == MediaSendEventType.replacedWithServer
+                      ? 1
+                      : incoming.sendStatus,
+                  replyInfo: incoming.replyInfo ?? existing.replyInfo,
+                  isOwn: incoming.isOwn || existing.isOwn,
+                );
+                if (event.type == MediaSendEventType.replacedWithServer &&
+                    targetLocalId != null &&
+                    _selectedCommentIds.remove(targetLocalId)) {
+                  _selectedCommentIds.add(incoming.id);
+                }
+              } else if (event.type == MediaSendEventType.failed) {
+                _comments[matchIdx] = existing.copyWith(sendStatus: 2);
+              }
+            } else if (incoming != null &&
+                event.type == MediaSendEventType.replacedWithServer) {
+              _comments.add(incoming.copyWith(sendStatus: 1, isOwn: true));
+            }
+          }
+
+          if (event.type == MediaSendEventType.replacedWithServer) {
+            for (final msg in event.messages) {
+              if (msg.threadRootMessageId != null &&
+                  msg.threadRootMessageId!.isNotEmpty) {
+                _rootMessageId ??= msg.threadRootMessageId;
+              }
+              if (msg.chatId.isNotEmpty &&
+                  msg.chatId != widget.channelId &&
+                  _linkedChatId == null) {
+                _linkedChatId = msg.chatId;
+              }
+            }
+            _commentsCount = math.max(
+              _commentsCount,
+              _comments.where((c) => c.sendStatus == 1).length,
+            );
+            _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
+          }
+          _dedupeCommentsInPlace();
+          _sortCommentsAscending();
+        });
+        if (event.type == MediaSendEventType.replacedWithServer) {
+          _bindLinkedGroupSubscription();
+        }
+        break;
+
+      case MediaSendEventType.cancelled:
+        final cancelSet =
+            event.localIds.where((id) => id.isNotEmpty).toSet();
+        if (cancelSet.isEmpty) return;
+        setState(() {
+          _comments.removeWhere((c) =>
+              cancelSet.contains(c.id) ||
+              (c.localId != null && cancelSet.contains(c.localId)));
+          _selectedCommentIds.removeAll(cancelSet);
+        });
+        break;
+    }
+  }
+
   void _onLinkedGroupNewMessage(WebSocketEvent event) {
     final rawMsg =
         (event.data['message'] as Map<String, dynamic>?) ??
@@ -604,10 +733,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final threadRoot = msg.threadRootMessageId?.trim();
     if (threadRoot == null || threadRoot.isEmpty) return;
 
-    if (_rootMessageId != null && threadRoot != _rootMessageId) {
-      return;
-    }
+    final matchesExistingLocal = msg.localId != null &&
+        msg.localId!.isNotEmpty &&
+        _comments.any((c) => c.localId == msg.localId || c.id == msg.localId);
     if (_rootMessageId == null) {
+      if (!matchesExistingLocal) return;
+      _rootMessageId = threadRoot;
+    } else if (threadRoot != _rootMessageId) {
       return;
     }
 
@@ -804,7 +936,9 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   bool _upsertComment(Message incoming) {
     final idIdx = _comments.indexWhere((c) => c.id == incoming.id);
     final lidIdx = (incoming.localId != null && incoming.localId!.isNotEmpty)
-        ? _comments.indexWhere((c) => c.localId == incoming.localId)
+        ? _comments.indexWhere(
+            (c) => c.localId == incoming.localId || c.id == incoming.localId,
+          )
         : -1;
 
     if (idIdx != -1 && lidIdx != -1 && idIdx != lidIdx) {
@@ -900,9 +1034,64 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     });
   }
 
+  Future<List<Message>> _loadPendingAndFailedDbComments() async {
+    try {
+      final db = AppDatabase();
+      final rows = await db.getThreadComments(
+        widget.channelId,
+        widget.postMessage.id,
+        limit: 100,
+      );
+      final activeLocalIds = MediaSendCoordinator.instance.activeLocalIds;
+      final result = <Message>[];
+      for (final row in rows) {
+        if (row.sendStatus != 0 && row.sendStatus != 2) continue;
+        if (row.sendStatus == 0 &&
+            row.serverId == null &&
+            !activeLocalIds.contains(row.localId)) {
+          await db.updateMessageStatus(
+            row.localId,
+            MessageSendStatus.failed.index,
+          );
+          result.add(
+            Message.fromDbMessage(
+              row.copyWith(sendStatus: MessageSendStatus.failed.index),
+            ),
+          );
+        } else {
+          result.add(Message.fromDbMessage(row));
+        }
+      }
+      return result;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  void _mergeUnsentComment(Message unsent) {
+    final lid = (unsent.localId != null && unsent.localId!.isNotEmpty)
+        ? unsent.localId
+        : null;
+    final idx = _comments.indexWhere(
+      (c) =>
+          c.id == unsent.id ||
+          (lid != null &&
+              ((c.localId != null && c.localId == lid) || c.id == lid)),
+    );
+    if (idx != -1) {
+      if (_comments[idx].sendStatus == 1) {
+        return;
+      }
+      _comments[idx] = unsent;
+      return;
+    }
+    _comments.add(unsent);
+  }
+
   Future<void> _loadInitial() async {
     _currentUserId = await AuthService.getUserId();
 
+    final List<Message> initialLocal = [];
     // Load cached thread comments from Drift if we already have linkedChatId
     if (_linkedChatId != null && _rootMessageId != null) {
       try {
@@ -911,17 +1100,23 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           _rootMessageId!,
           limit: 100,
         );
-        if (local.isNotEmpty && mounted) {
-          setState(() {
-            _comments
-              ..clear()
-              ..addAll(local.map((m) => Message.fromDbMessage(m)));
-            _sortCommentsAscending();
-            _isLoading = false;
-          });
-          _resolvePendingDraftReply();
-        }
+        initialLocal.addAll(local.map((m) => Message.fromDbMessage(m)));
       } catch (_) {}
+    }
+    final pendingLocal = await _loadPendingAndFailedDbComments();
+    if ((initialLocal.isNotEmpty || pendingLocal.isNotEmpty) && mounted) {
+      setState(() {
+        _comments
+          ..clear()
+          ..addAll(initialLocal);
+        for (final p in pendingLocal) {
+          _mergeUnsentComment(p);
+        }
+        _dedupeCommentsInPlace();
+        _sortCommentsAscending();
+        _isLoading = false;
+      });
+      _resolvePendingDraftReply();
     }
 
     unawaited(_syncProtectionFromDb());
@@ -934,10 +1129,12 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       messageId: widget.postMessage.id,
       limit: 50,
     );
+    final pendingLocal = await _loadPendingAndFailedDbComments();
     if (!mounted) return;
 
     setState(() {
       _isLoading = false;
+      final existingUnsent = _comments.where((c) => c.sendStatus != 1).toList();
       if (res.success) {
         _errorMessage = null;
         _canComment = res.canComment;
@@ -959,12 +1156,23 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           }
           _upsertComment(c);
         }
-        _commentsCount = math.max(
-          _rootPost.commentsCount,
-          _comments.length,
-        );
       } else {
         _errorMessage = res.errorMessage;
+      }
+
+      for (final unsent in existingUnsent) {
+        _mergeUnsentComment(unsent);
+      }
+      for (final p in pendingLocal) {
+        _mergeUnsentComment(p);
+      }
+      _dedupeCommentsInPlace();
+      _sortCommentsAscending();
+      if (res.success) {
+        _commentsCount = math.max(
+          _rootPost.commentsCount,
+          _comments.where((c) => c.sendStatus == 1).length,
+        );
       }
     });
     if (res.success) {
@@ -1034,14 +1242,24 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     bool invertMedia = false,
     bool hasMediaSpoiler = false,
     bool asDocument = false,
+    bool isViewOnce = false,
+    int ttlSeconds = 0,
     bool preserveComposerDraft = false,
+    List<File>? overrideFiles,
+    Map<String, String>? captionsByPath,
   }) async {
     if (!_canComment) return;
     final String controllerClean = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
     final String text = (cleanText ?? controllerClean).trimRight();
     final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
-    if ((text.trim().isEmpty && _attachedFiles.isEmpty) || _isSending) return;
+    final bool hasOverrideFiles =
+        overrideFiles != null && overrideFiles.isNotEmpty;
+    final bool hasFilesToSend = hasOverrideFiles || _attachedFiles.isNotEmpty;
+    if ((text.trim().isEmpty && !hasFilesToSend) ||
+        (!hasFilesToSend && _isSending)) {
+      return;
+    }
 
     if (_isEditing && _editingCommentId != null) {
       final editId = _editingCommentId!;
@@ -1094,14 +1312,18 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             ? activeSendAsPeer.name
             : (widget.channelName ?? 'Обсуждение'));
 
-    final List<File> filesToSend = List<File>.from(_attachedFiles);
+    final List<File> filesToSend = hasOverrideFiles
+        ? List<File>.from(overrideFiles)
+        : List<File>.from(_attachedFiles);
+    final bool isMediaSend = filesToSend.isNotEmpty;
     _suppressDraftSave = true;
     try {
       setState(() {
         _attachedFiles.clear();
         _attachedFileNames.clear();
-        _isSending = true;
-        _isUploading = filesToSend.isNotEmpty;
+        if (!isMediaSend) {
+          _isSending = true;
+        }
         _replyToComment = null;
         _pendingDraftReplyId = null;
         _isQuote = false;
@@ -1121,174 +1343,66 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       _saveCurrentDraft(immediate: true);
     }
 
-    try {
-      String resolveMimeMessageType(String mimeType) {
-        if (asDocument) return 'file';
-        if (mimeType.startsWith('image/')) return 'image';
-        if (mimeType.startsWith('video/')) return 'video';
-        if (mimeType.startsWith('audio/')) return 'audio';
-        return 'file';
-      }
-
-      if (filesToSend.isNotEmpty) {
-        final uploadedItems = <({
-          String url,
-          String fileName,
-          String messageType,
-        })>[];
-        for (int i = 0; i < filesToSend.length; i++) {
-          final file = filesToSend[i];
-          final uploadRes = await _fileService.uploadFileChunked(
-            file,
-            onProgress: (p) {
-              if (mounted) {
-                _uploadProgressNotifier.value =
-                    (i + p) / filesToSend.length;
-              }
-            },
-          );
-          uploadedItems.add((
-            url: uploadRes.url,
-            fileName: uploadRes.fileName,
-            messageType: resolveMimeMessageType(uploadRes.mimeType),
-          ));
-        }
-
-        final bool isVisualBatch = !asDocument &&
-            uploadedItems.length >= 2 &&
-            uploadedItems.every(
-              (u) => u.messageType == 'image' || u.messageType == 'video',
-            );
-        final String? batchGroupedId = isVisualBatch
-            ? 'album_${DateTime.now().millisecondsSinceEpoch}_${const Uuid().v4().substring(0, 8)}'
-            : null;
-
-        final localIds = <String>[];
-        final optimisticBatch = <Message>[];
-        for (int i = 0; i < uploadedItems.length; i++) {
-          final u = uploadedItems[i];
-          final itemText = i == 0 ? text : '';
-          final itemEntities = i == 0 ? resolvedEntities : const <MessageEntity>[];
-          final localId =
-              'local_comment_${DateTime.now().microsecondsSinceEpoch}_$i';
-          localIds.add(localId);
-          optimisticBatch.add(
-            Message(
-              id: localId,
-              localId: localId,
-              chatId: _linkedChatId ?? widget.channelId,
-              senderId: _currentUserId ?? '',
-              content: itemText,
-              messageType: u.messageType,
-              fileUrl: u.url,
-              fileName: u.fileName,
-              groupedId: batchGroupedId,
-              replyToMessageId: replyTo?.id,
-              replyInfo: replyTo != null
-                  ? ReplyInfo(
-                      messageId: replyTo.id,
-                      senderId: (replyTo.isChannelOrPersonaAuthored ||
-                              replyTo.id == _rootMessageId ||
-                              replyTo.id == widget.postMessage.id)
-                          ? '0'
-                          : replyTo.senderId,
-                      senderName: replyTo.resolveEffectiveAuthorTitle(
-                        chatName: widget.channelName,
-                        chatType: (replyTo.id == widget.postMessage.id ||
-                                replyTo.id == _rootMessageId)
-                            ? 'channel'
-                            : null,
-                      ),
-                      senderChatId: replyTo.senderChatId,
-                      isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
-                      content: replyTo.content,
-                      messageType: replyTo.messageType,
-                      entities: replyTo.entities,
-                    )
-                  : null,
-              isEdited: false,
-              createdAt: DateTime.now().toUtc().toIso8601String(),
-              senderName: sendingAsChannel
-                  ? (activeSendAsPeer?.name ?? 'Канал')
-                  : (sendAsAnon ? anonGroupTitle : 'Вы'),
-              senderAvatarUrl: sendingAsChannel
-                  ? activeSendAsPeer?.avatarUrl
-                  : (sendAsAnon
-                      ? (_linkedGroupAvatar ?? widget.channelAvatar)
-                      : null),
-              senderChatId: sendingAsChannel ? activeSendAsChatId : null,
-              senderChatName: sendingAsChannel ? activeSendAsPeer?.name : null,
-              senderChatAvatarUrl:
-                  sendingAsChannel ? activeSendAsPeer?.avatarUrl : null,
-              isFromAnonymousAdmin: !sendingAsChannel && sendAsAnon,
-              isOwn: true,
-              sendStatus: 0,
-              hasMediaSpoiler: hasMediaSpoiler,
-              entities: itemEntities,
-            ),
-          );
-        }
-
+    if (isMediaSend) {
+      try {
+        await MediaSendCoordinator.instance.enqueueMediaOrFiles(
+          chatId: widget.channelId,
+          files: filesToSend,
+          asDocument: asDocument,
+          caption: text,
+          captionsByPath: captionsByPath,
+          entities: resolvedEntities,
+          invertMedia: invertMedia,
+          replyToMessageId: replyTo?.id,
+          isQuote: capturedIsQuote,
+          quoteText: capturedQuoteText,
+          quoteOffset: capturedQuoteOffset,
+          quoteLength: capturedQuoteLength,
+          replyToSenderId: replyTo != null
+              ? ((replyTo.isChannelOrPersonaAuthored ||
+                      replyTo.id == _rootMessageId ||
+                      replyTo.id == widget.postMessage.id)
+                  ? '0'
+                  : replyTo.senderId)
+              : null,
+          replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+            chatName: widget.channelName,
+            chatType: (replyTo.id == widget.postMessage.id ||
+                    replyTo.id == _rootMessageId)
+                ? 'channel'
+                : null,
+          ),
+          replyToContent: replyTo?.content,
+          replyToMessageType: replyTo?.messageType ?? 'text',
+          hasMediaSpoiler: hasMediaSpoiler,
+          isViewOnce: isViewOnce,
+          ttlSeconds: ttlSeconds,
+          sendAsChatId: activeSendAsChatId,
+          sendAsMode: activeSendAsMode,
+          sendAsAnonymous: sendAsAnon,
+          threadRootMessageId: widget.postMessage.id,
+          senderId: _currentUserId,
+          senderName: sendingAsChannel
+              ? (activeSendAsPeer?.name ?? 'Канал')
+              : (sendAsAnon ? anonGroupTitle : null),
+          senderAvatarUrl: sendingAsChannel
+              ? activeSendAsPeer?.avatarUrl
+              : (sendAsAnon
+                  ? (_linkedGroupAvatar ?? widget.channelAvatar)
+                  : null),
+          senderChatName: sendingAsChannel ? activeSendAsPeer?.name : null,
+          senderChatAvatarUrl:
+              sendingAsChannel ? activeSendAsPeer?.avatarUrl : null,
+        );
+      } catch (e) {
         if (mounted) {
-          setState(() {
-            _comments.addAll(optimisticBatch);
-            _isUploading = false;
-            _uploadProgressNotifier.value = 0.0;
-          });
-          _scrollToBottom();
+          GlassToastService().show(context, 'Ошибка отправки: $e');
         }
-
-        bool anyFailed = false;
-        for (int i = 0; i < uploadedItems.length; i++) {
-          final u = uploadedItems[i];
-          final localId = localIds[i];
-          final itemText = i == 0 ? text : '';
-          final itemEntities = i == 0 && resolvedEntities.isNotEmpty
-              ? resolvedEntities
-              : null;
-
-          final sent = await ChatService.sendPostComment(
-            channelId: widget.channelId,
-            messageId: widget.postMessage.id,
-            content: itemText,
-            localId: localId,
-            replyToMessageId: replyTo?.id,
-            isQuote: i == 0 && capturedIsQuote,
-            quoteText: i == 0 ? capturedQuoteText : null,
-            quoteOffset: i == 0 ? capturedQuoteOffset : 0,
-            quoteLength: i == 0 ? capturedQuoteLength : 0,
-            entities: itemEntities,
-            fileUrl: u.url,
-            fileName: u.fileName,
-            messageType: u.messageType,
-            hasMediaSpoiler: hasMediaSpoiler,
-            groupedId: batchGroupedId,
-            sendAsMode: activeSendAsMode,
-            sendAsChatId: activeSendAsChatId,
-            sendAsAnonymous: sendAsAnon,
-          );
-
-          if (!mounted) return;
-          if (sent != null) {
-            setState(() {
-              _confirmSentComment(sent, localId: localId);
-            });
-            _bindLinkedGroupSubscription();
-          } else {
-            anyFailed = true;
-            setState(() {
-              final idx = _comments.indexWhere((c) => c.localId == localId);
-              if (idx != -1) {
-                _comments[idx] = _comments[idx].copyWith(sendStatus: 2);
-              }
-            });
-          }
-        }
-        if (anyFailed && mounted) {
-          GlassToastService().show(context, 'Не удалось отправить вложение');
-        }
-        return;
       }
+      return;
+    }
+
+    try {
 
       final localId = 'local_comment_${DateTime.now().microsecondsSinceEpoch}';
       final optimistic = Message(
@@ -1908,16 +2022,12 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
 
     if (result.files != null && result.files!.isNotEmpty) {
       if (result.sendImmediately) {
-        setState(() {
-          for (final file in result.files!) {
-            _attachedFiles.add(file);
-            _attachedFileNames.add(p.basename(file.path));
-          }
-        });
         await _sendComment(
           cleanText: '',
           entities: const [],
+          asDocument: result.asDocument,
           preserveComposerDraft: true,
+          overrideFiles: result.files!,
         );
       } else {
         final mediaRes = await Navigator.push<MediaSendResult>(
@@ -1930,18 +2040,16 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
           ),
         );
         if (mediaRes != null && mediaRes.files.isNotEmpty && mounted) {
-          setState(() {
-            for (final file in mediaRes.files) {
-              _attachedFiles.add(file);
-              _attachedFileNames.add(p.basename(file.path));
-            }
-          });
           await _sendComment(
             cleanText: mediaRes.caption ?? '',
             entities: const [],
             hasMediaSpoiler: mediaRes.hasMediaSpoiler,
             asDocument: mediaRes.asDocument,
+            isViewOnce: mediaRes.isViewOnce,
+            ttlSeconds: mediaRes.ttlSeconds,
             preserveComposerDraft: true,
+            overrideFiles: mediaRes.files,
+            captionsByPath: mediaRes.captionsByPath,
           );
         }
       }
@@ -2239,6 +2347,13 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final bool allMine = targets.every(_isOwnComment);
     if (!allMine && !_canDeleteOthers) return;
 
+    final unsentMessages = targets
+        .where((m) => m.sendStatus != 1 || m.id.startsWith('local_'))
+        .toList();
+    final serverMessages = targets
+        .where((m) => m.sendStatus == 1 && !m.id.startsWith('local_'))
+        .toList();
+
     final bool canModerate = !allMine && _canDeleteOthers;
     final String? authorName = targets.length == 1
         ? () {
@@ -2264,25 +2379,51 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       context: context,
       messageCount: targets.length,
       chatType: 'group',
-      canRevoke: allMine || _canDeleteOthers,
-      defaultRevoke: allMine || _canDeleteOthers,
-      canModerateOther: canModerate,
+      canRevoke: serverMessages.isNotEmpty && (allMine || _canDeleteOthers),
+      defaultRevoke: serverMessages.isNotEmpty && (allMine || _canDeleteOthers),
+      canModerateOther: serverMessages.isNotEmpty && canModerate,
       targetAuthorName: authorName,
     );
     if (res == null || !res.confirmed || !mounted) return;
 
-    final ids = targets.map((c) => c.id).toList();
+    if (unsentMessages.isNotEmpty) {
+      final unsentIds = <String>{};
+      for (final m in unsentMessages) {
+        final lid = m.localId ?? m.id;
+        unsentIds.add(m.id);
+        unsentIds.add(lid);
+        await MediaSendCoordinator.instance.cancelUpload(lid);
+        await AppDatabase().deleteMessage(lid);
+        if (m.id != lid) {
+          await AppDatabase().deleteMessage(m.id);
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _comments.removeWhere(
+            (c) =>
+                unsentIds.contains(c.id) ||
+                (c.localId != null && unsentIds.contains(c.localId)),
+          );
+          _selectedCommentIds.removeAll(unsentIds);
+        });
+      }
+    }
+
+    if (serverMessages.isEmpty || !mounted) return;
+
+    final ids = serverMessages.map((c) => c.id).toList();
     final backup = List<Message>.from(_comments);
     final prevCount = _commentsCount;
     setState(() {
       _comments.removeWhere((c) => ids.contains(c.id));
       _selectedCommentIds.removeAll(ids);
-      _commentsCount = math.max(0, _commentsCount - targets.length);
+      _commentsCount = math.max(0, _commentsCount - serverMessages.length);
       _rootPost = _rootPost.copyWith(commentsCount: _commentsCount);
     });
 
-    final targetChatId = targets.first.chatId.isNotEmpty
-        ? targets.first.chatId
+    final targetChatId = serverMessages.first.chatId.isNotEmpty
+        ? serverMessages.first.chatId
         : (_linkedChatId ?? widget.channelId);
 
     final apiRes = await ChatService.deleteMessagesBatch(
@@ -2294,8 +2435,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       deleteAllFromUser: res.deleteAllFromUser,
     );
     if (apiRes['success'] == true) {
-      if (res.deleteAllFromUser && targets.isNotEmpty && mounted) {
-        final offenderId = targets.first.senderId;
+      if (res.deleteAllFromUser && serverMessages.isNotEmpty && mounted) {
+        final offenderId = serverMessages.first.senderId;
         if (offenderId.isNotEmpty && offenderId != '0') {
           setState(() {
             final before = _comments.length;
@@ -2320,6 +2461,78 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         context,
         apiRes['message']?.toString() ?? 'Не удалось удалить комментарии',
       );
+    }
+  }
+
+  Future<void> _retryComment(Message comment) async {
+    final localId = (comment.localId != null && comment.localId!.isNotEmpty)
+        ? comment.localId!
+        : comment.id;
+    if (localId.isEmpty) return;
+
+    final dbRow = await AppDatabase().getMessageByLocalId(localId);
+    if (dbRow != null) {
+      if (mounted) {
+        setState(() {
+          final idx = _comments.indexWhere(
+            (c) =>
+                (c.localId != null && c.localId == localId) ||
+                c.id == localId,
+          );
+          if (idx != -1) {
+            _comments[idx] = _comments[idx].copyWith(sendStatus: 0);
+          }
+        });
+      }
+      await SyncService().retryFailedMessage(localId);
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      final idx = _comments.indexWhere(
+        (c) => (c.localId != null && c.localId == localId) || c.id == localId,
+      );
+      if (idx != -1) {
+        _comments[idx] = _comments[idx].copyWith(sendStatus: 0);
+      }
+    });
+    final sent = await ChatService.sendPostComment(
+      channelId: widget.channelId,
+      messageId: widget.postMessage.id,
+      content: comment.content,
+      localId: localId,
+      replyToMessageId: comment.replyToMessageId,
+      isQuote: comment.isQuote,
+      quoteText: comment.quoteText,
+      quoteOffset: comment.quoteOffset,
+      quoteLength: comment.quoteLength,
+      entities: comment.entities.isNotEmpty ? comment.entities : null,
+      messageType: comment.messageType,
+      hasMediaSpoiler: comment.hasMediaSpoiler,
+      sendAsMode: (comment.senderChatId != null &&
+              comment.senderChatId!.isNotEmpty)
+          ? 'channel'
+          : (comment.isFromAnonymousAdmin ? 'group' : 'user'),
+      sendAsChatId: comment.senderChatId,
+      sendAsAnonymous: comment.isFromAnonymousAdmin,
+    );
+    if (!mounted) return;
+    if (sent != null) {
+      setState(() {
+        _confirmSentComment(sent, localId: localId);
+      });
+      _bindLinkedGroupSubscription();
+    } else {
+      setState(() {
+        final idx = _comments.indexWhere(
+          (c) =>
+              (c.localId != null && c.localId == localId) || c.id == localId,
+        );
+        if (idx != -1) {
+          _comments[idx] = _comments[idx].copyWith(sendStatus: 2);
+        }
+      });
     }
   }
 
@@ -3078,6 +3291,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
       hasProtectedContent: _hasProtectedContent,
       reactions: comment.reactions.isNotEmpty ? comment.reactions : null,
       myReactions: comment.myReactions.isNotEmpty ? comment.myReactions : null,
+      onRetry: (msg) => _retryComment(msg),
       onReplyTap: (replyToId, _) => _scrollToComment(replyToId),
       onReactionTap: (emoji) {
         if (_isSelectionMode) {

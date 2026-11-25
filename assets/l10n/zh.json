@@ -1952,5 +1952,10 @@
   "media_viewer_protected_content": "Saving and forwarding restricted",
   "media_viewer_more": "more",
   "media_viewer_file_unavailable": "File unavailable",
-  "profile_tab_gifs": "GIFs"
+  "profile_tab_gifs": "GIFs",
+  "upload_cancel": "取消上传",
+  "upload_progress_of": "{sent} / {total}",
+  "upload_retry": "重新发送",
+  "video_load_error": "视频加载失败",
+  "video_retry": "重试"
 }

@@ -1952,5 +1952,10 @@
   "media_viewer_protected_content": "Копирование и сохранение запрещены",
   "media_viewer_more": "ещё",
   "media_viewer_file_unavailable": "Не удалось подготовить файл",
-  "profile_tab_gifs": "GIF"
+  "profile_tab_gifs": "GIF",
+  "upload_cancel": "Отменить загрузку",
+  "upload_progress_of": "{sent} из {total}",
+  "upload_retry": "Повторить отправку",
+  "video_load_error": "Не удалось загрузить видео",
+  "video_retry": "Повторить"
 }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:rive/rive.dart';
+import '../../l10n/app_localizations.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/media_cache_manager.dart';
 
 /// Interactive Telegram-style download button for media files.
@@ -182,6 +184,9 @@ class MediaDownloadButtonState extends State<MediaDownloadButton> {
   void handleTap() {
     if (_isDownloading) {
       _cancelDownload();
+    } else if (widget.isVideo && widget.onPlayVideo != null) {
+      // Allow immediate streaming playback without waiting for full file pre-download.
+      widget.onPlayVideo!.call();
     } else if (_isDownloaded && widget.isVideo) {
       widget.onPlayVideo?.call();
     } else if (!_isDownloaded) {
@@ -227,10 +232,22 @@ class MediaDownloadButtonState extends State<MediaDownloadButton> {
       });
       widget.onDownloaded?.call();
     } else {
+      final wasCancelled = MediaCacheManager.instance.wasCancelledByUser(
+        widget.url,
+      );
       setState(() {
         _isDownloading = false;
       });
       _triggerMorph(false);
+      if (!wasCancelled) {
+        GlassToastService().showError(
+          context,
+          AppLocalizations.trStatic(
+            'video_load_error',
+            'Не удалось загрузить медиафайл',
+          ),
+        );
+      }
     }
   }
 
@@ -245,7 +262,7 @@ class MediaDownloadButtonState extends State<MediaDownloadButton> {
   }
 
   Widget _buildIcon() {
-    if (_isDownloaded && widget.isVideo) {
+    if (widget.isVideo && !_isDownloading && (_isDownloaded || widget.onPlayVideo != null)) {
       return const iconoir.Play(
         color: Colors.white,
         width: 18,

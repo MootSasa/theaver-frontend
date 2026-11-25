@@ -12,7 +12,6 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:uuid/uuid.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -50,7 +49,6 @@ import '../../l10n/app_localizations.dart';
 import '../../utils/date_time_utils.dart';
 import '../../config/app_config.dart';
 import '../../services/media_playback_coordinator.dart';
-import '../../services/media_cache_manager.dart';
 import '../../services/file_service.dart';
 import '../../services/video_note_recorder_service.dart';
 import '../../services/video_note_playback_service.dart';
@@ -94,6 +92,7 @@ import '../../services/dm_parity_service.dart';
 import '../../widgets/chat/dm_parity_sheets.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_instant_cache.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../widgets/chat/contact_picker_sheet.dart';
 import '../../widgets/chat/location_picker_sheet.dart';
 import '../../widgets/chat/mention_and_bot_popup.dart';
@@ -642,6 +641,7 @@ class _ChannelScreenState extends State<ChannelScreen>
   final WebSocketService _wsService = WebSocketService();
   ChatSubscription? _chatSubscription;
   StreamSubscription<ChatRealtimeUpdate>? _realtimeUpdateSub;
+  StreamSubscription<MediaSendEvent>? _mediaSendSub;
   UnreadCountProvider? _unreadCountProvider;
   String? _registeredTileId;
 
@@ -723,6 +723,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
 
     _initWebSocket();
+    _mediaSendSub =
+        MediaSendCoordinator.instance.events.listen(_onMediaSendEvent);
     _entrySettleTimer = Timer(const Duration(milliseconds: 320), () {
       if (!mounted) return;
       ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
@@ -2208,6 +2210,142 @@ class _ChannelScreenState extends State<ChannelScreen>
     } catch (_) {}
   }
 
+  void _onMediaSendEvent(MediaSendEvent event) {
+    if (!mounted || event.chatId != widget.channelId) return;
+    if (event.threadRootMessageId != null &&
+        event.threadRootMessageId!.isNotEmpty) {
+      return;
+    }
+
+    final targetList =
+        _isDetachedHistoryWindow ? _detachedLatestBackup : _messages;
+
+    switch (event.type) {
+      case MediaSendEventType.inserted:
+        if (event.messages.isEmpty) return;
+        setState(() {
+          for (final msg in event.messages) {
+            final key = (msg.localId != null && msg.localId!.isNotEmpty)
+                ? msg.localId!
+                : msg.id;
+            final existingIdx = targetList.indexWhere((m) =>
+                (m.localId != null &&
+                    m.localId!.isNotEmpty &&
+                    m.localId == key) ||
+                m.id == msg.id);
+            if (existingIdx != -1) {
+              targetList[existingIdx] = msg;
+            } else {
+              targetList.insert(0, msg);
+            }
+          }
+          if (!_isDetachedHistoryWindow) {
+            _updateFeedItems();
+          }
+        });
+        if (!_isDetachedHistoryWindow) {
+          _scrollToBottom();
+        }
+        break;
+
+      case MediaSendEventType.updated:
+      case MediaSendEventType.replacedWithServer:
+      case MediaSendEventType.failed:
+      case MediaSendEventType.albumDowngradedToSingle:
+        bool changed = false;
+        final updatedMsgs = <Message>[];
+        setState(() {
+          for (int i = 0; i < event.localIds.length; i++) {
+            final targetLocalId = event.localIds[i];
+            Message? incoming;
+            for (final m in event.messages) {
+              if ((m.localId != null && m.localId == targetLocalId) ||
+                  m.id == targetLocalId) {
+                incoming = m;
+                break;
+              }
+            }
+            if (incoming == null &&
+                event.messages.length == event.localIds.length &&
+                i < event.messages.length) {
+              incoming = event.messages[i];
+            }
+            final idx = targetList.indexWhere((m) =>
+                (m.localId != null && m.localId == targetLocalId) ||
+                m.id == targetLocalId ||
+                (incoming != null &&
+                    incoming.id.isNotEmpty &&
+                    m.id == incoming.id));
+            if (idx != -1) {
+              final existing = targetList[idx];
+              if (incoming != null) {
+                final merged = incoming.copyWith(
+                  localId:
+                      incoming.localId ?? existing.localId ?? targetLocalId,
+                  sendStatus:
+                      event.type == MediaSendEventType.replacedWithServer
+                          ? 1
+                          : (event.type == MediaSendEventType.failed
+                              ? 2
+                              : incoming.sendStatus),
+                  replyInfo: incoming.replyInfo ?? existing.replyInfo,
+                  isQuote: incoming.isQuote || existing.isQuote,
+                  quoteText: incoming.quoteText ?? existing.quoteText,
+                  quoteOffset: incoming.quoteOffset != 0
+                      ? incoming.quoteOffset
+                      : existing.quoteOffset,
+                  quoteLength: incoming.quoteLength != 0
+                      ? incoming.quoteLength
+                      : existing.quoteLength,
+                  isOwn: incoming.isOwn || existing.isOwn,
+                );
+                targetList[idx] = merged;
+                updatedMsgs.add(merged);
+              } else if (event.type == MediaSendEventType.replacedWithServer) {
+                final merged = existing.copyWith(sendStatus: 1);
+                targetList[idx] = merged;
+                updatedMsgs.add(merged);
+              } else if (event.type == MediaSendEventType.failed) {
+                final merged = existing.copyWith(sendStatus: 2);
+                targetList[idx] = merged;
+                updatedMsgs.add(merged);
+              }
+              changed = true;
+            }
+          }
+          if (changed && !_isDetachedHistoryWindow) {
+            _updateFeedItems();
+          }
+        });
+        if (event.type == MediaSendEventType.replacedWithServer) {
+          for (final um in updatedMsgs) {
+            ChatInstantCache.instance.upsertMessage(widget.channelId, um);
+          }
+        }
+        break;
+
+      case MediaSendEventType.cancelled:
+        if (event.localIds.isEmpty) return;
+        final idSet = event.localIds.toSet();
+        final hasMatch = targetList.any((m) =>
+            idSet.contains(m.id) ||
+            (m.localId != null && idSet.contains(m.localId)));
+        if (hasMatch) {
+          setState(() {
+            targetList.removeWhere((m) =>
+                idSet.contains(m.id) ||
+                (m.localId != null && idSet.contains(m.localId)));
+            _selectedMessageIds.removeAll(idSet);
+            if (!_isDetachedHistoryWindow) {
+              _updateFeedItems();
+            }
+          });
+        }
+        ChatInstantCache.instance.removeMessages(widget.channelId, idSet);
+        break;
+    }
+  }
+
   void _onNewMessage(WebSocketEvent event) {
     final messageData = event.data['message'] as Map<String, dynamic>?;
     if (messageData == null) return;
@@ -2219,7 +2357,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         m.id == message.id ||
         (message.localId != null &&
             message.localId!.isNotEmpty &&
-            m.localId == message.localId));
+            (m.localId == message.localId || m.id == message.localId)));
 
     if (existingIndex != -1) {
       if (mounted) {
@@ -2229,12 +2367,14 @@ class _ChannelScreenState extends State<ChannelScreen>
             localId: existing.localId ?? message.localId,
             sendStatus: 1,
             replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
             isQuote: message.isQuote || existing.isQuote,
             quoteText: message.quoteText ?? existing.quoteText,
             quoteOffset:
                 message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
             quoteLength:
                 message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
+            isOwn: message.isOwn || existing.isOwn,
           );
           _updateFeedItems();
         });
@@ -2255,7 +2395,27 @@ class _ChannelScreenState extends State<ChannelScreen>
           message.senderId != _currentUserId && _currentUserId != null;
 
       if (_isDetachedHistoryWindow) {
-        if (!_detachedLatestBackup.any((m) => m.id == message.id)) {
+        final backupIdx = _detachedLatestBackup.indexWhere((m) =>
+            m.id == message.id ||
+            (message.localId != null &&
+                message.localId!.isNotEmpty &&
+                (m.localId == message.localId || m.id == message.localId)));
+        if (backupIdx != -1) {
+          final existing = _detachedLatestBackup[backupIdx];
+          _detachedLatestBackup[backupIdx] = message.copyWith(
+            localId: existing.localId ?? message.localId,
+            sendStatus: 1,
+            replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
+            isQuote: message.isQuote || existing.isQuote,
+            quoteText: message.quoteText ?? existing.quoteText,
+            quoteOffset:
+                message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength:
+                message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
+            isOwn: message.isOwn || existing.isOwn,
+          );
+        } else {
           _detachedLatestBackup.insert(0, message);
         }
         if (isIncoming) {
@@ -2455,12 +2615,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
 
     if (localMessages.isNotEmpty && mounted) {
+      final activeLocalIds = MediaSendCoordinator.instance.activeLocalIds;
       final fixedMessages = localMessages.map((m) {
         if (m.sendStatus == MessageSendStatus.sending.index) {
           if (m.serverId != null) {
             db.updateMessageSendStatus(
                 m.localId, m.serverId!, MessageSendStatus.sent.index);
             return m.copyWith(sendStatus: MessageSendStatus.sent.index);
+          } else if (activeLocalIds.contains(m.localId)) {
+            return m;
           } else {
             db.updateMessageStatus(m.localId, MessageSendStatus.failed.index);
             return m.copyWith(sendStatus: MessageSendStatus.failed.index);
@@ -2502,11 +2665,36 @@ class _ChannelScreenState extends State<ChannelScreen>
           final nextHasMore =
               result['has_more'] as bool? ?? (serverMessages.length >= 50);
 
-          final pendingMessages = _messages
-              .where(
-                (m) => m.sendStatus != 1 && m.localId != null,
-              )
-              .toList();
+          final List<Message> dbUnsentMessages = [];
+          try {
+            final dbLatest = await db.getMessages(widget.channelId, limit: 50);
+            final activeLocalIds = MediaSendCoordinator.instance.activeLocalIds;
+            for (final row in dbLatest) {
+              if (row.sendStatus == MessageSendStatus.failed.index) {
+                dbUnsentMessages.add(Message.fromDbMessage(row));
+              } else if (row.sendStatus == MessageSendStatus.sending.index &&
+                  row.serverId == null &&
+                  (activeLocalIds.contains(row.localId) ||
+                      _messages.any((em) =>
+                          em.localId == row.localId && em.sendStatus == 0))) {
+                dbUnsentMessages.add(Message.fromDbMessage(row));
+              }
+            }
+          } catch (_) {}
+
+          final Map<String, Message> pendingByKey = {};
+          for (final m in _messages) {
+            if (m.sendStatus != 1 && m.localId != null) {
+              pendingByKey[m.localId!] = m;
+            }
+          }
+          for (final m in dbUnsentMessages) {
+            final key = (m.localId != null && m.localId!.isNotEmpty)
+                ? m.localId!
+                : m.id;
+            pendingByKey.putIfAbsent(key, () => m);
+          }
+          final pendingMessages = pendingByKey.values.toList();
 
           final Map<String, Message> mergedById = {};
           final Map<String, Message> existingByLocalId = {};
@@ -2522,14 +2710,21 @@ class _ChannelScreenState extends State<ChannelScreen>
                     ? existingByLocalId[m.localId!]
                     : null);
             if (existing != null) {
+              if (existing.id != m.id) {
+                mergedById.remove(existing.id);
+              }
               mergedById[m.id] = m.copyWith(
                 localId: m.localId ?? existing.localId,
+                sendStatus: 1,
+                replyInfo: m.replyInfo ?? existing.replyInfo,
+                groupedId: m.groupedId ?? existing.groupedId,
                 isQuote: m.isQuote || existing.isQuote,
                 quoteText: m.quoteText ?? existing.quoteText,
                 quoteOffset:
                     m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
                 quoteLength:
                     m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+                isOwn: m.isOwn || existing.isOwn,
               );
             } else {
               mergedById[m.id] = m;
@@ -3285,16 +3480,21 @@ class _ChannelScreenState extends State<ChannelScreen>
     bool hasMediaSpoiler = false,
     bool asDocument = false,
     bool preserveComposerDraft = false,
+    List<File>? filesOverride,
+    Map<String, String>? captionsByPath,
+    bool isViewOnce = false,
+    int ttlSeconds = 0,
   }) async {
     final String controllerCleanText = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
     final String text = (cleanText ?? controllerCleanText).trimRight();
     final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
+    final bool hasIncomingFiles = _attachedFiles.isNotEmpty ||
+        (filesOverride != null && filesOverride.isNotEmpty);
     if ((text.trim().isEmpty &&
-            _attachedFiles.isEmpty &&
+            !hasIncomingFiles &&
             _stagedForward == null) ||
-        _isSending ||
-        _isUploading) {
+        (!hasIncomingFiles && _isSending)) {
       return;
     }
     final bool effectiveSilent = isSilent || _isSilentBroadcast;
@@ -3318,7 +3518,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           fwdRes['message']?.toString() ?? 'Ошибка пересылки',
         );
       }
-      if (text.trim().isEmpty && _attachedFiles.isEmpty) {
+      if (text.trim().isEmpty && !hasIncomingFiles) {
         return;
       }
     }
@@ -3327,7 +3527,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     final List<MessageEntity>? effectiveEntities =
         resolvedEntities.isNotEmpty ? resolvedEntities : null;
 
-    if (_isEditing && _editingMessageId != null) {
+    if (_isEditing && _editingMessageId != null && filesOverride == null) {
       final editingId = _editingMessageId!;
       _cancelEditing();
       setState(() {
@@ -3359,8 +3559,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       return;
     }
 
-    final filesToSend = List<File>.from(_attachedFiles);
-    final fileNamesToSend = List<String>.from(_attachedFileNames);
+    final filesToSend = filesOverride != null
+        ? List<File>.from(filesOverride)
+        : List<File>.from(_attachedFiles);
     final replyTo = _replyToMessage;
     final replyIsQuote = _isQuote;
     final replyQuoteText = _quoteText;
@@ -3372,6 +3573,16 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     _suppressDraftSave = true;
     try {
+      if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+        _showScrollDownFab = false;
+      }
       setState(() {
         _attachedFiles.clear();
         _attachedFileNames.clear();
@@ -3383,10 +3594,10 @@ class _ChannelScreenState extends State<ChannelScreen>
         _quoteText = null;
         _quoteOffset = 0;
         _quoteLength = 0;
+        _isUploading = false;
+        _uploadProgressNotifier.value = 0.0;
         if (filesToSend.isEmpty) {
           _isSending = true;
-        } else {
-          _isUploading = true;
         }
       });
       if (!preserveComposerDraft) {
@@ -3402,191 +3613,43 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
     _scrollToBottom();
 
-    // Multi / single file or album publishing path
     if (filesToSend.isNotEmpty) {
+      final channelTitle =
+          _channelName.isNotEmpty ? _channelName : widget.channelName;
       try {
-        final uploadedItems = <Map<String, dynamic>>[];
-        for (int i = 0; i < filesToSend.length; i++) {
-          final file = filesToSend[i];
-          final name = i < fileNamesToSend.length
-              ? fileNamesToSend[i]
-              : p.basename(file.path);
-          final msgType = asDocument ? 'file' : _detectMessageType(name);
-          final useChunked = msgType == 'video' ||
-              (!kIsWeb && await file.length() > 5 * 1024 * 1024);
-          final uploadResult = useChunked
-              ? await _fileService.uploadFileChunked(
-                  file,
-                  onProgress: (progress) {
-                    if (mounted) {
-                      _uploadProgressNotifier.value =
-                          (i + progress) / filesToSend.length;
-                    }
-                  },
-                )
-              : await _fileService.uploadFile(
-                  file,
-                  onProgress: (progress) {
-                    if (mounted) {
-                      _uploadProgressNotifier.value =
-                          (i + progress) / filesToSend.length;
-                    }
-                  },
-                );
-          if (!kIsWeb && (msgType == 'image' || msgType == 'video')) {
-            await MediaCacheManager.instance
-                .seedCacheFromFile(uploadResult.url, file);
-          }
-          uploadedItems.add({
-            'message_type': msgType,
-            'file_url': uploadResult.url,
-            'file_name': uploadResult.fileName,
-            'media_payload': uploadResult.toMediaPayload(),
-          });
-        }
-
-        final isMediaAlbum = uploadedItems.length > 1 &&
-            uploadedItems.every((it) =>
-                it['message_type'] == 'image' || it['message_type'] == 'video');
-
-        if (isMediaAlbum) {
-          for (int offset = 0; offset < uploadedItems.length; offset += 10) {
-            final end = math.min(offset + 10, uploadedItems.length);
-            final chunk = uploadedItems.sublist(offset, end);
-            final albumGroupedId = const Uuid().v4();
-            final chunkCaption = offset == 0 ? effectiveContent : '';
-            final chunkEntities = offset == 0 ? effectiveEntities : null;
-
-            Map<String, dynamic> res = await ChatService.sendMediaAlbum(
-              chatId: widget.channelId,
-              items: chunk,
-              groupedId: albumGroupedId,
-              caption: chunkCaption,
-              entities: chunkEntities,
-              invertMedia: effectiveInvert,
-              replyToMessageId: replyTo?.id,
-              isSilent: effectiveSilent,
-              hasMediaSpoiler: hasMediaSpoiler,
-            );
-
-            if (res['success'] != true && res['retry_after'] == null) {
-              final fallbackMsgs = <Message>[];
-              for (int idx = 0; idx < chunk.length; idx++) {
-                final item = chunk[idx];
-                final isLast = idx == chunk.length - 1;
-                final singleRes = await ChatService.sendMessage(
-                  chatId: widget.channelId,
-                  messageType: item['message_type'] ?? 'image',
-                  content: isLast ? chunkCaption : '',
-                  fileUrl: item['file_url'],
-                  fileName: item['file_name'],
-                  mediaPayload: item['media_payload'],
-                  entities: isLast ? chunkEntities : null,
-                  groupedId: albumGroupedId,
-                  invertMedia: effectiveInvert,
-                  replyToMessageId: replyTo?.id,
-                  isSilent: effectiveSilent,
-                  hasMediaSpoiler: hasMediaSpoiler,
-                );
-                if (singleRes['success'] == true &&
-                    singleRes['message'] is Message) {
-                  fallbackMsgs.add(singleRes['message'] as Message);
-                }
-              }
-              if (fallbackMsgs.isNotEmpty) {
-                res = {
-                  'success': true,
-                  'grouped_id': albumGroupedId,
-                  'messages': fallbackMsgs,
-                };
-              }
-            }
-
-            if (res['success'] == true && mounted) {
-              final rawMessages = res['messages'] as List<dynamic>? ?? [];
-              final newMsgs = <Message>[];
-              for (final raw in rawMessages) {
-                final msg = raw is Message
-                    ? raw
-                    : (raw is Map
-                        ? Message.fromJson(Map<String, dynamic>.from(raw))
-                        : null);
-                if (msg != null) newMsgs.add(msg);
-              }
-              setState(() {
-                for (final msg in newMsgs) {
-                  final existingIdx = _messages.indexWhere((m) => m.id == msg.id);
-                  if (existingIdx != -1) {
-                    _messages[existingIdx] = msg;
-                  } else {
-                    _messages.insert(0, msg);
-                  }
-                }
-                _sortMessagesDescending(_messages);
-                _updateFeedItems();
-              });
-              try {
-                await AppDatabase().saveMessages(
-                  newMsgs.map((m) => _messageToCompanion(m)).toList(),
-                );
-              } catch (_) {}
-            } else if (res['message'] != null && mounted) {
-              GlassToastService().show(context, res['message'].toString());
-            }
-          }
-        } else {
-          for (int i = 0; i < uploadedItems.length; i++) {
-            final item = uploadedItems[i];
-            final isLast = i == uploadedItems.length - 1;
-            final res = await ChatService.sendMessage(
-              chatId: widget.channelId,
-              messageType: item['message_type'] ?? 'document',
-              content: isLast ? effectiveContent : '',
-              fileUrl: item['file_url'],
-              fileName: item['file_name'],
-              mediaPayload: item['media_payload'],
-              entities: isLast ? effectiveEntities : null,
-              linkPreviewOptions: isLast ? effectiveLinkPreview : null,
-              invertMedia: effectiveInvert,
-              replyToMessageId: replyTo?.id,
-              isQuote: replyIsQuote,
-              quoteText: replyQuoteText,
-              quoteOffset: replyQuoteOffset,
-              quoteLength: replyQuoteLength,
-              isSilent: effectiveSilent,
-              hasMediaSpoiler: hasMediaSpoiler,
-            );
-            if (res['success'] == true && res['message'] is Message && mounted) {
-              final sent = res['message'] as Message;
-              setState(() {
-                if (!_messages.any((m) => m.id == sent.id)) {
-                  _messages.insert(0, sent);
-                  _sortMessagesDescending(_messages);
-                  _updateFeedItems();
-                }
-              });
-              try {
-                await AppDatabase().saveMessage(_messageToCompanion(sent));
-              } catch (_) {}
-            } else if (res['message'] != null && mounted) {
-              GlassToastService().show(context, res['message'].toString());
-            }
-          }
-        }
+        await MediaSendCoordinator.instance.enqueueMediaOrFiles(
+          chatId: widget.channelId,
+          files: filesToSend,
+          asDocument: asDocument,
+          caption: effectiveContent,
+          captionsByPath: captionsByPath,
+          entities: effectiveEntities,
+          invertMedia: effectiveInvert,
+          replyToMessageId: replyTo?.id,
+          isQuote: replyIsQuote,
+          quoteText: replyQuoteText,
+          quoteOffset: replyQuoteOffset,
+          quoteLength: replyQuoteLength,
+          replyToSenderId: replyTo != null ? '0' : null,
+          replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+            chatName: channelTitle,
+            chatType: 'channel',
+          ),
+          replyToContent: replyTo?.content,
+          replyToMessageType: replyTo?.messageType ?? 'text',
+          isSilent: effectiveSilent,
+          hasMediaSpoiler: hasMediaSpoiler,
+          isViewOnce: isViewOnce,
+          ttlSeconds: ttlSeconds,
+          senderId: _currentUserId,
+        );
       } catch (e) {
-        debugPrint('Channel file upload/send error: $e');
+        debugPrint('Channel media enqueue error: $e');
         if (mounted) {
           GlassToastService().show(
             context,
             context.l10n.translate('chat_upload_error'),
           );
-        }
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isUploading = false;
-            _uploadProgressNotifier.value = 0.0;
-          });
         }
       }
       return;
@@ -3793,7 +3856,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           }
         });
         if (result.sendImmediately) {
-          _sendMessage();
+          _sendMessage(asDocument: result.asDocument);
         }
       } else {
         await _openMediaSendScreen(result.files!);
@@ -3903,12 +3966,6 @@ class _ChannelScreenState extends State<ChannelScreen>
       return;
     }
 
-    setState(() {
-      for (final file in result.files) {
-        _attachedFiles.add(file);
-        _attachedFileNames.add(p.basename(file.path));
-      }
-    });
     _sendMessage(
       cleanText: result.caption ?? '',
       entities: const [],
@@ -3916,6 +3973,10 @@ class _ChannelScreenState extends State<ChannelScreen>
       hasMediaSpoiler: result.hasMediaSpoiler,
       asDocument: result.asDocument,
       preserveComposerDraft: true,
+      filesOverride: result.files,
+      captionsByPath: result.captionsByPath,
+      isViewOnce: result.isViewOnce,
+      ttlSeconds: result.ttlSeconds,
     );
   }
 
@@ -4097,26 +4158,37 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   /// Повторить отправку failed-сообщения
   Future<void> _retryMessage(Message message) async {
-    if (message.localId == null) return;
+    final targetLocalId =
+        (message.localId != null && message.localId!.isNotEmpty)
+            ? message.localId!
+            : message.id;
+    if (targetLocalId.isEmpty) return;
     final syncService = SyncService();
 
     setState(() {
-      final idx = _messages.indexWhere((m) => m.localId == message.localId);
+      final idx = _messages.indexWhere(
+        (m) =>
+            (m.localId != null && m.localId == targetLocalId) ||
+            m.id == targetLocalId,
+      );
       if (idx != -1) {
         _messages[idx] = _messages[idx].copyWith(sendStatus: 0);
         _updateFeedItems();
       }
     });
 
-    await syncService.retryFailedMessage(message.localId!);
+    await syncService.retryFailedMessage(targetLocalId);
 
     final db = AppDatabase();
     try {
-      final updated = await db.getMessageByLocalId(message.localId!);
+      final updated = await db.getMessageByLocalId(targetLocalId);
       if (updated != null && mounted) {
         setState(() {
-          final idx =
-              _messages.indexWhere((m) => m.localId == message.localId);
+          final idx = _messages.indexWhere(
+            (m) =>
+                (m.localId != null && m.localId == targetLocalId) ||
+                m.id == targetLocalId,
+          );
           if (idx != -1) {
             _messages[idx] = Message.fromDbMessage(updated);
             _updateFeedItems();
@@ -4570,6 +4642,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _viewsFlushTimer?.cancel();
     unawaited(_flushPendingViews());
     _realtimeUpdateSub?.cancel();
+    _mediaSendSub?.cancel();
 
     if (!_isDetachedHistoryWindow && _messages.isNotEmpty) {
       ChatInstantCache.instance.putMessages(widget.channelId, _messages);
@@ -5761,24 +5834,68 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
     if (res == null || !res.confirmed || !mounted) return;
 
-    final ids = targets.map((m) => m.id).toList();
-    final backup = List<Message>.from(_messages);
+    final unsentMessages = targets
+        .where((m) => m.sendStatus != 1 || m.id.startsWith('local_'))
+        .toList();
+    final serverMessages = targets
+        .where((m) => m.sendStatus == 1 && !m.id.startsWith('local_'))
+        .toList();
+    final targetIds = <String>{
+      for (final m in targets) m.id,
+      for (final m in targets)
+        if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+    };
+    final serverIds = serverMessages.map((m) => m.id).toList();
+    final serverBackup = List<Message>.from(
+      _messages.where((m) => serverIds.contains(m.id)),
+    );
+
     setState(() {
-      _messages.removeWhere((m) => ids.contains(m.id));
-      _selectedMessageIds.removeAll(ids);
+      _messages.removeWhere((m) =>
+          targetIds.contains(m.id) ||
+          (m.localId != null && targetIds.contains(m.localId)));
+      _selectedMessageIds.removeAll(targetIds);
       _updateFeedItems();
     });
 
+    for (final unsent in unsentMessages) {
+      final targetLocalId =
+          (unsent.localId != null && unsent.localId!.isNotEmpty)
+              ? unsent.localId!
+              : unsent.id;
+      await MediaSendCoordinator.instance.cancelUpload(targetLocalId);
+      await AppDatabase().deleteMessage(targetLocalId);
+      if (unsent.id != targetLocalId) {
+        await AppDatabase().deleteMessage(unsent.id);
+      }
+    }
+    if (unsentMessages.isNotEmpty) {
+      ChatInstantCache.instance.removeMessages(
+        widget.channelId,
+        [
+          for (final u in unsentMessages) ...[
+            u.id,
+            if (u.localId != null && u.localId!.isNotEmpty) u.localId!,
+          ],
+        ],
+      );
+    }
+
+    if (serverIds.isEmpty) return;
+
     final apiRes = await ChatService.deleteMessagesBatch(
       chatId: widget.channelId,
-      messageIds: ids,
+      messageIds: serverIds,
       revoke: res.revoke,
     );
     if (apiRes['success'] != true && mounted) {
       setState(() {
-        _messages
-          ..clear()
-          ..addAll(backup);
+        for (final restored in serverBackup) {
+          if (!_messages.any((m) => m.id == restored.id)) {
+            _messages.add(restored);
+          }
+        }
+        _sortMessagesDescending(_messages);
         _updateFeedItems();
       });
       GlassToastService().showError(
@@ -6953,9 +7070,6 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   Future<void> _sendVoiceMessage(VoiceRecordResult result) async {
     final file = result.file;
-    final voiceLabel =
-        AppLocalizations.of(context)?.translate('chat_voice_message') ??
-            'Voice message';
     if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
       debugPrint('Voice file is empty or does not exist');
       return;
@@ -6966,186 +7080,57 @@ class _ChannelScreenState extends State<ChannelScreen>
     final replyQuoteText = _quoteText;
     final replyQuoteOffset = _quoteOffset;
     final replyQuoteLength = _quoteLength;
+    final channelTitle =
+        _channelName.isNotEmpty ? _channelName : widget.channelName;
+
+    if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+        _showScrollDownFab = false;
+        _updateFeedItems();
+      });
+    }
     _cancelReply();
 
-    final syncService = SyncService();
-    String? pendingLocalId;
-    DbMessage? pendingMsg;
-
     try {
-      final fileName = kIsWeb
-          ? 'voice_${DateTime.now().millisecondsSinceEpoch}.webm'
-          : file.path.split(!kIsWeb ? Platform.pathSeparator : '/').last;
-      try {
-        pendingMsg = await syncService.createPendingMessage(
-          chatId: widget.channelId,
-          senderId: _currentUserId ?? '',
-          content: voiceLabel,
-          messageType: 'voice',
-          fileUrl: file.path,
-          fileName: fileName,
-          replyToMessageId: replyTo?.id,
-          isQuote: replyIsQuote,
-          quoteText: replyQuoteText,
-          quoteOffset: replyQuoteOffset,
-          quoteLength: replyQuoteLength,
-          replyToSenderId: replyTo?.senderId,
-          replyToSenderName: replyTo?.senderName,
-          replyToContent: replyTo?.content,
-          replyToMessageType: replyTo?.messageType ?? 'text',
-          waveform: result.waveform,
-          duration: result.duration.inSeconds,
-          isSilent: _isSilentBroadcast,
-        );
-      } catch (e) {
-        debugPrint('SyncService createPendingMessage voice error in channel: $e');
-      }
-
-      if (pendingMsg != null && mounted) {
-        pendingLocalId = pendingMsg.localId;
-        var message = Message.fromDbMessage(pendingMsg).copyWith(
-          waveform: result.waveform,
-          duration: result.duration.inSeconds,
-          isSilent: _isSilentBroadcast,
-        );
-        if (replyTo != null) {
-          final channelTitle =
-              _channelName.isNotEmpty ? _channelName : widget.channelName;
-          message = message.copyWith(
-            replyInfo: ReplyInfo(
-              messageId: replyTo.id,
-              senderId: '0',
-              senderName: replyTo.resolveEffectiveAuthorTitle(
-                chatName: channelTitle,
-                chatType: 'channel',
-              ),
-              content: replyTo.content,
-              messageType: replyTo.messageType,
-              entities: replyTo.entities,
-              nameColorPresetId: 'name_red',
-              replyStripStyle: 'solid',
-              replyEmoji: null,
-            ),
-          );
-        }
-        if (mounted) {
-          setState(() {
-            _messages.insert(0, message);
-            _updateFeedItems();
-          });
-          _scrollToBottom();
-        }
-      }
-
-      setState(() => _isUploading = true);
-      final uploadResult = await _fileService.uploadFile(
-        file,
-        onProgress: (progress) {
-          if (mounted) _uploadProgressNotifier.value = progress;
-        },
-      );
-
-      final effectiveDuration = uploadResult.duration > 0
-          ? uploadResult.duration
-          : result.duration.inSeconds;
-
-      final sendResult = await ChatService.sendMessage(
+      await MediaSendCoordinator.instance.enqueueVoiceNote(
         chatId: widget.channelId,
-        content: voiceLabel,
-        messageType: 'voice',
-        localId: pendingLocalId,
-        fileUrl: uploadResult.url,
-        fileName: uploadResult.fileName,
-        mediaPayload: uploadResult.toMediaPayload(),
+        audioFile: file,
+        durationSeconds: result.duration.inSeconds,
+        waveform: result.waveform,
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,
         quoteText: replyQuoteText,
         quoteOffset: replyQuoteOffset,
         quoteLength: replyQuoteLength,
-        waveform: result.waveform,
-        duration: effectiveDuration,
+        replyToSenderId: replyTo != null ? '0' : null,
+        replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+          chatName: channelTitle,
+          chatType: 'channel',
+        ),
+        replyToContent: replyTo?.content,
+        replyToMessageType: replyTo?.messageType ?? 'text',
         isSilent: _isSilentBroadcast,
+        senderId: _currentUserId,
       );
-
-      if (sendResult['success'] == true) {
-        if (!kIsWeb) {
-          await MediaCacheManager.instance
-              .seedCacheFromFile(uploadResult.url, file);
-        }
-        final sentMessage = sendResult['message'];
-        final serverId = sentMessage is Message ? sentMessage.id : null;
-        if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId,
-              remoteFileUrl: uploadResult.url);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                if (sentMessage is Message) {
-                  _messages[idx] = sentMessage.copyWith(
-                    localId: pendingLocalId,
-                    replyInfo: _messages[idx].replyInfo,
-                    waveform: sentMessage.waveform ?? _messages[idx].waveform,
-                    duration: sentMessage.duration ?? effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                } else {
-                  _messages[idx] = _messages[idx].copyWith(
-                    id: serverId,
-                    sendStatus: 1,
-                    duration: effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                }
-                _updateFeedItems();
-              }
-            });
-          }
-        }
-      } else {
-        if (pendingLocalId != null) {
-          await syncService.markMessageFailed(pendingLocalId);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-                _updateFeedItems();
-              }
-            });
-          }
-        }
-      }
     } catch (e) {
       debugPrint('Voice message send error in channel: $e');
-      if (pendingLocalId != null) {
-        await syncService.markMessageFailed(pendingLocalId);
-        if (mounted) {
-          setState(() {
-            final idx =
-                _messages.indexWhere((m) => m.localId == pendingLocalId);
-            if (idx != -1) {
-              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-            }
-          });
-        }
-      }
-    } finally {
       if (mounted) {
-        setState(() {
-          _isUploading = false;
-          _uploadProgressNotifier.value = 0.0;
-        });
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_upload_error'),
+        );
       }
     }
   }
 
   Future<void> _sendRoundVideoMessage(File file) async {
-    final videoNoteLabel =
-        AppLocalizations.of(context)?.translate('chat_video_note') ??
-            'Video message';
     if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
       debugPrint('Video file is empty or does not exist');
       return;
@@ -7158,181 +7143,51 @@ class _ChannelScreenState extends State<ChannelScreen>
     final replyQuoteText = _quoteText;
     final replyQuoteOffset = _quoteOffset;
     final replyQuoteLength = _quoteLength;
+    final channelTitle =
+        _channelName.isNotEmpty ? _channelName : widget.channelName;
+
+    if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+        _showScrollDownFab = false;
+        _updateFeedItems();
+      });
+    }
     _cancelReply();
 
-    final syncService = SyncService();
-    String? pendingLocalId;
-    DbMessage? pendingMsg;
-
     try {
-      final fileName = kIsWeb
-          ? 'video_note_${DateTime.now().millisecondsSinceEpoch}.webm'
-          : file.path.split(!kIsWeb ? Platform.pathSeparator : '/').last;
-      try {
-        pendingMsg = await syncService.createPendingMessage(
-          chatId: widget.channelId,
-          senderId: _currentUserId ?? '',
-          content: videoNoteLabel,
-          messageType: 'video',
-          fileUrl: file.path,
-          fileName: fileName,
-          isRound: true,
-          duration: recordedDurationSec,
-          replyToMessageId: replyTo?.id,
-          isQuote: replyIsQuote,
-          quoteText: replyQuoteText,
-          quoteOffset: replyQuoteOffset,
-          quoteLength: replyQuoteLength,
-          replyToSenderId: replyTo?.senderId,
-          replyToSenderName: replyTo?.senderName,
-          replyToContent: replyTo?.content,
-          replyToMessageType: replyTo?.messageType ?? 'text',
-          isSilent: _isSilentBroadcast,
-        );
-      } catch (e) {
-        debugPrint('SyncService createPendingMessage video error in channel: $e');
-      }
-
-      if (pendingMsg != null && mounted) {
-        pendingLocalId = pendingMsg.localId;
-        var message = Message.fromDbMessage(pendingMsg).copyWith(
-          duration: recordedDurationSec,
-        );
-        if (replyTo != null) {
-          final channelTitle =
-              _channelName.isNotEmpty ? _channelName : widget.channelName;
-          message = message.copyWith(
-            replyInfo: ReplyInfo(
-              messageId: replyTo.id,
-              senderId: '0',
-              senderName: replyTo.resolveEffectiveAuthorTitle(
-                chatName: channelTitle,
-                chatType: 'channel',
-              ),
-              content: replyTo.content,
-              messageType: replyTo.messageType,
-              entities: replyTo.entities,
-              nameColorPresetId: 'name_red',
-              replyStripStyle: 'solid',
-              replyEmoji: null,
-            ),
-          );
-        }
-        if (mounted) {
-          setState(() {
-            _messages.insert(0, message);
-            _updateFeedItems();
-          });
-          _scrollToBottom();
-        }
-      }
-
-      setState(() => _isUploading = true);
-      final uploadResult = await _fileService.uploadFileChunked(
-        file,
-        onProgress: (progress) {
-          if (mounted) _uploadProgressNotifier.value = progress;
-        },
-      );
-
-      final effectiveDuration = uploadResult.duration > 0
-          ? uploadResult.duration
-          : recordedDurationSec;
-
-      final result = await ChatService.sendMessage(
+      await MediaSendCoordinator.instance.enqueueRoundVideoNote(
         chatId: widget.channelId,
-        content: videoNoteLabel,
-        messageType: 'video',
-        localId: pendingLocalId,
-        fileUrl: uploadResult.url,
-        fileName: uploadResult.fileName,
-        mediaPayload: uploadResult.toMediaPayload(),
-        isRound: true,
-        duration: effectiveDuration,
+        videoFile: file,
+        durationSeconds: recordedDurationSec,
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,
         quoteText: replyQuoteText,
         quoteOffset: replyQuoteOffset,
         quoteLength: replyQuoteLength,
+        replyToSenderId: replyTo != null ? '0' : null,
+        replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+          chatName: channelTitle,
+          chatType: 'channel',
+        ),
+        replyToContent: replyTo?.content,
+        replyToMessageType: replyTo?.messageType ?? 'text',
         isSilent: _isSilentBroadcast,
+        senderId: _currentUserId,
       );
-
-      if (result['success'] == true) {
-        if (!kIsWeb) {
-          await MediaCacheManager.instance
-              .seedCacheFromFile(uploadResult.url, file);
-        }
-        final sentMessage = result['message'];
-        final serverId = sentMessage is Message ? sentMessage.id : null;
-        if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId,
-              remoteFileUrl: uploadResult.url);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                if (sentMessage is Message) {
-                  _messages[idx] = sentMessage.copyWith(
-                    localId: pendingLocalId,
-                    replyInfo: _messages[idx].replyInfo,
-                    sendStatus: 1,
-                    isRound: true,
-                    duration: sentMessage.duration ?? effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                } else {
-                  _messages[idx] = _messages[idx].copyWith(
-                    id: serverId,
-                    sendStatus: 1,
-                    isRound: true,
-                    duration: effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                }
-                _updateFeedItems();
-              }
-            });
-          }
-        }
-      } else {
-        if (pendingLocalId != null) {
-          await syncService.markMessageFailed(pendingLocalId);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-                _updateFeedItems();
-              }
-            });
-          }
-        }
-      }
     } catch (e) {
       debugPrint('Error sending round video message in channel: $e');
-      if (pendingLocalId != null) {
-        await syncService.markMessageFailed(pendingLocalId);
-        if (mounted) {
-          setState(() {
-            final idx =
-                _messages.indexWhere((m) => m.localId == pendingLocalId);
-            if (idx != -1) {
-              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-            }
-          });
-        }
-      }
       if (mounted) {
-        GlassToastService().show(context, context.l10n.translate('chat_upload_error'));
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isUploading = false;
-          _uploadProgressNotifier.value = 0.0;
-        });
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_upload_error'),
+        );
       }
     }
   }

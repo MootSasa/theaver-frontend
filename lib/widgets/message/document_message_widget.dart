@@ -9,7 +9,9 @@ import '../../l10n/app_localizations.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../design_system/theav_design_system.dart';
+import 'telegram_upload_progress.dart';
 
 enum DownloadStatus { idle, downloading, downloaded, failed }
 
@@ -17,12 +19,20 @@ class DocumentMessageWidget extends StatefulWidget {
   final String fileUrl;
   final String fileName;
   final double fileSize; // in bytes
+  final String? localId;
+  final int sendStatus;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onRetry;
 
   const DocumentMessageWidget({
     Key? key,
     required this.fileUrl,
     required this.fileName,
     required this.fileSize,
+    this.localId,
+    this.sendStatus = 1,
+    this.onCancelUpload,
+    this.onRetry,
   }) : super(key: key);
 
   @override
@@ -35,11 +45,15 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   String? _downloadedFilePath;
   double _resolvedFileSize = 0.0;
 
+  bool get _isUploadingOrFailed => widget.sendStatus != 1;
+
   @override
   void initState() {
     super.initState();
     _resolvedFileSize = widget.fileSize;
-    _checkFileExists();
+    if (!_isUploadingOrFailed) {
+      _checkFileExists();
+    }
   }
 
   @override
@@ -48,13 +62,16 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     if (widget.fileSize > 0 && widget.fileSize != _resolvedFileSize) {
       _resolvedFileSize = widget.fileSize;
     }
-    if (oldWidget.fileName != widget.fileName || oldWidget.fileUrl != widget.fileUrl) {
+    if (!_isUploadingOrFailed &&
+        (oldWidget.sendStatus != widget.sendStatus ||
+            oldWidget.fileName != widget.fileName ||
+            oldWidget.fileUrl != widget.fileUrl)) {
       _checkFileExists();
     }
   }
 
   Future<void> _checkFileExists() async {
-    if (kIsWeb) return;
+    if (kIsWeb || _isUploadingOrFailed) return;
     try {
       // 1. Check MediaCacheManager first
       final cached = await MediaCacheManager.instance.getCachedFile(
@@ -111,6 +128,37 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isUploadingOrFailed) {
+      final lid = widget.localId;
+      if (lid != null && lid.isNotEmpty) {
+        return ValueListenableBuilder<OutgoingUploadProgress>(
+          valueListenable: MediaSendCoordinator.instance.progressFor(
+            lid,
+            totalBytes: (widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize)
+                .round(),
+            sendStatus: widget.sendStatus,
+          ),
+          builder: (context, progress, _) => _buildUploadingCard(
+            context,
+            progress,
+          ),
+        );
+      }
+      return _buildUploadingCard(
+        context,
+        OutgoingUploadProgress(
+          localId: '',
+          chatId: '',
+          sentBytes: 0,
+          totalBytes: widget.fileSize.round(),
+          fraction: 0.0,
+          phase: widget.sendStatus == 2
+              ? OutgoingUploadPhase.failed
+              : OutgoingUploadPhase.uploading,
+        ),
+      );
+    }
+
     final effectiveSize = widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize;
     final formattedSize = _formatSize(effectiveSize);
     return GestureDetector(
@@ -158,6 +206,94 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
             _buildActionButton(context),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildUploadingCard(
+    BuildContext context,
+    OutgoingUploadProgress progress,
+  ) {
+    final totalBytes = progress.totalBytes > 0
+        ? progress.totalBytes
+        : (widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize).round();
+    final String subtitle;
+    if (progress.isFailed) {
+      subtitle = AppLocalizations.trStatic('upload_retry', 'Повторить');
+    } else if (totalBytes > 0) {
+      final sent = progress.sentBytes.clamp(0, totalBytes);
+      subtitle = AppLocalizations.trStatic(
+        'upload_progress_of',
+        '{sent} из {total}',
+        {
+          'sent': MediaCacheManager.formatBytes(sent),
+          'total': MediaCacheManager.formatBytes(totalBytes),
+        },
+      );
+    } else {
+      subtitle = _formatSize(widget.fileSize);
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.05),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TelegramRadialUploadIndicator(
+            progress: progress,
+            size: 38,
+            onCancel: widget.onCancelUpload ??
+                (widget.localId != null
+                    ? () => MediaSendCoordinator.instance.cancelUpload(
+                          widget.localId!,
+                        )
+                    : null),
+            onRetry: widget.onRetry ??
+                (widget.localId != null
+                    ? () => MediaSendCoordinator.instance.retryMessage(
+                          widget.localId!,
+                        )
+                    : null),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.fileName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                if (subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: progress.isFailed
+                          ? const Color(0xFFFF6B6B)
+                          : Theme.of(context)
+                              .colorScheme
+                              .onSurface
+                              .withValues(alpha: 0.65),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

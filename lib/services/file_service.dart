@@ -21,12 +21,37 @@ class FileService {
 
   FileService({
     String? baseUrl,
+    Dio? dio,
   })  : baseUrl = baseUrl ?? AppConfig.baseUrl,
-        _dio = Dio(BaseOptions(
-          connectTimeout: const Duration(seconds: 30),
-          receiveTimeout: const Duration(minutes: 15),
-          sendTimeout: const Duration(minutes: 15),
-        ));
+        _dio = dio ??
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(minutes: 15),
+              sendTimeout: const Duration(minutes: 15),
+            ));
+
+  /// Returns whether it is safe to copy [sourceFile] directly into the media
+  /// cache under [result.url] without poisoning the cache with a wrong container
+  /// (e.g. a server-transcoded `.mov`/`.webm` normalized to `.mp4`).
+  static bool shouldSeedUploadedFile(File sourceFile, UploadResult result) {
+    if (result.url.isEmpty) return false;
+    final srcExt = path.extension(sourceFile.path).toLowerCase();
+    final resPath = (Uri.tryParse(result.url)?.path ?? result.url).toLowerCase();
+    final mime = result.mimeType.toLowerCase();
+    if (mime.startsWith('video/') ||
+        srcExt == '.mov' ||
+        srcExt == '.webm' ||
+        srcExt == '.mkv' ||
+        srcExt == '.avi' ||
+        srcExt == '.3gp' ||
+        srcExt == '.m4v') {
+      return srcExt == '.mp4' && resPath.endsWith('.mp4');
+    }
+    if (mime.startsWith('audio/')) {
+      return srcExt.isNotEmpty && resPath.endsWith(srcExt);
+    }
+    return true;
+  }
 
   /// Get authorization headers
   Future<Map<String, String>> _getHeaders() async {
@@ -40,16 +65,43 @@ class FileService {
   ///
   /// [file] - The file to upload
   /// [onProgress] - Optional callback for upload progress (0.0 to 1.0)
+  /// [onSendBytes] - Optional byte-level progress callback `(sentBytes, totalBytes)`
   Future<UploadResult> uploadFile(
     File file, {
     void Function(double progress)? onProgress,
+    void Function(int sentBytes, int totalBytes)? onSendBytes,
+    CancelToken? cancelToken,
+    bool seedCache = true,
+    bool allowDeleteTempSource = false,
   }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw const FileUploadCancelledException();
+    }
+
+    final multiSegments = VideoNoteRecorderService.takeRecordedSegments(file.path);
+    if (multiSegments != null && multiSegments.length > 1) {
+      return _uploadAndConcatVideoSegments(
+        multiSegments,
+        onProgress: onProgress,
+        onSendBytes: onSendBytes,
+        cancelToken: cancelToken,
+      );
+    }
+
     final fileName = path.basename(file.path);
     final fileLength = await file.length();
 
-    // Automatically use chunked upload for large voice/media files (> 10 MB) so unlimited size works reliably
-    if (fileLength > 10 * 1024 * 1024) {
-      return uploadFileChunked(file, onProgress: onProgress);
+    // Automatically use 4 MB+ chunked upload for files > 8 MB so unlimited size
+    // works reliably without choking Nginx rate limits.
+    if (fileLength > 8 * 1024 * 1024) {
+      return _uploadSingleFileChunked(
+        file,
+        onProgress: onProgress,
+        onSendBytes: onSendBytes,
+        cancelToken: cancelToken,
+        seedCache: seedCache,
+        allowDeleteTempSource: allowDeleteTempSource,
+      );
     }
 
     // Determine mime type from file extension
@@ -69,22 +121,33 @@ class FileService {
       final response = await _dio.post(
         '$baseUrl/api/files/upload',
         data: formData,
+        cancelToken: cancelToken,
         options: Options(
           headers: headers,
           sendTimeout: const Duration(minutes: 15),
           receiveTimeout: const Duration(minutes: 15),
         ),
         onSendProgress: (sent, total) {
-          if (onProgress != null && total > 0) {
-            onProgress(sent / total);
+          final effTotal = fileLength > 0 ? fileLength : total;
+          final clampedSent = effTotal > 0 ? sent.clamp(0, effTotal) : sent;
+          if (effTotal > 0) {
+            onSendBytes?.call(clampedSent, effTotal);
+            // Leave final 4% until server FFmpeg normalization + MinIO store finish
+            onProgress?.call(((clampedSent / effTotal) * 0.96).clamp(0.0, 0.96));
           }
         },
       );
 
       if (response.statusCode == 200 && response.data['success'] == true) {
         final result = UploadResult.fromJson(response.data);
-        if (result.url.isNotEmpty) {
-          await MediaCacheManager.instance.seedCacheFromFile(result.url, file);
+        onSendBytes?.call(fileLength, fileLength);
+        onProgress?.call(1.0);
+        if (seedCache && shouldSeedUploadedFile(file, result)) {
+          await MediaCacheManager.instance.seedCacheFromFile(
+            result.url,
+            file,
+            deleteSourceIfTemp: allowDeleteTempSource,
+          );
         }
         return result;
       } else {
@@ -93,221 +156,365 @@ class FileService {
         );
       }
     } on DioException catch (e) {
+      if (CancelToken.isCancel(e) || (cancelToken?.isCancelled ?? false)) {
+        throw const FileUploadCancelledException();
+      }
+      final dynamic data = e.response?.data;
+      final serverMsg = data is Map ? data['message']?.toString() : null;
       throw FileUploadException(
-        e.response?.data?['message'] ?? 'Upload failed: ${e.message}',
+        serverMsg ?? 'Upload failed: ${e.message}',
       );
     }
   }
 
-  /// Upload a file in chunks to allow progressive processing and streaming.
+  /// Upload a file (uses fast single-stream POST for <= 8 MB and 4 MB chunks for > 8 MB).
   /// Also handles multi-segment video notes recorded when flipping the camera.
   Future<UploadResult> uploadFileChunked(
     File file, {
     void Function(double progress)? onProgress,
-    int chunkSize = 256 * 1024, // default 256 KB per chunk for small files
+    void Function(int sentBytes, int totalBytes)? onSendBytes,
+    CancelToken? cancelToken,
+    int chunkSize = 4 * 1024 * 1024, // 4 MB default chunk for > 8 MB files
+    bool seedCache = true,
+    bool allowDeleteTempSource = false,
   }) async {
+    if (cancelToken?.isCancelled == true) {
+      throw const FileUploadCancelledException();
+    }
+
     final multiSegments = VideoNoteRecorderService.takeRecordedSegments(file.path);
     if (multiSegments != null && multiSegments.length > 1) {
-      return _uploadAndConcatVideoSegments(multiSegments, onProgress: onProgress);
+      return _uploadAndConcatVideoSegments(
+        multiSegments,
+        onProgress: onProgress,
+        onSendBytes: onSendBytes,
+        cancelToken: cancelToken,
+      );
+    }
+
+    final rawSize = await file.length();
+    if (rawSize <= 8 * 1024 * 1024) {
+      return uploadFile(
+        file,
+        onProgress: onProgress,
+        onSendBytes: onSendBytes,
+        cancelToken: cancelToken,
+        seedCache: seedCache,
+        allowDeleteTempSource: allowDeleteTempSource,
+      );
     }
 
     return _uploadSingleFileChunked(
       file,
       onProgress: onProgress,
+      onSendBytes: onSendBytes,
+      cancelToken: cancelToken,
       chunkSize: chunkSize,
-      seedCache: true,
+      seedCache: seedCache,
+      allowDeleteTempSource: allowDeleteTempSource,
     );
   }
 
   Future<UploadResult> _uploadAndConcatVideoSegments(
     List<String> segmentPaths, {
     void Function(double progress)? onProgress,
+    void Function(int sentBytes, int totalBytes)? onSendBytes,
+    CancelToken? cancelToken,
   }) async {
     final List<String> objectNames = [];
     final int segCount = segmentPaths.length;
+    int totalSegBytes = 0;
+    for (final sp in segmentPaths) {
+      try {
+        final f = File(sp);
+        if (await f.exists()) totalSegBytes += await f.length();
+      } catch (_) {}
+    }
+    int completedBytes = 0;
 
     for (int idx = 0; idx < segCount; idx++) {
+      if (cancelToken?.isCancelled == true) {
+        throw const FileUploadCancelledException();
+      }
       final segFile = File(segmentPaths[idx]);
       if (!await segFile.exists() || await segFile.length() == 0) continue;
+      final segLen = await segFile.length();
 
       final segResult = await _uploadSingleFileChunked(
         segFile,
+        cancelToken: cancelToken,
         seedCache: false,
-        onProgress: (p) {
-          if (onProgress != null) {
-            onProgress(((idx + p) / segCount) * 0.9);
+        onSendBytes: (sent, _) {
+          if (totalSegBytes > 0) {
+            final overall = (completedBytes + sent).clamp(0, totalSegBytes);
+            onSendBytes?.call(overall, totalSegBytes);
           }
         },
+        onProgress: (p) {
+          onProgress?.call(((idx + p) / segCount) * 0.9);
+        },
       );
+      completedBytes += segLen;
       if (segResult.objectName.isNotEmpty) {
         objectNames.add(segResult.objectName);
       }
     }
 
     if (objectNames.isEmpty) {
-      throw FileUploadException('No valid video segments to upload');
+      throw const FileUploadException('No valid video segments to upload');
     }
 
     final headers = await _getHeaders();
-    final concatResp = await _dio.post(
-      '$baseUrl/api/files/upload/concat',
-      data: {
-        'object_names': objectNames,
-        'file_name': 'video_note_${DateTime.now().millisecondsSinceEpoch}.mp4',
-      },
-      options: Options(
-        headers: headers,
-        sendTimeout: const Duration(minutes: 15),
-        receiveTimeout: const Duration(minutes: 15),
-      ),
-    );
-
-    for (final sp in segmentPaths) {
-      try {
-        final f = File(sp);
-        if (await f.exists()) await f.delete();
-      } catch (_) {}
-    }
-
-    if (concatResp.statusCode == 200 && concatResp.data['success'] == true) {
-      onProgress?.call(1.0);
-      return UploadResult.fromJson(concatResp.data);
-    } else {
-      throw FileUploadException(
-        concatResp.data['message'] ?? 'Failed to stitch video segments',
+    try {
+      final concatResp = await _dio.post(
+        '$baseUrl/api/files/upload/concat',
+        data: {
+          'object_names': objectNames,
+          'file_name': 'video_note_${DateTime.now().millisecondsSinceEpoch}.mp4',
+        },
+        cancelToken: cancelToken,
+        options: Options(
+          headers: headers,
+          sendTimeout: const Duration(minutes: 15),
+          receiveTimeout: const Duration(minutes: 15),
+        ),
       );
+
+      for (final sp in segmentPaths) {
+        try {
+          final f = File(sp);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+
+      if (concatResp.statusCode == 200 && concatResp.data['success'] == true) {
+        if (totalSegBytes > 0) {
+          onSendBytes?.call(totalSegBytes, totalSegBytes);
+        }
+        onProgress?.call(1.0);
+        return UploadResult.fromJson(concatResp.data);
+      } else {
+        throw FileUploadException(
+          concatResp.data['message'] ?? 'Failed to stitch video segments',
+        );
+      }
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e) || (cancelToken?.isCancelled ?? false)) {
+        throw const FileUploadCancelledException();
+      }
+      rethrow;
     }
+  }
+
+  Future<void> _notifyServerCancelChunkedUpload(
+    String uploadId,
+    Map<String, String> headers,
+  ) async {
+    try {
+      await _dio.delete(
+        '$baseUrl/api/files/upload/chunked/$uploadId',
+        options: Options(
+          headers: headers,
+          sendTimeout: const Duration(seconds: 6),
+          receiveTimeout: const Duration(seconds: 6),
+        ),
+      );
+    } catch (_) {}
   }
 
   Future<UploadResult> _uploadSingleFileChunked(
     File file, {
     void Function(double progress)? onProgress,
-    int chunkSize = 256 * 1024,
+    void Function(int sentBytes, int totalBytes)? onSendBytes,
+    CancelToken? cancelToken,
+    int chunkSize = 4 * 1024 * 1024,
     bool seedCache = true,
+    bool allowDeleteTempSource = false,
   }) async {
     final fileName = path.basename(file.path);
     final rawSize = await file.length();
     final totalSize = math.max(rawSize, 1);
     final mimeType = _getMimeType(fileName);
 
-    // Scale chunk size dynamically for large files (> 4MB -> 1MB, > 32MB -> 2MB) and never truncate
-    int effectiveChunkSize = chunkSize;
-    if (totalSize > 32 * 1024 * 1024) {
-      effectiveChunkSize = math.max(effectiveChunkSize, 2 * 1024 * 1024);
-    } else if (totalSize > 4 * 1024 * 1024) {
-      effectiveChunkSize = math.max(effectiveChunkSize, 1024 * 1024);
+    // Use 4 MB chunks (8 MB for > 128 MB) so large videos upload fast without
+    // hammering Nginx rate limits.
+    int effectiveChunkSize = math.max(chunkSize, 4 * 1024 * 1024);
+    if (totalSize > 128 * 1024 * 1024) {
+      effectiveChunkSize = math.max(effectiveChunkSize, 8 * 1024 * 1024);
     }
     effectiveChunkSize = math.max(effectiveChunkSize, (totalSize / 40000).ceil());
     final partsCount = (totalSize / effectiveChunkSize).ceil().clamp(1, 50000);
 
     final headers = await _getHeaders();
+    String? uploadId;
 
-    // 1. Initialize chunked upload
-    final initResponse = await _dio.post(
-      '$baseUrl/api/files/upload/chunked/init',
-      data: {
-        'file_name': fileName,
-        'total_size': totalSize,
-        'parts_count': partsCount,
-        'mime_type': mimeType,
-      },
-      options: Options(headers: headers),
-    );
-
-    if (initResponse.statusCode != 200 || initResponse.data['success'] != true) {
-      throw FileUploadException(
-        initResponse.data['message'] ?? 'Failed to initialize chunked upload',
-      );
-    }
-
-    final uploadId = initResponse.data['upload_id'] as String;
-
-    // 2. Upload each chunk with retry
-    final raf = await file.open(mode: FileMode.read);
     try {
-      for (int i = 0; i < partsCount; i++) {
-        final start = i * effectiveChunkSize;
-        final currentChunkSize = (start + effectiveChunkSize > totalSize)
-            ? (totalSize - start)
-            : effectiveChunkSize;
+      // 1. Initialize chunked upload
+      final initResponse = await _dio.post(
+        '$baseUrl/api/files/upload/chunked/init',
+        data: {
+          'file_name': fileName,
+          'total_size': totalSize,
+          'parts_count': partsCount,
+          'mime_type': mimeType,
+        },
+        cancelToken: cancelToken,
+        options: Options(headers: headers),
+      );
 
-        await raf.setPosition(start);
-        final chunkBytes = await raf.read(currentChunkSize);
-        final partNumber = i + 1;
+      if (initResponse.statusCode != 200 || initResponse.data['success'] != true) {
+        throw FileUploadException(
+          initResponse.data['message'] ?? 'Failed to initialize chunked upload',
+        );
+      }
 
-        Response? partResponse;
-        Object? lastError;
+      uploadId = initResponse.data['upload_id'] as String;
 
-        for (int attempt = 0; attempt < 3; attempt++) {
-          try {
-            final formData = FormData.fromMap({
-              'upload_id': uploadId,
-              'part_number': partNumber.toString(),
-              'chunk_index': i.toString(),
-              'chunk': MultipartFile.fromBytes(
-                chunkBytes,
-                filename: 'part_$partNumber',
-                contentType: MediaType.parse('application/octet-stream'),
-              ),
-            });
+      // 2. Upload each chunk with continuous byte progress & exponential retry
+      final raf = await file.open(mode: FileMode.read);
+      try {
+        for (int i = 0; i < partsCount; i++) {
+          if (cancelToken?.isCancelled == true) {
+            throw const FileUploadCancelledException();
+          }
+          final start = i * effectiveChunkSize;
+          final currentChunkSize = (start + effectiveChunkSize > totalSize)
+              ? (totalSize - start)
+              : effectiveChunkSize;
 
-            partResponse = await _dio.put(
-              '$baseUrl/api/files/upload/chunked/part?upload_id=$uploadId&part_number=$partNumber',
-              data: formData,
-              options: Options(headers: headers),
-            );
+          await raf.setPosition(start);
+          final chunkBytes = await raf.read(currentChunkSize);
+          final partNumber = i + 1;
 
-            if (partResponse.statusCode == 200 && partResponse.data?['success'] == true) {
-              lastError = null;
-              break;
-            } else {
-              lastError = partResponse.data?['message'] ?? 'Failed to upload chunk $partNumber';
+          Response? partResponse;
+          Object? lastError;
+
+          const retryDelaysMs = <int>[600, 1500, 3000];
+          for (int attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+            if (cancelToken?.isCancelled == true) {
+              throw const FileUploadCancelledException();
             }
-          } catch (e) {
-            lastError = e;
-            if (attempt < 2) {
-              await Future.delayed(Duration(milliseconds: 250 * (attempt + 1)));
+            try {
+              final formData = FormData.fromMap({
+                'upload_id': uploadId,
+                'part_number': partNumber.toString(),
+                'chunk_index': i.toString(),
+                'chunk': MultipartFile.fromBytes(
+                  chunkBytes,
+                  filename: 'part_$partNumber',
+                  contentType: MediaType.parse('application/octet-stream'),
+                ),
+              });
+
+              partResponse = await _dio.put(
+                '$baseUrl/api/files/upload/chunked/part?upload_id=$uploadId&part_number=$partNumber',
+                data: formData,
+                cancelToken: cancelToken,
+                options: Options(headers: headers),
+                onSendProgress: (sent, total) {
+                  final chunkSent = total > 0
+                      ? ((currentChunkSize * sent) / total).round().clamp(0, currentChunkSize)
+                      : sent.clamp(0, currentChunkSize);
+                  final uploaded = (start + chunkSent).clamp(0, totalSize);
+                  onSendBytes?.call(uploaded, totalSize);
+                  onProgress?.call(((uploaded / totalSize) * 0.96).clamp(0.0, 0.96));
+                },
+              );
+
+              if (partResponse.statusCode == 200 && partResponse.data?['success'] == true) {
+                lastError = null;
+                break;
+              } else {
+                lastError = partResponse.data?['message'] ?? 'Failed to upload chunk $partNumber';
+              }
+            } on DioException catch (e) {
+              if (CancelToken.isCancel(e) || (cancelToken?.isCancelled ?? false)) {
+                throw const FileUploadCancelledException();
+              }
+              lastError = e;
+              final status = e.response?.statusCode;
+              final bool isFatalClientErr = status != null &&
+                  status >= 400 &&
+                  status < 500 &&
+                  status != 429;
+              if (isFatalClientErr || attempt >= retryDelaysMs.length) {
+                break;
+              }
+              await Future.delayed(Duration(milliseconds: retryDelaysMs[attempt]));
+            } catch (e) {
+              lastError = e;
+              if (attempt < retryDelaysMs.length) {
+                await Future.delayed(Duration(milliseconds: retryDelaysMs[attempt]));
+              }
             }
           }
-        }
 
-        if (partResponse == null || partResponse.statusCode != 200 || partResponse.data?['success'] != true) {
-          throw FileUploadException(
-            lastError != null ? lastError.toString() : 'Failed to upload chunk $partNumber',
+          if (partResponse == null || partResponse.statusCode != 200 || partResponse.data?['success'] != true) {
+            throw FileUploadException(
+              lastError != null ? lastError.toString() : 'Failed to upload chunk $partNumber',
+            );
+          }
+
+          final uploadedNow = math.min(totalSize, start + currentChunkSize);
+          onSendBytes?.call(uploadedNow, totalSize);
+          onProgress?.call(((uploadedNow / totalSize) * 0.96).clamp(0.0, 0.96));
+        }
+      } finally {
+        await raf.close();
+      }
+
+      if (cancelToken?.isCancelled == true) {
+        throw const FileUploadCancelledException();
+      }
+
+      // 3. Complete chunked upload
+      final completeResponse = await _dio.post(
+        '$baseUrl/api/files/upload/chunked/complete',
+        data: {
+          'upload_id': uploadId,
+        },
+        cancelToken: cancelToken,
+        options: Options(
+          headers: headers,
+          sendTimeout: const Duration(minutes: 15),
+          receiveTimeout: const Duration(minutes: 15),
+        ),
+      );
+
+      if (completeResponse.statusCode == 200 && completeResponse.data['success'] == true) {
+        final result = UploadResult.fromJson(completeResponse.data);
+        onSendBytes?.call(totalSize, totalSize);
+        onProgress?.call(1.0);
+        if (seedCache && shouldSeedUploadedFile(file, result)) {
+          await MediaCacheManager.instance.seedCacheFromFile(
+            result.url,
+            file,
+            deleteSourceIfTemp: allowDeleteTempSource,
           );
         }
-
-        if (onProgress != null) {
-          onProgress((i + 1) / partsCount);
+        return result;
+      } else {
+        throw FileUploadException(
+          completeResponse.data['message'] ?? 'Failed to complete chunked upload',
+        );
+      }
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e) || (cancelToken?.isCancelled ?? false)) {
+        if (uploadId != null) {
+          unawaited(_notifyServerCancelChunkedUpload(uploadId, headers));
         }
+        throw const FileUploadCancelledException();
       }
-    } finally {
-      await raf.close();
-    }
-
-    // 3. Complete chunked upload
-    final completeResponse = await _dio.post(
-      '$baseUrl/api/files/upload/chunked/complete',
-      data: {
-        'upload_id': uploadId,
-      },
-      options: Options(
-        headers: headers,
-        sendTimeout: const Duration(minutes: 15),
-        receiveTimeout: const Duration(minutes: 15),
-      ),
-    );
-
-    if (completeResponse.statusCode == 200 && completeResponse.data['success'] == true) {
-      final result = UploadResult.fromJson(completeResponse.data);
-      if (seedCache && result.url.isNotEmpty) {
-        await MediaCacheManager.instance.seedCacheFromFile(result.url, file);
-      }
-      return result;
-    } else {
+      final dynamic data = e.response?.data;
+      final serverMsg = data is Map ? data['message']?.toString() : null;
       throw FileUploadException(
-        completeResponse.data['message'] ?? 'Failed to complete chunked upload',
+        serverMsg ?? 'Upload failed: ${e.message}',
       );
+    } on FileUploadCancelledException {
+      if (uploadId != null) {
+        unawaited(_notifyServerCancelChunkedUpload(uploadId, headers));
+      }
+      rethrow;
     }
   }
 
@@ -315,8 +522,17 @@ class FileService {
   Future<UploadResult> uploadMediaFile(
     File file, {
     void Function(double progress)? onProgress,
+    void Function(int sentBytes, int totalBytes)? onSendBytes,
+    CancelToken? cancelToken,
+    bool seedCache = true,
   }) {
-    return uploadFileChunked(file, onProgress: onProgress);
+    return uploadFileChunked(
+      file,
+      onProgress: onProgress,
+      onSendBytes: onSendBytes,
+      cancelToken: cancelToken,
+      seedCache: seedCache,
+    );
   }
 
   /// Extracts basic local file metadata (file size, is_video) before upload.
@@ -805,6 +1021,7 @@ class FileService {
       '.tif': 'image/tiff',
       // Videos
       '.mp4': 'video/mp4',
+      '.m4v': 'video/mp4',
       '.webm': 'video/webm',
       '.mov': 'video/quicktime',
       '.avi': 'video/x-msvideo',
@@ -922,10 +1139,15 @@ class PresignedUrlResult {
 /// Exception thrown during file upload
 class FileUploadException implements Exception {
   final String message;
-  FileUploadException(this.message);
+  const FileUploadException(this.message);
   
   @override
   String toString() => 'FileUploadException: $message';
+}
+
+/// Exception thrown when an active upload is cancelled by the user.
+class FileUploadCancelledException extends FileUploadException {
+  const FileUploadCancelledException([super.message = 'Upload cancelled']);
 }
 
 /// Exception thrown during file download

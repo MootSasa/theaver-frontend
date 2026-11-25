@@ -64,7 +64,11 @@ class MediaAlbum {
   String get chatId => primaryMessage.chatId;
   String get createdAt => primaryMessage.createdAt;
   bool get isRead => primaryMessage.isRead;
-  int get sendStatus => primaryMessage.sendStatus;
+  int get sendStatus {
+    if (items.any((item) => item.message.sendStatus == 2)) return 2;
+    if (items.any((item) => item.message.sendStatus == 0)) return 0;
+    return primaryMessage.sendStatus;
+  }
   bool get hasCaption => caption != null && caption!.trim().isNotEmpty;
   bool get hasMediaSpoiler =>
       items.any((item) => item.message.hasMediaSpoiler);

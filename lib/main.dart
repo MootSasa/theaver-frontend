@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ import 'services/cache_service.dart';
 import 'services/draft_service.dart';
 import 'services/emoji_haptic_service.dart';
 import 'services/chat_realtime_manager.dart';
+import 'services/sync_service.dart';
 import 'services/database/app_database.dart';
 import 'services/liquid_glass_provider.dart';
 import 'services/unread_count_provider.dart';
@@ -155,6 +157,7 @@ void main() async {
   await ProfileInstantCache.instance.init();
   await ChatInstantCache.instance.init();
   AppDatabase.setActiveUser(AccountManager().currentAccount?.userId);
+  unawaited(SyncService().sweepInterruptedPendingMessages());
   await ChatFolderService().init();
   await ChatSwipeService().init();
   await CacheService().init();

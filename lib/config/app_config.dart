@@ -326,6 +326,43 @@ class AppConfig {
     return '$webBaseUrl/join/$inviteCode';
   }
 
+  /// Returns `true` when [url] refers to a local device file path rather than
+  /// an HTTP URL, data/blob URI, or relative server/storage object path.
+  static bool isLocalFilePath(String? url) {
+    if (url == null) return false;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return false;
+    if (trimmed.startsWith('http://') ||
+        trimmed.startsWith('https://') ||
+        trimmed.startsWith('data:') ||
+        trimmed.startsWith('blob:') ||
+        trimmed.startsWith('/api/') ||
+        trimmed.startsWith('api/') ||
+        trimmed.startsWith('/uploads/') ||
+        trimmed.startsWith('/media/')) {
+      return false;
+    }
+    if (trimmed.startsWith('file://') ||
+        trimmed.startsWith('content://') ||
+        trimmed.startsWith('/data/') ||
+        trimmed.startsWith('/storage/') ||
+        trimmed.startsWith('/sdcard/') ||
+        trimmed.startsWith('/mnt/') ||
+        trimmed.startsWith('/var/') ||
+        trimmed.startsWith('/tmp/') ||
+        trimmed.startsWith('/private/') ||
+        trimmed.startsWith('/Users/') ||
+        trimmed.startsWith('/home/') ||
+        trimmed.startsWith('/run/') ||
+        trimmed.startsWith('/opt/') ||
+        trimmed.startsWith('/app/') ||
+        RegExp(r'^[a-zA-Z]:[/\\]').hasMatch(trimmed)) {
+      return true;
+    }
+    if (trimmed.contains('\\')) return true;
+    return false;
+  }
+
   /// Resolves relative or absolute media / storage URLs.
   /// Returns full URL with storageUrl prepended if relative path.
   static String? resolveMediaUrl(String? url) {
@@ -333,16 +370,8 @@ class AppConfig {
     final trimmed = url.trim();
     if (trimmed.isEmpty) return null;
 
-    // Check if it's already a local file path
-    if (trimmed.startsWith('file://') ||
-        trimmed.startsWith('/data/') ||
-        trimmed.startsWith('/storage/') ||
-        trimmed.startsWith('/var/') ||
-        trimmed.startsWith('/tmp/') ||
-        trimmed.startsWith('/private/') ||
-        trimmed.startsWith('/Users/') ||
-        trimmed.startsWith('/home/') ||
-        RegExp(r'^[a-zA-Z]:[/\\]').hasMatch(trimmed)) {
+    // Preserve local file paths without prepending storageUrl.
+    if (isLocalFilePath(trimmed)) {
       return trimmed;
     }
 

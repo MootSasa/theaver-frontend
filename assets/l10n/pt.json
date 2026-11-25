@@ -1952,5 +1952,10 @@
   "media_viewer_protected_content": "Saving and forwarding restricted",
   "media_viewer_more": "more",
   "media_viewer_file_unavailable": "File unavailable",
-  "profile_tab_gifs": "GIFs"
+  "profile_tab_gifs": "GIFs",
+  "upload_cancel": "Cancelar envio",
+  "upload_progress_of": "{sent} de {total}",
+  "upload_retry": "Tentar novamente",
+  "video_load_error": "Falha ao carregar vídeo",
+  "video_retry": "Tentar novamente"
 }

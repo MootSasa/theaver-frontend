@@ -579,7 +579,10 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
                   unawaited(_shareCurrentItem());
                 },
               ),
-            if (!item.hasProtectedContent && widget.config.onForwardItem != null)
+            if (!item.hasProtectedContent &&
+                widget.config.onForwardItem != null &&
+                !item.id.startsWith('local_') &&
+                !AppConfig.isLocalFilePath(item.url))
               TheavListRow(
                 leading: iconoir.ForwardMessage(
                   color: palette.primary,

@@ -12,6 +12,7 @@ import 'contacts_service.dart';
 import 'draft_service.dart';
 import 'file_service.dart';
 import 'media_cache_manager.dart';
+import 'media_send_coordinator.dart';
 import 'peer_customization_cache.dart';
 import 'profile_instant_cache.dart';
 import 'websocket_service.dart';
@@ -157,7 +158,19 @@ class SyncService {
   /// Инициализация: открыть БД, запустить первичную синхронизацию
   Future<void> initialize() async {
     await _db.initialize();
+    await sweepInterruptedPendingMessages();
     await syncFromServer();
+  }
+
+  /// Marks any orphaned `sendStatus == 0` rows from previous killed runs as failed.
+  Future<void> sweepInterruptedPendingMessages() async {
+    try {
+      await _db.markInterruptedPendingMessagesFailed(
+        activeLocalIds: MediaSendCoordinator.instance.activeLocalIds,
+      );
+    } catch (e) {
+      debugPrint('SyncService: sweepInterruptedPendingMessages failed: $e');
+    }
   }
 
   /// Delta Sync: получить обновления с сервера и применить к локальной БД
@@ -440,6 +453,37 @@ class SyncService {
         (payload['message_id'] ?? payload['id'])?.toString();
     final chatId = payload['chat_id']?.toString();
     if (serverId == null || chatId == null) return;
+
+    // If this WebSocket/Sync event echoes an optimistic local message, confirm it
+    // in place instead of inserting a duplicate `srv_<id>` row.
+    final echoLocalId =
+        (payload['local_id'] ?? payload['client_message_id'])?.toString().trim();
+    if (echoLocalId != null && echoLocalId.isNotEmpty) {
+      final pendingByLocal = await _db.getMessageByLocalId(echoLocalId);
+      if (pendingByLocal != null) {
+        final echoFileUrl = payload['file_url']?.toString();
+        final rawPayload = payload['media_payload'];
+        String? echoMediaPayloadStr;
+        if (rawPayload is Map) {
+          echoMediaPayloadStr = jsonEncode(Map<String, dynamic>.from(rawPayload));
+        } else if (rawPayload is String && rawPayload.isNotEmpty) {
+          echoMediaPayloadStr = rawPayload;
+        }
+        await confirmMessageSent(
+          echoLocalId,
+          serverId,
+          remoteFileUrl: (echoFileUrl != null && echoFileUrl.isNotEmpty)
+              ? echoFileUrl
+              : null,
+          mediaPayload: echoMediaPayloadStr,
+        );
+        if (payload['community_id'] == null &&
+            !CommunityService.isCommunityChannelId(chatId)) {
+          await _db.refreshChatLastMessageFromDb(chatId);
+        }
+        return;
+      }
+    }
 
     // Проверить, есть ли уже это сообщение (по serverId)
     final existing = await _db.getMessageByServerId(serverId);
@@ -1174,6 +1218,7 @@ class SyncService {
 
   /// Создать локальное pending-сообщение (оптимистичный UI)
   Future<DbMessage> createPendingMessage({
+    String? localIdOverride,
     required String chatId,
     required String senderId,
     required String content,
@@ -1216,7 +1261,9 @@ class SyncService {
     String? senderChatAvatarUrl,
     bool isOwn = true,
   }) async {
-    final localId = _uuid.v4();
+    final localId = (localIdOverride != null && localIdOverride.isNotEmpty)
+        ? localIdOverride
+        : _uuid.v4();
     final now = DateTime.now().toUtc().toIso8601String();
 
     final String? entitiesStr = entities is List
@@ -1310,6 +1357,22 @@ class SyncService {
       senderChatAvatarUrl: Value(senderChatAvatarUrl),
     ));
 
+    if (threadRootMessageId == null || threadRootMessageId.isEmpty) {
+      final previewContent = content.isNotEmpty ? content : (fileName ?? '');
+      await _db.updateChatLastMessage(
+        chatId: chatId,
+        content: previewContent,
+        createdAt: now,
+        messageType: messageType,
+        isRound: isRound,
+        fileUrl: fileUrl,
+        groupedId: groupedId,
+        senderId: senderId,
+        senderName: senderName,
+        incrementUnread: false,
+      );
+    }
+
     // Return the saved message as DbMessage
     return DbMessage(
       serverId: null,
@@ -1376,10 +1439,14 @@ class SyncService {
 
   /// Подтвердить отправку — заменить localId на serverId
   Future<void> confirmMessageSent(String localId, String serverId,
-      {String? remoteFileUrl}) async {
+      {String? remoteFileUrl, String? mediaPayload}) async {
     await _db.updateMessageSendStatus(
-        localId, serverId, MessageSendStatus.sent.index,
-        fileUrl: remoteFileUrl);
+      localId,
+      serverId,
+      MessageSendStatus.sent.index,
+      fileUrl: remoteFileUrl,
+      mediaPayload: mediaPayload,
+    );
   }
 
   /// Пометить сообщение как failed
@@ -1391,6 +1458,13 @@ class SyncService {
   Future<void> retryFailedMessage(String localId) async {
     final msg = await _db.getMessageByLocalId(localId);
     if (msg == null || msg.sendStatus != MessageSendStatus.failed.index) return;
+
+    if (msg.messageType != 'text' ||
+        (msg.fileUrl != null && msg.fileUrl!.isNotEmpty) ||
+        (msg.groupedId != null && msg.groupedId!.isNotEmpty)) {
+      await MediaSendCoordinator.instance.retryMessage(localId);
+      return;
+    }
 
     await _db.updateMessageStatus(localId, MessageSendStatus.sending.index);
 

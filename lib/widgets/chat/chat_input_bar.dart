@@ -729,21 +729,6 @@ class _ChatInputBarState extends State<ChatInputBar> {
               : null,
         ),
 
-        // 5. Upload progress
-        if (widget.isUploading)
-          widget.uploadProgressNotifier != null
-              ? ValueListenableBuilder<double>(
-                  valueListenable: widget.uploadProgressNotifier!,
-                  builder: (context, progress, _) => LinearProgressIndicator(
-                    value: progress > 0 ? progress : null,
-                    backgroundColor: Colors.grey[300],
-                  ),
-                )
-              : LinearProgressIndicator(
-                  value: widget.uploadProgress > 0 ? widget.uploadProgress : null,
-                  backgroundColor: Colors.grey[300],
-                ),
-
         // 5b. Anonymous admin banner («От имени группы») — hidden when inline Send-As selector handles persona
         _GlassSafeAnimatedSection(
           visible: widget.isAnonymousAdmin && widget.sendAsLeadingWidget == null,

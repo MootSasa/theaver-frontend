@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:video_player/video_player.dart';
 
+import '../../config/app_config.dart';
+import '../../l10n/app_localizations.dart';
 import '../../models/theav_media_item.dart';
 import '../../services/media_cache_manager.dart';
 import '../../services/media_playback_coordinator.dart';
@@ -161,6 +163,7 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
   bool _isInitializing = false;
   bool _isDisposed = false;
   bool _isMuted = false;
+  String? _errorMessage;
 
   bool get _isRasterGif =>
       widget.item.kind == TheavMediaKind.gif && !widget.item.isVideoBackedGif;
@@ -174,7 +177,9 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
     _bindBridge();
     if (!_isRasterGif) {
       _extractLocalThumbIfAny();
-      _initVideoController();
+      if (widget.isActive) {
+        _initVideoController();
+      }
     }
   }
 
@@ -185,23 +190,36 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
       oldWidget.bridge?._detach();
       _bindBridge();
     }
-    if (oldWidget.item.id != widget.item.id ||
-        oldWidget.item.url != widget.item.url) {
+    if (oldWidget.item.id != widget.item.id) {
       _disposeControllerOnly();
       _detachDownloadProgress();
       _cachedFirstFrame = null;
+      _errorMessage = null;
       _isMuted = _isGifLoop;
       widget.bridge?.state.value = TheavVideoPlaybackState(isMuted: _isMuted);
       if (!_isRasterGif) {
         _extractLocalThumbIfAny();
-        _initVideoController();
+        if (widget.isActive) {
+          _initVideoController();
+        }
       }
       return;
     }
 
+    if (oldWidget.item.url != widget.item.url &&
+        _controller == null &&
+        !_isInitializing &&
+        !_isRasterGif &&
+        widget.isActive) {
+      _extractLocalThumbIfAny();
+      _initVideoController();
+    }
+
     if (oldWidget.isActive != widget.isActive && !_isRasterGif) {
       final ctrl = _controller;
-      if (ctrl != null && ctrl.value.isInitialized) {
+      if (widget.isActive && ctrl == null && !_isInitializing) {
+        _initVideoController();
+      } else if (ctrl != null && ctrl.value.isInitialized) {
         if (widget.isActive) {
           if (!_isMuted) {
             unawaited(MediaPlaybackCoordinator.instance.stopAll());
@@ -271,6 +289,19 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
     if (_isInitializing || _isDisposed) return;
     _isInitializing = true;
     final String itemId = widget.item.id;
+    final bool isLocalUnsent = widget.item.url.isEmpty ||
+        AppConfig.isLocalFilePath(widget.item.url) ||
+        (widget.item.messageId?.startsWith('local_') ?? false);
+
+    if (_errorMessage != null && mounted) {
+      setState(() => _errorMessage = null);
+    } else {
+      _errorMessage = null;
+    }
+    if (widget.bridge != null) {
+      widget.bridge!.state.value =
+          widget.bridge!.state.value.copyWith(clearError: true);
+    }
 
     try {
       // 1. Instant adoption from active PiP without any re-buffering.
@@ -281,83 +312,162 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
         return;
       }
 
-      // 2. Resolve cached/local file or stream URL.
+      // 2. Resolve local or cached disk file first.
       final String resolvedUrl = widget.item.resolvedUrl;
       File? localFile;
+      bool fromOutboxLocal = false;
       if (!kIsWeb &&
           widget.item.localFilePath != null &&
           widget.item.localFilePath!.isNotEmpty) {
         final f = File(widget.item.localFilePath!);
         if (await f.exists() && await f.length() > 0) {
           localFile = f;
+          fromOutboxLocal = true;
         }
       }
 
       if (localFile == null && !kIsWeb && resolvedUrl.isNotEmpty) {
-        localFile = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
+        final cached = await MediaCacheManager.instance.getCachedFile(resolvedUrl);
+        if (cached != null && await cached.exists() && await cached.length() > 0) {
+          localFile = cached;
+        }
       }
 
       if (!mounted || _isDisposed || widget.item.id != itemId) return;
 
-      if (localFile == null && !kIsWeb && resolvedUrl.startsWith('http')) {
-        // Check/start background download so the user sees progress, OR stream directly.
-        // We stream immediately for instant playback AND start cache download silently.
-        _startBackgroundCacheDownload(resolvedUrl);
+      if (localFile != null) {
+        final fileCtrl = VideoPlayerController.file(localFile);
+        try {
+          _controller = fileCtrl;
+          fileCtrl.addListener(_onControllerTick);
+          await fileCtrl.initialize();
+          if (!mounted ||
+              _isDisposed ||
+              widget.item.id != itemId ||
+              !identical(_controller, fileCtrl)) {
+            fileCtrl.removeListener(_onControllerTick);
+            await fileCtrl.dispose();
+            return;
+          }
+          await _configureAndPlay(fileCtrl);
+          return;
+        } catch (fileErr) {
+          fileCtrl.removeListener(_onControllerTick);
+          if (identical(_controller, fileCtrl)) {
+            _controller = null;
+          }
+          try {
+            await fileCtrl.dispose().timeout(const Duration(milliseconds: 150));
+          } catch (_) {}
+          if (!fromOutboxLocal && !isLocalUnsent && resolvedUrl.isNotEmpty) {
+            // Evict corrupted/mismatched cache file and continue to network stream
+            await MediaCacheManager.instance.evict(resolvedUrl);
+          } else {
+            rethrow;
+          }
+        }
       }
 
-      final VideoPlayerController controller;
-      if (localFile != null) {
-        controller = VideoPlayerController.file(localFile);
-      } else {
-        final uri = Uri.tryParse(resolvedUrl);
-        if (uri == null) {
-          widget.bridge?.state.value = widget.bridge!.state.value
-              .copyWith(errorMessage: 'Invalid video URL');
+      if (resolvedUrl.isEmpty) {
+        throw Exception('Video URL is empty');
+      }
+
+      // 3. Presigned or authenticated HTTP Range streaming.
+      final target =
+          await MediaCacheManager.instance.resolveStreamableVideoTarget(
+        resolvedUrl,
+      );
+      if (!mounted || _isDisposed || widget.item.id != itemId) return;
+
+      if (target != null) {
+        final netCtrl = VideoPlayerController.networkUrl(
+          target.uri,
+          httpHeaders: target.headers,
+        );
+        try {
+          _controller = netCtrl;
+          netCtrl.addListener(_onControllerTick);
+          await netCtrl.initialize().timeout(const Duration(seconds: 12));
+          if (!mounted ||
+              _isDisposed ||
+              widget.item.id != itemId ||
+              !identical(_controller, netCtrl)) {
+            netCtrl.removeListener(_onControllerTick);
+            await netCtrl.dispose();
+            return;
+          }
+          await _configureAndPlay(netCtrl);
+          return;
+        } catch (streamErr) {
+          netCtrl.removeListener(_onControllerTick);
+          if (identical(_controller, netCtrl)) {
+            _controller = null;
+          }
+          try {
+            await netCtrl.dispose().timeout(const Duration(milliseconds: 150));
+          } catch (_) {}
+          if (kIsWeb) {
+            rethrow;
+          }
+        }
+      }
+
+      // 4. Fallback: download into local cache with byte progress, then play from File.
+      if (!kIsWeb && resolvedUrl.startsWith('http')) {
+        _attachDownloadProgressNotifier(resolvedUrl);
+        final downloaded = await MediaCacheManager.instance.downloadFile(
+          resolvedUrl,
+          expectedTotalSize: widget.item.fileSize,
+        );
+        _detachDownloadProgress();
+        if (!mounted || _isDisposed || widget.item.id != itemId) return;
+        if (downloaded != null &&
+            await downloaded.exists() &&
+            await downloaded.length() > 0) {
+          final dlCtrl = VideoPlayerController.file(downloaded);
+          _controller = dlCtrl;
+          dlCtrl.addListener(_onControllerTick);
+          await dlCtrl.initialize();
+          if (!mounted ||
+              _isDisposed ||
+              widget.item.id != itemId ||
+              !identical(_controller, dlCtrl)) {
+            dlCtrl.removeListener(_onControllerTick);
+            await dlCtrl.dispose();
+            return;
+          }
+          await _configureAndPlay(dlCtrl);
           return;
         }
-        controller = VideoPlayerController.networkUrl(uri);
       }
 
-      _controller = controller;
-      controller.addListener(_onControllerTick);
-      await controller.initialize();
-
-      if (!mounted || _isDisposed || widget.item.id != itemId || !identical(_controller, controller)) {
-        if (!identical(_controller, controller)) {
-          try {
-            controller.removeListener(_onControllerTick);
-            await controller.dispose();
-          } catch (_) {}
-        }
-        return;
-      }
-
-      await _configureAndPlay(controller);
+      throw Exception('Failed to load video');
     } catch (e) {
       if (mounted && !_isDisposed && widget.item.id == itemId) {
+        setState(() {
+          _errorMessage = e.toString();
+        });
         widget.bridge?.state.value = widget.bridge!.state.value.copyWith(
           errorMessage: e.toString(),
           clearDownloadFraction: true,
         );
       }
     } finally {
+      _detachDownloadProgress();
       _isInitializing = false;
     }
   }
 
-  void _startBackgroundCacheDownload(String resolvedUrl) {
+  void _attachDownloadProgressNotifier(String resolvedUrl) {
     _detachDownloadProgress();
     final notifier = MediaCacheManager.instance.getByteProgressNotifier(resolvedUrl);
     _downloadNotifier = notifier;
     notifier.addListener(_onDownloadProgressTick);
-    if (!MediaCacheManager.instance.isDownloading(resolvedUrl)) {
-      unawaited(
-        MediaCacheManager.instance.downloadFile(
-          resolvedUrl,
-          expectedTotalSize: widget.item.fileSize,
-        ),
-      );
-    }
+  }
+
+  void _retryVideoInit() {
+    _disposeControllerOnly();
+    _initVideoController();
   }
 
   void _onDownloadProgressTick() {
@@ -547,6 +657,51 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
     );
   }
 
+  Widget _buildRetryOverlayButton(BuildContext context) {
+    String retryLabel = 'Повторить';
+    try {
+      final t = context.l10n.translate('video_retry');
+      if (t.isNotEmpty && t != 'video_retry') retryLabel = t;
+    } catch (_) {}
+    return GestureDetector(
+      onTap: _retryVideoInit,
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 11,
+        ),
+        decoration: BoxDecoration(
+          color: const Color(0xCC101218),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.16),
+            width: 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const iconoir.Refresh(
+              color: Colors.white,
+              width: 18,
+              height: 18,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              retryLabel,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isRasterGif) {
@@ -601,26 +756,14 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
                 ValueListenableBuilder<TheavVideoPlaybackState>(
                   valueListenable: bridgeState,
                   builder: (_, s, __) {
-                    if (s.errorMessage != null) {
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xCC101218),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const iconoir.WarningCircle(
-                          color: Colors.white70,
-                          width: 34,
-                          height: 34,
-                        ),
-                      );
+                    if ((_errorMessage ?? s.errorMessage) != null) {
+                      return _buildRetryOverlayButton(context);
                     }
                     return _MatteLoadingRing(progress: s.downloadFraction);
                   },
                 )
+              else if (_errorMessage != null)
+                _buildRetryOverlayButton(context)
               else
                 const _MatteLoadingRing(),
             ],

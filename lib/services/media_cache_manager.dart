@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -46,12 +47,162 @@ class MediaCacheManager {
     receiveTimeout: const Duration(minutes: 10),
   ));
 
+  /// Exposes the internal [Dio] client for attaching hermetic [HttpClientAdapter] mocks in tests.
+  @visibleForTesting
+  Dio get dioForTesting => _dio;
+
   final Map<String, CancelToken> _cancelTokens = {};
+  final Map<String, Future<File?>> _inFlightDownloads = {};
+  final Map<String, ({String url, DateTime expiresAt})> _presignedUrlCache = {};
   final Map<String, ValueNotifier<double>> _progressNotifiers = {};
   final Map<String, ValueNotifier<DownloadByteProgress>> _byteProgressNotifiers = {};
   final Map<String, String> _localPathCache = {};
   final Map<String, Uint8List> _videoThumbnailCache = {};
   final Set<String> _userCancelledUrls = {};
+
+  static const Set<String> _publicBuckets = {'avatars', 'releases'};
+
+  /// Extracts a MinIO object key when [rawOrResolvedUrl] points to the private
+  /// media bucket (or `/api/files/download/<objectName>`). Returns `null` for
+  /// public buckets (`avatars`, `releases`), already-presigned URLs, and
+  /// external hosts.
+  String? extractProtectedObjectName(
+    String rawOrResolvedUrl, {
+    bool ignorePresignQuery = false,
+  }) {
+    final trimmed = rawOrResolvedUrl.trim();
+    if (trimmed.isEmpty || AppConfig.isLocalFilePath(trimmed)) return null;
+    final resolved = AppConfig.resolveMediaUrl(trimmed) ?? trimmed;
+    final uri = Uri.tryParse(resolved);
+    if (uri == null) return null;
+
+    // Already a presigned S3/MinIO URL — must not strip query signature unless
+    // explicitly falling back after an expired-signature 401/403 failure.
+    if (!ignorePresignQuery &&
+        (uri.queryParameters.containsKey('X-Amz-Signature') ||
+            uri.queryParameters.containsKey('x-amz-signature'))) {
+      return null;
+    }
+
+    final rawPath = uri.path;
+    final dlIdx = rawPath.indexOf('/api/files/download/');
+    if (dlIdx != -1) {
+      final obj = rawPath.substring(dlIdx + '/api/files/download/'.length);
+      return obj.isNotEmpty ? Uri.decodeFull(obj) : null;
+    }
+
+    final storageUri = Uri.tryParse(AppConfig.storageUrl);
+    final bool isStorageHost = uri.port == 9000 ||
+        uri.host.contains('minio') ||
+        uri.host.startsWith('storage.') ||
+        (storageUri != null &&
+            storageUri.host.isNotEmpty &&
+            uri.host == storageUri.host);
+    if (!isStorageHost) return null;
+
+    final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+    if (segs.length < 2) return null;
+    final bucket = segs.first.toLowerCase();
+    if (_publicBuckets.contains(bucket)) return null;
+    return segs.sublist(1).map(Uri.decodeComponent).join('/');
+  }
+
+  /// Resolves the best streaming target `(uri, httpHeaders)` for network video
+  /// playback, obtaining a short-lived presigned MinIO URL (or authenticated
+  /// `/api/files/download/...` fallback) when pointing at the private media bucket.
+  Future<({Uri uri, Map<String, String> headers})?> resolveStreamableVideoTarget(
+    String rawOrResolvedUrl,
+  ) async {
+    final resolved = AppConfig.resolveMediaUrl(rawOrResolvedUrl) ?? rawOrResolvedUrl;
+    if (resolved.isEmpty) return null;
+
+    final objectName = extractProtectedObjectName(resolved);
+    if (objectName != null) {
+      final cached = _presignedUrlCache[objectName];
+      if (cached != null &&
+          DateTime.now().isBefore(
+            cached.expiresAt.subtract(const Duration(minutes: 5)),
+          )) {
+        final uri = Uri.tryParse(cached.url);
+        if (uri != null) {
+          return (uri: uri, headers: const <String, String>{});
+        }
+      }
+
+      final token = await AuthService.getToken();
+      if (token != null && token.isNotEmpty) {
+        try {
+          final resp = await _dio.get<dynamic>(
+            '${AppConfig.baseUrl}/api/files/download-presigned/$objectName',
+            options: Options(
+              headers: {'Authorization': 'Bearer $token'},
+              receiveTimeout: const Duration(seconds: 5),
+              sendTimeout: const Duration(seconds: 5),
+            ),
+          );
+          if (resp.statusCode == 200 &&
+              resp.data is Map &&
+              resp.data['success'] == true) {
+            final dlUrl = resp.data['download_url']?.toString() ?? '';
+            final expiresSec =
+                (resp.data['expires_in'] as num?)?.toInt() ?? 3600;
+            final dlUri = Uri.tryParse(dlUrl);
+            if (dlUri != null) {
+              _presignedUrlCache[objectName] = (
+                url: dlUrl,
+                expiresAt: DateTime.now().add(Duration(seconds: expiresSec)),
+              );
+              return (uri: dlUri, headers: const <String, String>{});
+            }
+          }
+        } catch (_) {}
+
+        final fallbackUri =
+            Uri.tryParse('${AppConfig.baseUrl}/api/files/download/$objectName');
+        if (fallbackUri != null) {
+          return (
+            uri: fallbackUri,
+            headers: <String, String>{'Authorization': 'Bearer $token'},
+          );
+        }
+      }
+    }
+
+    final uri = Uri.tryParse(resolved);
+    if (uri == null) return null;
+    final bool needsAuth =
+        uri.path.toLowerCase().contains('/api/') && objectName == null;
+    if (needsAuth) {
+      final token = await AuthService.getToken();
+      if (token != null && token.isNotEmpty) {
+        return (
+          uri: uri,
+          headers: <String, String>{'Authorization': 'Bearer $token'},
+        );
+      }
+    }
+    return (uri: uri, headers: const <String, String>{});
+  }
+
+  /// Fetches and disk-caches remote thumbnail bytes (with automatic private-bucket
+  /// `/api/files/download/...` fallback on 401/403).
+  Future<Uint8List?> fetchThumbnailBytes(String rawOrResolvedUrl) async {
+    if (kIsWeb || rawOrResolvedUrl.isEmpty) return null;
+    final resolved = AppConfig.resolveMediaUrl(rawOrResolvedUrl) ?? rawOrResolvedUrl;
+    final mem = _videoThumbnailCache[resolved];
+    if (mem != null && mem.isNotEmpty) return mem;
+
+    final file = await downloadMedia(resolved);
+    if (file == null || !await file.exists()) return null;
+    try {
+      final bytes = await file.readAsBytes();
+      if (bytes.isNotEmpty) {
+        cacheVideoThumbnail(resolved, bytes);
+        return bytes;
+      }
+    } catch (_) {}
+    return null;
+  }
 
   /// Synchronously returns a cached [File] if its local path is already known in memory.
   /// Prevents a 1-frame placeholder flash when cloning media bubbles for the blur context menu.
@@ -60,15 +211,22 @@ class MediaCacheManager {
     final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
     final cachedPath = _localPathCache[url] ?? _localPathCache[resolvedUrl];
     if (cachedPath != null) {
-      return File(cachedPath);
+      final f = File(cachedPath);
+      if (f.existsSync() && f.lengthSync() > 0) {
+        return f;
+      }
+      _localPathCache.remove(url);
+      _localPathCache.remove(resolvedUrl);
     }
 
     final uri = Uri.tryParse(url);
     final isNetwork =
         uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-    if (!isNetwork &&
-        !url.startsWith('/api/') &&
-        !url.startsWith('/uploads/')) {
+    if (AppConfig.isLocalFilePath(url) ||
+        (!isNetwork &&
+            !url.startsWith('/api/') &&
+            !url.startsWith('/uploads/') &&
+            !url.startsWith('/media/'))) {
       try {
         final filePath =
             url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
@@ -179,7 +337,11 @@ class MediaCacheManager {
     // Support direct local file paths (e.g., pending outgoing media before upload completes)
     final uri = Uri.tryParse(url);
     final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-    if (!isNetwork && !url.startsWith('/api/') && !url.startsWith('/uploads/')) {
+    if (AppConfig.isLocalFilePath(url) ||
+        (!isNetwork &&
+            !url.startsWith('/api/') &&
+            !url.startsWith('/uploads/') &&
+            !url.startsWith('/media/'))) {
       try {
         final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
         final directFile = File(filePath);
@@ -276,6 +438,8 @@ class MediaCacheManager {
       }
     }
     _cancelTokens.clear();
+    _inFlightDownloads.clear();
+    _presignedUrlCache.clear();
     _localPathCache.clear();
     _progressNotifiers.clear();
     _byteProgressNotifiers.clear();
@@ -454,7 +618,8 @@ class MediaCacheManager {
     expectedTotalSize: expectedTotalSize,
   );
 
-  /// Download a media file to local cache with HTTP Range resume and byte progress tracking
+  /// Download a media file to local cache with HTTP Range resume, deduplicated
+  /// in-flight futures, automatic private-bucket fallback, and byte progress.
   Future<File?> downloadMedia(
     String url, {
     void Function(double progress)? onProgress,
@@ -474,13 +639,54 @@ class MediaCacheManager {
       return existing;
     }
 
-    if (_cancelTokens.containsKey(url) || _cancelTokens.containsKey(resolvedUrl)) {
-      // Already downloading
-      return null;
+    final existingFuture = _inFlightDownloads[resolvedUrl];
+    if (existingFuture != null) {
+      if (onProgress == null && onByteProgress == null) {
+        return existingFuture;
+      }
+      final notifier = getByteProgressNotifier(url);
+      void forwardProgress() {
+        onProgress?.call(notifier.value.fraction);
+        onByteProgress?.call(notifier.value);
+      }
+
+      notifier.addListener(forwardProgress);
+      try {
+        return await existingFuture;
+      } finally {
+        notifier.removeListener(forwardProgress);
+      }
     }
 
+    final Future<File?> downloadFuture = _downloadMediaInternal(
+      url: url,
+      resolvedUrl: resolvedUrl,
+      onProgress: onProgress,
+      onByteProgress: onByteProgress,
+      expectedTotalSize: expectedTotalSize,
+    );
+    _inFlightDownloads[resolvedUrl] = downloadFuture;
+    try {
+      return await downloadFuture;
+    } finally {
+      if (identical(_inFlightDownloads[resolvedUrl], downloadFuture)) {
+        _inFlightDownloads.remove(resolvedUrl);
+      }
+    }
+  }
+
+  Future<File?> _downloadMediaInternal({
+    required String url,
+    required String resolvedUrl,
+    void Function(double progress)? onProgress,
+    void Function(DownloadByteProgress progress)? onByteProgress,
+    int? expectedTotalSize,
+  }) async {
     final cancelToken = CancelToken();
     _cancelTokens[url] = cancelToken;
+    if (resolvedUrl != url) {
+      _cancelTokens[resolvedUrl] = cancelToken;
+    }
 
     try {
       final mediaDir = await getMediaCacheDirectory();
@@ -496,26 +702,37 @@ class MediaCacheManager {
       }
 
       final parsedUri = Uri.tryParse(resolvedUrl);
+      final protectedObj = extractProtectedObjectName(resolvedUrl);
 
-      // S3/MinIO storage buckets and direct file downloads reject Bearer tokens with HTTP 400 Bad Request.
-      // We only attach Authorization if the URL is an /api/ endpoint and NOT a MinIO/S3 storage endpoint.
+      // Prefer authenticated `/api/files/download/<objectName>` when the target is
+      // inside a protected MinIO bucket so we don't waste a guaranteed 403 round-trip.
+      String requestUrl = resolvedUrl;
       bool shouldAttachAuth = false;
       if (parsedUri != null) {
         final pathLower = parsedUri.path.toLowerCase();
-        final isMinIOStorage = parsedUri.port == 9000 ||
-            parsedUri.host.contains('minio') ||
-            parsedUri.host.startsWith('storage.') ||
-            (AppConfig.storageUrl.isNotEmpty &&
-                parsedUri.host == (Uri.tryParse(AppConfig.storageUrl)?.host ?? ''));
-        if (!isMinIOStorage && pathLower.contains('/api/')) {
-          shouldAttachAuth = true;
+        if (protectedObj != null && !pathLower.contains('/api/files/download/')) {
+          final token = await AuthService.getToken();
+          if (token != null && token.isNotEmpty) {
+            requestUrl = '${AppConfig.baseUrl}/api/files/download/$protectedObj';
+            shouldAttachAuth = true;
+          }
+        } else {
+          final isMinIOStorage = parsedUri.port == 9000 ||
+              parsedUri.host.contains('minio') ||
+              parsedUri.host.startsWith('storage.') ||
+              (AppConfig.storageUrl.isNotEmpty &&
+                  parsedUri.host ==
+                      (Uri.tryParse(AppConfig.storageUrl)?.host ?? ''));
+          if (!isMinIOStorage && pathLower.contains('/api/')) {
+            shouldAttachAuth = true;
+          }
         }
       }
 
       final headers = <String, dynamic>{};
       if (shouldAttachAuth) {
         final token = await AuthService.getToken();
-        if (token != null) {
+        if (token != null && token.isNotEmpty) {
           headers['Authorization'] = 'Bearer $token';
         }
       }
@@ -526,7 +743,7 @@ class MediaCacheManager {
       Response<ResponseBody> response;
       try {
         response = await _dio.get<ResponseBody>(
-          resolvedUrl,
+          requestUrl,
           cancelToken: cancelToken,
           options: Options(
             headers: headers,
@@ -534,8 +751,30 @@ class MediaCacheManager {
           ),
         );
       } on DioException catch (dioErr) {
-        // If server returns 416 (Range Not Satisfiable), delete corrupted .tmp file and retry from offset 0
-        if (dioErr.response?.statusCode == 416 && headers.containsKey('Range')) {
+        final status = dioErr.response?.statusCode;
+        // Private MinIO bucket returns 401/403 (or expired presign returns 403):
+        // fallback to authenticated backend proxy.
+        final fallbackObj = protectedObj ??
+            extractProtectedObjectName(resolvedUrl, ignorePresignQuery: true);
+        if ((status == 401 || status == 403) &&
+            fallbackObj != null &&
+            !requestUrl.contains('/api/files/download/')) {
+          final token = await AuthService.getToken();
+          if (token != null && token.isNotEmpty) {
+            headers['Authorization'] = 'Bearer $token';
+            requestUrl = '${AppConfig.baseUrl}/api/files/download/$fallbackObj';
+            response = await _dio.get<ResponseBody>(
+              requestUrl,
+              cancelToken: cancelToken,
+              options: Options(
+                headers: headers,
+                responseType: ResponseType.stream,
+              ),
+            );
+          } else {
+            rethrow;
+          }
+        } else if (status == 416 && headers.containsKey('Range')) {
           debugPrint('Media download 416 Range Not Satisfiable for $url, resetting .tmp file and retrying from 0');
           try {
             if (await tempFile.exists()) await tempFile.delete();
@@ -543,7 +782,7 @@ class MediaCacheManager {
           headers.remove('Range');
           existingBytes = 0;
           response = await _dio.get<ResponseBody>(
-            resolvedUrl,
+            requestUrl,
             cancelToken: cancelToken,
             options: Options(
               headers: headers,
@@ -642,7 +881,13 @@ class MediaCacheManager {
         }
       }
     } finally {
-      _cancelTokens.remove(url);
+      if (identical(_cancelTokens[url], cancelToken)) {
+        _cancelTokens.remove(url);
+      }
+      if (resolvedUrl != url &&
+          identical(_cancelTokens[resolvedUrl], cancelToken)) {
+        _cancelTokens.remove(resolvedUrl);
+      }
     }
     return null;
   }

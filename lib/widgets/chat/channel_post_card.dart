@@ -15,6 +15,7 @@ import '../../services/chat_service.dart';
 import '../../services/contacts_service.dart';
 import '../../services/dm_parity_service.dart' show TranslationResult;
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/theav_theme_service.dart';
 import '../../utils/date_time_utils.dart';
@@ -33,6 +34,7 @@ import '../message/inline_keyboard_widget.dart';
 import '../message/location_message_widget.dart';
 import '../message/media_album_widget.dart';
 import '../message/media_download_button.dart';
+import '../message/telegram_upload_progress.dart';
 import '../message/media_spoiler_overlay.dart';
 import '../message/message_bubble.dart';
 import '../message/message_interactive_state.dart';
@@ -1193,6 +1195,7 @@ class ChannelPostCard extends StatelessWidget {
 
     if (hasMedia) {
       if (_isImage || _isVideo) {
+        final String itemLocalId = msg.localId ?? msg.id;
         final double mediaHeight = _computeSingleMediaHeight(msg, cardWidth);
         final String heroTag = TheavMediaItem.heroTagForMessage(
           messageId: msg.id,
@@ -1203,8 +1206,11 @@ class ChannelPostCard extends StatelessWidget {
           hasSpoiler: msg.hasMediaSpoiler,
           borderRadius: 0.0,
           child: _SingleChannelMediaView(
-            key: ValueKey('ch_media_${msg.id}_$resolvedFileUrl'),
+            key: ValueKey('ch_media_$itemLocalId'),
             messageId: msg.id,
+            localId: itemLocalId,
+            chatId: msg.chatId,
+            sendStatus: msg.sendStatus,
             url: resolvedFileUrl,
             thumbBase64: msg.thumbBase64,
             thumbUrl: msg.thumbUrl,
@@ -1219,6 +1225,9 @@ class ChannelPostCard extends StatelessWidget {
               messageType: _isVideo ? 'video' : 'image',
               fileSize: msg.mediaFileSize,
             ),
+            onCancelUpload: () =>
+                MediaSendCoordinator.instance.cancelUpload(itemLocalId),
+            onRetry: onRetry != null ? () => onRetry!(msg) : null,
             onTap: ([localPath]) {
               if (onMediaTap != null) {
                 onMediaTap!(msg, localFilePath: localPath);
@@ -1346,6 +1355,7 @@ class ChannelPostCard extends StatelessWidget {
 
       if (_isRoundVideo) {
         final double circleSize = math.min(220.0, cardWidth - 24.0);
+        final String roundLocalId = msg.localId ?? msg.id;
         return [
           Padding(
             padding: EdgeInsets.fromLTRB(
@@ -1356,8 +1366,9 @@ class ChannelPostCard extends StatelessWidget {
             ),
             child: Center(
               child: VideoMessageWidget(
-                key: ValueKey('ch_vmsg_${msg.id}'),
+                key: ValueKey('ch_vmsg_$roundLocalId'),
                 messageId: msg.id,
+                localId: roundLocalId,
                 videoUrl: resolvedFileUrl,
                 size: circleSize,
                 duration: msg.duration != null && msg.duration! > 0
@@ -1370,6 +1381,8 @@ class ChannelPostCard extends StatelessWidget {
                 isRead: true,
                 sendStatus: msg.sendStatus,
                 timeText: _resolveTimeString(msg),
+                onCancelUpload: () =>
+                    MediaSendCoordinator.instance.cancelUpload(roundLocalId),
                 onRetry: onRetry != null ? () => onRetry!(msg) : null,
                 chatId: msg.chatId,
                 chatType: 'channel',
@@ -1382,6 +1395,7 @@ class ChannelPostCard extends StatelessWidget {
 
       if (_isVoice || _isAudio) {
         final effectiveDurSec = msg.duration ?? msg.mediaDuration;
+        final String audioLocalId = msg.localId ?? msg.id;
         return [
           Padding(
             padding: EdgeInsets.fromLTRB(
@@ -1395,8 +1409,9 @@ class ChannelPostCard extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 VoiceMessageWidget(
-                  key: ValueKey('ch_audio_${msg.id}'),
+                  key: ValueKey('ch_audio_$audioLocalId'),
                   messageId: msg.id,
+                  localId: audioLocalId,
                   audioUrl: resolvedFileUrl,
                   title: _isAudio ? (msg.fileName ?? 'Audio') : null,
                   duration: effectiveDurSec != null && effectiveDurSec > 0
@@ -1409,6 +1424,8 @@ class ChannelPostCard extends StatelessWidget {
                   isListened: true,
                   sendStatus: msg.sendStatus,
                   timeText: null,
+                  onCancelUpload: () =>
+                      MediaSendCoordinator.instance.cancelUpload(audioLocalId),
                   onRetry: onRetry != null ? () => onRetry!(msg) : null,
                   chatId: msg.chatId,
                   chatType: 'channel',
@@ -1458,6 +1475,12 @@ class ChannelPostCard extends StatelessWidget {
                         ? msg.content.trim()
                         : 'file'),
                 fileSize: (msg.mediaFileSize ?? 0).toDouble(),
+                localId: msg.localId ?? msg.id,
+                sendStatus: msg.sendStatus,
+                onCancelUpload: () => MediaSendCoordinator.instance.cancelUpload(
+                  msg.localId ?? msg.id,
+                ),
+                onRetry: onRetry != null ? () => onRetry!(msg) : null,
               ),
               if (hasCaption)
                 Padding(
@@ -1919,6 +1942,9 @@ class ChannelPostCard extends StatelessWidget {
 
 class _SingleChannelMediaView extends StatefulWidget {
   final String messageId;
+  final String? localId;
+  final String? chatId;
+  final int sendStatus;
   final String url;
   final String? thumbBase64;
   final String? thumbUrl;
@@ -1930,11 +1956,16 @@ class _SingleChannelMediaView extends StatefulWidget {
   final double topRadius;
   final String? heroTag;
   final bool autoDownload;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onRetry;
   final void Function([String? localPath]) onTap;
 
   const _SingleChannelMediaView({
     super.key,
     required this.messageId,
+    this.localId,
+    this.chatId,
+    this.sendStatus = 1,
     required this.url,
     this.thumbBase64,
     this.thumbUrl,
@@ -1946,6 +1977,8 @@ class _SingleChannelMediaView extends StatefulWidget {
     required this.topRadius,
     this.heroTag,
     required this.autoDownload,
+    this.onCancelUpload,
+    this.onRetry,
     required this.onTap,
   });
 
@@ -2036,6 +2069,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
   @override
   Widget build(BuildContext context) {
     final isCached = _cachedFile != null;
+    final isUploadingOrFailed = widget.sendStatus != 1;
     final resolvedThumbUrl =
         widget.thumbUrl != null && widget.thumbUrl!.isNotEmpty
         ? (AppConfig.resolveMediaUrl(widget.thumbUrl!) ?? widget.thumbUrl!)
@@ -2044,7 +2078,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
 
     final bool hasOpaqueMedia =
         (!widget.isVideo && _cachedFile != null) ||
-        (widget.isVideo && isCached && _cachedFirstFrame != null);
+        (widget.isVideo && _cachedFirstFrame != null);
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     final int targetCacheWidth = (widget.width * dpr).round().clamp(240, 1280);
     final String effectiveHeroTag = widget.heroTag ??
@@ -2055,7 +2089,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
 
     return GestureDetector(
       onTap: () {
-        if (!isCached) {
+        if (!isUploadingOrFailed && !isCached) {
           _downloadButtonKey.currentState?.handleTap();
           return;
         }
@@ -2075,7 +2109,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
                   thumbBase64: widget.thumbBase64,
                   fit: BoxFit.cover,
                 ),
-              if (widget.isVideo && isCached)
+              if (widget.isVideo)
                 Hero(
                   tag: effectiveHeroTag,
                   child: _cachedFirstFrame != null
@@ -2087,23 +2121,12 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
                           filterQuality: FilterQuality.low,
                           gaplessPlayback: true,
                         )
-                      : (resolvedThumbUrl != null &&
-                              resolvedThumbUrl.isNotEmpty
-                          ? Image.network(
-                              resolvedThumbUrl,
-                              width: widget.width,
-                              height: widget.height,
-                              fit: BoxFit.cover,
-                              cacheWidth: targetCacheWidth,
-                              filterQuality: FilterQuality.low,
-                              loadingBuilder: (context, child, progress) =>
-                                  progress == null
-                                  ? child
-                                  : const SizedBox.shrink(),
-                              errorBuilder: (_, __, ___) =>
-                                  const SizedBox.shrink(),
-                            )
-                          : const SizedBox.shrink()),
+                      : RemoteVideoThumbnailImage(
+                          thumbUrl: resolvedThumbUrl,
+                          width: widget.width,
+                          height: widget.height,
+                          cacheWidth: targetCacheWidth,
+                        ),
                 ),
               if (!widget.isVideo && _cachedFile != null)
                 Hero(
@@ -2118,7 +2141,18 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
                     gaplessPlayback: true,
                   ),
                 ),
-              if (widget.url.isNotEmpty && (!isCached || widget.isVideo))
+              if (isUploadingOrFailed)
+                TelegramMediaUploadOverlay(
+                  localId: widget.localId ?? widget.messageId,
+                  chatId: widget.chatId,
+                  fileSize: widget.fileSize,
+                  sendStatus: widget.sendStatus,
+                  onCancel: widget.onCancelUpload,
+                  onRetry: widget.onRetry,
+                )
+              else if (!isUploadingOrFailed &&
+                  widget.url.isNotEmpty &&
+                  (!isCached || widget.isVideo))
                 MediaDownloadButton(
                   key: _downloadButtonKey,
                   url: widget.url,
@@ -2128,7 +2162,8 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
                   onDownloaded: _checkCache,
                   onPlayVideo: () => widget.onTap(_cachedFile?.path),
                 ),
-              if (widget.isVideo &&
+              if (!isUploadingOrFailed &&
+                  widget.isVideo &&
                   widget.duration != null &&
                   widget.duration! > 0)
                 Positioned(

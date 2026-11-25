@@ -289,7 +289,14 @@ class MediaPlaybackCoordinator with ChangeNotifier {
         if (cachedDisk != null && await cachedDisk.exists()) {
           ctrl = VideoPlayerController.file(cachedDisk);
         } else if (isNetwork) {
-          ctrl = VideoPlayerController.networkUrl(uri);
+          final target = await MediaCacheManager.instance
+              .resolveStreamableVideoTarget(resolvedUrl);
+          ctrl = target != null
+              ? VideoPlayerController.networkUrl(
+                  target.uri,
+                  httpHeaders: target.headers,
+                )
+              : VideoPlayerController.networkUrl(uri);
         } else {
           ctrl = VideoPlayerController.file(File(
             resolvedUrl.startsWith('file://')
