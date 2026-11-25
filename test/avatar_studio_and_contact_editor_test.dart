@@ -38,6 +38,7 @@ import 'package:theaver/widgets/avatar_editor/theav_avatar_picker_sheet.dart';
 import 'package:theaver/widgets/chat/message_reply_info.dart';
 import 'package:theaver/widgets/chat/suggested_photo_bubble_card.dart';
 import 'package:theaver/widgets/community/community_members_panel.dart';
+import 'package:theaver/widgets/design_system/theav_design_system.dart';
 import 'package:theaver/widgets/message/group_message_avatar_row.dart';
 import 'package:theaver/widgets/profile/avatar_gallery_viewer.dart';
 import 'package:theaver/widgets/profile/expandable_avatar.dart';
@@ -459,8 +460,8 @@ void main() {
     });
   });
 
-  group('2. TheavAvatarEditorScreen & AvatarEmojiConstructorView (Glass & Matte)', () {
-    testWidgets('Editor wraps canvas & dial in SwipeBackBlocker, supports tabs/aspect/undo, and has 0 forbidden opacity/clip wrappers above Glass', (tester) async {
+  group('2. TheavAvatarEditorScreen & AvatarEmojiConstructorView (Matte Full-Screen Studio & Picker)', () {
+    testWidgets('Editor wraps canvas & dial in SwipeBackBlocker, supports tabs/aspect/undo, and avoids LiquidGlassLens even in GlassMode.full', (tester) async {
       final Uint8List pngBytes = (await tester.runAsync(
         () => _createSyntheticPng(width: 180, height: 180),
       ))!;
@@ -505,7 +506,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      _expectNoTranslucentOpacityAboveGlass(tester);
+      expect(find.byType(LiquidGlassLens), findsNothing);
+      expect(find.byType(LiquidGlassTabBar), findsNothing);
       expect(
         find.byKey(const ValueKey<String>('avatar_editor_mini_circle_slider')),
         findsOneWidget,
@@ -534,10 +536,11 @@ void main() {
       await tester.tapAt(tester.getCenter(find.text('Рисунок').first));
       await _pumpFrames(tester);
       expect(find.text('Перо'), findsOneWidget);
-      _expectNoTranslucentOpacityAboveGlass(tester);
+      expect(find.byType(LiquidGlassLens), findsNothing);
+      expect(tester.takeException(), isNull);
     });
 
-    testWidgets('TheavAvatarPickerSheet shows Constructor tab & AvatarEmojiConstructorView builds cleanly in GlassMode.full', (tester) async {
+    testWidgets('TheavAvatarPickerSheet opens as full-screen opaque route (no TheavModalSheet) with zero LiquidGlassLens in GlassMode.full', (tester) async {
       await tester.pumpWidget(
         _wrapTestApp(
           glassMode: GlassMode.full,
@@ -565,11 +568,15 @@ void main() {
       await tester.tap(find.text('Open Picker'));
       await _pumpFrames(tester);
 
+      expect(find.byType(TheavAvatarPickerSheet), findsOneWidget);
+      expect(find.byType(TheavModalSheet), findsNothing);
+      expect(find.byType(LiquidGlassLens), findsNothing);
+      expect(find.byType(LiquidGlassTabBar), findsNothing);
       expect(find.byType(AvatarEmojiConstructorView), findsOneWidget);
       expect(find.text('Галерея'), findsOneWidget);
       expect(find.text('Конструктор'), findsWidgets);
       expect(find.text('Монограмма'), findsOneWidget);
-      _expectNoTranslucentOpacityAboveGlass(tester);
+      expect(tester.takeException(), isNull);
     });
   });
 
@@ -1443,6 +1450,123 @@ void main() {
           }
         });
       }
+    });
+  });
+
+  group('8. Avatar Editor & Picker Narrow Viewport Zero-Overflow Audits', () {
+    testWidgets('TheavAvatarEditorScreen renders cleanly with zero RenderFlex overflow across all 4 tabs at 280x600 and 320x640 with 1.2x text scale', (tester) async {
+      final Uint8List pngBytes = (await tester.runAsync(
+        () => _createSyntheticPng(width: 200, height: 140),
+      ))!;
+
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      for (final Size viewport in const <Size>[
+        Size(320, 640),
+        Size(280, 600),
+      ]) {
+        tester.view.physicalSize = viewport;
+        tester.view.devicePixelRatio = 1.0;
+
+        await tester.pumpWidget(
+          _wrapTestApp(
+            glassMode: GlassMode.full,
+            home: Builder(
+              builder: (BuildContext ctx) => MediaQuery(
+                data: MediaQuery.of(ctx).copyWith(
+                  textScaler: const TextScaler.linear(1.2),
+                ),
+                child: TheavAvatarEditorScreen(
+                  key: ValueKey<String>('editor_${viewport.width.toInt()}'),
+                  initialBytes: pngBytes,
+                  fileName: 'narrow.png',
+                  maskShape: AvatarShapeMask.circle,
+                  ctaMode: AvatarEditorCtaMode.setPhoto,
+                  subjectName: 'Александра',
+                ),
+              ),
+            ),
+          ),
+        );
+
+        for (int i = 0; i < 30; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 25)),
+          );
+          await tester.pump(const Duration(milliseconds: 25));
+          if (find.byType(AvatarCropCanvas).evaluate().isNotEmpty) {
+            break;
+          }
+        }
+        await _pumpFrames(tester);
+        expect(tester.takeException(), isNull);
+
+        // Tab 2: Adjustments
+        await tester.tapAt(tester.getCenter(find.text('Коррекция').first));
+        await _pumpFrames(tester);
+        expect(tester.takeException(), isNull);
+
+        // Tab 3: Stickers + add selected text layer so 4 action chips appear in one Row
+        await tester.tapAt(tester.getCenter(find.text('Стикеры').first));
+        await _pumpFrames(tester);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.text('Добавить текст'));
+        await _pumpFrames(tester);
+        expect(find.byType(LiquidGlassLens), findsNothing);
+        await tester.enterText(find.byType(TextField).last, 'VIP');
+        await tester.pump();
+        await tester.tap(find.text('Готово').last);
+        await _pumpFrames(tester);
+        expect(tester.takeException(), isNull);
+
+        // Tab 4: Markup (previously crashed with right overflow)
+        await tester.tapAt(tester.getCenter(find.text('Рисунок').first));
+        await _pumpFrames(tester);
+        expect(find.text('Перо'), findsOneWidget);
+        expect(find.byType(LiquidGlassLens), findsNothing);
+        expect(tester.takeException(), isNull);
+      }
+    });
+
+    testWidgets('TheavAvatarPickerSheet renders cleanly across Gallery and Constructor tabs at 280x600 with 1.2x text scale', (tester) async {
+      tester.view.physicalSize = const Size(280, 600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        _wrapTestApp(
+          glassMode: GlassMode.full,
+          home: Builder(
+            builder: (BuildContext ctx) => MediaQuery(
+              data: MediaQuery.of(ctx).copyWith(
+                textScaler: const TextScaler.linear(1.2),
+              ),
+              child: const TheavAvatarPickerSheet(
+                maskShape: AvatarShapeMask.circle,
+                ctaMode: AvatarEditorCtaMode.setPhoto,
+                subjectName: 'Екатерина',
+                canDeleteCurrent: true,
+                startInConstructor: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpFrames(tester);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.text('Конструктор').first);
+      await _pumpFrames(tester);
+      expect(find.byType(AvatarEmojiConstructorView), findsOneWidget);
+      expect(find.byType(LiquidGlassLens), findsNothing);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.text('Монограмма').first);
+      await _pumpFrames(tester);
+      expect(tester.takeException(), isNull);
     });
   });
 }

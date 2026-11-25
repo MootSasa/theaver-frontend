@@ -362,8 +362,9 @@ class AvatarStudioPaint {
 
     for (final AvatarBrushStroke stroke in strokes) {
       if (stroke.points.isEmpty) continue;
+      final double maxStrokePx = math.max(1.5, minSide * 0.16);
       final double widthPx =
-          (stroke.strokeWidthFraction * minSide).clamp(1.5, minSide * 0.16);
+          (stroke.strokeWidthFraction * minSide).clamp(1.5, maxStrokePx);
 
       final List<Offset> pts = <Offset>[
         for (final pt in stroke.points)
@@ -490,9 +491,12 @@ class AvatarStudioPaint {
     required AvatarTextLayer layer,
     TextDirection textDirection = TextDirection.ltr,
   }) {
-    final double minSide = math.min(cropSize.width, cropSize.height);
+    final double minSide =
+        math.max(1.0, math.min(cropSize.width, cropSize.height));
+    final double upperFont = math.max(6.0, minSide * 0.52);
+    final double lowerFont = math.min(10.0, upperFont);
     final double fontSize =
-        (minSide * 0.068 * layer.scale).clamp(10.0, minSide * 0.52);
+        (minSide * 0.068 * layer.scale).clamp(lowerFont, upperFont);
     final Color fgColor = switch (layer.backgroundMode) {
       AvatarTextBackgroundMode.solid =>
         layer.color.computeLuminance() > 0.58
@@ -545,10 +549,11 @@ class AvatarStudioPaint {
     required Rect bounds,
     required AvatarTextLayer layer,
     TextDirection textDirection = TextDirection.ltr,
+    Size? layoutCropSize,
   }) {
     if (layer.text.trim().isEmpty) return;
     final measured = layoutTextLayer(
-      cropSize: bounds.size,
+      cropSize: layoutCropSize ?? bounds.size,
       layer: layer,
       textDirection: textDirection,
     );

@@ -235,6 +235,7 @@ class _AvatarEmojiConstructorViewState
                       _buildScaleAndStyleRow(context, palette),
                       const SizedBox(height: 12),
                       TheavSegmentedControl<int>(
+                        useGlass: false,
                         height: 36,
                         expand: true,
                         selected: _foregroundTab,
@@ -295,10 +296,13 @@ class _AvatarEmojiConstructorViewState
   }
 
   Widget _buildLivePreview(TheavPalette palette) {
+    final double previewSize = math
+        .min(_previewSize, MediaQuery.sizeOf(context).height * 0.28)
+        .clamp(136.0, _previewSize);
     final List<Color> colors = _config.gradientColors.length >= 2
         ? _config.gradientColors
         : <Color>[const Color(0xFF4FACFE), const Color(0xFF00F2FE)];
-    final double fgBox = _previewSize * _config.foregroundScale;
+    final double fgBox = previewSize * _config.foregroundScale;
 
     Widget foreground;
     if (_config.stickerUrl != null && _config.stickerUrl!.isNotEmpty) {
@@ -339,10 +343,10 @@ class _AvatarEmojiConstructorViewState
 
     return Center(
       child: Container(
-        width: _previewSize,
-        height: _previewSize,
+        width: previewSize,
+        height: previewSize,
         decoration: BoxDecoration(
-          borderRadius: widget.maskShape.borderRadiusForSize(_previewSize),
+          borderRadius: widget.maskShape.borderRadiusForSize(previewSize),
           border: Border.all(
             color: palette.onSurface.withValues(alpha: 0.14),
             width: 1.0,
@@ -469,55 +473,73 @@ class _AvatarEmojiConstructorViewState
   Widget _buildScaleAndStyleRow(BuildContext context, TheavPalette palette) {
     return Row(
       children: [
-        GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () {
-            HapticUtils.selection();
-            setState(() {
-              _config = _config.copyWith(isRadial: !_config.isRadial);
-            });
-          },
-          child: Container(
-            height: 32,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-              color: palette.onSurface.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: palette.divider,
-                width: 0.6,
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 132),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              HapticUtils.selection();
+              setState(() {
+                _config = _config.copyWith(isRadial: !_config.isRadial);
+              });
+            },
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: palette.onSurface.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: palette.divider,
+                  width: 0.6,
+                ),
               ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                iconoir.Palette(
-                  width: 15,
-                  height: 15,
-                  color: palette.primary,
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  _config.isRadial
-                      ? context.trOr('avatar_constructor_radial', 'Радиальный')
-                      : context.trOr('avatar_constructor_linear', 'Линейный'),
-                  style: TextStyle(
-                    color: palette.onSurface,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  iconoir.Palette(
+                    width: 15,
+                    height: 15,
+                    color: palette.primary,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      _config.isRadial
+                          ? context.trOr(
+                              'avatar_constructor_radial',
+                              'Радиальный',
+                            )
+                          : context.trOr(
+                              'avatar_constructor_linear',
+                              'Линейный',
+                            ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.onSurface,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        Text(
-          context.trOr('avatar_constructor_size', 'Размер'),
-          style: TextStyle(
-            color: palette.subtext,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
+        const SizedBox(width: 8),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 72),
+          child: Text(
+            context.trOr('avatar_constructor_size', 'Размер'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: palette.subtext,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ),
         Expanded(
@@ -800,56 +822,71 @@ class _AvatarEmojiConstructorViewState
   }
 
   Widget _buildBottomActions(BuildContext context, TheavPalette palette) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextButton.icon(
-            key: const ValueKey<String>('avatar_constructor_open_editor'),
-            onPressed: _isRendering ? null : _openInPhotoEditor,
-            icon: iconoir.EditPencil(
-              width: 17,
-              height: 17,
-              color: palette.primary,
-            ),
-            label: Text(
-              context.trOr(
-                'avatar_constructor_open_editor',
-                'Открыть в фоторедакторе',
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextButton(
+              key: const ValueKey<String>('avatar_constructor_open_editor'),
+              onPressed: _isRendering ? null : _openInPhotoEditor,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  iconoir.EditPencil(
+                    width: 17,
+                    height: 17,
+                    color: palette.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      context.trOr(
+                        'avatar_constructor_open_editor',
+                        'Открыть в фоторедакторе',
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.primary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-              style: TextStyle(
-                color: palette.primary,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
             ),
-          ),
-          const SizedBox(height: 4),
-          TheavFloatingPillButton(
-            key: const ValueKey<String>('avatar_constructor_cta_btn'),
-            height: 46,
-            isPrimary: true,
-            enabled: !_isRendering,
-            label: _ctaLabel(context),
-            icon: _isRendering
-                ? SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.0,
+            const SizedBox(height: 4),
+            TheavFloatingPillButton(
+              key: const ValueKey<String>('avatar_constructor_cta_btn'),
+              height: 46,
+              isPrimary: true,
+              useGlass: false,
+              enabled: !_isRendering,
+              label: _ctaLabel(context),
+              icon: _isRendering
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.0,
+                        color: palette.onPrimary,
+                      ),
+                    )
+                  : iconoir.Check(
+                      width: 18,
+                      height: 18,
                       color: palette.onPrimary,
                     ),
-                  )
-                : iconoir.Check(
-                    width: 18,
-                    height: 18,
-                    color: palette.onPrimary,
-                  ),
-            onTap: _confirmConstructorAvatar,
-          ),
-        ],
+              onTap: _confirmConstructorAvatar,
+            ),
+          ],
+        ),
       ),
     );
   }

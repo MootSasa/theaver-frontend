@@ -193,6 +193,7 @@ class _TheavScheduleSheetBodyState extends State<_TheavScheduleSheetBody> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TheavSegmentedControl<int>(
+          useGlass: false,
           options: const [
             TheavSegmentOption(value: 0, label: 'Сегодня'),
             TheavSegmentOption(value: 1, label: 'Через час'),

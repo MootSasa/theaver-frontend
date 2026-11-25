@@ -14,6 +14,29 @@ export 'theav_floating_pill_button.dart';
 export 'theav_inset_group.dart';
 export 'theav_overlays.dart';
 
+/// Forces a subtree (and modals opened from it when propagated) to render with
+/// clean matte surfaces without [LiquidGlassLens] or [BackdropFilter] shaders.
+class TheavMatteScope extends InheritedWidget {
+  final bool enabled;
+
+  const TheavMatteScope({
+    super.key,
+    this.enabled = true,
+    required super.child,
+  });
+
+  static bool isActive(BuildContext context, {bool listen = true}) {
+    final TheavMatteScope? scope = listen
+        ? context.dependOnInheritedWidgetOfExactType<TheavMatteScope>()
+        : context.getInheritedWidgetOfExactType<TheavMatteScope>();
+    return scope?.enabled ?? false;
+  }
+
+  @override
+  bool updateShouldNotify(TheavMatteScope oldWidget) =>
+      enabled != oldWidget.enabled;
+}
+
 /// Resolved surface tokens binding [TheavPalette] (`context.theav`) with the
 /// active [GlassMode] (`full` / `lite` / `disabled`) and power-saving state.
 class TheavSurfaceStyle {
@@ -40,6 +63,17 @@ class TheavSurfaceStyle {
   factory TheavSurfaceStyle.of(BuildContext context, {bool listen = true}) {
     final palette = context.theav;
     final brightness = Theme.of(context).brightness;
+    if (TheavMatteScope.isActive(context, listen: listen)) {
+      return TheavSurfaceStyle._(
+        context: context,
+        palette: palette,
+        brightness: brightness,
+        mode: GlassMode.disabled,
+        allowBlur: false,
+        allowMaterialBlur: false,
+        glassProvider: null,
+      );
+    }
     final provider = LiquidGlassProvider.maybeOf(context, listen: listen);
     final mode = LiquidGlassProvider.glassModeOf(context, listen: listen);
     final powerAllowsBlur =

@@ -604,6 +604,7 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
                           scale: _hoveringTrash ? 1.12 : 1.0,
                           duration: const Duration(milliseconds: 140),
                           child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 16),
                             padding: const EdgeInsets.symmetric(
                               horizontal: 14,
                               vertical: 8,
@@ -629,15 +630,19 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
                                   color: Colors.white,
                                 ),
                                 const SizedBox(width: 6),
-                                Text(
-                                  context.trOr(
-                                    'avatar_editor_drag_to_delete',
-                                    'Отпустите, чтобы удалить',
-                                  ),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w600,
+                                Flexible(
+                                  child: Text(
+                                    context.trOr(
+                                      'avatar_editor_drag_to_delete',
+                                      'Отпустите, чтобы удалить',
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -657,7 +662,8 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
 
   Widget _buildStickerWidget(AvatarStickerLayer layer, Rect cropRect) {
     final double minSide = math.min(cropRect.width, cropRect.height);
-    final double side = (minSide * 0.24 * layer.scale).clamp(24.0, minSide * 1.4);
+    final double side = (minSide * 0.24 * layer.scale)
+        .clamp(24.0, math.max(24.0, minSide * 1.4));
     final bool selected = widget.selectedLayerId == layer.id;
     final double cx = layer.normX * cropRect.width;
     final double cy = layer.normY * cropRect.height;
@@ -1059,12 +1065,17 @@ class _SingleTextLayerPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final AvatarTextLayer centered = layer.copyWith(normX: 0.5, normY: 0.5);
+    final AvatarTextLayer centered = layer.copyWith(
+      normX: 0.5,
+      normY: 0.5,
+      rotation: 0.0,
+    );
     AvatarStudioPaint.paintTextLayer(
       canvas: canvas,
       bounds: Offset.zero & size,
       layer: centered,
       textDirection: textDirection,
+      layoutCropSize: cropSize,
     );
   }
 

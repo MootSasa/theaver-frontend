@@ -119,6 +119,7 @@ class _ContactPickerSheetBodyState extends State<_ContactPickerSheetBody> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TheavSegmentedControl<int>(
+          useGlass: false,
           options: const [
             TheavSegmentOption(value: 0, label: 'Из контактов'),
             TheavSegmentOption(value: 1, label: 'Вручную'),

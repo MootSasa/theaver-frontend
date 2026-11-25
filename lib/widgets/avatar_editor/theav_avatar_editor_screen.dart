@@ -6,7 +6,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/avatar_editor_models.dart';
@@ -61,15 +60,17 @@ class TheavAvatarEditorScreen extends StatefulWidget {
   }) {
     return Navigator.of(context).push<AvatarPickResult>(
       SwipeBackPageRoute<AvatarPickResult>(
-        builder: (_) => TheavAvatarEditorScreen(
-          initialBytes: initialBytes,
-          initialFilePath: initialFilePath,
-          fileName: fileName,
-          maskShape: maskShape,
-          ctaMode: ctaMode,
-          subjectName: subjectName,
-          initialAspectMode: initialAspectMode,
-          isFromConstructor: isFromConstructor,
+        builder: (_) => TheavMatteScope(
+          child: TheavAvatarEditorScreen(
+            initialBytes: initialBytes,
+            initialFilePath: initialFilePath,
+            fileName: fileName,
+            maskShape: maskShape,
+            ctaMode: ctaMode,
+            subjectName: subjectName,
+            initialAspectMode: initialAspectMode,
+            isFromConstructor: isFromConstructor,
+          ),
         ),
       ),
     );
@@ -134,6 +135,10 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
   String? _selectedLayerId;
   bool _isAdjustingSlider = false;
   int _layerSeq = 0;
+  BuildContext? _studioCtx;
+
+  BuildContext get _modalHostContext =>
+      (_studioCtx != null && _studioCtx!.mounted) ? _studioCtx! : context;
 
   bool get _hasUnsavedChanges =>
       _state.aspectMode != _baselineAspectMode ||
@@ -348,7 +353,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
     }
 
     final bool? discard = await showTheavDialog<bool>(
-      context: context,
+      context: _modalHostContext,
       title: context.trOr(
         'avatar_editor_discard_title',
         'Отменить изменения?',
@@ -454,7 +459,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
   Future<void> _openStickerPickerSheet() async {
     if (!mounted) return;
     await showTheavModalSheet<void>(
-      context: context,
+      context: _modalHostContext,
       title: context.trOr('avatar_editor_stickers', 'Стикеры'),
       showCloseButton: true,
       maxHeightFactor: 0.72,
@@ -482,7 +487,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
     bool bold = existing?.bold ?? true;
 
     final bool? saved = await showTheavDialog<bool>(
-      context: context,
+      context: _modalHostContext,
       title: context.trOr('avatar_editor_text', 'Текст'),
       content: _AvatarTextLayerDialogContent(
         initialText: draftText,
@@ -614,34 +619,37 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
   Widget build(BuildContext context) {
     final ThemeData studioTheme = _buildStudioTheme(context);
 
-    return Theme(
-      data: studioTheme,
-      child: Builder(
-        builder: (BuildContext themedCtx) {
-          return PopScope(
-            canPop: !_hasUnsavedChanges && !_isExporting,
-            onPopInvokedWithResult: (bool didPop, _) {
-              if (!didPop) {
-                _handleClose();
-              }
-            },
-            child: SwipeBackPopScope(
-              swipeBackEnabled: !_hasUnsavedChanges && !_isExporting,
-              onSwipeBackPop: _handleClose,
-              child: Scaffold(
-                backgroundColor: _studioBackground,
-                body: _buildBody(themedCtx),
+    return TheavMatteScope(
+      child: Theme(
+        data: studioTheme,
+        child: Builder(
+          builder: (BuildContext themedCtx) {
+            _studioCtx = themedCtx;
+            return PopScope(
+              canPop: !_hasUnsavedChanges && !_isExporting,
+              onPopInvokedWithResult: (bool didPop, _) {
+                if (!didPop) {
+                  _handleClose();
+                }
+              },
+              child: SwipeBackPopScope(
+                swipeBackEnabled: !_hasUnsavedChanges && !_isExporting,
+                onSwipeBackPop: _handleClose,
+                child: Scaffold(
+                  backgroundColor: _studioBackground,
+                  body: _buildBody(themedCtx),
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
 
   Widget _buildBody(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final bool isWide = mq.size.width >= 640;
+    final bool isWide = mq.size.width >= 720;
     final double topHudPad = mq.padding.top + (isWide ? 64.0 : 112.0);
     final double bottomHudPad =
         math.min(mq.size.height * 0.44, mq.padding.bottom + 264.0);
@@ -707,9 +715,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
   }
 
   Widget _buildTopHud(BuildContext context, {required bool isWide}) {
-    final bool glass = TheavSurfaceStyle.of(context).isGlass;
-
-    final Widget closeBtn = TheavHeaderIconButton(
+    final Widget closeBtn = _StudioIconCircleButton(
       key: const ValueKey<String>('avatar_editor_close_btn'),
       size: 40,
       tooltip: context.trOr('profile_cancel', 'Закрыть'),
@@ -717,7 +723,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
       onTap: _handleClose,
     );
 
-    final Widget historyPill = TheavFloatingSurface(
+    final Widget historyPill = _StudioPanel(
       borderRadius: 20,
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: SizedBox(
@@ -727,7 +733,8 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
           children: [
             IconButton(
               key: const ValueKey<String>('avatar_editor_undo_btn'),
-              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 34, height: 34),
               onPressed: _undoStack.isNotEmpty ? _undo : null,
               icon: iconoir.Undo(
                 width: 18,
@@ -739,7 +746,8 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
             ),
             IconButton(
               key: const ValueKey<String>('avatar_editor_redo_btn'),
-              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 34, height: 34),
               onPressed: _redoStack.isNotEmpty ? _redo : null,
               icon: iconoir.Redo(
                 width: 18,
@@ -749,21 +757,26 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
                     : Colors.white.withValues(alpha: 0.30),
               ),
             ),
-            TextButton(
-              key: const ValueKey<String>('avatar_editor_reset_btn'),
-              onPressed: _hasUnsavedChanges ? _resetAll : null,
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                minimumSize: const Size(0, 34),
-              ),
-              child: Text(
-                context.trOr('avatar_editor_reset', 'Сбросить'),
-                style: TextStyle(
-                  color: _hasUnsavedChanges
-                      ? Colors.white
-                      : Colors.white.withValues(alpha: 0.35),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+            Flexible(
+              child: TextButton(
+                key: const ValueKey<String>('avatar_editor_reset_btn'),
+                onPressed: _hasUnsavedChanges ? _resetAll : null,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(0, 34),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  context.trOr('avatar_editor_reset', 'Сбросить'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _hasUnsavedChanges
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.35),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
@@ -772,64 +785,85 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
       ),
     );
 
-    final Widget aspectPill = TheavFloatingSurface(
+    final Widget aspectPill = _StudioPanel(
       borderRadius: 20,
       padding: const EdgeInsets.all(3),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _AspectChip(
-            label: context.trOr('avatar_editor_aspect_square', '1:1'),
-            selected: _state.aspectMode == AvatarCropAspectMode.square1x1,
-            onTap: () => _setAspectMode(AvatarCropAspectMode.square1x1),
+      child: SwipeBackBlocker(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _AspectChip(
+                label: context.trOr('avatar_editor_aspect_square', '1:1'),
+                selected: _state.aspectMode == AvatarCropAspectMode.square1x1,
+                onTap: () => _setAspectMode(AvatarCropAspectMode.square1x1),
+              ),
+              _AspectChip(
+                label:
+                    context.trOr('avatar_editor_aspect_original', 'Оригинал'),
+                selected: _state.aspectMode == AvatarCropAspectMode.original,
+                onTap: () => _setAspectMode(AvatarCropAspectMode.original),
+              ),
+              _AspectChip(
+                label: context.trOr('avatar_editor_aspect_free', 'Свободно'),
+                selected: _state.aspectMode == AvatarCropAspectMode.free,
+                onTap: () => _setAspectMode(AvatarCropAspectMode.free),
+              ),
+            ],
           ),
-          _AspectChip(
-            label:
-                context.trOr('avatar_editor_aspect_original', 'Оригинал'),
-            selected: _state.aspectMode == AvatarCropAspectMode.original,
-            onTap: () => _setAspectMode(AvatarCropAspectMode.original),
-          ),
-          _AspectChip(
-            label: context.trOr('avatar_editor_aspect_free', 'Свободно'),
-            selected: _state.aspectMode == AvatarCropAspectMode.free,
-            onTap: () => _setAspectMode(AvatarCropAspectMode.free),
-          ),
-        ],
+        ),
       ),
     );
 
-    final Widget content = isWide
-        ? Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              closeBtn,
-              historyPill,
-              aspectPill,
-            ],
-          )
-        : Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  closeBtn,
-                  historyPill,
-                ],
-              ),
-              const SizedBox(height: 8),
-              Center(child: aspectPill),
-            ],
-          );
+    if (isWide) {
+      return Row(
+        children: [
+          closeBtn,
+          const SizedBox(width: 8),
+          Flexible(
+            child: Align(
+              alignment: Alignment.center,
+              child: historyPill,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: aspectPill,
+            ),
+          ),
+        ],
+      );
+    }
 
-    return glass ? LiquidGlassBatch(child: content) : content;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            closeBtn,
+            const SizedBox(width: 8),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: historyPill,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Center(child: aspectPill),
+      ],
+    );
   }
 
   Widget _buildBottomHud(BuildContext context) {
-    final bool glass = TheavSurfaceStyle.of(context).isGlass;
     final palette = context.theav;
 
     final Widget tabBar = TheavSegmentedControl<AvatarEditorTab>(
+      useGlass: false,
       height: 36,
       expand: true,
       selected: _activeTab,
@@ -861,7 +895,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
       ],
     );
 
-    final Widget deck = TheavFloatingSurface(
+    final Widget deck = _StudioPanel(
       borderRadius: 22,
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       child: _buildTabControls(context, palette),
@@ -874,6 +908,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
             key: const ValueKey<String>('avatar_editor_cta_btn'),
             height: 46,
             isPrimary: true,
+            useGlass: false,
             enabled: !_isLoadingSource && !_isExporting && _decodedImage != null,
             label: _ctaLabel(context),
             icon: _isExporting
@@ -896,19 +931,17 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
       ],
     );
 
-    final Widget column = Column(
+    return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         deck,
         const SizedBox(height: 8),
-        glass ? LiquidGlassBatch.exclude(child: tabBar) : tabBar,
+        tabBar,
         const SizedBox(height: 8),
         ctaRow,
       ],
     );
-
-    return glass ? LiquidGlassBatch(child: column) : column;
   }
 
   Widget _buildTabControls(BuildContext context, TheavPalette palette) {
@@ -962,12 +995,17 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
             height: 28,
             child: Row(
               children: [
-                Text(
-                  context.trOr('avatar_editor_circle_size', 'Кружок'),
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.78),
-                    fontSize: 12.0,
-                    fontWeight: FontWeight.w600,
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 96),
+                  child: Text(
+                    context.trOr('avatar_editor_circle_size', 'Кружок'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.78),
+                      fontSize: 12.0,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1022,9 +1060,11 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
                   ),
                 ),
                 SizedBox(
-                  width: 38,
+                  width: 42,
                   child: Text(
                     '${(_state.miniSizeFrac * 100).round()}%',
+                    maxLines: 1,
+                    softWrap: false,
                     textAlign: TextAlign.right,
                     style: const TextStyle(
                       color: Colors.white,
@@ -1044,26 +1084,30 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _StudioActionChip(
-              icon: const iconoir.RotateCameraLeft(
-                width: 17,
-                height: 17,
-                color: Colors.white,
+            Flexible(
+              child: _StudioActionChip(
+                icon: const iconoir.RotateCameraLeft(
+                  width: 17,
+                  height: 17,
+                  color: Colors.white,
+                ),
+                label: '-90°',
+                onTap: _rotateMinus90,
               ),
-              label: '-90°',
-              onTap: _rotateMinus90,
             ),
             const SizedBox(width: 10),
-            _StudioActionChip(
-              icon: iconoir.Flip(
-                width: 17,
-                height: 17,
-                color: _state.flipHorizontal ? palette.primary : Colors.white,
+            Flexible(
+              child: _StudioActionChip(
+                icon: iconoir.Flip(
+                  width: 17,
+                  height: 17,
+                  color: _state.flipHorizontal ? palette.primary : Colors.white,
+                ),
+                label: context.trOr('avatar_editor_flip', 'Отразить'),
+                selected: _state.flipHorizontal,
+                accentColor: palette.primary,
+                onTap: _toggleFlipHorizontal,
               ),
-              label: context.trOr('avatar_editor_flip', 'Отразить'),
-              selected: _state.flipHorizontal,
-              accentColor: palette.primary,
-              onTap: _toggleFlipHorizontal,
             ),
           ],
         ),
@@ -1305,7 +1349,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
                 onTap: _openStickerPickerSheet,
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Expanded(
               child: _StudioActionChip(
                 icon: const iconoir.Text(
@@ -1318,7 +1362,7 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
               ),
             ),
             if (_selectedLayerId != null) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               if (selectedText != null) ...[
                 _StudioActionChip(
                   icon: const iconoir.EditPencil(
@@ -1383,80 +1427,101 @@ class _TheavAvatarEditorScreenState extends State<TheavAvatarEditorScreen> {
       children: [
         Row(
           children: [
-            _StudioActionChip(
-              label: context.trOr('avatar_editor_brush_pen', 'Перо'),
-              selected: _brushStyle == AvatarBrushStyle.pen,
-              accentColor: palette.primary,
-              onTap: () => setState(() => _brushStyle = AvatarBrushStyle.pen),
-            ),
-            const SizedBox(width: 6),
-            _StudioActionChip(
-              label: context.trOr('avatar_editor_brush_neon', 'Неон'),
-              selected: _brushStyle == AvatarBrushStyle.neon,
-              accentColor: palette.primary,
-              onTap: () => setState(() => _brushStyle = AvatarBrushStyle.neon),
-            ),
-            const SizedBox(width: 6),
-            _StudioActionChip(
-              label: context.trOr(
-                'avatar_editor_brush_highlighter',
-                'Маркер',
-              ),
-              selected: _brushStyle == AvatarBrushStyle.highlighter,
-              accentColor: palette.primary,
-              onTap: () =>
-                  setState(() => _brushStyle = AvatarBrushStyle.highlighter),
-            ),
-            const Spacer(),
-            // Stroke thickness dots
-            for (final double w in _brushWidths)
-              GestureDetector(
-                onTap: () {
-                  HapticUtils.selection();
-                  setState(() => _brushWidthFraction = w);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: (_brushWidthFraction - w).abs() < 1e-4
-                          ? Colors.white.withValues(alpha: 0.20)
-                          : Colors.transparent,
-                    ),
-                    alignment: Alignment.center,
-                    child: Container(
-                      width: (w * 380).clamp(5.0, 15.0),
-                      height: (w * 380).clamp(5.0, 15.0),
-                      decoration: BoxDecoration(
-                        color: _brushColor,
-                        shape: BoxShape.circle,
+            Expanded(
+              child: SwipeBackBlocker(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _StudioActionChip(
+                        label: context.trOr('avatar_editor_brush_pen', 'Перо'),
+                        selected: _brushStyle == AvatarBrushStyle.pen,
+                        accentColor: palette.primary,
+                        onTap: () =>
+                            setState(() => _brushStyle = AvatarBrushStyle.pen),
                       ),
-                    ),
+                      const SizedBox(width: 6),
+                      _StudioActionChip(
+                        label:
+                            context.trOr('avatar_editor_brush_neon', 'Неон'),
+                        selected: _brushStyle == AvatarBrushStyle.neon,
+                        accentColor: palette.primary,
+                        onTap: () =>
+                            setState(() => _brushStyle = AvatarBrushStyle.neon),
+                      ),
+                      const SizedBox(width: 6),
+                      _StudioActionChip(
+                        label: context.trOr(
+                          'avatar_editor_brush_highlighter',
+                          'Маркер',
+                        ),
+                        selected: _brushStyle == AvatarBrushStyle.highlighter,
+                        accentColor: palette.primary,
+                        onTap: () => setState(
+                          () => _brushStyle = AvatarBrushStyle.highlighter,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              onPressed: _state.strokes.isNotEmpty
-                  ? () {
+            ),
+            const SizedBox(width: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Stroke thickness dots
+                for (final double w in _brushWidths)
+                  GestureDetector(
+                    onTap: () {
                       HapticUtils.selection();
-                      final next = _state.copyWith(
-                        strokes: _state.strokes
-                            .sublist(0, _state.strokes.length - 1),
-                      );
-                      _commitHistory(next);
-                    }
-                  : null,
-              icon: iconoir.Undo(
-                width: 17,
-                height: 17,
-                color: _state.strokes.isNotEmpty
-                    ? Colors.white
-                    : Colors.white.withValues(alpha: 0.28),
-              ),
+                      setState(() => _brushWidthFraction = w);
+                    },
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      margin: const EdgeInsets.symmetric(horizontal: 1),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: (_brushWidthFraction - w).abs() < 1e-4
+                            ? Colors.white.withValues(alpha: 0.20)
+                            : Colors.transparent,
+                      ),
+                      alignment: Alignment.center,
+                      child: Container(
+                        width: (w * 380).clamp(5.0, 15.0),
+                        height: (w * 380).clamp(5.0, 15.0),
+                        decoration: BoxDecoration(
+                          color: _brushColor,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 32, height: 32),
+                  onPressed: _state.strokes.isNotEmpty
+                      ? () {
+                          HapticUtils.selection();
+                          final next = _state.copyWith(
+                            strokes: _state.strokes
+                                .sublist(0, _state.strokes.length - 1),
+                          );
+                          _commitHistory(next);
+                        }
+                      : null,
+                  icon: iconoir.Undo(
+                    width: 17,
+                    height: 17,
+                    color: _state.strokes.isNotEmpty
+                        ? Colors.white
+                        : Colors.white.withValues(alpha: 0.28),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1527,6 +1592,8 @@ class _AspectChip extends StatelessWidget {
         ),
         child: Text(
           label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: selected ? Colors.white : Colors.white.withValues(alpha: 0.65),
             fontSize: 12.5,
@@ -1561,7 +1628,7 @@ class _StudioActionChip extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 34,
-        padding: EdgeInsets.symmetric(horizontal: label.isEmpty ? 10 : 12),
+        padding: EdgeInsets.symmetric(horizontal: label.isEmpty ? 9 : 10),
         decoration: BoxDecoration(
           color: selected
               ? accent.withValues(alpha: 0.22)
@@ -1574,29 +1641,112 @@ class _StudioActionChip extends StatelessWidget {
             width: 0.6,
           ),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (icon != null) icon!,
-            if (icon != null && label.isNotEmpty) const SizedBox(width: 6),
-            if (label.isNotEmpty)
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: selected ? accent : Colors.white,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints box) {
+            final bool showGapAndLabel =
+                label.isNotEmpty && (!box.hasBoundedWidth || box.maxWidth >= 46);
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (icon != null) icon!,
+                if (icon != null && showGapAndLabel) const SizedBox(width: 5),
+                if (showGapAndLabel)
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected ? accent : Colors.white,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
+  }
+}
+
+class _StudioPanel extends StatelessWidget {
+  final Widget child;
+  final double borderRadius;
+  final EdgeInsetsGeometry? padding;
+
+  const _StudioPanel({
+    required this.child,
+    this.borderRadius = 20.0,
+    this.padding,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xE6141822),
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.12),
+          width: 0.6,
+        ),
+      ),
+      child: padding != null ? Padding(padding: padding!, child: child) : child,
+    );
+  }
+}
+
+class _StudioIconCircleButton extends StatelessWidget {
+  final Widget icon;
+  final VoidCallback? onTap;
+  final String? tooltip;
+  final double size;
+
+  const _StudioIconCircleButton({
+    super.key,
+    required this.icon,
+    this.onTap,
+    this.tooltip,
+    this.size = 40.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    Widget button = SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xE6141822),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.12),
+            width: 0.6,
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap == null
+                ? null
+                : () {
+                    HapticUtils.tap();
+                    onTap!();
+                  },
+            child: Center(child: icon),
+          ),
+        ),
+      ),
+    );
+    if (tooltip != null && tooltip!.isNotEmpty) {
+      button = Tooltip(message: tooltip!, child: button);
+    }
+    return button;
   }
 }
 
@@ -1861,6 +2011,7 @@ class _AvatarStickerChooserContentState
       mainAxisSize: MainAxisSize.min,
       children: [
         TheavSegmentedControl<int>(
+          useGlass: false,
           height: 36,
           expand: true,
           selected: _tab,

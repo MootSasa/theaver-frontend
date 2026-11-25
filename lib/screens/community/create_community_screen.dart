@@ -572,6 +572,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
             child: TheavSegmentedControl<bool>(
+              useGlass: false,
               selected: _isJoinMode,
               onChanged: (v) => setState(() => _isJoinMode = v),
               options: const [

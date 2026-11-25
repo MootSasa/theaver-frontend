@@ -34,11 +34,15 @@ class TheavFloatingSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool insideSheet = TheavModalSheetScope.isActive(context);
     final surfaceStyle = TheavSurfaceStyle.of(context);
     final Widget content =
         padding != null ? Padding(padding: padding!, child: child) : child;
 
-    if (surfaceStyle.isGlass && surfaceStyle.glassProvider != null) {
+    if (!insideSheet &&
+        enableBlur &&
+        surfaceStyle.isGlass &&
+        surfaceStyle.glassProvider != null) {
       final style = surfaceStyle.glassProvider!.createStyle(
         context: context,
         cornerRadius: borderRadius,
@@ -70,7 +74,21 @@ class TheavFloatingSurface extends StatelessWidget {
       );
     }
 
-    final bool suppressBlur = !enableBlur || TheavModalSheetScope.isActive(context);
+    if (insideSheet) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: colorOverride ?? surfaceStyle.trackFill,
+          borderRadius: BorderRadius.circular(borderRadius),
+          border: Border.all(
+            color: surfaceStyle.hairlineBorder,
+            width: 0.5,
+          ),
+        ),
+        child: content,
+      );
+    }
+
+    final bool suppressBlur = !enableBlur;
     final blurFilter = suppressBlur
         ? null
         : surfaceStyle.getMaterialHudBlurFilter(sigma: 10.0);
@@ -231,6 +249,7 @@ class TheavFloatingPillButton extends StatelessWidget {
   final bool enabled;
   final double height;
   final EdgeInsetsGeometry padding;
+  final bool useGlass;
 
   const TheavFloatingPillButton({
     super.key,
@@ -242,65 +261,106 @@ class TheavFloatingPillButton extends StatelessWidget {
     this.enabled = true,
     this.height = 44.0,
     this.padding = const EdgeInsets.symmetric(horizontal: 16),
+    this.useGlass = true,
   });
+
+  Widget _buildInnerContent(Color effectiveFg) {
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(height / 2),
+        onTap: enabled && onTap != null
+            ? () {
+                HapticUtils.tap();
+                onTap!();
+              }
+            : null,
+        child: Padding(
+          padding: padding,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                IconTheme(
+                  data: IconThemeData(color: effectiveFg, size: 18),
+                  child: icon!,
+                ),
+                const SizedBox(width: 8),
+              ],
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: effectiveFg,
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final palette = context.theav;
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+    final bool insideSheet = TheavModalSheetScope.isActive(context);
     final Color? fillOverride = isPrimary
-        ? palette.primary
+        ? (enabled ? palette.primary : palette.primary.withValues(alpha: 0.55))
         : (isDestructive ? palette.error.withValues(alpha: 0.14) : null);
     final Color fg = isPrimary
         ? palette.onPrimary
         : (isDestructive ? palette.error : palette.onSurface);
     final Color effectiveFg = enabled ? fg : fg.withValues(alpha: 0.42);
+    final Widget innerContent = _buildInnerContent(effectiveFg);
+
+    if (isPrimary || !useGlass || insideSheet || !style.isGlass) {
+      final Color bgColor = fillOverride ?? style.trackFill;
+      return SizedBox(
+        height: height,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(height / 2),
+            border: isPrimary
+                ? null
+                : Border.all(
+                    color: isDestructive
+                        ? palette.error.withValues(alpha: 0.22)
+                        : style.hairlineBorder,
+                    width: 0.5,
+                  ),
+            boxShadow: isPrimary && enabled
+                ? [
+                    BoxShadow(
+                      color: palette.primary.withValues(
+                        alpha: style.isDark ? 0.24 : 0.18,
+                      ),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : null,
+          ),
+          child: innerContent,
+        ),
+      );
+    }
 
     return SizedBox(
       height: height,
       child: TheavFloatingSurface(
         borderRadius: height / 2,
         colorOverride: fillOverride,
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(height / 2),
-            onTap: enabled && onTap != null
-                ? () {
-                    HapticUtils.tap();
-                    onTap!();
-                  }
-                : null,
-            child: Padding(
-              padding: padding,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (icon != null) ...[
-                    IconTheme(
-                      data: IconThemeData(color: effectiveFg, size: 18),
-                      child: icon!,
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  Flexible(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: effectiveFg,
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -0.1,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
+        child: innerContent,
       ),
     );
   }

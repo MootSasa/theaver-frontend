@@ -2213,6 +2213,7 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
           child: TheavSegmentedControl<int>(
+            useGlass: false,
             selected: _membersSegment,
             onChanged: (v) => setState(() => _membersSegment = v),
             options: [

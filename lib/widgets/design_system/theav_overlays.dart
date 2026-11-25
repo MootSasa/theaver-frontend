@@ -53,6 +53,7 @@ Future<T?> showTheavModalSheet<T>({
 }) {
   final NavigatorState navigator =
       Navigator.of(context, rootNavigator: useRootNavigator);
+  final bool forceMatte = TheavMatteScope.isActive(context, listen: false);
   final CapturedThemes capturedThemes = InheritedTheme.capture(
     from: context,
     to: navigator.context,
@@ -62,6 +63,7 @@ Future<T?> showTheavModalSheet<T>({
       builder: builder,
       customSheetBuilder: customSheetBuilder,
       capturedThemes: capturedThemes,
+      forceMatte: forceMatte,
       title: title,
       trailing: trailing,
       padding: padding,
@@ -226,6 +228,7 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
   final WidgetBuilder builder;
   final WidgetBuilder? customSheetBuilder;
   final CapturedThemes capturedThemes;
+  final bool forceMatte;
   final String? title;
   final Widget? trailing;
   final EdgeInsetsGeometry padding;
@@ -253,6 +256,7 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
     required this.builder,
     this.customSheetBuilder,
     required this.capturedThemes,
+    this.forceMatte = false,
     this.title,
     this.trailing,
     required this.padding,
@@ -425,9 +429,11 @@ class _TheavModalSheetRoute<T> extends PopupRoute<T> {
             enableDrag: enableDrag,
             child: Builder(builder: builder),
           );
+    final Widget scopedPage =
+        forceMatte ? TheavMatteScope(child: page) : page;
     return _TheavModalSheetRouteScope(
       route: this,
-      child: capturedThemes.wrap(page),
+      child: capturedThemes.wrap(scopedPage),
     );
   }
 
@@ -946,6 +952,11 @@ Future<T?> showTheavDialog<T>({
   bool barrierDismissible = true,
 }) {
   final bool isGlass = TheavSurfaceStyle.of(context, listen: false).isGlass;
+  final bool forceMatte = TheavMatteScope.isActive(context, listen: false);
+  final CapturedThemes capturedThemes = InheritedTheme.capture(
+    from: context,
+    to: Navigator.of(context, rootNavigator: true).context,
+  );
   return showGeneralDialog<T>(
     context: context,
     barrierDismissible: barrierDismissible,
@@ -967,22 +978,24 @@ Future<T?> showTheavDialog<T>({
             customActions: customActions,
             opacity: op,
           );
-      if (!isGlass || disableAnim) {
-        return buildDialog(1.0);
-      }
-      return AnimatedBuilder(
-        animation: animation,
-        builder: (animCtx, _) {
-          final bool isReversing =
-              animation.status == AnimationStatus.reverse;
-          final double op = (isReversing
-                  ? Curves.easeInCubic
-                  : Curves.easeOutCubic)
-              .transform(animation.value)
-              .clamp(0.0, 1.0);
-          return buildDialog(op);
-        },
-      );
+      final Widget dialogChild = (!isGlass || disableAnim)
+          ? buildDialog(1.0)
+          : AnimatedBuilder(
+              animation: animation,
+              builder: (animCtx, _) {
+                final bool isReversing =
+                    animation.status == AnimationStatus.reverse;
+                final double op = (isReversing
+                        ? Curves.easeInCubic
+                        : Curves.easeOutCubic)
+                    .transform(animation.value)
+                    .clamp(0.0, 1.0);
+                return buildDialog(op);
+              },
+            );
+      final Widget scoped =
+          forceMatte ? TheavMatteScope(child: dialogChild) : dialogChild;
+      return capturedThemes.wrap(scoped);
     },
     transitionBuilder: (ctx, animation, secondaryAnimation, child) {
       final disableAnim = MediaQuery.maybeDisableAnimationsOf(ctx) ?? false;

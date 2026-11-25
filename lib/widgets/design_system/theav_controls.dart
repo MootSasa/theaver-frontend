@@ -32,6 +32,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
   final double height;
   final EdgeInsetsGeometry margin;
   final bool expand;
+  final bool useGlass;
 
   const TheavSegmentedControl({
     super.key,
@@ -41,6 +42,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
     this.height = 38.0,
     this.margin = EdgeInsets.zero,
     this.expand = false,
+    this.useGlass = true,
   });
 
   int _selectedIndex() {
@@ -88,6 +90,10 @@ class TheavSegmentedControl<T> extends StatelessWidget {
     required double cellH,
   }) {
     final int selectedIdx = _selectedIndex();
+    final bool denseSegments = options.length >= 4;
+    final double hPad = denseSegments ? 4.0 : 8.0;
+    final double fontSize = denseSegments ? 12.5 : 13.5;
+
     return Padding(
       padding: EdgeInsets.all(pad),
       child: Row(
@@ -106,7 +112,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                   height: cellH,
                   child: Center(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      padding: EdgeInsets.symmetric(horizontal: hPad),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -130,7 +136,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                                 color: i == selectedIdx
                                     ? palette.onSurface
                                     : palette.subtext,
-                                fontSize: 13.5,
+                                fontSize: fontSize,
                                 fontWeight: i == selectedIdx
                                     ? FontWeight.w600
                                     : FontWeight.w500,
@@ -162,7 +168,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
     final int n = options.length;
     final int activeIdx = _selectedIndex();
 
-    if (style.isGlass && style.glassProvider != null) {
+    if (useGlass && style.isGlass && style.glassProvider != null) {
       return SwipeBackBlocker(
         child: Padding(
           padding: margin,

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -14,12 +15,13 @@ import '../../l10n/app_localizations.dart';
 import '../../models/avatar_editor_models.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../design_system/theav_design_system.dart';
 import 'avatar_emoji_constructor_view.dart';
 import 'theav_avatar_editor_screen.dart';
 
-/// Unified Avatar Picker sheet offering device Gallery / File Picker and the
-/// Emoji / Sticker / Monogram Constructor, seamlessly handing off to
+/// Full-screen opaque Avatar Picker window offering device Gallery / File Picker
+/// and the Emoji / Sticker / Monogram Constructor, seamlessly handing off to
 /// [TheavAvatarEditorScreen].
 class TheavAvatarPickerSheet extends StatefulWidget {
   final AvatarShapeMask maskShape;
@@ -37,8 +39,28 @@ class TheavAvatarPickerSheet extends StatefulWidget {
     this.startInConstructor = false,
   });
 
-  /// Opens the Avatar Picker modal sheet and resolves with an [AvatarPickResult]
-  /// (media bytes/file or [AvatarPickResult.deletedCurrent]), or `null` on cancel.
+  /// Alias for [pickAndEdit]. Opens the dedicated full-screen Avatar Picker route.
+  static Future<AvatarPickResult?> open({
+    required BuildContext context,
+    AvatarShapeMask maskShape = AvatarShapeMask.circle,
+    AvatarEditorCtaMode ctaMode = AvatarEditorCtaMode.done,
+    String? subjectName,
+    bool canDeleteCurrent = false,
+    bool startInConstructor = false,
+  }) {
+    return pickAndEdit(
+      context: context,
+      maskShape: maskShape,
+      ctaMode: ctaMode,
+      subjectName: subjectName,
+      canDeleteCurrent: canDeleteCurrent,
+      startInConstructor: startInConstructor,
+    );
+  }
+
+  /// Opens the dedicated full-screen Avatar Picker route and resolves with an
+  /// [AvatarPickResult] (media bytes/file or [AvatarPickResult.deletedCurrent]),
+  /// or `null` on cancel.
   static Future<AvatarPickResult?> pickAndEdit({
     required BuildContext context,
     AvatarShapeMask maskShape = AvatarShapeMask.circle,
@@ -47,22 +69,25 @@ class TheavAvatarPickerSheet extends StatefulWidget {
     bool canDeleteCurrent = false,
     bool startInConstructor = false,
   }) {
-    return showTheavModalSheet<AvatarPickResult>(
-      context: context,
-      isScrollControlled: true,
-      enableDrag: true,
-      showCloseButton: false,
-      maxHeightFactor: 0.92,
-      padding: const EdgeInsets.fromLTRB(0, 6, 0, 12),
-      builder: (BuildContext _) {
-        return TheavAvatarPickerSheet(
-          maskShape: maskShape,
-          ctaMode: ctaMode,
-          subjectName: subjectName,
-          canDeleteCurrent: canDeleteCurrent,
-          startInConstructor: startInConstructor,
-        );
-      },
+    final NavigatorState navigator = Navigator.of(context);
+    final CapturedThemes capturedThemes = InheritedTheme.capture(
+      from: context,
+      to: navigator.context,
+    );
+    return navigator.push<AvatarPickResult>(
+      SwipeBackPageRoute<AvatarPickResult>(
+        builder: (BuildContext _) => capturedThemes.wrap(
+          TheavMatteScope(
+            child: TheavAvatarPickerSheet(
+              maskShape: maskShape,
+              ctaMode: ctaMode,
+              subjectName: subjectName,
+              canDeleteCurrent: canDeleteCurrent,
+              startInConstructor: startInConstructor,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -85,6 +110,8 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
   int _totalAssetsCount = 0;
   final Map<int, List<AssetEntity>> _pageCache = <int, List<AssetEntity>>{};
   final Set<int> _loadingPages = <int>{};
+  final Set<int> _scheduledPageRequests = <int>{};
+  BuildContext? _matteContext;
 
   bool get _isMobileGallery =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
@@ -143,6 +170,7 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
   Future<void> _selectAlbum(AssetPathEntity album) async {
     _pageCache.clear();
     _loadingPages.clear();
+    _scheduledPageRequests.clear();
     setState(() {
       _selectedAlbum = album;
       _isLoadingAlbums = true;
@@ -161,8 +189,26 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
     }
   }
 
+  void _requestPageIfNeeded(int pageIndex) {
+    if (_pageCache.containsKey(pageIndex) ||
+        _loadingPages.contains(pageIndex) ||
+        !_scheduledPageRequests.add(pageIndex)) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scheduledPageRequests.remove(pageIndex);
+      if (mounted) {
+        _fetchPage(pageIndex);
+      }
+    });
+  }
+
   Future<void> _fetchPage(int pageIndex) async {
-    if (_loadingPages.contains(pageIndex) || _selectedAlbum == null) return;
+    if (_loadingPages.contains(pageIndex) ||
+        _pageCache.containsKey(pageIndex) ||
+        _selectedAlbum == null) {
+      return;
+    }
     _loadingPages.add(pageIndex);
     try {
       final int start = pageIndex * _pageSize;
@@ -295,8 +341,12 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
   Future<void> _confirmDeleteCurrent() async {
     if (_isBusy) return;
     HapticUtils.heavy();
+    final BuildContext dialogCtx =
+        (_matteContext != null && _matteContext!.mounted)
+            ? _matteContext!
+            : context;
     final bool? confirmed = await showTheavDialog<bool>(
-      context: context,
+      context: dialogCtx,
       title: context.trOr(
         'avatar_picker_delete_confirm_title',
         'Удалить фото?',
@@ -326,8 +376,12 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
 
   void _showAlbumSelector() {
     if (_albums.length <= 1) return;
+    final BuildContext sheetHostCtx =
+        (_matteContext != null && _matteContext!.mounted)
+            ? _matteContext!
+            : context;
     showTheavModalSheet<void>(
-      context: context,
+      context: sheetHostCtx,
       title: context.trOr('avatar_picker_all_photos', 'Все фото'),
       showCloseButton: true,
       maxHeightFactor: 0.72,
@@ -415,92 +469,99 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
-    final mq = MediaQuery.of(context);
-    final double availHeight = math.max(
-      220.0,
-      mq.size.height * 0.90 - mq.viewInsets.bottom - mq.padding.bottom - 48.0,
-    );
-    final double bodyHeight = math.min(
-      (mq.size.height * 0.78).clamp(320.0, 680.0),
-      availHeight,
-    );
 
-    return SizedBox(
-      height: bodyHeight,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-            child: Row(
-              children: [
-                TheavHeaderIconButton(
-                  key: const ValueKey<String>('avatar_picker_close_btn'),
-                  size: 36,
-                  icon: iconoir.Xmark(
-                    width: 18,
-                    height: 18,
-                    color: palette.onSurface,
-                  ),
-                  onTap: () => Navigator.of(context).maybePop(),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TheavSegmentedControl<int>(
-                    height: 36,
-                    expand: true,
-                    selected: _activeTab,
-                    onChanged: (int v) => setState(() => _activeTab = v),
-                    options: [
-                      TheavSegmentOption(
-                        value: 0,
-                        label: context.trOr('avatar_picker_gallery', 'Галерея'),
+    return TheavMatteScope(
+      child: Builder(
+        builder: (BuildContext matteCtx) {
+          _matteContext = matteCtx;
+          return Scaffold(
+            backgroundColor: palette.bgBase,
+            body: SafeArea(
+              bottom: false,
+              child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                child: Row(
+                  children: [
+                    _PickerMatteCircleButton(
+                      key: const ValueKey<String>('avatar_picker_close_btn'),
+                      size: 38,
+                      tooltip:
+                          MaterialLocalizations.of(context).backButtonTooltip,
+                      icon: iconoir.NavArrowLeft(
+                        width: 20,
+                        height: 20,
+                        color: palette.onSurface,
                       ),
-                      TheavSegmentOption(
-                        value: 1,
-                        label: context.trOr(
-                          'avatar_picker_constructor',
-                          'Конструктор',
+                      onTap: () => Navigator.of(context).maybePop(),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TheavSegmentedControl<int>(
+                        useGlass: false,
+                        height: 36,
+                        expand: true,
+                        selected: _activeTab,
+                        onChanged: (int v) => setState(() => _activeTab = v),
+                        options: [
+                          TheavSegmentOption(
+                            value: 0,
+                            label: context.trOr(
+                              'avatar_picker_gallery',
+                              'Галерея',
+                            ),
+                          ),
+                          TheavSegmentOption(
+                            value: 1,
+                            label: context.trOr(
+                              'avatar_picker_constructor',
+                              'Конструктор',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    if (widget.canDeleteCurrent)
+                      _PickerMatteCircleButton(
+                        key: const ValueKey<String>('avatar_picker_delete_btn'),
+                        size: 38,
+                        tooltip: context.trOr(
+                          'avatar_picker_delete_photo',
+                          'Удалить фото',
                         ),
-                      ),
-                    ],
-                  ),
+                        icon: iconoir.Trash(
+                          width: 18,
+                          height: 18,
+                          color: palette.error,
+                        ),
+                        onTap: _confirmDeleteCurrent,
+                      )
+                    else
+                      const SizedBox(width: 38),
+                  ],
                 ),
-                const SizedBox(width: 10),
-                if (widget.canDeleteCurrent)
-                  TheavHeaderIconButton(
-                    key: const ValueKey<String>('avatar_picker_delete_btn'),
-                    size: 36,
-                    tooltip: context.trOr(
-                      'avatar_picker_delete_photo',
-                      'Удалить фото',
-                    ),
-                    icon: iconoir.Trash(
-                      width: 18,
-                      height: 18,
-                      color: palette.error,
-                    ),
-                    onTap: _confirmDeleteCurrent,
-                  )
-                else
-                  const SizedBox(width: 36),
-              ],
-            ),
+              ),
+              Expanded(
+                child: _activeTab == 0
+                    ? (_isMobileGallery
+                        ? _buildMobileGalleryTab(context, palette)
+                        : _buildDesktopPickerTab(context, palette))
+                    : AvatarEmojiConstructorView(
+                        maskShape: widget.maskShape,
+                        ctaMode: widget.ctaMode,
+                        subjectName: widget.subjectName,
+                        onCompleted: (AvatarPickResult res) {
+                          if (mounted) Navigator.of(context).pop(res);
+                        },
+                      ),
+              ),
+            ],
           ),
-          Expanded(
-            child: _activeTab == 0
-                ? (_isMobileGallery
-                    ? _buildMobileGalleryTab(context, palette)
-                    : _buildDesktopPickerTab(context, palette))
-                : AvatarEmojiConstructorView(
-                    maskShape: widget.maskShape,
-                    ctaMode: widget.ctaMode,
-                    subjectName: widget.subjectName,
-                    onCompleted: (AvatarPickResult res) {
-                      if (mounted) Navigator.of(context).pop(res);
-                    },
-                  ),
-          ),
-        ],
+        ),
+          );
+        },
       ),
     );
   }
@@ -515,60 +576,101 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _albums.length > 1 ? _showAlbumSelector : null,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: palette.onSurface.withValues(alpha: 0.07),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        albumTitle,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: palette.onSurface,
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: LayoutBuilder(
+            builder: (BuildContext ctx, BoxConstraints box) {
+              return Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _albums.length > 1 ? _showAlbumSelector : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: palette.onSurface.withValues(alpha: 0.07),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  albumTitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: palette.onSurface,
+                                  ),
+                                ),
+                              ),
+                              if (_albums.length > 1) ...[
+                                const SizedBox(width: 4),
+                                iconoir.NavArrowDown(
+                                  width: 16,
+                                  height: 16,
+                                  color: palette.subtext,
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
                       ),
-                      if (_albums.length > 1) ...[
-                        const SizedBox(width: 4),
-                        iconoir.NavArrowDown(
-                          width: 16,
-                          height: 16,
-                          color: palette.subtext,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: math.max(96.0, box.maxWidth * 0.48),
+                    ),
+                    child: TextButton(
+                      onPressed: _isBusy ? null : _pickFromFileSystem,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6,
                         ),
-                      ],
-                    ],
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          iconoir.Folder(
+                            width: 16,
+                            height: 16,
+                            color: palette.primary,
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              context.trOr(
+                                'avatar_picker_choose_file',
+                                'Выбрать файл',
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                                color: palette.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              TextButton.icon(
-                onPressed: _isBusy ? null : _pickFromFileSystem,
-                icon: iconoir.Folder(
-                  width: 16,
-                  height: 16,
-                  color: palette.primary,
-                ),
-                label: Text(
-                  context.trOr('avatar_picker_choose_file', 'Выбрать файл'),
-                  style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w600,
-                    color: palette.primary,
-                  ),
-                ),
-              ),
-            ],
+                ],
+              );
+            },
           ),
         ),
         Expanded(
@@ -579,7 +681,14 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
               : (!_hasPermission
                   ? _buildPermissionDeniedView(context, palette)
                   : GridView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      padding: EdgeInsets.fromLTRB(
+                        4,
+                        0,
+                        4,
+                        MediaQuery.paddingOf(context).bottom + 12,
+                      ),
+                      scrollCacheExtent: const ScrollCacheExtent.pixels(540),
+                      addAutomaticKeepAlives: false,
                       physics: const BouncingScrollPhysics(),
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
@@ -597,26 +706,30 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
                         final int itemIdx = assetIdx % _pageSize;
                         final List<AssetEntity>? page = _pageCache[pageIdx];
                         if (page != null && itemIdx < page.length) {
+                          if (itemIdx >= (_pageSize * 0.7).floor() &&
+                              (pageIdx + 1) * _pageSize < _totalAssetsCount) {
+                            _requestPageIfNeeded(pageIdx + 1);
+                          }
                           final AssetEntity asset = page[itemIdx];
-                          return GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () => _onTapAsset(asset),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: AssetEntityImage(
-                                asset,
-                                isOriginal: false,
-                                thumbnailSize: const ThumbnailSize.square(280),
-                                fit: BoxFit.cover,
+                          return RepaintBoundary(
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => _onTapAsset(asset),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: AssetEntityImage(
+                                  asset,
+                                  isOriginal: false,
+                                  thumbnailSize:
+                                      const ThumbnailSize.square(240),
+                                  filterQuality: FilterQuality.low,
+                                  fit: BoxFit.cover,
+                                ),
                               ),
                             ),
                           );
                         }
-                        if (!_loadingPages.contains(pageIdx)) {
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _fetchPage(pageIdx);
-                          });
-                        }
+                        _requestPageIfNeeded(pageIdx);
                         return ClipRRect(
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
@@ -770,5 +883,53 @@ class _TheavAvatarPickerSheetState extends State<TheavAvatarPickerSheet> {
           ),
       ],
     );
+  }
+}
+
+class _PickerMatteCircleButton extends StatelessWidget {
+  final Widget icon;
+  final VoidCallback? onTap;
+  final String? tooltip;
+  final double size;
+
+  const _PickerMatteCircleButton({
+    super.key,
+    required this.icon,
+    this.onTap,
+    this.tooltip,
+    this.size = 38.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.theav;
+    Widget btn = SizedBox(
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: palette.onSurface.withValues(alpha: 0.08),
+          shape: BoxShape.circle,
+          border: Border.all(color: palette.divider, width: 0.5),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onTap == null
+                ? null
+                : () {
+                    HapticUtils.tap();
+                    onTap!();
+                  },
+            child: Center(child: icon),
+          ),
+        ),
+      ),
+    );
+    if (tooltip != null && tooltip!.isNotEmpty) {
+      btn = Tooltip(message: tooltip!, child: btn);
+    }
+    return btn;
   }
 }
