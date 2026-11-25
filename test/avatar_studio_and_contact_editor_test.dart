@@ -11,6 +11,8 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:photo_view/photo_view_gallery.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,6 +39,7 @@ import 'package:theaver/widgets/chat/message_reply_info.dart';
 import 'package:theaver/widgets/chat/suggested_photo_bubble_card.dart';
 import 'package:theaver/widgets/community/community_members_panel.dart';
 import 'package:theaver/widgets/message/group_message_avatar_row.dart';
+import 'package:theaver/widgets/profile/avatar_gallery_viewer.dart';
 import 'package:theaver/widgets/profile/expandable_avatar.dart';
 import 'package:theaver/widgets/profile/qr_code_dialog.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
@@ -1354,6 +1357,92 @@ void main() {
 
       expect(find.textContaining('Обновлённый 42'), findsOneWidget);
       expect(find.textContaining('Канал Новости'), findsOneWidget);
+    });
+  });
+
+  group('7. Profile Square Header vs Fullscreen Aspect Ratio', () {
+    testWidgets('ExpandableAvatar crops portrait photo to 1:1 square in header and opens full original aspect ratio in AvatarGalleryViewer', (tester) async {
+      late Directory tmpDir;
+      late String taggedUrl;
+      await tester.runAsync(() async {
+        tmpDir = Directory.systemTemp.createTempSync('theaver_portrait_expand_');
+        final Uint8List pngBytes =
+            await _createSyntheticPng(width: 120, height: 240);
+        final File imgFile = File('${tmpDir.path}/portrait.png');
+        await imgFile.writeAsBytes(pngBytes, flush: true);
+        taggedUrl = '${imgFile.path}#acrop=0.2500,0.1000,0.5000,0.2500';
+      });
+
+      try {
+        await tester.pumpWidget(
+          _wrapTestApp(
+            home: Builder(
+              builder: (context) => MediaQuery(
+                data: const MediaQueryData(size: Size(300, 600)),
+                child: Scaffold(
+                  body: Align(
+                    alignment: Alignment.topCenter,
+                    child: ExpandableAvatar(
+                      avatarUrls: <String>[taggedUrl],
+                      expandFactor: 1.0,
+                      displayName: 'Portrait',
+                      onTap: () => AvatarGalleryViewer.open(
+                        context,
+                        avatarUrls: <String>[taggedUrl],
+                        displayName: 'Portrait',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await _pumpFrames(tester);
+
+        expect(tester.getSize(find.byType(ExpandableAvatar)), const Size(300, 300));
+        final Positioned innerPos = tester.widget<Positioned>(
+          find.descendant(
+            of: find.byType(ExpandableAvatar),
+            matching: find.byWidgetPredicate(
+              (w) => w is Positioned && w.width == 300.0 && w.height == 600.0,
+            ),
+          ),
+        );
+        expect(innerPos.width, closeTo(300.0, 0.5));
+        expect(innerPos.height, closeTo(600.0, 0.5));
+
+        // Open fullscreen viewer & step cleanly through Hero flight and image decode.
+        await tester.tap(find.byType(ExpandableAvatar));
+        for (int i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 45));
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 15)),
+          );
+          await tester.pump();
+        }
+        expect(tester.takeException(), isNull);
+        expect(find.byType(AvatarGalleryViewer), findsOneWidget);
+        expect(find.byType(PhotoViewGallery), findsOneWidget);
+
+        final PhotoView photoView =
+            tester.widget<PhotoView>(find.byType(PhotoView));
+        expect(photoView.initialScale, PhotoViewComputedScale.contained);
+
+        // Close fullscreen viewer back to the square profile header cleanly.
+        await tester.tap(find.byIcon(Icons.arrow_back));
+        for (int i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 45));
+        }
+        expect(find.byType(AvatarGalleryViewer), findsNothing);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.runAsync(() async {
+          if (await tmpDir.exists()) {
+            await tmpDir.delete(recursive: true);
+          }
+        });
+      }
     });
   });
 }

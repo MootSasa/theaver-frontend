@@ -6923,19 +6923,9 @@ class ProfileScreenState extends State<ProfileScreen>
     // В развёрнутом режиме (_isAvatarExpanded == true) активный сдвиг вверх равен _collapseSlideUp;
     // в момент пересечения порога сворачивания (_isAvatarExpanded == false) стартовая высота прямоугольника
     // фиксируется через _collapseMorphStartSlideUp, обеспечивая 0.0px скачка между Фазой 1 (уход вверх) и Фазой 2 (сжатие в круг).
-    final String? activeHeaderUrl =
-        (_avatarUrls.isNotEmpty && _currentAvatarIndex < _avatarUrls.length)
-            ? _avatarUrls[_currentAvatarIndex]
-            : _avatarUrl;
-    final AvatarCropSpec? activeHeaderCrop =
-        AvatarCropSpec.split(activeHeaderUrl).crop;
-    final double fullExpandedBaseHeight =
-        (activeHeaderCrop != null && activeHeaderCrop.imageAspectRatio < 0.98)
-            ? (screenWidth / activeHeaderCrop.imageAspectRatio).clamp(
-                screenWidth,
-                math.min(screenWidth * 1.33, screenHeight * 0.56),
-              )
-            : screenWidth;
+    // В профиле аватарка при раскрытии всегда образует квадрат 1:1 (`screenWidth x screenWidth`),
+    // а полное исходное соотношение сторон раскрывается только в полноэкранном `AvatarGalleryViewer`.
+    final double fullExpandedBaseHeight = screenWidth;
     final activeExpandedSlideUp =
         _isAvatarExpanded ? _collapseSlideUp : _collapseMorphStartSlideUp;
     final expandedTargetHeight =

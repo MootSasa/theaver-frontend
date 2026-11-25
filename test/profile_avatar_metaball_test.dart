@@ -983,5 +983,47 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('Portrait 9:16 and landscape 16:9 #acrop avatars always expand to a 1:1 square in ProfileScreen', (tester) async {
+      final glassProvider = LiquidGlassProvider();
+      await glassProvider.setMode(GlassMode.disabled);
+
+      for (final String url in <String>[
+        'https://example.com/portrait.jpg#acrop=0.2000,0.1000,0.6000,0.3375',
+        'https://example.com/landscape.jpg#acrop=0.3000,0.1500,0.3375,0.6000',
+      ]) {
+        await tester.pumpWidget(
+          _buildProfileTestApp(
+            glassProvider: glassProvider,
+            child: ProfileScreen(
+              key: ValueKey<String>(url),
+              userId: 'square_expand_peer',
+              initialName: 'Square Expand',
+              initialAvatarUrl: url,
+              initialIsOnline: true,
+              heroTag: 'square_expand_peer',
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final gestureDown = await tester.startGesture(const Offset(196.0, 220.0));
+        await gestureDown.moveBy(const Offset(0.0, 175.0));
+        await tester.pump();
+        await gestureDown.up();
+        for (int i = 0; i < 16; i++) {
+          await tester.pump(const Duration(milliseconds: 30));
+        }
+
+        final expandedAvatar =
+            tester.widget<ExpandableAvatar>(find.byType(ExpandableAvatar));
+        expect(expandedAvatar.expandFactor, closeTo(1.0, 0.005));
+        expect(
+          tester.getSize(find.byType(ExpandableAvatar)),
+          const Size(393.0, 393.0),
+        );
+        expect(tester.takeException(), isNull);
+      }
+    });
   });
 }

@@ -724,6 +724,226 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     return a + (b - a) * t;
   }
 
+  Widget _buildRawAvatarSource(
+    String cleanUrl, {
+    required double width,
+    required double height,
+    required BoxFit fit,
+    required Alignment alignment,
+    required Color bgColor,
+    required double iconSize,
+    required bool isDark,
+  }) {
+    if (cleanUrl.startsWith('data:')) {
+      final provider = avatarFullImageProvider(cleanUrl);
+      if (provider != null) {
+        return Image(
+          image: provider,
+          fit: fit,
+          alignment: alignment,
+          width: width,
+          height: height,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) =>
+              _avatarErrorWidget(bgColor, iconSize, isDark),
+        );
+      }
+      return _avatarErrorWidget(bgColor, iconSize, isDark);
+    }
+
+    if (!kIsWeb && cleanUrl.startsWith('file://')) {
+      try {
+        final filePath = Uri.parse(cleanUrl).toFilePath();
+        final file = File(filePath);
+        if (file.existsSync()) {
+          return Image.file(
+            file,
+            fit: fit,
+            alignment: alignment,
+            width: width,
+            height: height,
+            gaplessPlayback: true,
+            errorBuilder: (context, error, stackTrace) =>
+                _avatarErrorWidget(bgColor, iconSize, isDark),
+          );
+        }
+        return _avatarErrorWidget(bgColor, iconSize, isDark);
+      } catch (_) {
+        return _avatarErrorWidget(bgColor, iconSize, isDark);
+      }
+    }
+
+    if (!kIsWeb && File(cleanUrl).existsSync()) {
+      return Image.file(
+        File(cleanUrl),
+        fit: fit,
+        alignment: alignment,
+        width: width,
+        height: height,
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) =>
+            _avatarErrorWidget(bgColor, iconSize, isDark),
+      );
+    }
+
+    final validUrl = stripAvatarCropFragment(getValidAvatarUrl(cleanUrl));
+    if (validUrl != null &&
+        (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
+      return CachedNetworkImage(
+        imageUrl: validUrl,
+        fit: fit,
+        alignment: alignment,
+        width: width,
+        height: height,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        placeholder: (context, _) => Container(
+          width: width,
+          height: height,
+          color: bgColor,
+        ),
+        errorWidget: (context, _, __) =>
+            _avatarErrorWidget(bgColor, iconSize, isDark),
+      );
+    }
+
+    return _avatarErrorWidget(bgColor, iconSize, isDark);
+  }
+
+  Widget _buildFramedAvatarBox({
+    required String cleanUrl,
+    required AvatarCropSpec? miniCrop,
+    required double boxWidth,
+    required double boxHeight,
+    required double expandT,
+    required bool lockToSquareScale,
+    required Color bgColor,
+    required double iconSize,
+    required bool isDark,
+    required Alignment imgAlignment,
+  }) {
+    final double safeW = math.max(1.0, boxWidth);
+    final double safeH = math.max(1.0, boxHeight);
+    final bool hasSubCrop = miniCrop != null && !miniCrop.isFullSquare;
+
+    if (hasSubCrop) {
+      final double imgAspect = miniCrop.imageAspectRatio.clamp(0.2, 5.0);
+      final double wCover;
+      final double hCover;
+      final double x1;
+      final double y1;
+      final double cx1;
+      final double cy1;
+      final double refSide;
+
+      if (lockToSquareScale) {
+        final double squareSide = math.max(safeW, safeH);
+        wCover = imgAspect >= 1.0 ? squareSide * imgAspect : squareSide;
+        hCover = imgAspect >= 1.0 ? squareSide : squareSide / imgAspect;
+        x1 = (squareSide * 0.5 - miniCrop.cx * wCover)
+            .clamp(squareSide - wCover, 0.0);
+        y1 = (squareSide * 0.5 - miniCrop.cy * hCover)
+            .clamp(squareSide - hCover, 0.0);
+        cx1 = (squareSide * 0.5 - x1) / math.max(1e-6, wCover);
+        cy1 = (squareSide * 0.5 - y1) / math.max(1e-6, hCover);
+        refSide = squareSide;
+      } else {
+        final double boxAspect = safeW / safeH;
+        wCover = imgAspect >= boxAspect ? safeH * imgAspect : safeW;
+        hCover = imgAspect >= boxAspect ? safeH : safeW / imgAspect;
+        x1 = (safeW * 0.5 - miniCrop.cx * wCover).clamp(safeW - wCover, 0.0);
+        y1 = (safeH * 0.5 - miniCrop.cy * hCover).clamp(safeH - hCover, 0.0);
+        cx1 = (safeW * 0.5 - x1) / math.max(1e-6, wCover);
+        cy1 = (safeH * 0.5 - y1) / math.max(1e-6, hCover);
+        refSide = math.min(safeW, safeH);
+      }
+
+      final double miniSideAtCover = math.max(1e-6, miniCrop.nw * wCover);
+      final double zoom0 = math.max(1.0, refSide / miniSideAtCover);
+      final double t = expandT.clamp(0.0, 1.0);
+      final double invZoom = lerpDouble(1.0 / zoom0, 1.0, t);
+      final double zoom = invZoom > 1e-6 ? (1.0 / invZoom) : 1.0;
+      final double wRender = wCover * zoom;
+      final double hRender = hCover * zoom;
+      final double focusX = lerpDouble(miniCrop.cx, cx1, t);
+      final double focusY = lerpDouble(miniCrop.cy, cy1, t);
+      final double xRender =
+          (safeW * 0.5 - focusX * wRender).clamp(safeW - wRender, 0.0);
+      final double yRender =
+          (safeH * 0.5 - focusY * hRender).clamp(safeH - hRender, 0.0);
+
+      return SizedBox(
+        width: safeW,
+        height: safeH,
+        child: ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                left: xRender,
+                top: yRender,
+                width: wRender,
+                height: hRender,
+                child: _buildRawAvatarSource(
+                  cleanUrl,
+                  width: wRender,
+                  height: hRender,
+                  fit: BoxFit.fill,
+                  alignment: Alignment.center,
+                  bgColor: bgColor,
+                  iconSize: iconSize,
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (lockToSquareScale && safeH < safeW - 0.5) {
+      final double squareSide = safeW;
+      return SizedBox(
+        width: safeW,
+        height: safeH,
+        child: ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                left: (safeW - squareSide) * 0.5,
+                top: (safeH - squareSide) * 0.5,
+                width: squareSide,
+                height: squareSide,
+                child: _buildRawAvatarSource(
+                  cleanUrl,
+                  width: squareSide,
+                  height: squareSide,
+                  fit: BoxFit.cover,
+                  alignment: imgAlignment,
+                  bgColor: bgColor,
+                  iconSize: iconSize,
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return _buildRawAvatarSource(
+      cleanUrl,
+      width: safeW,
+      height: safeH,
+      fit: BoxFit.cover,
+      alignment: imgAlignment,
+      bgColor: bgColor,
+      iconSize: iconSize,
+      isDark: isDark,
+    );
+  }
+
   /// Построение виджета изображения аватарки с поддержкой data:, file: и network URL
   Widget _buildAvatarImage(
     String url,
@@ -739,144 +959,20 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         AvatarCropSpec.split(url);
     final String cleanUrl = split.cleanUrl ?? url;
     final AvatarCropSpec? miniCrop = split.crop;
-    final bool hasSubCrop = miniCrop != null && !miniCrop.isFullSquare;
+    final double clampedExpand = widget.expandFactor.clamp(0.0, 1.0);
 
-    final double safeW = math.max(1.0, width);
-    final double safeH = math.max(1.0, height);
-    double wRender = safeW;
-    double hRender = safeH;
-    double xRender = 0.0;
-    double yRender = 0.0;
-
-    if (hasSubCrop) {
-      final double imgAspect = miniCrop.imageAspectRatio.clamp(0.2, 5.0);
-      final double boxAspect = safeW / safeH;
-      final double wCover =
-          imgAspect >= boxAspect ? safeH * imgAspect : safeW;
-      final double hCover =
-          imgAspect >= boxAspect ? safeH : safeW / imgAspect;
-      final double miniSideAtCover =
-          math.max(1e-6, miniCrop.nw * wCover);
-      final double zoom0 =
-          math.max(1.0, math.max(safeW, safeH) / miniSideAtCover);
-      final double t = widget.expandFactor.clamp(0.0, 1.0);
-      final double invZoom = lerpDouble(1.0 / zoom0, 1.0, t);
-      final double zoom = invZoom > 1e-6 ? (1.0 / invZoom) : 1.0;
-      wRender = wCover * zoom;
-      hRender = hCover * zoom;
-      final double x1 =
-          (safeW * 0.5 - miniCrop.cx * wCover).clamp(safeW - wCover, 0.0);
-      final double y1 =
-          (safeH * 0.5 - miniCrop.cy * hCover).clamp(safeH - hCover, 0.0);
-      final double cx1 = (safeW * 0.5 - x1) / math.max(1e-6, wCover);
-      final double cy1 = (safeH * 0.5 - y1) / math.max(1e-6, hCover);
-      final double focusX = lerpDouble(miniCrop.cx, cx1, t);
-      final double focusY = lerpDouble(miniCrop.cy, cy1, t);
-      xRender = (safeW * 0.5 - focusX * wRender).clamp(safeW - wRender, 0.0);
-      yRender = (safeH * 0.5 - focusY * hRender).clamp(safeH - hRender, 0.0);
-    }
-
-    final BoxFit imageFit = hasSubCrop ? BoxFit.fill : BoxFit.cover;
-    final Alignment resolvedAlign =
-        hasSubCrop ? Alignment.center : imgAlignment;
-    Widget imageWidget;
-
-    if (cleanUrl.startsWith('data:')) {
-      final provider = avatarFullImageProvider(cleanUrl);
-      if (provider != null) {
-        imageWidget = Image(
-          image: provider,
-          fit: imageFit,
-          alignment: resolvedAlign,
-          width: wRender,
-          height: hRender,
-          gaplessPlayback: true,
-          errorBuilder: (context, error, stackTrace) =>
-              _avatarErrorWidget(bgColor, iconSize, isDark),
-        );
-      } else {
-        return _avatarErrorWidget(bgColor, iconSize, isDark);
-      }
-    } else if (!kIsWeb && cleanUrl.startsWith('file://')) {
-      try {
-        final filePath = Uri.parse(cleanUrl).toFilePath();
-        final file = File(filePath);
-        if (file.existsSync()) {
-          imageWidget = Image.file(
-            file,
-            fit: imageFit,
-            alignment: resolvedAlign,
-            width: wRender,
-            height: hRender,
-            gaplessPlayback: true,
-            errorBuilder: (context, error, stackTrace) =>
-                _avatarErrorWidget(bgColor, iconSize, isDark),
-          );
-        } else {
-          imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
-        }
-      } catch (_) {
-        imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
-      }
-    } else {
-      if (!kIsWeb && File(cleanUrl).existsSync()) {
-        imageWidget = Image.file(
-          File(cleanUrl),
-          fit: imageFit,
-          alignment: resolvedAlign,
-          width: wRender,
-          height: hRender,
-          gaplessPlayback: true,
-          errorBuilder: (context, error, stackTrace) =>
-              _avatarErrorWidget(bgColor, iconSize, isDark),
-        );
-      } else {
-        final validUrl = stripAvatarCropFragment(getValidAvatarUrl(cleanUrl));
-        if (validUrl != null &&
-            (validUrl.startsWith('http://') ||
-                validUrl.startsWith('https://'))) {
-          imageWidget = CachedNetworkImage(
-            imageUrl: validUrl,
-            fit: imageFit,
-            alignment: resolvedAlign,
-            width: wRender,
-            height: hRender,
-            fadeInDuration: Duration.zero,
-            fadeOutDuration: Duration.zero,
-            placeholder: (context, _) => Container(
-              width: wRender,
-              height: hRender,
-              color: bgColor,
-            ),
-            errorWidget: (context, _, __) =>
-                _avatarErrorWidget(bgColor, iconSize, isDark),
-          );
-        } else {
-          imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
-        }
-      }
-    }
-
-    if (hasSubCrop) {
-      imageWidget = SizedBox(
-        width: safeW,
-        height: safeH,
-        child: ClipRect(
-          child: Stack(
-            clipBehavior: Clip.hardEdge,
-            children: [
-              Positioned(
-                left: xRender,
-                top: yRender,
-                width: wRender,
-                height: hRender,
-                child: imageWidget,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+    final Widget imageWidget = _buildFramedAvatarBox(
+      cleanUrl: cleanUrl,
+      miniCrop: miniCrop,
+      boxWidth: width,
+      boxHeight: height,
+      expandT: clampedExpand,
+      lockToSquareScale: true,
+      bgColor: bgColor,
+      iconSize: iconSize,
+      isDark: isDark,
+      imgAlignment: imgAlignment,
+    );
 
     if (!enableHero) {
       return imageWidget;
@@ -887,8 +983,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         : 'avatar_hero_$url';
 
     final double initialRadius = ExpandableAvatar.calculateBorderRadius(
-      width,
-      widget.expandFactor.clamp(0.0, 1.0),
+      math.min(width, height),
+      clampedExpand,
     );
 
     return Hero(
@@ -908,16 +1004,36 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         return AnimatedBuilder(
           animation: curvedAnimation,
           builder: (context, child) {
-            final double currentRadius =
-                lerpDouble(initialRadius, 0.0, curvedAnimation.value);
+            final double tFlight = curvedAnimation.value;
+            final double currentRadius = lerpDouble(initialRadius, 0.0, tFlight);
+            final double shuttleExpand = lerpDouble(clampedExpand, 1.0, tFlight);
             return ClipRRect(
               borderRadius: BorderRadius.circular(currentRadius),
               child: Material(
                 type: MaterialType.transparency,
-                child: SizedBox.expand(
-                  child: hasSubCrop
-                      ? FittedBox(fit: BoxFit.cover, child: imageWidget)
-                      : imageWidget,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final double bw = constraints.maxWidth.isFinite &&
+                            constraints.maxWidth > 0.0
+                        ? constraints.maxWidth
+                        : math.max(1.0, width);
+                    final double bh = constraints.maxHeight.isFinite &&
+                            constraints.maxHeight > 0.0
+                        ? constraints.maxHeight
+                        : math.max(1.0, height);
+                    return _buildFramedAvatarBox(
+                      cleanUrl: cleanUrl,
+                      miniCrop: miniCrop,
+                      boxWidth: bw,
+                      boxHeight: bh,
+                      expandT: shuttleExpand,
+                      lockToSquareScale: false,
+                      bgColor: bgColor,
+                      iconSize: iconSize,
+                      isDark: isDark,
+                      imgAlignment: imgAlignment,
+                    );
+                  },
                 ),
               ),
             );
