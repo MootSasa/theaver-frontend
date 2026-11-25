@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../config/app_config.dart';
 import '../../models/theav_theme.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
@@ -78,15 +79,44 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
     super.initState();
     _wasActive = _playbackService.activeMessageId == widget.messageId;
     _playbackService.addListener(_onPlaybackUpdate);
+    _syncCacheImmediate();
     _checkCacheStatus();
   }
 
   @override
   void didUpdateWidget(VoiceMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.audioUrl != widget.audioUrl) {
+    if (oldWidget.audioUrl != widget.audioUrl ||
+        oldWidget.sendStatus != widget.sendStatus) {
       _detachProgressListener();
+      _syncCacheImmediate();
       _checkCacheStatus();
+    }
+  }
+
+  bool get _isRemoteAudioUrl {
+    final raw = widget.audioUrl.trim();
+    if (raw.isEmpty || AppConfig.isLocalFilePath(raw)) return false;
+    return raw.startsWith('http://') ||
+        raw.startsWith('https://') ||
+        raw.startsWith('/api/') ||
+        raw.startsWith('/media/') ||
+        raw.startsWith('/uploads/');
+  }
+
+  void _syncCacheImmediate() {
+    if (widget.audioUrl.isEmpty) return;
+    if (kIsWeb || !_isRemoteAudioUrl) {
+      _isCached = true;
+      _isDownloading = false;
+      return;
+    }
+    final syncFile = MediaCacheManager.instance.getCachedFileSync(
+      widget.audioUrl,
+    );
+    if (syncFile != null) {
+      _isCached = true;
+      _isDownloading = false;
     }
   }
 
@@ -112,7 +142,7 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
   Future<void> _checkCacheStatus() async {
     if (widget.audioUrl.isEmpty) return;
 
-    if (kIsWeb || widget.isMe || !widget.audioUrl.startsWith('http')) {
+    if (kIsWeb || !_isRemoteAudioUrl) {
       if (mounted) {
         setState(() {
           _isCached = true;
@@ -147,7 +177,8 @@ class _VoiceMessageWidgetState extends State<VoiceMessageWidget> {
     }
 
     final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
-      messageType: 'audio',
+      messageType:
+          (widget.title != null && widget.title!.isNotEmpty) ? 'audio' : 'voice',
       fileSize: widget.fileSize,
     );
 

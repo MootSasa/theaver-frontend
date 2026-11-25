@@ -142,11 +142,12 @@ class FileService {
         final result = UploadResult.fromJson(response.data);
         onSendBytes?.call(fileLength, fileLength);
         onProgress?.call(1.0);
-        if (seedCache && shouldSeedUploadedFile(file, result)) {
+        if (seedCache) {
           await MediaCacheManager.instance.seedCacheFromFile(
             result.url,
             file,
             deleteSourceIfTemp: allowDeleteTempSource,
+            preserveSourceExtension: !shouldSeedUploadedFile(file, result),
           );
         }
         return result;
@@ -485,11 +486,12 @@ class FileService {
         final result = UploadResult.fromJson(completeResponse.data);
         onSendBytes?.call(totalSize, totalSize);
         onProgress?.call(1.0);
-        if (seedCache && shouldSeedUploadedFile(file, result)) {
+        if (seedCache) {
           await MediaCacheManager.instance.seedCacheFromFile(
             result.url,
             file,
             deleteSourceIfTemp: allowDeleteTempSource,
+            preserveSourceExtension: !shouldSeedUploadedFile(file, result),
           );
         }
         return result;
@@ -673,7 +675,22 @@ class FileService {
         }
       } catch (_) {}
 
-      // 3. Download via Dio (only attach Bearer token for API endpoints, not direct MinIO URLs)
+      // 3. On native/desktop platforms, route network download through MediaCacheManager
+      // so Range resume, private-bucket fallback, and in-flight deduplication avoid redundant transfers.
+      if (!kIsWeb) {
+        final downloaded = await MediaCacheManager.instance.downloadMedia(
+          resolvedUrl,
+          onProgress: onProgress,
+        );
+        if (downloaded != null &&
+            await downloaded.exists() &&
+            await downloaded.length() > 0) {
+          if (downloaded.path == savePath) return downloaded;
+          return await downloaded.copy(savePath);
+        }
+      }
+
+      // 4. Web / fallback download via Dio (only attach Bearer token for API endpoints, not direct MinIO URLs)
       final isApiEndpoint = resolvedUrl.contains('/api/');
       final headers = isApiEndpoint ? await _getHeaders() : <String, String>{};
 

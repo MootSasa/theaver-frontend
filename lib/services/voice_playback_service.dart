@@ -4,6 +4,7 @@ import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
+import '../config/app_config.dart';
 import 'video_note_playback_service.dart';
 import 'contacts_service.dart';
 import 'media_cache_manager.dart';
@@ -286,15 +287,26 @@ class VoicePlaybackService with ChangeNotifier {
       }
 
       String playPath = audioUrl;
-      if (audioUrl.startsWith('http://') || audioUrl.startsWith('https://')) {
-        final cached = await MediaCacheManager.instance.getCachedFile(audioUrl);
+      final bool isRemote = !AppConfig.isLocalFilePath(audioUrl) &&
+          (audioUrl.startsWith('http://') ||
+              audioUrl.startsWith('https://') ||
+              audioUrl.startsWith('/api/') ||
+              audioUrl.startsWith('/media/') ||
+              audioUrl.startsWith('/uploads/'));
+      if (!kIsWeb && isRemote) {
+        final cached =
+            await MediaCacheManager.instance.getCachedFile(audioUrl);
         if (cached != null && await cached.exists()) {
           playPath = cached.path;
         } else {
-          // Play directly from URL immediately to prevent blocking playback.
-          playPath = audioUrl;
-          // Download in the background for future use.
-          MediaCacheManager.instance.downloadMedia(audioUrl).catchError((_) => null);
+          final downloaded =
+              await MediaCacheManager.instance.downloadMedia(audioUrl);
+          if (_activeMessageId != messageId) return;
+          if (downloaded != null && await downloaded.exists()) {
+            playPath = downloaded.path;
+          } else {
+            playPath = AppConfig.resolveMediaUrl(audioUrl) ?? audioUrl;
+          }
         }
       }
 

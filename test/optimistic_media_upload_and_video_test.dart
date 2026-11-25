@@ -24,6 +24,7 @@ import 'package:theaver/services/file_service.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/media_cache_manager.dart';
 import 'package:theaver/services/media_send_coordinator.dart';
+import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/widgets/chat/chat_input_bar.dart';
 import 'package:theaver/widgets/media_viewer/theav_media_video_surface.dart';
 import 'package:theaver/widgets/message/document_message_widget.dart';
@@ -745,4 +746,354 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
     });
   });
+
+  group('5. Single-Pass Media Caching & Zero Sender Re-Downloads', () {
+    test('concurrent downloads across canonical URL variants share 1 HTTP GET', () async {
+      final payload = Uint8List.fromList(List<int>.generate(512, (i) => i % 253));
+      int httpHits = 0;
+
+      MediaCacheManager.instance.dioForTesting.httpClientAdapter = _ScriptedHttpAdapter(
+        (options) async {
+          httpHits++;
+          await Future<void>.delayed(const Duration(milliseconds: 25));
+          return ResponseBody.fromBytes(
+            payload,
+            200,
+            headers: {
+              Headers.contentLengthHeader: ['${payload.length}'],
+            },
+          );
+        },
+      );
+
+      final results = await Future.wait([
+        MediaCacheManager.instance.downloadMedia('/media/videos/net.mp4'),
+        MediaCacheManager.instance.downloadMedia(
+          'https://storage.theaver.app/media/videos/net.mp4?X-Amz-Signature=abc123',
+        ),
+      ]);
+
+      expect(results[0], isNotNull);
+      expect(results[1], isNotNull);
+      expect(results[0]!.path, results[1]!.path);
+      expect(httpHits, 1);
+
+      // Subsequent reads across API proxy & localhost forms hit disk cache with 0 network I/O.
+      final apiHit = await MediaCacheManager.instance.downloadMedia(
+        'https://api.theaver.app/api/files/download/videos/net.mp4',
+      );
+      final localMinioHit = await MediaCacheManager.instance.getCachedFile(
+        'http://localhost:9000/media/videos/net.mp4',
+      );
+      expect(apiHit!.path, results[0]!.path);
+      expect(localMinioHit!.path, results[0]!.path);
+      expect(httpHits, 1);
+    });
+
+    testWidgets('sender pre-seeds cache before RPC so WS echo triggers 0 downloads (single, transcoded .mov & album)', (tester) async {
+      int cacheHttpHits = 0;
+      MediaCacheManager.instance.dioForTesting.httpClientAdapter = _ScriptedHttpAdapter(
+        (options) async {
+          cacheHttpHits++;
+          return ResponseBody.fromString('unexpected download', 500);
+        },
+      );
+
+      await tester.runAsync(() async {
+        await SettingsService().init();
+        await SettingsService().saveStorageSettings(
+          StorageSettings(
+            autoDownloadPhotosOnWifi: true,
+            autoDownloadVideosOnWifi: true,
+            autoDownloadFilesOnWifi: true,
+            autoDownloadAudioOnWifi: true,
+            autoDownloadPhotosOnCellular: false,
+            autoDownloadVideosOnCellular: false,
+            autoDownloadFilesOnCellular: false,
+            autoDownloadAudioOnCellular: false,
+            autoDownloadPhotosOnRoaming: false,
+            autoDownloadVideosOnRoaming: false,
+            autoDownloadFilesOnRoaming: false,
+            autoDownloadAudioOnRoaming: false,
+          ),
+        );
+      });
+      addTearDown(
+        () => SettingsService().saveStorageSettings(StorageSettings.defaults()),
+      );
+
+      late final Completer<void> singleRpcEntered;
+      late final Completer<void> singleRpcRelease;
+      late final Completer<void> albumRpcEntered;
+      late final Completer<void> albumRpcRelease;
+
+      late File docFile;
+      late File movFile;
+      late File a1File;
+      late File a2File;
+      const docUrl = 'https://storage.theaver.app/media/files/sender_doc.pdf';
+      const movUrl = 'https://storage.theaver.app/media/videos/iphone_clip.mp4';
+      const a1Url = 'https://storage.theaver.app/media/images/alb1.png';
+      const a2Url = 'https://storage.theaver.app/media/images/alb2.png';
+
+      await tester.runAsync(() async {
+        singleRpcEntered = Completer<void>();
+        singleRpcRelease = Completer<void>();
+        albumRpcEntered = Completer<void>();
+        albumRpcRelease = Completer<void>();
+        docFile = File(p.join(tempDir.path, 'sender_doc.pdf'))
+          ..writeAsBytesSync(Uint8List.fromList(List.filled(2048, 77)));
+        movFile = File(p.join(tempDir.path, 'iphone_clip.mov'))
+          ..writeAsBytesSync(Uint8List.fromList(List.filled(1024, 55)));
+        a1File = File(p.join(tempDir.path, 'alb1.png'))
+          ..writeAsBytesSync(_minimalPngBytes());
+        a2File = File(p.join(tempDir.path, 'alb2.png'))
+          ..writeAsBytesSync(_minimalPngBytes());
+
+        MediaSendCoordinator.instance.configureForTesting(
+          uploadOverride: (file, {onSendBytes, cancelToken}) async {
+            final base = p.basename(file.path);
+            if (base.contains('sender_doc.pdf')) {
+              return UploadResult(
+                fileId: 101,
+                objectName: 'files/sender_doc.pdf',
+                url: docUrl,
+                fileName: 'sender_doc.pdf',
+                mimeType: 'application/pdf',
+                size: 2048,
+              );
+            }
+            if (base.contains('iphone_clip.mov')) {
+              return UploadResult(
+                fileId: 102,
+                objectName: 'videos/iphone_clip.mp4',
+                url: movUrl,
+                fileName: 'iphone_clip.mp4',
+                mimeType: 'video/mp4',
+                size: 1024,
+              );
+            }
+            if (base.contains('alb1.png')) {
+              return UploadResult(
+                fileId: 103,
+                objectName: 'images/alb1.png',
+                url: a1Url,
+                fileName: 'alb1.png',
+                mimeType: 'image/png',
+                size: 128,
+              );
+            }
+            if (base.contains('alb2.png')) {
+              return UploadResult(
+                fileId: 104,
+                objectName: 'images/alb2.png',
+                url: a2Url,
+                fileName: 'alb2.png',
+                mimeType: 'image/png',
+                size: 128,
+              );
+            }
+            return UploadResult(
+              fileId: base.hashCode.abs(),
+              objectName: 'images/$base',
+              url: 'https://storage.theaver.app/media/images/$base',
+              fileName: base,
+              mimeType: 'image/png',
+              size: 128,
+            );
+          },
+          sendSingleRpcOverride: (chatId, localId, content, messageType, fileUrl,
+              fileName, mediaPayload, groupedId, isRound, duration, waveform) async {
+            if (fileUrl == docUrl && !singleRpcEntered.isCompleted) {
+              singleRpcEntered.complete();
+              await singleRpcRelease.future;
+            }
+            return {
+              'success': true,
+              'message': Message(
+                id: 'srv_$localId',
+                chatId: chatId,
+                senderId: 'test_user_001',
+                content: content,
+                messageType: messageType,
+                isEdited: false,
+                createdAt: DateTime.now().toUtc().toIso8601String(),
+                senderName: 'Test Admin',
+                fileUrl: fileUrl,
+                fileName: fileName,
+                localId: localId,
+                sendStatus: 1,
+              ),
+            };
+          },
+          sendAlbumRpcOverride: (chatId, groupedId, items, caption) async {
+            if (!albumRpcEntered.isCompleted) {
+              albumRpcEntered.complete();
+            }
+            await albumRpcRelease.future;
+            final now = DateTime.now().toUtc().toIso8601String();
+            return {
+              'success': true,
+              'grouped_id': groupedId,
+              'messages': items.map((it) {
+                final lid = it['local_id']?.toString() ?? '';
+                return Message(
+                  id: 'srv_$lid',
+                  chatId: chatId,
+                  senderId: 'test_user_001',
+                  content: it['content']?.toString() ?? '',
+                  messageType: 'image',
+                  isEdited: false,
+                  createdAt: now,
+                  senderName: 'Test Admin',
+                  fileUrl: it['file_url']?.toString(),
+                  fileName: it['file_name']?.toString(),
+                  localId: lid,
+                  groupedId: groupedId,
+                  sendStatus: 1,
+                );
+              }).toList(),
+            };
+          },
+        );
+
+        await MediaSendCoordinator.instance.enqueueMediaOrFiles(
+          chatId: 'chat_1',
+          files: [docFile],
+          asDocument: true,
+        );
+        await singleRpcEntered.future.timeout(const Duration(seconds: 3));
+
+        // While single RPC is still in flight (WS echo window!), cache must ALREADY be seeded.
+        expect(MediaCacheManager.instance.getCachedFileSync(docUrl), isNotNull);
+        expect(
+          MediaCacheManager.instance.getCachedFileSync('/media/files/sender_doc.pdf'),
+          isNotNull,
+        );
+      });
+
+      // Mounting DocumentMessageWidget in settled (WS echoed) state hits Frame-0 sync cache -> 0 downloads!
+      await tester.pumpWidget(_wrapTestApp(
+        const DocumentMessageWidget(
+          fileUrl: docUrl,
+          fileName: 'sender_doc.pdf',
+          fileSize: 2048,
+          localId: 'ws_echo_doc',
+          sendStatus: 1,
+        ),
+      ));
+      await tester.pump();
+      expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
+      expect(cacheHttpHits, 0);
+
+      await tester.runAsync(() async {
+        singleRpcRelease.complete();
+
+        // Also test transcoded .mov -> .mp4 pre-RPC seeding and album pre-RPC seeding.
+        await MediaSendCoordinator.instance.enqueueMediaOrFiles(
+          chatId: 'chat_1',
+          files: [movFile],
+        );
+        final movCached = await _waitForSeededFile(movUrl);
+        expect(movCached, isNotNull);
+        expect(MediaCacheManager.instance.getCachedFileSync(movUrl), isNotNull);
+
+        await MediaSendCoordinator.instance.enqueueMediaOrFiles(
+          chatId: 'chat_1',
+          files: [a1File, a2File],
+        );
+        await albumRpcEntered.future.timeout(const Duration(seconds: 3));
+        expect(MediaCacheManager.instance.getCachedFileSync(a1Url), isNotNull);
+        expect(MediaCacheManager.instance.getCachedFileSync(a2Url), isNotNull);
+
+        albumRpcRelease.complete();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      });
+
+      expect(cacheHttpHits, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+
+    testWidgets('DocumentMessageWidget downloads file once into MediaCacheManager without auto-duplicating into Downloads', (tester) async {
+      final pdfBytes = Uint8List.fromList(List<int>.filled(4096, 66));
+      int httpHits = 0;
+      late Directory downloadsDir;
+
+      MediaCacheManager.instance.dioForTesting.httpClientAdapter = _ScriptedHttpAdapter(
+        (options) async {
+          httpHits++;
+          return ResponseBody.fromBytes(
+            pdfBytes,
+            200,
+            headers: {
+              Headers.contentLengthHeader: ['${pdfBytes.length}'],
+            },
+          );
+        },
+      );
+
+      await tester.runAsync(() async {
+        downloadsDir = Directory(p.join(tempDir.path, 'system_downloads'))
+          ..createSync(recursive: true);
+        await SettingsService().init();
+        await SettingsService().saveStorageSettings(
+          StorageSettings(
+            autoDownloadPhotosOnWifi: false,
+            autoDownloadVideosOnWifi: false,
+            autoDownloadFilesOnWifi: false,
+            autoDownloadAudioOnWifi: false,
+            autoDownloadPhotosOnCellular: false,
+            autoDownloadVideosOnCellular: false,
+            autoDownloadFilesOnCellular: false,
+            autoDownloadAudioOnCellular: false,
+            autoDownloadPhotosOnRoaming: false,
+            autoDownloadVideosOnRoaming: false,
+            autoDownloadFilesOnRoaming: false,
+            autoDownloadAudioOnRoaming: false,
+            downloadPath: downloadsDir.path,
+          ),
+        );
+      });
+      addTearDown(
+        () => SettingsService().saveStorageSettings(StorageSettings.defaults()),
+      );
+
+      const remoteDocUrl = 'https://storage.theaver.app/media/files/single_pass.pdf';
+      await tester.pumpWidget(_wrapTestApp(
+        const DocumentMessageWidget(
+          fileUrl: remoteDocUrl,
+          fileName: 'single_pass.pdf',
+          fileSize: 5 * 1024 * 1024,
+          localId: 'doc_dl_1',
+          sendStatus: 1,
+        ),
+      ));
+      await tester.pump();
+      expect(httpHits, 0);
+
+      await tester.tap(find.byType(IconButton));
+      await tester.pump();
+      for (int i = 0; i < 40; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.byIcon(Icons.more_vert_rounded).evaluate().isNotEmpty) break;
+      }
+
+      expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
+      expect(httpHits, 1);
+      expect(downloadsDir.listSync(), isEmpty);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
+}
+
+Future<File?> _waitForSeededFile(String url) async {
+  for (int i = 0; i < 50; i++) {
+    final f = MediaCacheManager.instance.getCachedFileSync(url);
+    if (f != null) return f;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+  return MediaCacheManager.instance.getCachedFile(url);
 }

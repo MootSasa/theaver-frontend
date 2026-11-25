@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -29,7 +28,29 @@ class VideoNoteControllerPool {
   static final Map<String, Set<VoidCallback>> _evictionCallbacks = {};
   static const int _maxControllers = 4;
 
-  static String _normKey(String url) => AppConfig.resolveMediaUrl(url) ?? url;
+  static String _normKey(String url) =>
+      MediaCacheManager.instance.canonicalCacheKey(url);
+
+  static void rekey(
+    String oldUrl,
+    String newUrl,
+    VideoPlayerController controller,
+  ) {
+    final oldKey = _normKey(oldUrl);
+    final newKey = _normKey(newUrl);
+    if (oldKey.isEmpty || newKey.isEmpty || oldKey == newKey) return;
+    _pool.remove(oldKey);
+    _order.remove(oldKey);
+    final cbs = _evictionCallbacks.remove(oldKey);
+    if (cbs != null && cbs.isNotEmpty) {
+      _evictionCallbacks
+          .putIfAbsent(newKey, () => <VoidCallback>{})
+          .addAll(cbs);
+    }
+    _pool[newKey] = controller;
+    _order.remove(newKey);
+    _order.add(newKey);
+  }
 
   static void registerEvictionCallback(String url, VoidCallback cb) {
     final key = _normKey(url);
@@ -210,6 +231,28 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   void didUpdateWidget(VideoMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoUrl != widget.videoUrl) {
+      final bool wasUploading =
+          oldWidget.sendStatus != 1 && widget.sendStatus == 1;
+      if (wasUploading &&
+          _controller != null &&
+          _controller!.value.isInitialized) {
+        VideoNoteControllerPool.unregisterEvictionCallback(
+          oldWidget.videoUrl,
+          _onControllerEvicted,
+        );
+        VideoNoteControllerPool.rekey(
+          oldWidget.videoUrl,
+          widget.videoUrl,
+          _controller!,
+        );
+        VideoNoteControllerPool.registerEvictionCallback(
+          widget.videoUrl,
+          _onControllerEvicted,
+        );
+        _isCached = true;
+        _isDownloading = false;
+        return;
+      }
       VideoNoteControllerPool.unregisterEvictionCallback(oldWidget.videoUrl, _onControllerEvicted);
       VideoNoteControllerPool.registerEvictionCallback(widget.videoUrl, _onControllerEvicted);
       _initSession++;
@@ -1236,8 +1279,8 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                     imageFilter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                     child: Transform.scale(
                       scale: 1.15,
-                      child: CachedNetworkImage(
-                        imageUrl: resolvedThumbUrl,
+                      child: RemoteVideoThumbnailImage(
+                        thumbUrl: resolvedThumbUrl,
                         fit: BoxFit.cover,
                         width: diameter,
                         height: diameter,

@@ -145,7 +145,7 @@ class MediaDownloadButtonState extends State<MediaDownloadButton> {
       if (widget.autoDownload &&
           partial == null &&
           !MediaCacheManager.instance.wasCancelledByUser(widget.url)) {
-        _startDownload();
+        _startDownload(autoTriggered: true);
       }
     }
   }
@@ -194,7 +194,7 @@ class MediaDownloadButtonState extends State<MediaDownloadButton> {
     }
   }
 
-  Future<void> _startDownload() async {
+  Future<void> _startDownload({bool autoTriggered = false}) async {
     if (_isDownloading) return;
     setState(() {
       _isDownloading = true;
@@ -235,11 +235,14 @@ class MediaDownloadButtonState extends State<MediaDownloadButton> {
       final wasCancelled = MediaCacheManager.instance.wasCancelledByUser(
         widget.url,
       );
+      final wasPaused = MediaCacheManager.instance.wasDownloadPaused(
+        widget.url,
+      );
       setState(() {
         _isDownloading = false;
       });
       _triggerMorph(false);
-      if (!wasCancelled) {
+      if (!wasCancelled && !wasPaused && !autoTriggered) {
         GlassToastService().showError(
           context,
           AppLocalizations.trStatic(

@@ -1182,6 +1182,20 @@ class MediaSendCoordinator {
             uploadResult.duration > 0) {
           item.duration = uploadResult.duration;
         }
+
+        // Seed MediaCacheManager BEFORE sending the RPC so an early WebSocket
+        // echo on the sender device never triggers a re-download.
+        if (!kIsWeb && remoteUrl.isNotEmpty) {
+          await MediaCacheManager.instance.seedCacheFromFile(
+            remoteUrl,
+            file,
+            deleteSourceIfTemp: false,
+            preserveSourceExtension: !FileService.shouldSeedUploadedFile(
+              file,
+              uploadResult,
+            ),
+          );
+        }
       }
 
       if (item.cancelled) return;
@@ -1208,18 +1222,22 @@ class MediaSendCoordinator {
           ? sentMsg.fileUrl!
           : remoteUrl;
 
-      // Seed local cache only when bytes were not transcoded on the server.
-      if (!kIsWeb && uploadedLocalFile != null && item.uploadResult != null) {
-        if (FileService.shouldSeedUploadedFile(
+      // Alias-seed finalRemoteUrl only if the RPC response normalized it to a different key.
+      if (!kIsWeb &&
+          uploadedLocalFile != null &&
+          item.uploadResult != null &&
+          finalRemoteUrl.isNotEmpty &&
+          MediaCacheManager.instance.canonicalCacheKey(finalRemoteUrl) !=
+              MediaCacheManager.instance.canonicalCacheKey(remoteUrl)) {
+        await MediaCacheManager.instance.seedCacheFromFile(
+          finalRemoteUrl,
           uploadedLocalFile,
-          item.uploadResult!,
-        )) {
-          await MediaCacheManager.instance.seedCacheFromFile(
-            finalRemoteUrl,
+          deleteSourceIfTemp: false,
+          preserveSourceExtension: !FileService.shouldSeedUploadedFile(
             uploadedLocalFile,
-            deleteSourceIfTemp: false,
-          );
-        }
+            item.uploadResult!,
+          ),
+        );
       }
 
       final persistedPayloadStr = rpcPayload != null && rpcPayload.isNotEmpty
@@ -1327,6 +1345,18 @@ class MediaSendCoordinator {
             item.remoteMediaPayload = res.toMediaPayload();
             item.uploadResult = res;
 
+            if (!kIsWeb && res.url.isNotEmpty) {
+              await MediaCacheManager.instance.seedCacheFromFile(
+                res.url,
+                file,
+                deleteSourceIfTemp: false,
+                preserveSourceExtension: !FileService.shouldSeedUploadedFile(
+                  file,
+                  res,
+                ),
+              );
+            }
+
             // Persist remote URL in DB so any partial-retry skips already-uploaded tiles.
             final partialPayload = Map<String, dynamic>.from(item.extraPayload)
               ..['remote_file_url'] = res.url
@@ -1417,18 +1447,27 @@ class MediaSendCoordinator {
         final item = currentSurviving[i];
         final matched = byLocalId[item.localId] ??
             (i < serverMessages.length ? serverMessages[i] : null);
-        final remoteUrl = matched?.fileUrl ?? item.remoteFileUrl ?? '';
+        final remoteUrl = (matched?.fileUrl != null && matched!.fileUrl!.isNotEmpty)
+            ? matched.fileUrl!
+            : (item.remoteFileUrl ?? '');
         final localFile = localFilesById[item.localId];
         final ur = uploadResultsById[item.localId];
         if (!kIsWeb &&
             localFile != null &&
             ur != null &&
-            FileService.shouldSeedUploadedFile(localFile, ur) &&
-            remoteUrl.isNotEmpty) {
+            remoteUrl.isNotEmpty &&
+            MediaCacheManager.instance.canonicalCacheKey(remoteUrl) !=
+                MediaCacheManager.instance.canonicalCacheKey(
+                  item.remoteFileUrl ?? '',
+                )) {
           await MediaCacheManager.instance.seedCacheFromFile(
             remoteUrl,
             localFile,
             deleteSourceIfTemp: false,
+            preserveSourceExtension: !FileService.shouldSeedUploadedFile(
+              localFile,
+              ur,
+            ),
           );
         }
 

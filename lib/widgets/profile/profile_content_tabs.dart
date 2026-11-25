@@ -1093,6 +1093,25 @@ class ProfileSectionPageContent extends StatelessWidget {
     final rawUrl = msg.fileUrl ?? '';
     if (rawUrl.isEmpty) return;
 
+    if (kIsWeb) {
+      final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+      final uri = Uri.tryParse(resolved);
+      if (uri != null) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+      return;
+    }
+
+    final fileService = FileService();
+    try {
+      final cached = await MediaCacheManager.instance.getCachedFile(rawUrl);
+      if (cached != null && await cached.exists() && await cached.length() > 0) {
+        await fileService.openFile(cached.path);
+        return;
+      }
+    } catch (_) {}
+
+    if (!context.mounted) return;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     GlassToastService().show(
       context,
@@ -1105,26 +1124,32 @@ class ProfileSectionPageContent extends StatelessWidget {
       ),
     );
 
-    try {
-      if (kIsWeb) {
-        final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-        final uri = Uri.tryParse(resolved);
-        if (uri != null) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
+    int? expectedSize;
+    final rawPayload = msg.mediaPayload;
+    if (rawPayload != null && rawPayload.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawPayload);
+        if (decoded is Map) {
+          expectedSize = (decoded['file_size'] as num?)?.toInt();
         }
+      } catch (_) {}
+    }
+
+    try {
+      final downloaded = await MediaCacheManager.instance.downloadMedia(
+        rawUrl,
+        expectedTotalSize: expectedSize,
+      );
+      if (downloaded != null && await downloaded.exists()) {
+        await fileService.openFile(downloaded.path);
         return;
       }
-      final fileService = FileService();
-      final savedPath = await fileService.downloadToDownloads(rawUrl, fileName);
-      if (!savedPath.startsWith('content://')) {
-        await fileService.openFile(savedPath);
-      }
-    } catch (_) {
-      final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-      final uri = Uri.tryParse(resolved);
-      if (uri != null) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
+    } catch (_) {}
+
+    final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+    final uri = Uri.tryParse(resolved);
+    if (uri != null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 

@@ -1468,6 +1468,7 @@ class ChannelPostCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               DocumentMessageWidget(
+                key: ValueKey('ch_doc_${msg.localId ?? msg.id}'),
                 fileUrl: resolvedFileUrl,
                 fileName:
                     msg.fileName ??
@@ -2004,9 +2005,25 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
   void didUpdateWidget(covariant _SingleChannelMediaView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
-      _cachedFile = null;
-      _cachedFirstFrame = null;
+      final bool wasUploading =
+          oldWidget.sendStatus != 1 && widget.sendStatus == 1;
+      final prevFile = _cachedFile;
+      final prevThumb = _cachedFirstFrame;
+      if (!wasUploading) {
+        _cachedFile = null;
+        _cachedFirstFrame = null;
+      }
       _syncCacheImmediate();
+      if (wasUploading) {
+        if (_cachedFile == null &&
+            prevFile != null &&
+            prevFile.existsSync()) {
+          _cachedFile = prevFile;
+        }
+        if (_cachedFirstFrame == null && prevThumb != null) {
+          _cachedFirstFrame = prevThumb;
+        }
+      }
       _checkCache();
     }
   }
@@ -2089,7 +2106,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
 
     return GestureDetector(
       onTap: () {
-        if (!isUploadingOrFailed && !isCached) {
+        if (!isUploadingOrFailed && !isCached && !widget.isVideo) {
           _downloadButtonKey.currentState?.handleTap();
           return;
         }

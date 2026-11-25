@@ -745,6 +745,43 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
     TheavMediaItem item,
     bool enableHero,
   ) {
+    final resolved = item.resolvedUrl;
+    final bool hasDirectLocal =
+        (item.memoryBytes != null && item.memoryBytes!.isNotEmpty) ||
+            (!kIsWeb &&
+                item.localFilePath != null &&
+                item.localFilePath!.isNotEmpty &&
+                File(item.localFilePath!).existsSync()) ||
+            MediaCacheManager.instance.getCachedFileSync(resolved) != null ||
+            resolved.startsWith('data:') ||
+            (!kIsWeb && resolved.startsWith('file://')) ||
+            (!kIsWeb &&
+                resolved.startsWith('/') &&
+                !resolved.startsWith('/api/') &&
+                !resolved.startsWith('/uploads/') &&
+                !resolved.startsWith('/media/'));
+
+    if (!kIsWeb &&
+        item.kind == TheavMediaKind.photo &&
+        !hasDirectLocal &&
+        MediaCacheManager.instance.extractProtectedObjectName(
+              resolved,
+              ignorePresignQuery: true,
+            ) !=
+            null) {
+      final Widget cachedViewerImage = Center(
+        child: _MediaCacheViewerImage(
+          item: item,
+          resolvedUrl: resolved,
+        ),
+      );
+      if (!enableHero || item.heroTag.isEmpty) return cachedViewerImage;
+      return Hero(
+        tag: item.heroTag,
+        child: cachedViewerImage,
+      );
+    }
+
     final provider = _resolveStaticImageProvider(item);
     final Widget image = Image(
       image: provider,
@@ -950,6 +987,199 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Renders protected `/media/` photos through [MediaCacheManager] so opening a
+/// photo in the fullscreen viewer shares the exact same disk cache as chat bubbles
+/// without triggering duplicate downloads into `DefaultCacheManager`.
+class _MediaCacheViewerImage extends StatefulWidget {
+  final TheavMediaItem item;
+  final String resolvedUrl;
+
+  const _MediaCacheViewerImage({
+    required this.item,
+    required this.resolvedUrl,
+  });
+
+  @override
+  State<_MediaCacheViewerImage> createState() => _MediaCacheViewerImageState();
+}
+
+class _MediaCacheViewerImageState extends State<_MediaCacheViewerImage> {
+  File? _cachedFile;
+  ValueNotifier<DownloadByteProgress>? _byteNotifier;
+  double _fraction = 0.0;
+  bool _hasError = false;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncImmediate();
+    if (_cachedFile == null) {
+      _loadMedia();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _MediaCacheViewerImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.resolvedUrl != widget.resolvedUrl) {
+      _detachNotifier();
+      _cachedFile = null;
+      _fraction = 0.0;
+      _hasError = false;
+      _syncImmediate();
+      if (_cachedFile == null) {
+        _loadMedia();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _detachNotifier();
+    super.dispose();
+  }
+
+  void _detachNotifier() {
+    _byteNotifier?.removeListener(_onProgressTick);
+    _byteNotifier = null;
+  }
+
+  void _onProgressTick() {
+    if (!mounted || _byteNotifier == null) return;
+    final val = _byteNotifier!.value.fraction;
+    if ((val - _fraction).abs() >= 0.01) {
+      setState(() => _fraction = val);
+    }
+  }
+
+  void _syncImmediate() {
+    final sync = MediaCacheManager.instance.getCachedFileSync(
+      widget.resolvedUrl,
+    );
+    if (sync != null) {
+      _cachedFile = sync;
+      _hasError = false;
+      _isLoading = false;
+    }
+  }
+
+  Future<void> _loadMedia() async {
+    final String targetUrl = widget.resolvedUrl;
+    if (targetUrl.isEmpty || _isLoading) return;
+    _isLoading = true;
+    _hasError = false;
+
+    final existing = await MediaCacheManager.instance.getCachedFile(targetUrl);
+    if (!mounted || widget.resolvedUrl != targetUrl) return;
+    if (existing != null && await existing.exists() && await existing.length() > 0) {
+      _isLoading = false;
+      setState(() {
+        _cachedFile = existing;
+        _hasError = false;
+      });
+      return;
+    }
+
+    _detachNotifier();
+    _byteNotifier =
+        MediaCacheManager.instance.getByteProgressNotifier(targetUrl);
+    _byteNotifier?.addListener(_onProgressTick);
+    if (mounted) {
+      setState(() => _fraction = _byteNotifier?.value.fraction ?? 0.0);
+    }
+
+    final file = await MediaCacheManager.instance.downloadMedia(
+      targetUrl,
+      expectedTotalSize: widget.item.fileSize,
+    );
+    _detachNotifier();
+    _isLoading = false;
+    if (!mounted || widget.resolvedUrl != targetUrl) return;
+    if (file != null && await file.exists() && await file.length() > 0) {
+      setState(() {
+        _cachedFile = file;
+        _hasError = false;
+      });
+    } else {
+      setState(() => _hasError = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final file = _cachedFile;
+    if (file != null) {
+      return Image.file(
+        file,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        gaplessPlayback: true,
+        errorBuilder: (_, __, ___) => const Center(
+          child: iconoir.MediaImage(
+            color: Colors.white54,
+            width: 60,
+            height: 60,
+          ),
+        ),
+      );
+    }
+
+    if (_hasError) {
+      return Center(
+        child: GestureDetector(
+          onTap: _loadMedia,
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: const BoxDecoration(
+              color: Color(0xB3101218),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.refresh_rounded,
+              color: Colors.white,
+              size: 28,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Center(
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (widget.item.thumbBase64 != null &&
+              widget.item.thumbBase64!.isNotEmpty)
+            BlurredMediaPlaceholder(
+              thumbBase64: widget.item.thumbBase64,
+              aspectRatio: widget.item.aspectRatio,
+              fit: BoxFit.contain,
+            ),
+          Container(
+            width: 48,
+            height: 48,
+            decoration: const BoxDecoration(
+              color: Color(0xB3101218),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                value: _fraction > 0 ? _fraction : null,
+                strokeWidth: 2.4,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

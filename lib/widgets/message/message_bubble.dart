@@ -2642,6 +2642,7 @@ class MessageBubble extends StatelessWidget {
     // Default: Document / File
     final String docLocalId = message.localId ?? message.id;
     return DocumentMessageWidget(
+      key: ValueKey('doc_$docLocalId'),
       fileUrl: resolvedUrl,
       fileName: message.fileName ??
           (message.content.trim().isNotEmpty ? message.content.trim() : 'file'),
@@ -2801,9 +2802,25 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
   void didUpdateWidget(covariant _SingleMediaBubbleWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
-      _cachedFile = null;
-      _cachedFirstFrame = null;
+      final bool wasUploading =
+          oldWidget.sendStatus != 1 && widget.sendStatus == 1;
+      final prevFile = _cachedFile;
+      final prevThumb = _cachedFirstFrame;
+      if (!wasUploading) {
+        _cachedFile = null;
+        _cachedFirstFrame = null;
+      }
       _syncCacheImmediate();
+      if (wasUploading) {
+        if (_cachedFile == null &&
+            prevFile != null &&
+            prevFile.existsSync()) {
+          _cachedFile = prevFile;
+        }
+        if (_cachedFirstFrame == null && prevThumb != null) {
+          _cachedFirstFrame = prevThumb;
+        }
+      }
       _checkCache();
     }
   }
@@ -2884,8 +2901,8 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
 
     return GestureDetector(
       onTap: () {
-        if (!isUploadingOrFailed && !isCached) {
-          // While not downloaded, tapping anywhere on the bubble starts/cancels download
+        if (!isUploadingOrFailed && !isCached && !widget.isVideo) {
+          // While not downloaded, tapping anywhere on the photo bubble starts/cancels download
           _downloadButtonKey.currentState?.handleTap();
           return;
         }

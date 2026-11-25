@@ -373,6 +373,12 @@ class _TheavMediaVideoSurfaceState extends State<TheavMediaVideoSurface> {
       }
 
       // 3. Presigned or authenticated HTTP Range streaming.
+      // Pause any concurrent bubble background auto-download so bytes are not fetched twice.
+      if (!kIsWeb &&
+          resolvedUrl.isNotEmpty &&
+          MediaCacheManager.instance.isDownloading(resolvedUrl)) {
+        MediaCacheManager.instance.cancelDownload(resolvedUrl, byUser: false);
+      }
       final target =
           await MediaCacheManager.instance.resolveStreamableVideoTarget(
         resolvedUrl,

@@ -1,4 +1,4 @@
-import 'dart:io' show File, Directory;
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
@@ -44,6 +44,7 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   double _progress = 0.0;
   String? _downloadedFilePath;
   double _resolvedFileSize = 0.0;
+  ValueNotifier<DownloadByteProgress>? _byteNotifier;
 
   bool get _isUploadingOrFailed => widget.sendStatus != 1;
 
@@ -52,6 +53,7 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     super.initState();
     _resolvedFileSize = widget.fileSize;
     if (!_isUploadingOrFailed) {
+      _syncCacheImmediate();
       _checkFileExists();
     }
   }
@@ -62,25 +64,95 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     if (widget.fileSize > 0 && widget.fileSize != _resolvedFileSize) {
       _resolvedFileSize = widget.fileSize;
     }
+    if (oldWidget.fileUrl != widget.fileUrl) {
+      _detachByteNotifier();
+      _downloadedFilePath = null;
+      _status = DownloadStatus.idle;
+      _progress = 0.0;
+    }
     if (!_isUploadingOrFailed &&
         (oldWidget.sendStatus != widget.sendStatus ||
             oldWidget.fileName != widget.fileName ||
             oldWidget.fileUrl != widget.fileUrl)) {
+      _syncCacheImmediate();
       _checkFileExists();
     }
   }
 
+  @override
+  void dispose() {
+    _detachByteNotifier();
+    super.dispose();
+  }
+
+  void _attachByteNotifier() {
+    if (kIsWeb || widget.fileUrl.isEmpty) return;
+    _detachByteNotifier();
+    _byteNotifier =
+        MediaCacheManager.instance.getByteProgressNotifier(widget.fileUrl);
+    _byteNotifier?.addListener(_onByteProgress);
+  }
+
+  void _detachByteNotifier() {
+    _byteNotifier?.removeListener(_onByteProgress);
+    _byteNotifier = null;
+  }
+
+  void _onByteProgress() {
+    if (!mounted || _byteNotifier == null) return;
+    final bp = _byteNotifier!.value;
+    final downloading = MediaCacheManager.instance.isDownloading(widget.fileUrl);
+    if (bp.fraction >= 1.0 && !downloading) {
+      _checkFileExists();
+      return;
+    }
+    setState(() {
+      if (downloading) {
+        _status = DownloadStatus.downloading;
+      }
+      _progress = bp.fraction;
+      if (bp.totalBytes > 0 && _resolvedFileSize <= 0) {
+        _resolvedFileSize = bp.totalBytes.toDouble();
+      }
+    });
+  }
+
+  void _syncCacheImmediate() {
+    if (kIsWeb || _isUploadingOrFailed || widget.fileUrl.isEmpty) return;
+    final syncFile = MediaCacheManager.instance.getCachedFileSync(
+      widget.fileUrl,
+    );
+    if (syncFile != null) {
+      _status = DownloadStatus.downloaded;
+      _downloadedFilePath = syncFile.path;
+      _progress = 1.0;
+      if (_resolvedFileSize <= 0) {
+        try {
+          final len = syncFile.lengthSync();
+          if (len > 0) {
+            _resolvedFileSize = len.toDouble();
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
   Future<void> _checkFileExists() async {
-    if (kIsWeb || _isUploadingOrFailed) return;
+    if (kIsWeb || _isUploadingOrFailed || widget.fileUrl.isEmpty) return;
+    final String checkedUrl = widget.fileUrl;
     try {
-      // 1. Check MediaCacheManager first
-      final cached = await MediaCacheManager.instance.getCachedFile(
-        widget.fileUrl,
-      );
+      final cached = await MediaCacheManager.instance.getCachedFile(checkedUrl);
+      if (!mounted || widget.fileUrl != checkedUrl || _isUploadingOrFailed) {
+        return;
+      }
       if (cached != null && await cached.exists()) {
         final len = await cached.length();
         if (len > 0) {
-          if (mounted) {
+          _detachByteNotifier();
+          if (!mounted || widget.fileUrl != checkedUrl) return;
+          if (_status != DownloadStatus.downloaded ||
+              _downloadedFilePath != cached.path ||
+              (_resolvedFileSize <= 0 && len > 0)) {
             setState(() {
               _status = DownloadStatus.downloaded;
               _downloadedFilePath = cached.path;
@@ -94,23 +166,32 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
         }
       }
 
-      // 2. Check default Downloads directory
-      final dir = await _getSaveDirectory();
-      final file = File('${dir.path}/${widget.fileName}');
-      if (await file.exists()) {
-        final len = await file.length();
-        if (len > 0) {
-          if (mounted) {
-            setState(() {
-              _status = DownloadStatus.downloaded;
-              _downloadedFilePath = file.path;
-              _progress = 1.0;
-              if (_resolvedFileSize <= 0) {
-                _resolvedFileSize = len.toDouble();
-              }
-            });
-          }
-        }
+      if (MediaCacheManager.instance.isDownloading(checkedUrl)) {
+        _attachByteNotifier();
+        setState(() {
+          _status = DownloadStatus.downloading;
+          _progress = _byteNotifier?.value.fraction ?? _progress;
+        });
+        return;
+      }
+
+      final effectiveSize =
+          widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize;
+      final int? sizeInt = effectiveSize > 0 ? effectiveSize.round() : null;
+      final bool autoDownload =
+          !MediaCacheManager.instance.wasCancelledByUser(checkedUrl) &&
+              MediaCacheManager.instance.shouldAutoDownload(
+                messageType: 'file',
+                fileSize: sizeInt,
+              );
+      if (autoDownload) {
+        unawaited(_startDownload(autoTriggered: true));
+      } else if (_status == DownloadStatus.downloaded) {
+        setState(() {
+          _status = DownloadStatus.idle;
+          _downloadedFilePath = null;
+          _progress = 0.0;
+        });
       }
     } catch (_) {}
   }
@@ -162,7 +243,16 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     final effectiveSize = widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize;
     final formattedSize = _formatSize(effectiveSize);
     return GestureDetector(
-      onTap: _status == DownloadStatus.downloaded ? _showFileOptions : null,
+      onTap: () {
+        if (_status == DownloadStatus.downloaded) {
+          _openDownloadedFile();
+        } else if (_status == DownloadStatus.downloading) {
+          _cancelDownload();
+        } else {
+          _startDownload();
+        }
+      },
+      onLongPress: _status == DownloadStatus.downloaded ? _showFileOptions : null,
       child: Container(
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
@@ -300,40 +390,50 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
 
   Widget _buildActionButton(BuildContext context) {
     if (_status == DownloadStatus.downloading) {
-      return SizedBox(
-        width: 32,
-        height: 32,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            CircularProgressIndicator(
-              value: _progress > 0 ? _progress : null,
-              strokeWidth: 2.0,
-            ),
-            if (_progress > 0)
-              Text(
-                '${(_progress * 100).toStringAsFixed(0)}%',
-                style: const TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
-                ),
+      return GestureDetector(
+        onTap: _cancelDownload,
+        child: SizedBox(
+          width: 32,
+          height: 32,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CircularProgressIndicator(
+                value: _progress > 0 ? _progress : null,
+                strokeWidth: 2.0,
               ),
-          ],
+              const Icon(
+                Icons.close_rounded,
+                size: 15,
+                color: Color(0xFF0088CC),
+              ),
+            ],
+          ),
         ),
       );
     } else if (_status == DownloadStatus.failed) {
       return IconButton(
-        onPressed: _startDownload,
+        onPressed: () => _startDownload(),
         icon: const iconoir.Refresh(width: 20, height: 20),
         tooltip: context.l10n.translate('chat_file_not_found'),
         padding: EdgeInsets.zero,
         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
       );
     } else if (_status == DownloadStatus.downloaded) {
-      return const iconoir.CheckCircle(color: Colors.green, width: 22, height: 22);
+      return IconButton(
+        onPressed: _showFileOptions,
+        icon: Icon(
+          Icons.more_vert_rounded,
+          size: 20,
+          color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+        ),
+        tooltip: widget.fileName,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      );
     } else {
       return IconButton(
-        onPressed: _startDownload,
+        onPressed: () => _startDownload(),
         icon: const iconoir.Download(width: 20, height: 20, color: Color(0xFF0088CC)),
         tooltip: context.l10n.translate('chat_download'),
         padding: EdgeInsets.zero,
@@ -342,7 +442,11 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     }
   }
 
-  Future<void> _startDownload() async {
+  Future<void> _startDownload({bool autoTriggered = false}) async {
+    if (_status == DownloadStatus.downloading) return;
+    if (!kIsWeb) {
+      _attachByteNotifier();
+    }
     setState(() {
       _status = DownloadStatus.downloading;
       _progress = 0.0;
@@ -355,16 +459,37 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
         await _downloadWithProgress();
       }
     } catch (e) {
+      _detachByteNotifier();
       if (mounted) {
+        if (MediaCacheManager.instance.wasCancelledByUser(widget.fileUrl)) {
+          setState(() {
+            _status = DownloadStatus.idle;
+            _progress = 0.0;
+          });
+          return;
+        }
         setState(() {
           _status = DownloadStatus.failed;
           _progress = 0.0;
         });
-        GlassToastService().showError(
-          context,
-          'Download failed: ${e.toString()}',
-        );
+        if (!autoTriggered) {
+          GlassToastService().showError(
+            context,
+            'Download failed: ${e.toString()}',
+          );
+        }
       }
+    }
+  }
+
+  void _cancelDownload() {
+    MediaCacheManager.instance.cancelDownload(widget.fileUrl, byUser: true);
+    _detachByteNotifier();
+    if (mounted) {
+      setState(() {
+        _status = DownloadStatus.idle;
+        _progress = 0.0;
+      });
     }
   }
 
@@ -389,11 +514,17 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
   }
 
   Future<void> _downloadWithProgress() async {
-    // 1. Download into MediaCacheManager so it is cached and tracked in storage statistics
+    final effectiveSize =
+        widget.fileSize > 0 ? widget.fileSize : _resolvedFileSize;
+    final int? sizeInt = effectiveSize > 0 ? effectiveSize.round() : null;
+    final String requestedUrl = widget.fileUrl;
+
+    // Single download into MediaCacheManager only (matches Telegram internal cache UX).
     final cachedFile = await MediaCacheManager.instance.downloadMedia(
-      widget.fileUrl,
+      requestedUrl,
+      expectedTotalSize: sizeInt,
       onProgress: (p) {
-        if (mounted) {
+        if (mounted && _status == DownloadStatus.downloading) {
           setState(() {
             _progress = p;
           });
@@ -401,47 +532,32 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
       },
     );
 
+    _detachByteNotifier();
+    if (MediaCacheManager.instance.wasCancelledByUser(requestedUrl)) {
+      if (mounted) {
+        setState(() {
+          _status = DownloadStatus.idle;
+          _progress = 0.0;
+        });
+      }
+      return;
+    }
+
     if (cachedFile == null || !await cachedFile.exists()) {
       throw Exception('Failed to download file');
     }
 
     final fileLen = await cachedFile.length();
-    String openablePath = cachedFile.path;
-
-    // 2. Also save to user's Downloads folder (or MediaStore.Downloads on Android)
-    try {
-      final savedPath = await FileService().downloadToDownloads(
-        widget.fileUrl,
-        widget.fileName,
-      );
-      if (!savedPath.startsWith('content://')) {
-        openablePath = savedPath;
-      }
-    } catch (_) {}
-
     if (mounted) {
       setState(() {
         _status = DownloadStatus.downloaded;
         _progress = 1.0;
-        _downloadedFilePath = openablePath;
+        _downloadedFilePath = cachedFile.path;
         if (_resolvedFileSize <= 0 && fileLen > 0) {
           _resolvedFileSize = fileLen.toDouble();
         }
       });
-      GlassToastService().show(
-        context,
-        'Файл скачан. Нажмите на файл, чтобы открыть.',
-      );
     }
-  }
-
-  Future<Directory> _getSaveDirectory() async {
-    final pathStr = await FileService().getDefaultDownloadDirectory();
-    final dir = Directory(pathStr);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    return dir;
   }
 
   Future<void> _openDownloadedFile() async {
@@ -467,6 +583,25 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     }
   }
 
+  Future<void> _saveToDownloads() async {
+    try {
+      await FileService().downloadToDownloads(widget.fileUrl, widget.fileName);
+      if (mounted) {
+        GlassToastService().show(
+          context,
+          AppLocalizations.trStatic(
+            'saved_to_downloads',
+            'Сохранено в Загрузки',
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().showError(context, 'Ошибка сохранения: $e');
+      }
+    }
+  }
+
   void _showFileOptions() {
     final parentContext = context;
     showTheavModalSheet<void>(
@@ -485,20 +620,22 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
               },
             ),
             TheavListRow(
+              leading: const iconoir.Download(width: 20, height: 20),
+              title: AppLocalizations.trStatic(
+                'save_to_downloads',
+                'Сохранить в Загрузки',
+              ),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _saveToDownloads();
+              },
+            ),
+            TheavListRow(
               leading: const iconoir.ShareAndroid(width: 20, height: 20),
               title: parentContext.l10n.translate('share'),
               onTap: () {
                 Navigator.pop(sheetCtx);
                 _shareFile();
-              },
-            ),
-            TheavListRow(
-              leading: const iconoir.Folder(width: 20, height: 20),
-              title: 'Показать в папке',
-              subtitle: _downloadedFilePath,
-              onTap: () {
-                Navigator.pop(sheetCtx);
-                _showInFolder();
               },
             ),
           ],
@@ -523,29 +660,6 @@ class _DocumentMessageWidgetState extends State<DocumentMessageWidget> {
     } catch (e) {
       if (mounted) {
         GlassToastService().showError(context, 'Ошибка при отправке: $e');
-      }
-    }
-  }
-
-  /// Show the downloaded file in the system file manager
-  Future<void> _showInFolder() async {
-    if (_downloadedFilePath == null) {
-      GlassToastService().show(context, 'Сначала скачайте файл');
-      return;
-    }
-    try {
-      // open_file can open the file, but to show in folder we use
-      // the system's file manager via open_file with "folder" mode
-      final result = await OpenFile.open(_downloadedFilePath);
-      if (result.type != ResultType.done && mounted) {
-        GlassToastService().showError(
-          context,
-          'Не удалось открыть: ${result.message}',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        GlassToastService().showError(context, 'Ошибка: $e');
       }
     }
   }

@@ -1534,17 +1534,27 @@ class SyncService {
       );
 
       if (result['success'] == true) {
-        if (!kIsWeb &&
-            uploadedLocalFile != null &&
-            remoteFileUrl != null &&
-            remoteFileUrl.isNotEmpty) {
-          await MediaCacheManager.instance
-              .seedCacheFromFile(remoteFileUrl, uploadedLocalFile);
-        }
         final sentMessage = result['message'];
         final serverId = sentMessage is Message ? sentMessage.id : null;
+        final finalRemoteUrl = (sentMessage is Message &&
+                sentMessage.fileUrl != null &&
+                sentMessage.fileUrl!.isNotEmpty)
+            ? sentMessage.fileUrl!
+            : remoteFileUrl;
+        if (!kIsWeb &&
+            uploadedLocalFile != null &&
+            finalRemoteUrl != null &&
+            finalRemoteUrl.isNotEmpty &&
+            MediaCacheManager.instance.canonicalCacheKey(finalRemoteUrl) !=
+                MediaCacheManager.instance.canonicalCacheKey(remoteFileUrl ?? '')) {
+          await MediaCacheManager.instance.seedCacheFromFile(
+            finalRemoteUrl,
+            uploadedLocalFile,
+            deleteSourceIfTemp: true,
+          );
+        }
         if (serverId != null && serverId.isNotEmpty) {
-          await confirmMessageSent(localId, serverId, remoteFileUrl: remoteFileUrl);
+          await confirmMessageSent(localId, serverId, remoteFileUrl: finalRemoteUrl);
         }
       } else {
         await markMessageFailed(localId);

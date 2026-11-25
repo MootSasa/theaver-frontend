@@ -15,6 +15,7 @@ import '../config/app_config.dart';
 import '../utils/emoji_utils.dart';
 import 'auth_service.dart';
 import 'emoji_effect_cache_service.dart';
+import 'media_cache_manager.dart';
 import 'websocket_service.dart';
 
 int? _parseStickerNullableInt(dynamic raw) {
@@ -1705,7 +1706,15 @@ class StickerService extends ChangeNotifier {
     if (kIsWeb) return null;
     final fullUrl = resolveUrl(rawUrl);
     if (fullUrl.isEmpty) return null;
-    return _rasterFileCache[fullUrl];
+    final mem = _rasterFileCache[fullUrl];
+    if (mem != null) return mem;
+    final mediaCached =
+        MediaCacheManager.instance.getCachedFileSync(fullUrl);
+    if (mediaCached != null) {
+      _rasterFileCache[fullUrl] = mediaCached;
+      return mediaCached;
+    }
+    return null;
   }
 
   @visibleForTesting
@@ -1747,6 +1756,31 @@ class StickerService extends ChangeNotifier {
 
   Future<File?> _downloadRasterFileInternal(String fullUrl) async {
     try {
+      final mediaCached =
+          await MediaCacheManager.instance.getCachedFile(fullUrl);
+      if (mediaCached != null &&
+          await mediaCached.exists() &&
+          await mediaCached.length() > 16) {
+        _rasterFileCache[fullUrl] = mediaCached;
+        return mediaCached;
+      }
+
+      if (MediaCacheManager.instance.extractProtectedObjectName(
+            fullUrl,
+            ignorePresignQuery: true,
+          ) !=
+          null) {
+        final downloaded =
+            await MediaCacheManager.instance.downloadMedia(fullUrl);
+        if (downloaded != null &&
+            await downloaded.exists() &&
+            await downloaded.length() > 16) {
+          _rasterFileCache[fullUrl] = downloaded;
+          return downloaded;
+        }
+        return null;
+      }
+
       final cacheDir = await _getRasterCacheDir();
       if (cacheDir == null) return null;
 

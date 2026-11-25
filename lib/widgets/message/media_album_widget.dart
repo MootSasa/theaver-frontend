@@ -658,9 +658,26 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
   void didUpdateWidget(covariant _AlbumTileWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item.fileUrl != widget.item.fileUrl) {
-      _cachedFile = null;
-      _cachedFirstFrame = null;
+      final bool wasUploading =
+          oldWidget.item.message.sendStatus != 1 &&
+              widget.item.message.sendStatus == 1;
+      final prevFile = _cachedFile;
+      final prevThumb = _cachedFirstFrame;
+      if (!wasUploading) {
+        _cachedFile = null;
+        _cachedFirstFrame = null;
+      }
       _syncCacheImmediate();
+      if (wasUploading) {
+        if (_cachedFile == null &&
+            prevFile != null &&
+            prevFile.existsSync()) {
+          _cachedFile = prevFile;
+        }
+        if (_cachedFirstFrame == null && prevThumb != null) {
+          _cachedFirstFrame = prevThumb;
+        }
+      }
       _checkCache();
     }
   }
@@ -804,7 +821,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
           color: const Color(0xFF181818),
           child: GestureDetector(
             onTap: () {
-              if (!isUploadingOrFailed && !isCached) {
+              if (!isUploadingOrFailed && !isCached && !item.isVideo) {
                 _downloadButtonKey.currentState?.handleTap();
                 return;
               }
