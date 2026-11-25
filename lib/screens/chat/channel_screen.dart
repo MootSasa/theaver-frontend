@@ -21,6 +21,7 @@ import 'dart:math' as math;
 import '../../models/chat_draft.dart';
 import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/unread_count_provider.dart';
@@ -742,6 +743,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     StickerService.instance.registerInputTarget(_stickerInputTarget);
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
     }
@@ -4586,6 +4588,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _chatSubscription?.cancel();
 
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     DeepLinkService.pendingInlinePrefill.removeListener(
       _onPendingInlinePrefillChanged,
     );
@@ -4623,6 +4626,10 @@ class _ChannelScreenState extends State<ChannelScreen>
     super.dispose();
   }
 
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
   List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
     final List<PlaybackTrack> playlist = [];
     final startIndex = _messages.indexWhere(
@@ -4634,6 +4641,19 @@ class _ChannelScreenState extends State<ChannelScreen>
         final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
         if (resolvedUrl.isEmpty) continue;
 
+        final bool exposeAuthor = _signMessages &&
+            _showAuthorProfiles &&
+            ContactsService.shouldResolveUserIdentity(
+              m.senderId,
+              senderChatId: m.senderChatId,
+              isAnonymousAdmin: m.isFromAnonymousAdmin,
+            );
+        final String trackSenderName = exposeAuthor
+            ? ContactsService.resolvePeerName(m.senderId, m.senderName)
+            : (_channelName.isNotEmpty
+                ? _channelName
+                : (widget.channelName ?? m.senderName));
+
         if (m.messageType == 'voice') {
           playlist.add(PlaybackTrack(
             messageId: m.id,
@@ -4641,7 +4661,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             chatType: 'channel',
             mediaType: 'voice',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
+            senderId: exposeAuthor ? m.senderId : null,
+            senderName: trackSenderName,
             chatTitle: widget.channelName,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
             waveform: m.waveform,
@@ -4653,7 +4674,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             chatType: 'channel',
             mediaType: 'video_note',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
+            senderId: exposeAuthor ? m.senderId : null,
+            senderName: trackSenderName,
             chatTitle: widget.channelName,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
           ));
@@ -5240,21 +5262,52 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _openAuthorProfile(Message message) {
-    if (message.senderId.isEmpty) return;
+    final authorId =
+        (message.postAuthorId != null && message.postAuthorId!.isNotEmpty)
+            ? message.postAuthorId!
+            : message.senderId;
+    if (authorId.isEmpty || authorId == '0') return;
     HapticUtils.tap();
-    final participant = _findParticipant(message.senderId);
+    final participant = _findParticipant(authorId);
+    final isBot = participant?.isBot ?? false;
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      authorId,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: message.isFromAnonymousAdmin,
+      isBot: isBot,
+    );
+    final rawName = participant?.displayName.isNotEmpty == true
+        ? participant!.displayName
+        : (message.senderName.isNotEmpty
+            ? message.senderName
+            : (_channelName.isNotEmpty ? _channelName : 'Channel'));
+    final resolvedName = canResolve
+        ? ContactsService.resolvePeerName(
+            authorId,
+            rawName,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isBot: isBot,
+          )
+        : rawName;
+    final rawAvatar = participant?.avatarUrl ?? message.senderAvatarUrl;
+    final resolvedAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(
+            authorId,
+            rawAvatar,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isBot: isBot,
+          )
+        : rawAvatar;
     Navigator.push(
       context,
       SwipeBackPageRoute(
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
-          userId: message.senderId,
-          initialName: participant?.displayName.isNotEmpty == true
-              ? participant!.displayName
-              : (message.senderName.isNotEmpty
-                  ? message.senderName
-                  : (_channelName.isNotEmpty ? _channelName : 'Channel')),
-          initialAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+          userId: authorId,
+          initialName: resolvedName,
+          initialAvatarUrl: resolvedAvatar,
           initialIsOnline: participant?.isOnline,
           initialLastSeen: participant?.lastSeen,
         ),
@@ -5263,19 +5316,35 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _openUserProfileById(String userId) {
-    if (userId.isEmpty) return;
+    if (userId.isEmpty || userId == '0') return;
     HapticUtils.tap();
     final participant = _findParticipant(userId);
+    final isBot = participant?.isBot ?? false;
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      userId,
+      isBot: isBot,
+    );
+    final rawName = participant?.displayName.isNotEmpty == true
+        ? participant!.displayName
+        : (_channelName.isNotEmpty ? _channelName : 'User');
+    final resolvedName = canResolve
+        ? ContactsService.resolvePeerName(userId, rawName, isBot: isBot)
+        : rawName;
+    final resolvedAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(
+            userId,
+            participant?.avatarUrl,
+            isBot: isBot,
+          )
+        : participant?.avatarUrl;
     Navigator.push(
       context,
       SwipeBackPageRoute(
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
           userId: userId,
-          initialName: participant?.displayName.isNotEmpty == true
-              ? participant!.displayName
-              : (_channelName.isNotEmpty ? _channelName : 'User'),
-          initialAvatarUrl: participant?.avatarUrl,
+          initialName: resolvedName,
+          initialAvatarUrl: resolvedAvatar,
           initialIsOnline: participant?.isOnline,
           initialLastSeen: participant?.lastSeen,
         ),
@@ -6587,17 +6656,35 @@ class _ChannelScreenState extends State<ChannelScreen>
             participants: _participants
                 .where((p) => p.id != _currentUserId && p.username.isNotEmpty)
                 .map(
-                  (p) => MentionCandidate(
-                    id: p.id,
-                    username: p.username,
-                    displayName:
-                        p.displayName.isNotEmpty ? p.displayName : p.username,
-                    avatarUrl: p.avatarUrl,
-                    isBot: p.isBot ||
+                  (p) {
+                    final isBot = p.isBot ||
                         p.username.toLowerCase().endsWith('bot') ||
                         p.username.toLowerCase() == 'botmother' ||
-                        p.username.toLowerCase() == 'walt',
-                  ),
+                        p.username.toLowerCase() == 'walt';
+                    final rawName =
+                        p.displayName.isNotEmpty ? p.displayName : p.username;
+                    final displayName = !isBot
+                        ? ContactsService.resolvePeerName(
+                            p.id,
+                            rawName,
+                            isBot: isBot,
+                          )
+                        : rawName;
+                    final avatarUrl = !isBot
+                        ? ContactsService.resolvePeerAvatarUrl(
+                            p.id,
+                            p.avatarUrl,
+                            isBot: isBot,
+                          )
+                        : p.avatarUrl;
+                    return MentionCandidate(
+                      id: p.id,
+                      username: p.username,
+                      displayName: displayName,
+                      avatarUrl: avatarUrl,
+                      isBot: isBot,
+                    );
+                  },
                 )
                 .toList(),
             inlineBots: _inlineDirectoryBots,

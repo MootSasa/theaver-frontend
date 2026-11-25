@@ -18,6 +18,7 @@ import 'scheduled_messages_screen.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../models/chat_draft.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
@@ -947,6 +948,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     StickerService.instance.registerInputTarget(_stickerInputTarget);
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
     }
@@ -2945,16 +2947,21 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     // Get typing user name from event or participants
     final eventUserName = event.data['user_name']?.toString();
     String name = eventUserName ?? '';
+    final typingUser = _participants.firstWhere(
+      (p) => p.id == typingUserId,
+      orElse: () => ChatParticipant(
+          id: '', username: '', displayName: 'Someone', role: 'member'),
+    );
     if (name.isEmpty) {
-      final typingUser = _participants.firstWhere(
-        (p) => p.id == typingUserId,
-        orElse: () => ChatParticipant(
-            id: '', username: '', displayName: 'Someone', role: 'member'),
-      );
       name = typingUser.displayName.isNotEmpty
           ? typingUser.displayName
           : typingUser.username;
     }
+    name = ContactsService.resolvePeerName(
+      typingUserId,
+      name,
+      isBot: typingUser.id.isNotEmpty && typingUser.isBot,
+    );
 
     if (mounted) {
       setState(() {
@@ -4228,6 +4235,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.resolveEffectiveAuthorTitle(
                 chatName: fallbackTitle,
               ),
+              senderChatId: replyTo.senderChatId,
+              isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
@@ -5664,6 +5673,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       _onPendingInlinePrefillChanged,
     );
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     }
@@ -5724,6 +5734,10 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     super.dispose();
   }
 
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<bool> _onRaiseToListenFirstUnplayed() async {
     if (!mounted || _isVoiceRecording || _isVideoRecording) return false;
     // Find the chronologically oldest unlistened incoming voice message
@@ -5736,13 +5750,27 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
         if (resolvedUrl.isEmpty) continue;
 
+        final canResolveSender = ContactsService.shouldResolveUserIdentity(
+          m.senderId,
+          senderChatId: m.senderChatId,
+          isAnonymousAdmin: m.isFromAnonymousAdmin,
+          isMirroredChannelPost: m.isMirroredChannelPost,
+          isBot: _findParticipant(m.senderId)?.isBot ?? false,
+        );
+        final fallbackGroupName =
+            _groupName.isNotEmpty ? _groupName : widget.groupName;
+        final trackSenderName = canResolveSender
+            ? ContactsService.resolvePeerName(m.senderId, m.senderName)
+            : m.resolveEffectiveAuthorTitle(chatName: fallbackGroupName);
+
         final track = PlaybackTrack(
           messageId: m.id,
           chatId: widget.chatId,
           chatType: 'group',
           mediaType: 'voice',
           mediaUrl: resolvedUrl,
-          senderName: m.senderName,
+          senderId: canResolveSender ? m.senderId : null,
+          senderName: trackSenderName,
           chatTitle: widget.groupName,
           duration: m.duration != null && m.duration! > 0
               ? Duration(seconds: m.duration!)
@@ -5766,11 +5794,24 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final startIndex = _messages.indexWhere(
         (m) => m.id == startMessageId || m.localId == startMessageId);
     if (startIndex >= 0) {
+      final fallbackGroupName =
+          _groupName.isNotEmpty ? _groupName : widget.groupName;
       for (int i = startIndex - 1; i >= 0; i--) {
         final m = _messages[i];
         final rawUrl = m.fileUrl ?? '';
         final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
         if (resolvedUrl.isEmpty) continue;
+
+        final canResolveSender = ContactsService.shouldResolveUserIdentity(
+          m.senderId,
+          senderChatId: m.senderChatId,
+          isAnonymousAdmin: m.isFromAnonymousAdmin,
+          isMirroredChannelPost: m.isMirroredChannelPost,
+          isBot: _findParticipant(m.senderId)?.isBot ?? false,
+        );
+        final trackSenderName = canResolveSender
+            ? ContactsService.resolvePeerName(m.senderId, m.senderName)
+            : m.resolveEffectiveAuthorTitle(chatName: fallbackGroupName);
 
         if (m.messageType == 'voice') {
           playlist.add(PlaybackTrack(
@@ -5779,7 +5820,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             chatType: 'group',
             mediaType: 'voice',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
+            senderId: canResolveSender ? m.senderId : null,
+            senderName: trackSenderName,
             chatTitle: widget.groupName,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
             waveform: m.waveform,
@@ -5791,7 +5833,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             chatType: 'group',
             mediaType: 'video_note',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
+            senderId: canResolveSender ? m.senderId : null,
+            senderName: trackSenderName,
             chatTitle: widget.groupName,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
           ));
@@ -5973,8 +6016,19 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       );
     }
 
+    final String? resolvedTypingName = (_isTyping &&
+            ((_typingUserName != null && _typingUserName!.isNotEmpty) ||
+                (_typingUserId != null && _typingUserId!.isNotEmpty)))
+        ? ContactsService.resolvePeerName(
+            _typingUserId,
+            _typingUserName ?? '',
+            isBot: _typingUserId != null &&
+                (_findParticipant(_typingUserId!)?.isBot ?? false),
+          )
+        : null;
+
     final String statusSubtitle;
-    if (_isTyping && _typingUserName != null && _typingUserName!.isNotEmpty) {
+    if (_isTyping && resolvedTypingName != null && resolvedTypingName.isNotEmpty) {
       final String l10nKey;
       if (_typingAction == 'record_voice') {
         l10nKey = 'chat_user_recording_voice';
@@ -5985,7 +6039,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       }
       statusSubtitle = context.l10n
           .translate(l10nKey)
-          .replaceAll('{name}', _typingUserName!);
+          .replaceAll('{name}', resolvedTypingName);
     } else if (onlineCount >= 1) {
       statusSubtitle = context.l10n
           .translate('chat_status_members_and_online')
@@ -6837,14 +6891,30 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (userId.isEmpty || userId == '0') return;
     HapticUtils.tap();
     final participant = _findParticipant(userId);
+    final isBot = participant?.isBot ?? false;
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      userId,
+      isBot: isBot,
+    );
+    final rawName = participant?.displayName ?? '';
+    final resolvedName = canResolve
+        ? ContactsService.resolvePeerName(userId, rawName, isBot: isBot)
+        : rawName;
+    final resolvedAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(
+            userId,
+            participant?.avatarUrl,
+            isBot: isBot,
+          )
+        : participant?.avatarUrl;
     Navigator.push(
       context,
       SwipeBackPageRoute(
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
           userId: userId,
-          initialName: participant?.displayName,
-          initialAvatarUrl: participant?.avatarUrl,
+          initialName: resolvedName.isNotEmpty ? resolvedName : null,
+          initialAvatarUrl: resolvedAvatar,
           initialIsOnline: participant?.isOnline,
           initialLastSeen: participant?.lastSeen,
         ),
@@ -6853,23 +6923,67 @@ class _GroupChatScreenState extends State<GroupChatScreen>
   }
 
   void _openSenderProfile(Message message) {
+    final hasSenderChat = message.senderChatId != null &&
+        message.senderChatId!.trim().isNotEmpty &&
+        message.senderChatId!.trim() != '0';
+    if (hasSenderChat) {
+      _openChannelProfileById(
+        message.senderChatId!,
+        name: message.senderChatName?.trim().isNotEmpty == true
+            ? message.senderChatName
+            : message.senderName,
+        avatarUrl: message.senderChatAvatarUrl ?? message.senderAvatarUrl,
+      );
+      return;
+    }
     if (message.isFromAnonymousAdmin) {
       _openGroupInfo();
       return;
     }
+    if (message.isMirroredChannelPost) return;
     if (message.senderId.isEmpty || message.senderId == '0') return;
     HapticUtils.tap();
     final participant = _findParticipant(message.senderId);
+    final isBot = participant?.isBot ?? false;
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      message.senderId,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: message.isFromAnonymousAdmin,
+      isMirroredChannelPost: message.isMirroredChannelPost,
+      isBot: isBot,
+    );
+    final rawName = participant?.displayName.isNotEmpty == true
+        ? participant!.displayName
+        : message.senderName;
+    final resolvedName = canResolve
+        ? ContactsService.resolvePeerName(
+            message.senderId,
+            rawName,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isMirroredChannelPost: message.isMirroredChannelPost,
+            isBot: isBot,
+          )
+        : rawName;
+    final rawAvatar = participant?.avatarUrl ?? message.senderAvatarUrl;
+    final resolvedAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(
+            message.senderId,
+            rawAvatar,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isMirroredChannelPost: message.isMirroredChannelPost,
+            isBot: isBot,
+          )
+        : rawAvatar;
     Navigator.push(
       context,
       SwipeBackPageRoute(
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
           userId: message.senderId,
-          initialName: participant?.displayName.isNotEmpty == true
-              ? participant!.displayName
-              : message.senderName,
-          initialAvatarUrl: participant?.avatarUrl ?? message.senderAvatarUrl,
+          initialName: resolvedName,
+          initialAvatarUrl: resolvedAvatar,
           initialIsOnline: participant?.isOnline,
           initialLastSeen: participant?.lastSeen,
         ),
@@ -6909,6 +7023,11 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         : theme.colorScheme.onSurface.withValues(alpha: 0.65);
 
     if (message.hasReply) {
+      final replySenderId = message.replyInfo?.senderId.trim() ?? '';
+      final replyParticipant =
+          (replySenderId.isNotEmpty && replySenderId != '0')
+              ? _findParticipant(replySenderId)
+              : null;
       final Widget baseReply = MessageReplyInfo(
         replyInfo: message.replyInfo,
         isQuote: message.isQuote,
@@ -6917,6 +7036,13 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         quoteLength: message.quoteLength,
         isMe: isMe,
         currentUserId: _currentUserId,
+        replySenderChatId: message.replyInfo?.senderChatId ??
+            (message.replyToChatType == 'channel'
+                ? message.replyToChatId
+                : null),
+        replyIsFromAnonymousAdmin:
+            message.replyInfo?.isFromAnonymousAdmin ?? false,
+        replyIsBot: replyParticipant?.isBot ?? false,
         onTap: _isSelectionMode
             ? null
             : () => _handleReplyTap(
@@ -6956,6 +7082,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
       return MessageReplyInfo.forwarded(
         authorName: message.forwardFromName!,
         authorAvatarUrl: message.forwardFromAvatarUrl,
+        authorUserId: message.forwardedFromUserId,
         isMe: isMe,
       );
     }
@@ -7012,6 +7139,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final String effectiveGroupName =
         widget.groupName ?? (_groupName.isNotEmpty ? _groupName : 'Group');
     final String? effectiveGroupAvatar = widget.groupAvatar ?? _groupAvatar;
+    final bool senderIsBot =
+        !isAnonMsg && !hasSenderChat && (participant?.isBot ?? false);
+    final bool canResolveSender = ContactsService.shouldResolveUserIdentity(
+      message.senderId,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: isAnonMsg,
+      isMirroredChannelPost: message.isMirroredChannelPost,
+      isBot: senderIsBot,
+    );
     final String resolvedSenderName = hasSenderChat
         ? (message.senderChatName?.trim().isNotEmpty == true
               ? message.senderChatName!
@@ -7023,10 +7159,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                         message.senderName != 'You'
                     ? message.senderName
                     : effectiveGroupName)
-              : message.senderName);
-    final String? resolvedSenderAvatar = hasSenderChat
+              : (canResolveSender
+                    ? ContactsService.resolvePeerName(
+                        message.senderId,
+                        message.senderName,
+                        senderChatId: message.senderChatId,
+                        isAnonymousAdmin: isAnonMsg,
+                        isMirroredChannelPost: message.isMirroredChannelPost,
+                        isBot: senderIsBot,
+                      )
+                    : message.senderName));
+    final String? rawSenderAvatar = hasSenderChat
         ? message.senderChatAvatarUrl
         : (participant?.avatarUrl ?? message.senderAvatarUrl);
+    final String? resolvedSenderAvatar = canResolveSender
+        ? ContactsService.resolvePeerAvatarUrl(
+            message.senderId,
+            rawSenderAvatar,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: isAnonMsg,
+            isMirroredChannelPost: message.isMirroredChannelPost,
+            isBot: senderIsBot,
+          )
+        : rawSenderAvatar;
     final VoidCallback? onSenderTap = _isSelectionMode
         ? null
         : (hasSenderChat
@@ -7067,13 +7222,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final Widget? senderHeaderWidget = showSenderHeader
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
+            senderId: message.senderId,
+            senderChatId: message.senderChatId,
+            isFromAnonymousAdmin: isAnonMsg,
+            isMirroredChannelPost: message.isMirroredChannelPost,
             nameColor: (hasSenderChat || isAnonMsg)
                 ? (isMe
                       ? Theme.of(context).colorScheme.onPrimary
                       : Theme.of(context).colorScheme.primary)
                 : _resolveSenderNameColor(message),
             customization: senderCust,
-            isBot: !isAnonMsg && !hasSenderChat && (participant?.isBot ?? false),
+            isBot: senderIsBot,
             isVerified: isSenderVerified,
             adminTitle: resolvedAdminTitle,
             role: resolvedRole,
@@ -7128,6 +7287,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (showGroupSenderAvatar) {
       albumWidget = GroupMessageAvatarRow(
         senderId: hasSenderChat ? message.senderChatId! : message.senderId,
+        senderChatId: message.senderChatId,
         senderName: resolvedSenderName,
         senderAvatarUrl: resolvedSenderAvatar,
         showAvatar: lastInCluster,
@@ -7136,6 +7296,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         isSelected: isSelected,
         isHighlighted: isAlbumTargeted,
         isFromAnonymousAdmin: !hasSenderChat && isAnonMsg,
+        isBot: senderIsBot,
         groupAvatarUrl: effectiveGroupAvatar,
         groupName: effectiveGroupName,
         onTapGroupAvatar: _isSelectionMode
@@ -7379,6 +7540,15 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final String effectiveGroupName =
         widget.groupName ?? (_groupName.isNotEmpty ? _groupName : 'Group');
     final String? effectiveGroupAvatar = widget.groupAvatar ?? _groupAvatar;
+    final bool senderIsBot =
+        !isAnonMsg && !hasSenderChat && (participant?.isBot ?? false);
+    final bool canResolveSender = ContactsService.shouldResolveUserIdentity(
+      message.senderId,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: isAnonMsg,
+      isMirroredChannelPost: message.isMirroredChannelPost,
+      isBot: senderIsBot,
+    );
     final String resolvedSenderName = hasSenderChat
         ? (message.senderChatName?.trim().isNotEmpty == true
               ? message.senderChatName!
@@ -7390,10 +7560,29 @@ class _GroupChatScreenState extends State<GroupChatScreen>
                         message.senderName != 'You'
                     ? message.senderName
                     : effectiveGroupName)
-              : message.senderName);
-    final String? resolvedSenderAvatar = hasSenderChat
+              : (canResolveSender
+                    ? ContactsService.resolvePeerName(
+                        message.senderId,
+                        message.senderName,
+                        senderChatId: message.senderChatId,
+                        isAnonymousAdmin: isAnonMsg,
+                        isMirroredChannelPost: message.isMirroredChannelPost,
+                        isBot: senderIsBot,
+                      )
+                    : message.senderName));
+    final String? rawSenderAvatar = hasSenderChat
         ? message.senderChatAvatarUrl
         : (participant?.avatarUrl ?? message.senderAvatarUrl);
+    final String? resolvedSenderAvatar = canResolveSender
+        ? ContactsService.resolvePeerAvatarUrl(
+            message.senderId,
+            rawSenderAvatar,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: isAnonMsg,
+            isMirroredChannelPost: message.isMirroredChannelPost,
+            isBot: senderIsBot,
+          )
+        : rawSenderAvatar;
     final VoidCallback? onSenderTap = _isSelectionMode
         ? null
         : (hasSenderChat
@@ -7434,13 +7623,17 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final Widget? senderHeaderWidget = showSenderHeader
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
+            senderId: message.senderId,
+            senderChatId: message.senderChatId,
+            isFromAnonymousAdmin: isAnonMsg,
+            isMirroredChannelPost: message.isMirroredChannelPost,
             nameColor: (hasSenderChat || isAnonMsg)
                 ? (isMe
                       ? Theme.of(context).colorScheme.onPrimary
                       : Theme.of(context).colorScheme.primary)
                 : _resolveSenderNameColor(message),
             customization: senderCust,
-            isBot: !isAnonMsg && !hasSenderChat && (participant?.isBot ?? false),
+            isBot: senderIsBot,
             isVerified: isSenderVerified,
             adminTitle: resolvedAdminTitle,
             role: resolvedRole,
@@ -7518,6 +7711,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     if (showGroupSenderAvatar) {
       messageWidget = GroupMessageAvatarRow(
         senderId: hasSenderChat ? message.senderChatId! : message.senderId,
+        senderChatId: message.senderChatId,
         senderName: resolvedSenderName,
         senderAvatarUrl: resolvedSenderAvatar,
         showAvatar: lastInCluster,
@@ -7526,6 +7720,7 @@ class _GroupChatScreenState extends State<GroupChatScreen>
         isSelected: isSelected,
         isHighlighted: isHighlighted,
         isFromAnonymousAdmin: !hasSenderChat && isAnonMsg,
+        isBot: senderIsBot,
         groupAvatarUrl: effectiveGroupAvatar,
         groupName: effectiveGroupName,
         onTapGroupAvatar: _isSelectionMode
@@ -8230,20 +8425,38 @@ class _GroupChatScreenState extends State<GroupChatScreen>
             participants: _participants
                 .where((p) => p.id != _currentUserId && p.username.isNotEmpty)
                 .map(
-                  (p) => MentionCandidate(
-                    id: p.id,
-                    username: p.username,
-                    displayName:
-                        p.displayName.isNotEmpty ? p.displayName : p.username,
-                    avatarUrl: p.avatarUrl,
-                    isBot: p.isBot ||
+                  (p) {
+                    final isBot = p.isBot ||
                         p.username.toLowerCase().endsWith('bot') ||
                         p.username.toLowerCase() == 'botmother' ||
-                        p.username.toLowerCase() == 'walt',
-                    roleLabel: p.role == 'owner'
-                        ? 'Владелец'
-                        : (p.role == 'admin' ? 'Админ' : null),
-                  ),
+                        p.username.toLowerCase() == 'walt';
+                    final rawName =
+                        p.displayName.isNotEmpty ? p.displayName : p.username;
+                    final displayName = !isBot
+                        ? ContactsService.resolvePeerName(
+                            p.id,
+                            rawName,
+                            isBot: isBot,
+                          )
+                        : rawName;
+                    final avatarUrl = !isBot
+                        ? ContactsService.resolvePeerAvatarUrl(
+                            p.id,
+                            p.avatarUrl,
+                            isBot: isBot,
+                          )
+                        : p.avatarUrl;
+                    return MentionCandidate(
+                      id: p.id,
+                      username: p.username,
+                      displayName: displayName,
+                      avatarUrl: avatarUrl,
+                      isBot: isBot,
+                      roleLabel: p.role == 'owner'
+                          ? 'Владелец'
+                          : (p.role == 'admin' ? 'Админ' : null),
+                    );
+                  },
                 )
                 .toList(),
             inlineBots: _inlineDirectoryBots,
@@ -8741,6 +8954,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.resolveEffectiveAuthorTitle(
                 chatName: fallbackTitle,
               ),
+              senderChatId: replyTo.senderChatId,
+              isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
@@ -9001,6 +9216,8 @@ class _GroupChatScreenState extends State<GroupChatScreen>
               senderName: replyTo.resolveEffectiveAuthorTitle(
                 chatName: fallbackTitle,
               ),
+              senderChatId: replyTo.senderChatId,
+              isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
@@ -10176,8 +10393,23 @@ class _GroupChatScreenState extends State<GroupChatScreen>
     final bool isAdmin = _canDeleteOthers;
     if (!allMine && !isAdmin) return;
     final bool canModerate = !allMine && isAdmin;
-    final String? authorName =
-        targets.length == 1 ? targets.first.senderName : null;
+    final String? authorName = targets.length == 1
+        ? () {
+            final target = targets.first;
+            final participant = _findParticipant(target.senderId);
+            final fallbackTitle = target.resolveEffectiveAuthorTitle(
+              chatName: _groupName.isNotEmpty ? _groupName : widget.groupName,
+            );
+            return ContactsService.resolvePeerName(
+              target.senderId,
+              fallbackTitle,
+              senderChatId: target.senderChatId,
+              isAnonymousAdmin: target.isFromAnonymousAdmin,
+              isMirroredChannelPost: target.isMirroredChannelPost,
+              isBot: participant?.isBot ?? false,
+            );
+          }()
+        : null;
 
     final res = await showTelegramDeleteMessagesSheet(
       context: context,

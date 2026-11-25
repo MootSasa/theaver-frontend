@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
+import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
 
 /// Draggable Picture-in-Picture floating mini-window for active video calls
 /// and High-FPS screen share streams when minimized.
@@ -39,6 +42,35 @@ class _CallPipOverlayState extends State<CallPipOverlay>
       curve: Curves.easeOutBack,
       reverseCurve: Curves.easeInCubic,
     );
+  }
+
+  String _resolvePipCallTitle(
+    CallStateProvider callProvider,
+    CallSession? call,
+  ) {
+    if (call == null) return 'Звонок';
+    final fallback = call.title.isNotEmpty ? call.title : 'Звонок';
+    if (call.isGroupOrCommunity) return fallback;
+    final myId = callProvider.currentUserId;
+    String? peerId;
+    for (final p in call.participants) {
+      if (p.userId.isNotEmpty && p.userId != 'local' && p.userId != myId) {
+        peerId = p.userId;
+        break;
+      }
+    }
+    peerId ??= ContactsService.shouldResolveUserIdentity(call.initiatorId)
+        ? call.initiatorId
+        : null;
+    if (peerId == null && call.chatId.isNotEmpty) {
+      final cachedChat = ChatInstantCache.instance.getSync(call.chatId)?.chat;
+      if (cachedChat != null && cachedChat.chatType == 'private' && !cachedChat.isBot) {
+        peerId = cachedChat.otherUserId;
+      }
+    }
+    if (!ContactsService.shouldResolveUserIdentity(peerId)) return fallback;
+    final resolved = ContactsService.resolvePeerName(peerId, call.title);
+    return resolved.isNotEmpty ? resolved : fallback;
   }
 
   @override
@@ -333,17 +365,25 @@ class _CallPipOverlayState extends State<CallPipOverlay>
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Flexible(
-                                child: Text(
-                                  callProvider.activeCall?.title ?? 'Звонок',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                    shadows: [
-                                      Shadow(blurRadius: 4, color: Colors.black),
-                                    ],
+                                child: ValueListenableBuilder<int>(
+                                  valueListenable:
+                                      ContactsService.revisionNotifier,
+                                  builder: (_, __, ___) => Text(
+                                    _resolvePipCallTitle(
+                                      callProvider,
+                                      callProvider.activeCall,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.white,
+                                      shadows: [
+                                        Shadow(
+                                            blurRadius: 4, color: Colors.black),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),

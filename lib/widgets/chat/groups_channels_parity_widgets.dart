@@ -8,6 +8,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
 import '../../utils/blur_utils.dart';
@@ -1698,66 +1699,80 @@ class _InviteLinkImportersBodyState extends State<_InviteLinkImportersBody> {
         ),
       );
     }
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TheavInsetGroup(
-            header: 'ВСТУПИЛО: $_total',
-            children: [
-              for (final imp in _items)
-                TheavListRow(
-                  leading: AvatarWithStatus(
-                    userId: imp.userId,
-                    avatarUrl: imp.avatarUrl,
-                    name: imp.displayName.isNotEmpty
-                        ? imp.displayName
-                        : '@${imp.username}',
-                    radius: 20,
-                    isOnline: false,
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) => SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TheavInsetGroup(
+              header: 'ВСТУПИЛО: $_total',
+              children: [
+                for (final imp in _items)
+                  Builder(
+                    builder: (_) {
+                      final rawName = imp.displayName.isNotEmpty
+                          ? imp.displayName
+                          : '@${imp.username}';
+                      final impName = ContactsService.resolvePeerName(
+                        imp.userId,
+                        rawName,
+                      );
+                      final impAvatar = ContactsService.resolvePeerAvatarUrl(
+                        imp.userId,
+                        imp.avatarUrl,
+                      );
+                      return TheavListRow(
+                        leading: AvatarWithStatus(
+                          userId: imp.userId,
+                          avatarUrl: impAvatar,
+                          name: impName,
+                          radius: 20,
+                          isOnline: false,
+                        ),
+                        title: impName,
+                        subtitle: [
+                          if (imp.username.isNotEmpty) '@${imp.username}',
+                          if (imp.joinedAt != null)
+                            DateTimeUtils.formatTimeHHmm(imp.joinedAt),
+                        ].join(' · '),
+                        trailing: imp.viaJoinRequest
+                            ? Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: palette.primary.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  'По заявке',
+                                  style: TextStyle(
+                                    color: palette.primary,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              )
+                            : null,
+                      );
+                    },
                   ),
-                  title: imp.displayName.isNotEmpty
-                      ? imp.displayName
-                      : '@${imp.username}',
-                  subtitle: [
-                    if (imp.username.isNotEmpty) '@${imp.username}',
-                    if (imp.joinedAt != null)
-                      DateTimeUtils.formatTimeHHmm(imp.joinedAt),
-                  ].join(' · '),
-                  trailing: imp.viaJoinRequest
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: palette.primary.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            'По заявке',
-                            style: TextStyle(
-                              color: palette.primary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        )
-                      : null,
-                ),
-            ],
-          ),
-          if (_hasMore)
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: TheavFloatingPillButton(
-                label: _loadingMore ? 'Загрузка...' : 'Загрузить ещё',
-                enabled: !_loadingMore,
-                onTap: () => _load(reset: false),
-              ),
+              ],
             ),
-        ],
+            if (_hasMore)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: TheavFloatingPillButton(
+                  label: _loadingMore ? 'Загрузка...' : 'Загрузить ещё',
+                  enabled: !_loadingMore,
+                  onTap: () => _load(reset: false),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

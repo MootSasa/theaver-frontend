@@ -547,47 +547,125 @@ class SyncService {
     final String syncSenderId = payload['sender_id']?.toString() ?? '';
     final bool syncIsAnon = payload['is_from_anonymous_admin'] == true ||
         payload['is_from_anonymous_admin'] == 1;
-    final bool isHumanSyncSender = syncSenderId.isNotEmpty &&
-        syncSenderId != '0' &&
-        !syncIsAnon &&
-        parsedSenderChatId == null;
+    final bool syncIsMirrored =
+        (payload['channel_post_id']?.toString().trim() ?? '').isNotEmpty;
+    final bool syncSenderIsBot = payload['sender_is_bot'] == true ||
+        payload['sender_is_bot'] == 1 ||
+        payload['is_bot'] == true ||
+        payload['is_bot'] == 1;
+    final bool isHumanSyncSender = ContactsService.shouldResolveUserIdentity(
+      syncSenderId,
+      senderChatId: parsedSenderChatId,
+      isAnonymousAdmin: syncIsAnon,
+      isMirroredChannelPost: syncIsMirrored,
+      isBot: syncSenderIsBot,
+    );
     final String? resolvedSyncSenderName = isHumanSyncSender
-        ? ContactsService.resolveName(
+        ? ContactsService.resolvePeerName(
             syncSenderId,
             payload['sender_name']?.toString() ?? '',
+            senderChatId: parsedSenderChatId,
+            isAnonymousAdmin: syncIsAnon,
+            isMirroredChannelPost: syncIsMirrored,
+            isBot: syncSenderIsBot,
           )
         : payload['sender_name']?.toString();
     final String? resolvedSyncSenderAvatar = isHumanSyncSender
-        ? ContactsService.resolveAvatarUrl(
+        ? ContactsService.resolvePeerAvatarUrl(
             syncSenderId,
             payload['sender_avatar_url']?.toString(),
+            senderChatId: parsedSenderChatId,
+            isAnonymousAdmin: syncIsAnon,
+            isMirroredChannelPost: syncIsMirrored,
+            isBot: syncSenderIsBot,
           )
         : payload['sender_avatar_url']?.toString();
-    final String? syncReplySenderId = payload['reply_to_sender_id']?.toString();
-    final String? resolvedSyncReplySenderName = (syncReplySenderId != null &&
-            syncReplySenderId.isNotEmpty &&
-            syncReplySenderId != '0')
-        ? ContactsService.resolveName(
-            syncReplySenderId,
-            payload['reply_to_sender_name']?.toString() ?? '',
-          )
-        : payload['reply_to_sender_name']?.toString();
-    final String? syncFwdId = (payload['forward_from_id'] ??
-            payload['forwarded_from_user_id'] ??
-            payload['forwarded_from_chat_id'])
-        ?.toString();
-    final bool isUserSyncFwd = payload['forwarded_from_chat_id'] == null &&
-        syncFwdId != null &&
-        syncFwdId.isNotEmpty &&
-        syncFwdId != '0';
+
+    final Map<String, dynamic>? replyInfoMap = payload['reply_info'] is Map
+        ? Map<String, dynamic>.from(payload['reply_info'] as Map)
+        : null;
+    final String? syncReplyMsgId =
+        (payload['reply_to_message_id'] ?? replyInfoMap?['message_id'])
+            ?.toString();
+    final String? syncReplySenderId =
+        (payload['reply_to_sender_id'] ?? replyInfoMap?['sender_id'])
+            ?.toString();
+    final String? syncReplySenderChatId = nonEmptyStr(
+      payload['reply_to_sender_chat_id'] ?? replyInfoMap?['sender_chat_id'],
+    );
+    final bool syncReplyIsAnon =
+        payload['reply_to_is_from_anonymous_admin'] == true ||
+            payload['reply_to_is_from_anonymous_admin'] == 1 ||
+            replyInfoMap?['is_from_anonymous_admin'] == true ||
+            replyInfoMap?['is_from_anonymous_admin'] == 1;
+    final bool syncReplyIsChannel =
+        payload['reply_to_chat_type']?.toString().trim() == 'channel';
+    final bool syncReplyIsBot = payload['reply_to_sender_is_bot'] == true ||
+        payload['reply_to_sender_is_bot'] == 1 ||
+        replyInfoMap?['is_bot'] == true ||
+        replyInfoMap?['is_bot'] == 1;
+    final String? rawSyncReplySenderName =
+        (payload['reply_to_sender_name'] ?? replyInfoMap?['sender_name'])
+            ?.toString();
+    final String? resolvedSyncReplySenderName =
+        (rawSyncReplySenderName != null &&
+                ContactsService.shouldResolveUserIdentity(
+                  syncReplySenderId,
+                  senderChatId: syncReplySenderChatId,
+                  isAnonymousAdmin: syncReplyIsAnon,
+                  isMirroredChannelPost: syncReplyIsChannel,
+                  isBot: syncReplyIsBot,
+                ))
+            ? ContactsService.resolvePeerName(
+                syncReplySenderId,
+                rawSyncReplySenderName,
+                senderChatId: syncReplySenderChatId,
+                isAnonymousAdmin: syncReplyIsAnon,
+                isMirroredChannelPost: syncReplyIsChannel,
+                isBot: syncReplyIsBot,
+              )
+            : rawSyncReplySenderName;
+
+    final String? rawSyncFwdUserId =
+        nonEmptyStr(payload['forwarded_from_user_id']);
+    final String? rawSyncFwdChatId =
+        nonEmptyStr(payload['forwarded_from_chat_id']);
+    final String? rawSyncFwdId = nonEmptyStr(payload['forward_from_id']);
+    final bool syncFwdIsBot = payload['forwarded_from_is_bot'] == true ||
+        payload['forwarded_from_is_bot'] == 1 ||
+        payload['forward_from_is_bot'] == true ||
+        payload['forward_from_is_bot'] == 1;
+    String? syncFwdId;
+    bool isUserSyncFwd = false;
+    if (rawSyncFwdUserId != null && rawSyncFwdUserId != '0') {
+      syncFwdId = rawSyncFwdUserId;
+      isUserSyncFwd = true;
+    } else if (rawSyncFwdChatId != null && rawSyncFwdChatId != '0') {
+      syncFwdId = rawSyncFwdChatId.startsWith('chat:')
+          ? rawSyncFwdChatId
+          : 'chat:$rawSyncFwdChatId';
+    } else if (rawSyncFwdId != null && rawSyncFwdId != '0') {
+      syncFwdId = rawSyncFwdId;
+      if (!rawSyncFwdId.startsWith('chat:')) {
+        isUserSyncFwd = true;
+      }
+    }
     final String? rawSyncFwdName =
         (payload['forward_from_name'] ?? payload['forwarded_from_name'])
             ?.toString();
     final String? resolvedSyncFwdName = isUserSyncFwd && rawSyncFwdName != null
-        ? ContactsService.resolveName(syncFwdId, rawSyncFwdName)
+        ? ContactsService.resolvePeerName(
+            syncFwdId,
+            rawSyncFwdName,
+            isBot: syncFwdIsBot,
+          )
         : rawSyncFwdName;
     final String? resolvedSyncFwdAvatar = isUserSyncFwd
-        ? ContactsService.resolveAvatarUrl(syncFwdId, fwdAvatarUrl)
+        ? ContactsService.resolvePeerAvatarUrl(
+            syncFwdId,
+            fwdAvatarUrl,
+            isBot: syncFwdIsBot,
+          )
         : fwdAvatarUrl;
 
     await _db.saveMessage(MessagesCompanion(
@@ -605,16 +683,22 @@ class SyncService {
         final raw = payload['file_name']?.toString().trim();
         return (raw != null && raw.isNotEmpty) ? raw : null;
       }()),
-      replyToMessageId: Value(payload['reply_to_message_id']?.toString()),
+      replyToMessageId: Value(syncReplyMsgId),
       isQuote: Value(payload['is_quote'] as bool? ?? false),
       quoteText: Value(payload['quote_text']?.toString()),
       quoteOffset: Value(payload['quote_offset'] as int? ?? 0),
       quoteLength: Value(payload['quote_length'] as int? ?? 0),
       replyToSenderId: Value(syncReplySenderId),
       replyToSenderName: Value(resolvedSyncReplySenderName),
-      replyToContent: Value(payload['reply_to_content']?.toString()),
-      replyToMessageType:
-          Value(payload['reply_to_message_type']?.toString() ?? 'text'),
+      replyToContent: Value(
+        (payload['reply_to_content'] ?? replyInfoMap?['content'])?.toString(),
+      ),
+      replyToMessageType: Value(
+        (payload['reply_to_message_type'] ??
+                replyInfoMap?['message_type'] ??
+                'text')
+            .toString(),
+      ),
       isRead: const Value(false),
       isEdited: const Value(false),
       sendStatus: Value(MessageSendStatus.sent.index),
@@ -925,14 +1009,18 @@ class SyncService {
     final linkedChatId = payload['linked_chat_id']?.toString().trim();
 
     final otherUid = payload['other_user_id']?.toString();
-    final isPrivatePeer =
-        chatType == 'private' && otherUid != null && otherUid.isNotEmpty;
-    final resolvedChatName =
-        isPrivatePeer ? ContactsService.resolveName(otherUid, name) : name;
+    final isBot = payload['is_bot'] == true || payload['is_bot'] == 1;
+    final isPrivatePeer = chatType == 'private' &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(otherUid, isBot: isBot);
+    final resolvedChatName = isPrivatePeer
+        ? ContactsService.resolvePeerName(otherUid, name, isBot: isBot)
+        : name;
     final resolvedChatAvatar = isPrivatePeer
-        ? ContactsService.resolveAvatarUrl(
+        ? ContactsService.resolvePeerAvatarUrl(
             otherUid,
             payload['avatar_url']?.toString(),
+            isBot: isBot,
           )
         : payload['avatar_url']?.toString();
 
@@ -993,18 +1081,27 @@ class SyncService {
 
     final peerUid =
         (payload['other_user_id'] ?? chat.otherUserId)?.toString();
-    final isPrivatePeer =
-        chat.chatType == 'private' && peerUid != null && peerUid.isNotEmpty;
+    final isBot = payload.containsKey('is_bot')
+        ? (payload['is_bot'] == true || payload['is_bot'] == 1)
+        : chat.isBot;
+    final isPrivatePeer = chat.chatType == 'private' &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(peerUid, isBot: isBot);
     final resolvedName = payload.containsKey('name')
         ? (isPrivatePeer
-            ? ContactsService.resolveName(peerUid, payload['name'].toString())
+            ? ContactsService.resolvePeerName(
+                peerUid,
+                payload['name'].toString(),
+                isBot: isBot,
+              )
             : payload['name'].toString())
         : chat.name;
     final resolvedAvatar = payload.containsKey('avatar_url')
         ? (isPrivatePeer
-            ? ContactsService.resolveAvatarUrl(
+            ? ContactsService.resolvePeerAvatarUrl(
                 peerUid,
                 payload['avatar_url']?.toString(),
+                isBot: isBot,
               )
             : payload['avatar_url']?.toString())
         : chat.avatarUrl;

@@ -225,6 +225,11 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(QueryExecutor executor, {this.userId = 'test'})
       : super(executor);
 
+  @visibleForTesting
+  static void setTestingInstance(String userId, AppDatabase db) {
+    _instances[userId] = db;
+  }
+
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
@@ -773,19 +778,70 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
+  ChatsCompanion _resolveChatCompanionContacts(ChatsCompanion chat) {
+    final chatType = chat.chatType.present ? chat.chatType.value : null;
+    final otherUid = chat.otherUserId.present ? chat.otherUserId.value : null;
+    final isBot = chat.isBot.present ? chat.isBot.value : false;
+    var next = chat;
+    if (chatType == 'private' &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(otherUid, isBot: isBot)) {
+      if (next.name.present) {
+        final resolvedName = ContactsService.resolvePeerName(
+          otherUid,
+          next.name.value,
+          isBot: isBot,
+        );
+        if (resolvedName != next.name.value) {
+          next = next.copyWith(name: Value(resolvedName));
+        }
+      }
+      if (next.avatarUrl.present) {
+        final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+          otherUid,
+          next.avatarUrl.value,
+          isBot: isBot,
+        );
+        if (resolvedAvatar != next.avatarUrl.value) {
+          next = next.copyWith(avatarUrl: Value(resolvedAvatar));
+        }
+      }
+    }
+    if (chatType != 'channel' &&
+        next.lastMessageSenderId.present &&
+        next.lastMessageSenderName.present &&
+        next.lastMessageSenderName.value != null) {
+      final lastSid = next.lastMessageSenderId.value;
+      final rawLastName = next.lastMessageSenderName.value!;
+      final resolvedLastName = ContactsService.resolvePeerName(
+        lastSid,
+        rawLastName,
+        isMirroredChannelPost: chatType == 'channel',
+      );
+      if (resolvedLastName != rawLastName) {
+        next = next.copyWith(lastMessageSenderName: Value(resolvedLastName));
+      }
+    }
+    return next;
+  }
+
   /// Сохранить/обновить чат (upsert)
   Future<void> saveChat(ChatsCompanion chat) async {
     await ensureInitialized();
-    await into(chats).insertOnConflictUpdate(chat);
+    await into(chats).insertOnConflictUpdate(
+      _resolveChatCompanionContacts(chat),
+    );
   }
 
   /// Сохранить список чатов (batch upsert)
   Future<void> saveChats(List<ChatsCompanion> chatCompanions) async {
     await ensureInitialized();
+    final resolved =
+        chatCompanions.map(_resolveChatCompanionContacts).toList();
     await batch((b) {
-      b.insertAllOnConflictUpdate(chats, chatCompanions);
+      b.insertAllOnConflictUpdate(chats, resolved);
     });
-    if (chatCompanions.any((c) => c.chatType.value == 'saved')) {
+    if (resolved.any((c) => c.chatType.present && c.chatType.value == 'saved')) {
       await _cleanupDuplicateSavedChats();
     }
   }
@@ -941,18 +997,35 @@ class AppDatabase extends _$AppDatabase {
   /// Обновить аватар пользователя в чатах и сообщениях
   Future<void> updateUserAvatarInChats(String userId, String? avatarUrl) async {
     final uid = userId.trim();
-    if (uid.isEmpty) return;
+    if (uid.isEmpty ||
+        uid == '0' ||
+        uid == 'local' ||
+        uid.startsWith('chat:')) {
+      return;
+    }
     await ensureInitialized();
+    if (!_isInitialized) return;
     final effectiveAvatar = ContactsService.resolveAvatarUrl(uid, avatarUrl);
+    final trimmedAvatar = effectiveAvatar?.trim();
+    final normalizedAvatar =
+        (trimmedAvatar != null && trimmedAvatar.isNotEmpty)
+            ? trimmedAvatar
+            : null;
     await (update(chats)
           ..where((t) =>
               t.chatType.equals('private') & t.otherUserId.equals(uid)))
-        .write(ChatsCompanion(avatarUrl: Value(effectiveAvatar)));
+        .write(ChatsCompanion(avatarUrl: Value(normalizedAvatar)));
     await (update(messages)
           ..where((t) =>
               t.senderId.equals(uid) &
-              (t.senderChatId.isNull() | t.senderChatId.equals(''))))
-        .write(MessagesCompanion(senderAvatarUrl: Value(effectiveAvatar)));
+              t.isFromAnonymousAdmin.equals(false) &
+              (t.senderChatId.isNull() |
+                  t.senderChatId.equals('') |
+                  t.senderChatId.equals('0'))))
+        .write(MessagesCompanion(senderAvatarUrl: Value(normalizedAvatar)));
+    await (update(messages)..where((t) => t.forwardFromId.equals(uid))).write(
+      MessagesCompanion(forwardFromAvatarUrl: Value(normalizedAvatar)),
+    );
   }
 
   /// Applies local contact name and custom avatar overrides for [userId] across
@@ -964,8 +1037,15 @@ class AppDatabase extends _$AppDatabase {
     bool updateAvatar = true,
   }) async {
     final uid = userId.trim();
-    if (uid.isEmpty || uid == '0') return;
+    if (uid.isEmpty ||
+        uid == '0' ||
+        uid == 'local' ||
+        uid.startsWith('chat:') ||
+        !ContactsService.shouldResolveUserIdentity(uid)) {
+      return;
+    }
     await ensureInitialized();
+    if (!_isInitialized) return;
 
     final trimmedName = effectiveName?.trim();
     final hasName = trimmedName != null && trimmedName.isNotEmpty;
@@ -992,7 +1072,8 @@ class AppDatabase extends _$AppDatabase {
       await (update(chats)
             ..where((t) =>
                 t.lastMessageSenderId.equals(uid) &
-                t.lastMessageSenderId.isNotValue('0')))
+                t.lastMessageSenderId.isNotValue('0') &
+                t.chatType.isNotValue('channel')))
           .write(
         ChatsCompanion(lastMessageSenderName: Value(trimmedName)),
       );
@@ -1001,7 +1082,10 @@ class AppDatabase extends _$AppDatabase {
     await (update(messages)
           ..where((t) =>
               t.senderId.equals(uid) &
-              (t.senderChatId.isNull() | t.senderChatId.equals(''))))
+              t.isFromAnonymousAdmin.equals(false) &
+              (t.senderChatId.isNull() |
+                  t.senderChatId.equals('') |
+                  t.senderChatId.equals('0'))))
         .write(
       MessagesCompanion(
         senderName: hasName ? Value(trimmedName) : const Value.absent(),
@@ -1011,7 +1095,11 @@ class AppDatabase extends _$AppDatabase {
     );
 
     if (hasName) {
-      await (update(messages)..where((t) => t.replyToSenderId.equals(uid)))
+      await (update(messages)
+            ..where((t) =>
+                t.replyToSenderId.equals(uid) &
+                (t.replyToChatType.isNull() |
+                    t.replyToChatType.isNotValue('channel'))))
           .write(
         MessagesCompanion(replyToSenderName: Value(trimmedName)),
       );
@@ -1284,13 +1372,189 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
+  MessagesCompanion _resolveMessageCompanionContacts(
+    MessagesCompanion message,
+  ) {
+    var next = message;
+    final senderId = next.senderId.present ? next.senderId.value : '';
+    final senderChatId =
+        next.senderChatId.present ? next.senderChatId.value : null;
+    final isAnon = next.isFromAnonymousAdmin.present
+        ? next.isFromAnonymousAdmin.value
+        : false;
+    final msgType = next.messageType.present ? next.messageType.value : 'text';
+
+    bool isMirrored = false;
+    if (msgType != 'system' &&
+        next.mediaPayload.present &&
+        next.mediaPayload.value != null &&
+        next.mediaPayload.value!.contains('channel_post_id')) {
+      try {
+        final decoded = jsonDecode(next.mediaPayload.value!);
+        if (decoded is Map) {
+          final cp = decoded['channel_post_id']?.toString().trim() ?? '';
+          if (cp.isNotEmpty) isMirrored = true;
+        }
+      } catch (_) {}
+    }
+
+    if (ContactsService.shouldResolveUserIdentity(
+      senderId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+    )) {
+      if (next.senderName.present && next.senderName.value != null) {
+        final resolvedSenderName = ContactsService.resolvePeerName(
+          senderId,
+          next.senderName.value!,
+          senderChatId: senderChatId,
+          isAnonymousAdmin: isAnon,
+          isMirroredChannelPost: isMirrored,
+        );
+        if (resolvedSenderName != next.senderName.value) {
+          next = next.copyWith(senderName: Value(resolvedSenderName));
+        }
+      }
+      if (next.senderAvatarUrl.present) {
+        final resolvedSenderAvatar = ContactsService.resolvePeerAvatarUrl(
+          senderId,
+          next.senderAvatarUrl.value,
+          senderChatId: senderChatId,
+          isAnonymousAdmin: isAnon,
+          isMirroredChannelPost: isMirrored,
+        );
+        if (resolvedSenderAvatar != next.senderAvatarUrl.value) {
+          next = next.copyWith(senderAvatarUrl: Value(resolvedSenderAvatar));
+        }
+      }
+    }
+
+    final replySenderId =
+        next.replyToSenderId.present ? next.replyToSenderId.value : null;
+    final replyChatType =
+        next.replyToChatType.present ? next.replyToChatType.value : null;
+    if (next.replyToSenderName.present &&
+        next.replyToSenderName.value != null) {
+      final resolvedReplyName = ContactsService.resolvePeerName(
+        replySenderId,
+        next.replyToSenderName.value!,
+        isMirroredChannelPost: replyChatType == 'channel',
+      );
+      if (resolvedReplyName != next.replyToSenderName.value) {
+        next = next.copyWith(replyToSenderName: Value(resolvedReplyName));
+      }
+    }
+
+    final fwdId =
+        next.forwardFromId.present ? (next.forwardFromId.value?.trim() ?? '') : '';
+    if (fwdId.isNotEmpty &&
+        !fwdId.startsWith('chat:') &&
+        ContactsService.shouldResolveUserIdentity(fwdId)) {
+      if (next.forwardFromName.present && next.forwardFromName.value != null) {
+        final resolvedFwdName = ContactsService.resolvePeerName(
+          fwdId,
+          next.forwardFromName.value!,
+        );
+        if (resolvedFwdName != next.forwardFromName.value) {
+          next = next.copyWith(forwardFromName: Value(resolvedFwdName));
+        }
+      }
+      if (next.forwardFromAvatarUrl.present) {
+        final resolvedFwdAvatar = ContactsService.resolvePeerAvatarUrl(
+          fwdId,
+          next.forwardFromAvatarUrl.value,
+        );
+        if (resolvedFwdAvatar != next.forwardFromAvatarUrl.value) {
+          next = next.copyWith(forwardFromAvatarUrl: Value(resolvedFwdAvatar));
+        }
+      }
+    }
+
+    if (next.recentRepliersJson.present &&
+        next.recentRepliersJson.value != null &&
+        next.recentRepliersJson.value!.isNotEmpty &&
+        next.recentRepliersJson.value != '[]') {
+      try {
+        final decoded = jsonDecode(next.recentRepliersJson.value!);
+        if (decoded is List) {
+          bool changed = false;
+          final updatedList = <dynamic>[];
+          for (final item in decoded) {
+            if (item is Map) {
+              final map = Map<String, dynamic>.from(item);
+              final pt = map['peer_type']?.toString().trim().toLowerCase() ?? '';
+              final cid = map['chat_id']?.toString().trim() ?? '';
+              final scid = map['sender_chat_id']?.toString().trim() ?? '';
+              final rAnon = map['is_from_anonymous_admin'] == true ||
+                  map['is_from_anonymous_admin'] == 1;
+              final rBot = map['is_bot'] == true || map['is_bot'] == 1;
+              final uid =
+                  (map['user_id'] ?? map['id'] ?? '').toString().trim();
+              final isPersona = pt == 'channel' ||
+                  pt == 'chat' ||
+                  pt == 'group' ||
+                  (cid.isNotEmpty && cid != '0') ||
+                  (scid.isNotEmpty && scid != '0') ||
+                  rAnon;
+              if (!isPersona &&
+                  ContactsService.shouldResolveUserIdentity(
+                    uid,
+                    senderChatId: scid,
+                    isAnonymousAdmin: rAnon,
+                    isBot: rBot,
+                  )) {
+                final rawName =
+                    (map['display_name'] ?? map['name'] ?? '').toString();
+                final nextName = ContactsService.resolvePeerName(
+                  uid,
+                  rawName,
+                  senderChatId: scid,
+                  isAnonymousAdmin: rAnon,
+                  isBot: rBot,
+                );
+                if (nextName != rawName) {
+                  map['display_name'] = nextName;
+                  changed = true;
+                }
+                final rawAv = map['avatar_url']?.toString();
+                final nextAv = ContactsService.resolvePeerAvatarUrl(
+                  uid,
+                  rawAv,
+                  senderChatId: scid,
+                  isAnonymousAdmin: rAnon,
+                  isBot: rBot,
+                );
+                if (nextAv != rawAv) {
+                  map['avatar_url'] = nextAv;
+                  changed = true;
+                }
+              }
+              updatedList.add(map);
+            } else {
+              updatedList.add(item);
+            }
+          }
+          if (changed) {
+            next = next.copyWith(
+              recentRepliersJson: Value(jsonEncode(updatedList)),
+            );
+          }
+        }
+      } catch (_) {}
+    }
+
+    return next;
+  }
+
   /// Сохранить сообщение (upsert по localId — primary key)
   /// Если у сообщения есть serverId, сначала проверяет существующую запись
   /// по serverId и переиспользует её localId для корректного обновления
   Future<void> saveMessage(MessagesCompanion message) async {
     await ensureInitialized();
+    final resolvedMessage = _resolveMessageCompanionContacts(message);
     // Если есть serverId (не absent и не null), проверить существующее сообщение
-    final serverIdValue = message.serverId;
+    final serverIdValue = resolvedMessage.serverId;
     final hasServerId = serverIdValue.present &&
         serverIdValue.value != null &&
         serverIdValue.value!.isNotEmpty;
@@ -1312,12 +1576,12 @@ class AppDatabase extends _$AppDatabase {
         }
         // Переиспользовать существующий localId для корректного upsert
         await into(messages).insertOnConflictUpdate(
-          message.copyWith(localId: Value(canonical.localId)),
+          resolvedMessage.copyWith(localId: Value(canonical.localId)),
         );
         return;
       }
     }
-    await into(messages).insertOnConflictUpdate(message);
+    await into(messages).insertOnConflictUpdate(resolvedMessage);
   }
 
   /// Сохранить список сообщений (batch upsert с проверкой serverId)

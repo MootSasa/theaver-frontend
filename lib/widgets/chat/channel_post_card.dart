@@ -11,6 +11,7 @@ import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/settings/profile_screen.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/dm_parity_service.dart' show TranslationResult;
 import '../../services/media_cache_manager.dart';
 import '../../services/peer_customization_cache.dart';
@@ -314,6 +315,13 @@ class ChannelPostCard extends StatelessWidget {
     String? avatarUrl,
   ) {
     if (authorId.isEmpty || authorId == '0') return;
+    final canResolve = ContactsService.shouldResolveUserIdentity(authorId);
+    final effectiveName = canResolve
+        ? ContactsService.resolvePeerName(authorId, authorName)
+        : authorName;
+    final effectiveAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(authorId, avatarUrl)
+        : avatarUrl;
     HapticUtils.tap();
     Navigator.push(
       context,
@@ -321,8 +329,8 @@ class ChannelPostCard extends StatelessWidget {
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
           userId: authorId,
-          initialName: authorName,
-          initialAvatarUrl: avatarUrl,
+          initialName: effectiveName,
+          initialAvatarUrl: effectiveAvatar,
         ),
       ),
     );
@@ -678,9 +686,14 @@ class ChannelPostCard extends StatelessWidget {
           : msg.senderCustomization;
       final bool canOpenAuthor =
           onAuthorTap != null || (authorId.isNotEmpty && authorId != '0');
+      final bool canResolveAuthor = ContactsService.shouldResolveUserIdentity(
+        authorId,
+        senderChatId: msg.senderChatId,
+        isAnonymousAdmin: msg.isFromAnonymousAdmin,
+      );
 
-      children.add(
-        Material(
+      Widget buildAuthorHeader(String effectiveName, String? effectiveAvatar) {
+        return Material(
           type: MaterialType.transparency,
           child: InkWell(
             onTap: canOpenAuthor
@@ -688,8 +701,8 @@ class ChannelPostCard extends StatelessWidget {
                       () => _defaultOpenAuthorProfile(
                         context,
                         authorId,
-                        resolvedAuthorName,
-                        msg.senderAvatarUrl,
+                        effectiveName,
+                        effectiveAvatar,
                       ))
                 : null,
             child: Padding(
@@ -701,16 +714,17 @@ class ChannelPostCard extends StatelessWidget {
                     userId: (authorId.isNotEmpty && authorId != '0')
                         ? authorId
                         : null,
-                    avatarUrl: msg.senderAvatarUrl,
-                    name: resolvedAuthorName,
+                    avatarUrl: effectiveAvatar,
+                    name: effectiveName,
                     radius: 10.0,
                     isOnline: false,
                     showDecoration: false,
+                    resolveContactOverride: false,
                   ),
                   const SizedBox(width: 6.0),
                   Flexible(
                     child: Text(
-                      resolvedAuthorName,
+                      effectiveName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -740,7 +754,29 @@ class ChannelPostCard extends StatelessWidget {
               ),
             ),
           ),
-        ),
+        );
+      }
+
+      children.add(
+        canResolveAuthor
+            ? ValueListenableBuilder<int>(
+                valueListenable: ContactsService.revisionNotifier,
+                builder: (_, __, ___) => buildAuthorHeader(
+                  ContactsService.resolvePeerName(
+                    authorId,
+                    resolvedAuthorName,
+                    senderChatId: msg.senderChatId,
+                    isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                  ),
+                  ContactsService.resolvePeerAvatarUrl(
+                    authorId,
+                    msg.senderAvatarUrl,
+                    senderChatId: msg.senderChatId,
+                    isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                  ),
+                ),
+              )
+            : buildAuthorHeader(resolvedAuthorName, msg.senderAvatarUrl),
       );
     }
 
@@ -779,6 +815,10 @@ class ChannelPostCard extends StatelessWidget {
         quoteLength: msg.quoteLength,
         isMe: false,
         currentUserId: currentUserId,
+        replySenderChatId: msg.replyInfo?.senderChatId ??
+            (msg.replyToChatType == 'channel' ? msg.replyToChatId : null),
+        replyIsFromAnonymousAdmin:
+            msg.replyInfo?.isFromAnonymousAdmin ?? false,
         onTap: () =>
             onReplyTap?.call(msg.replyToMessageId!, msg.replyInfo?.chatId),
       );
@@ -786,6 +826,7 @@ class ChannelPostCard extends StatelessWidget {
       replyOrForwardWidget = MessageReplyInfo.forwarded(
         authorName: msg.forwardFromName!,
         authorAvatarUrl: msg.forwardFromAvatarUrl,
+        authorUserId: msg.forwardedFromUserId,
         isMe: false,
       );
     }

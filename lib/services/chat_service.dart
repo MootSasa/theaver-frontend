@@ -793,18 +793,107 @@ class RecentReplier {
   final String userId;
   final String displayName;
   final String? avatarUrl;
+  final String? peerType;
+  final String? chatId;
+  final String? senderChatId;
+  final bool isFromAnonymousAdmin;
+  final bool isBot;
 
   const RecentReplier({
     required this.userId,
     required this.displayName,
     this.avatarUrl,
+    this.peerType,
+    this.chatId,
+    this.senderChatId,
+    this.isFromAnonymousAdmin = false,
+    this.isBot = false,
   });
 
-  factory RecentReplier.fromJson(Map<String, dynamic> json) {
+  bool get isChannelOrPersona {
+    final pt = peerType?.trim().toLowerCase() ?? '';
+    if (pt == 'channel' || pt == 'chat' || pt == 'group') return true;
+    final cid = chatId?.trim() ?? '';
+    if (cid.isNotEmpty && cid != '0') return true;
+    final scid = senderChatId?.trim() ?? '';
+    if (scid.isNotEmpty && scid != '0') return true;
+    return isFromAnonymousAdmin;
+  }
+
+  RecentReplier withResolvedContacts() {
+    if (isChannelOrPersona) return this;
+    final nextName = ContactsService.resolvePeerName(
+      userId,
+      displayName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isFromAnonymousAdmin,
+      isBot: isBot,
+    );
+    final nextAvatar = ContactsService.resolvePeerAvatarUrl(
+      userId,
+      avatarUrl,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isFromAnonymousAdmin,
+      isBot: isBot,
+    );
+    if (nextName == displayName && nextAvatar == avatarUrl) {
+      return this;
+    }
     return RecentReplier(
-      userId: (json['user_id'] ?? json['id'] ?? '').toString(),
-      displayName: (json['display_name'] ?? json['name'] ?? '').toString(),
-      avatarUrl: _nonEmptyString(json['avatar_url']),
+      userId: userId,
+      displayName: nextName,
+      avatarUrl: nextAvatar,
+      peerType: peerType,
+      chatId: chatId,
+      senderChatId: senderChatId,
+      isFromAnonymousAdmin: isFromAnonymousAdmin,
+      isBot: isBot,
+    );
+  }
+
+  factory RecentReplier.fromJson(Map<String, dynamic> json) {
+    final uid = (json['user_id'] ?? json['id'] ?? '').toString();
+    final rawName = (json['display_name'] ?? json['name'] ?? '').toString();
+    final rawAvatar = _nonEmptyString(json['avatar_url']);
+    final peerType = _nonEmptyString(json['peer_type']);
+    final chatId = _nonEmptyString(json['chat_id']);
+    final senderChatId = _nonEmptyString(json['sender_chat_id']);
+    final isAnon = _parseBoolFlag(json['is_from_anonymous_admin']);
+    final isBot = _parseBoolFlag(json['is_bot']);
+    final pt = peerType?.toLowerCase() ?? '';
+    final isChannelOrPersona = pt == 'channel' ||
+        pt == 'chat' ||
+        pt == 'group' ||
+        (chatId != null && chatId != '0') ||
+        (senderChatId != null && senderChatId != '0') ||
+        isAnon;
+    final resolvedName = isChannelOrPersona
+        ? rawName
+        : ContactsService.resolvePeerName(
+            uid,
+            rawName,
+            senderChatId: senderChatId,
+            isAnonymousAdmin: isAnon,
+            isBot: isBot,
+          );
+    final resolvedAvatar = isChannelOrPersona
+        ? rawAvatar
+        : ContactsService.resolvePeerAvatarUrl(
+            uid,
+            rawAvatar,
+            senderChatId: senderChatId,
+            isAnonymousAdmin: isAnon,
+            isBot: isBot,
+          );
+    return RecentReplier(
+      userId: uid,
+      displayName: resolvedName,
+      avatarUrl: resolvedAvatar,
+      peerType: peerType,
+      chatId: chatId,
+      senderChatId: senderChatId,
+      isFromAnonymousAdmin: isAnon,
+      isBot: isBot,
     );
   }
 
@@ -832,6 +921,11 @@ class RecentReplier {
         'user_id': userId,
         'display_name': displayName,
         if (avatarUrl != null) 'avatar_url': avatarUrl,
+        if (peerType != null) 'peer_type': peerType,
+        if (chatId != null) 'chat_id': chatId,
+        if (senderChatId != null) 'sender_chat_id': senderChatId,
+        if (isFromAnonymousAdmin) 'is_from_anonymous_admin': true,
+        if (isBot) 'is_bot': true,
       };
 
   @override
@@ -841,10 +935,24 @@ class RecentReplier {
           runtimeType == other.runtimeType &&
           userId == other.userId &&
           displayName == other.displayName &&
-          avatarUrl == other.avatarUrl;
+          avatarUrl == other.avatarUrl &&
+          peerType == other.peerType &&
+          chatId == other.chatId &&
+          senderChatId == other.senderChatId &&
+          isFromAnonymousAdmin == other.isFromAnonymousAdmin &&
+          isBot == other.isBot;
 
   @override
-  int get hashCode => Object.hash(userId, displayName, avatarUrl);
+  int get hashCode => Object.hash(
+        userId,
+        displayName,
+        avatarUrl,
+        peerType,
+        chatId,
+        senderChatId,
+        isFromAnonymousAdmin,
+        isBot,
+      );
 }
 
 /// Summary of a linked discussion group (for a channel) or linked channel (for a group).
@@ -1335,6 +1443,8 @@ class Chat {
   final int unreadReactionsCount;
   final String? mySendAsChatId;
   final String? mySendAsMode;
+  final String? originalName;
+  final String? originalAvatarUrl;
   late final int updatedAtEpochMs =
       DateTimeUtils.parseUtcDateTime(updatedAt)?.millisecondsSinceEpoch ?? 0;
 
@@ -1391,6 +1501,8 @@ class Chat {
     this.unreadReactionsCount = 0,
     this.mySendAsChatId,
     this.mySendAsMode,
+    this.originalName,
+    this.originalAvatarUrl,
   }) : showAuthorProfiles = showAuthorProfiles ?? (chatType != 'channel');
 
   bool get canPostInChannel =>
@@ -1410,15 +1522,40 @@ class Chat {
   /// Whether this chat has unread messages or is marked as unread.
   bool get hasUnread => unreadCount > 0 || isMarkedUnread;
 
-  /// Contact-aware display name for private chats, falling back to [name].
-  String get effectiveName => chatType == 'private'
-      ? ContactsService.resolveName(otherUserId, name)
-      : name;
+  /// Contact-aware display name for private chats, falling back to [originalName] or [name].
+  String get effectiveName {
+    if (chatType != 'private' || isBot) return name;
+    final base = (originalName != null && originalName!.isNotEmpty)
+        ? originalName!
+        : name;
+    return ContactsService.resolvePeerName(otherUserId, base, isBot: isBot);
+  }
 
-  /// Contact-aware avatar URL for private chats, falling back to [avatarUrl].
-  String? get effectiveAvatarUrl => chatType == 'private'
-      ? ContactsService.resolveAvatarUrl(otherUserId, avatarUrl)
-      : avatarUrl;
+  /// Contact-aware avatar URL for private chats, falling back to [originalAvatarUrl] or [avatarUrl].
+  String? get effectiveAvatarUrl {
+    if (chatType != 'private' || isBot) return avatarUrl;
+    if (ContactsService.hasCustomAvatarFor(otherUserId)) {
+      return ContactsService.resolvePeerAvatarUrl(
+        otherUserId,
+        avatarUrl,
+        isBot: isBot,
+      );
+    }
+    final c = ContactsService.getCached(otherUserId);
+    if (c != null) {
+      if (c.originalAvatarUrl != null && c.originalAvatarUrl!.trim().isNotEmpty) {
+        return c.originalAvatarUrl!.trim();
+      }
+      if (c.avatarUrl.trim().isNotEmpty) {
+        return c.avatarUrl.trim();
+      }
+    }
+    return ContactsService.resolvePeerAvatarUrl(
+      otherUserId,
+      originalAvatarUrl ?? avatarUrl,
+      isBot: isBot,
+    );
+  }
 
   /// True if the last message in this chat is a round video note («кружочек»)
   bool get isLastMessageRoundVideo =>
@@ -1584,11 +1721,56 @@ class Chat {
     final int effectiveUnreadCount =
         (parsedMarkedUnread && rawUnreadCount == 0) ? -1 : rawUnreadCount;
 
+    final bool parsedIsBot = json['is_bot'] == true;
+    final String rawName = json['name']?.toString() ?? '';
+    final String? rawAvatarUrl = json['avatar_url']?.toString();
+    final bool canResolvePrivatePeer = parsedChatType == 'private' &&
+        !parsedIsBot &&
+        (parsedOtherUserId ?? '').trim().isNotEmpty;
+    final String resolvedName = canResolvePrivatePeer
+        ? ContactsService.resolvePeerName(
+            parsedOtherUserId,
+            rawName,
+            isBot: parsedIsBot,
+          )
+        : rawName;
+    final String? resolvedAvatarUrl = canResolvePrivatePeer
+        ? ContactsService.resolvePeerAvatarUrl(
+            parsedOtherUserId,
+            rawAvatarUrl,
+            isBot: parsedIsBot,
+          )
+        : rawAvatarUrl;
+
+    final String? parsedLastSenderId =
+        _nonEmptyString(json['last_message_sender_id']);
+    final String? rawLastSenderName =
+        _nonEmptyString(json['last_message_sender_name']);
+    final String? lastSenderChatId =
+        _nonEmptyString(json['last_message_sender_chat_id']);
+    final bool lastIsAnon =
+        _parseBoolFlag(json['last_message_is_from_anonymous_admin']);
+    final bool lastIsChannelPost =
+        _parseBoolFlag(json['last_message_is_channel_post']) ||
+            parsedChatType == 'channel';
+    final String? resolvedLastSenderName =
+        (parsedLastSenderId != null && rawLastSenderName != null)
+            ? ContactsService.resolvePeerName(
+                parsedLastSenderId,
+                rawLastSenderName,
+                senderChatId: lastSenderChatId,
+                isAnonymousAdmin: lastIsAnon,
+                isMirroredChannelPost: lastIsChannelPost,
+              )
+            : rawLastSenderName;
+
     return Chat(
       id: json['id']?.toString() ?? json['chat_id']?.toString() ?? '',
       chatType: parsedChatType,
-      name: json['name']?.toString() ?? '',
-      avatarUrl: json['avatar_url']?.toString(),
+      name: resolvedName,
+      avatarUrl: resolvedAvatarUrl,
+      originalName: rawName,
+      originalAvatarUrl: rawAvatarUrl,
       lastMessage: json['last_message']?.toString(),
       lastMessageTime: json['last_message_time']?.toString(),
       lastMessageType: msgType,
@@ -1614,7 +1796,7 @@ class Chat {
       pinnedMessage: parsedPinnedMessage,
       username: json['username']?.toString(),
       isPublic: json['is_public'] == true,
-      isBot: json['is_bot'] == true,
+      isBot: parsedIsBot,
       isVerified: json['is_verified'] == true,
       isArchived: json['is_archived'] == true || json['is_archived'] == 1,
       communityId: _parseNullableInt(json['community_id']),
@@ -1623,8 +1805,8 @@ class Chat {
       linkedChatId: parsedLinkedChatId,
       myRole: parsedMyRole,
       isMember: parsedIsMember,
-      lastMessageSenderId: _nonEmptyString(json['last_message_sender_id']),
-      lastMessageSenderName: _nonEmptyString(json['last_message_sender_name']),
+      lastMessageSenderId: parsedLastSenderId,
+      lastMessageSenderName: resolvedLastSenderName,
       hasActiveCall:
           _parseBoolFlag(json['has_active_call']) || parsedActiveCallId != null,
       activeCallId: parsedActiveCallId,
@@ -1691,11 +1873,59 @@ class Chat {
         if (dec is Map) dbAppearance = Map<String, dynamic>.from(dec);
       } catch (_) {}
     }
+    final bool canResolveDbPrivatePeer = model.chatType == 'private' &&
+        !model.isBot &&
+        (model.otherUserId ?? '').trim().isNotEmpty;
+    final cachedContact = canResolveDbPrivatePeer
+        ? ContactsService.getCached(model.otherUserId)
+        : null;
+    final String? dbOrigName = cachedContact != null
+        ? ((cachedContact.originalDisplayName?.trim().isNotEmpty ?? false)
+            ? cachedContact.originalDisplayName!.trim()
+            : (cachedContact.displayName.trim().isNotEmpty
+                ? cachedContact.displayName.trim()
+                : null))
+        : null;
+    final String? dbOrigAvatar = cachedContact != null
+        ? ((cachedContact.originalAvatarUrl?.trim().isNotEmpty ?? false)
+            ? cachedContact.originalAvatarUrl!.trim()
+            : (!cachedContact.hasCustomAvatar &&
+                    cachedContact.avatarUrl.trim().isNotEmpty
+                ? cachedContact.avatarUrl.trim()
+                : null))
+        : null;
+    final String resolvedDbName = canResolveDbPrivatePeer
+        ? ContactsService.resolvePeerName(
+            model.otherUserId,
+            dbOrigName ?? model.name,
+            isBot: model.isBot,
+          )
+        : model.name;
+    final String? resolvedDbAvatar = canResolveDbPrivatePeer
+        ? ContactsService.resolvePeerAvatarUrl(
+            model.otherUserId,
+            dbOrigAvatar ?? model.avatarUrl,
+            isBot: model.isBot,
+          )
+        : model.avatarUrl;
+    final dbLastSenderId = _nonEmptyString(model.lastMessageSenderId);
+    final rawDbLastSenderName = _nonEmptyString(model.lastMessageSenderName);
+    final resolvedDbLastSenderName =
+        (dbLastSenderId != null && rawDbLastSenderName != null)
+            ? ContactsService.resolvePeerName(
+                dbLastSenderId,
+                rawDbLastSenderName,
+                isMirroredChannelPost: model.chatType == 'channel',
+              )
+            : rawDbLastSenderName;
+
     return Chat(
       id: model.chatId,
       chatType: model.chatType,
-      name: model.name,
-      avatarUrl: model.avatarUrl,
+      name: resolvedDbName,
+      avatarUrl: resolvedDbAvatar,
+      originalName: dbOrigName,
+      originalAvatarUrl: dbOrigAvatar,
       lastMessage: model.lastMessage,
       lastMessageTime: model.lastMessageTime,
       lastMessageType: model.lastMessageType,
@@ -1722,8 +1952,8 @@ class Chat {
       linkedChatId: _nonEmptyString(model.linkedChatId),
       myRole: _nonEmptyString(model.myRole),
       isMember: model.myRole != 'guest',
-      lastMessageSenderId: _nonEmptyString(model.lastMessageSenderId),
-      lastMessageSenderName: _nonEmptyString(model.lastMessageSenderName),
+      lastMessageSenderId: dbLastSenderId,
+      lastMessageSenderName: resolvedDbLastSenderName,
       hasActiveCall: model.hasActiveCall,
       activeCallId: activeCallId,
       defaultPermissions: GroupDefaultPermissions.tryParse(
@@ -1809,6 +2039,11 @@ class Chat {
     String? chatType,
     String? name,
     String? avatarUrl,
+    bool clearAvatarUrl = false,
+    String? originalName,
+    bool clearOriginalName = false,
+    String? originalAvatarUrl,
+    bool clearOriginalAvatarUrl = false,
     String? lastMessage,
     String? lastMessageTime,
     String? lastMessageType,
@@ -1862,11 +2097,36 @@ class Chat {
     bool clearMySendAsChatId = false,
     String? mySendAsMode,
   }) {
+    final effectiveChatType = chatType ?? this.chatType;
+    final effectiveOtherUid = otherUserId ?? this.otherUserId;
+    final effectiveIsBot = isBot ?? this.isBot;
+    final String? nextOriginalAvatarUrl;
+    if (clearOriginalAvatarUrl) {
+      nextOriginalAvatarUrl = null;
+    } else if (originalAvatarUrl != null) {
+      nextOriginalAvatarUrl = originalAvatarUrl;
+    } else if (clearAvatarUrl &&
+        effectiveChatType == 'private' &&
+        !effectiveIsBot &&
+        !ContactsService.hasCustomAvatarFor(effectiveOtherUid)) {
+      nextOriginalAvatarUrl = null;
+    } else if (avatarUrl != null &&
+        effectiveChatType == 'private' &&
+        !effectiveIsBot &&
+        !ContactsService.hasCustomAvatarFor(effectiveOtherUid)) {
+      nextOriginalAvatarUrl = avatarUrl.trim().isNotEmpty ? avatarUrl : null;
+    } else {
+      nextOriginalAvatarUrl = this.originalAvatarUrl;
+    }
+
     return Chat(
       id: id ?? this.id,
-      chatType: chatType ?? this.chatType,
+      chatType: effectiveChatType,
       name: name ?? this.name,
-      avatarUrl: avatarUrl ?? this.avatarUrl,
+      avatarUrl: clearAvatarUrl ? null : (avatarUrl ?? this.avatarUrl),
+      originalName:
+          clearOriginalName ? null : (originalName ?? this.originalName),
+      originalAvatarUrl: nextOriginalAvatarUrl,
       lastMessage: lastMessage ?? this.lastMessage,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
       lastMessageType: lastMessageType ?? this.lastMessageType,
@@ -1877,7 +2137,7 @@ class Chat {
       isOnline: isOnline ?? this.isOnline,
       lastSeen: lastSeen ?? this.lastSeen,
       isPinned: isPinned ?? this.isPinned,
-      otherUserId: otherUserId ?? this.otherUserId,
+      otherUserId: effectiveOtherUid,
       lastMessageGroupedId: lastMessageGroupedId ?? this.lastMessageGroupedId,
       lastMessageEntities: lastMessageEntities ?? this.lastMessageEntities,
       draft: draft ?? this.draft,
@@ -1891,7 +2151,7 @@ class Chat {
       hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
       username: username ?? this.username,
       isPublic: isPublic ?? this.isPublic,
-      isBot: isBot ?? this.isBot,
+      isBot: effectiveIsBot,
       isVerified: isVerified ?? this.isVerified,
       isArchived: isArchived ?? this.isArchived,
       communityId: communityId ?? this.communityId,
@@ -1937,6 +2197,8 @@ class ReplyInfo {
   final String content; // truncated preview text
   final String messageType; // 'text', 'image', etc.
   final String? chatId; // The chat ID where the original message resides
+  final String? senderChatId;
+  final bool isFromAnonymousAdmin;
   final String? nameColorPresetId;
   final String? replyStripStyle;
   final ReplyEmojiData? replyEmoji;
@@ -1949,6 +2211,8 @@ class ReplyInfo {
     required this.content,
     required this.messageType,
     this.chatId,
+    this.senderChatId,
+    this.isFromAnonymousAdmin = false,
     this.nameColorPresetId,
     this.replyStripStyle,
     this.replyEmoji,
@@ -2004,13 +2268,27 @@ class ReplyInfo {
   }
 
   factory ReplyInfo.fromJson(Map<String, dynamic> json) {
+    final senderId = json['sender_id']?.toString() ?? '';
+    final rawSenderName = json['sender_name']?.toString() ?? '';
+    final senderChatId = _nonEmptyString(json['sender_chat_id']);
+    final isAnon = _parseBoolFlag(json['is_from_anonymous_admin']);
+    final isBot = _parseBoolFlag(json['is_bot']);
+    final resolvedSenderName = ContactsService.resolvePeerName(
+      senderId,
+      rawSenderName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isBot: isBot,
+    );
     return ReplyInfo(
       messageId: json['message_id']?.toString() ?? '',
-      senderId: json['sender_id']?.toString() ?? '',
-      senderName: json['sender_name']?.toString() ?? '',
+      senderId: senderId,
+      senderName: resolvedSenderName,
       content: json['content']?.toString() ?? '',
       messageType: json['message_type']?.toString() ?? 'text',
       chatId: json['chat_id']?.toString(),
+      senderChatId: senderChatId,
+      isFromAnonymousAdmin: isAnon,
       nameColorPresetId: json['name_color_preset_id']?.toString() ??
           json['reply_to_sender_name_color_id']?.toString(),
       replyStripStyle: json['reply_strip_style']?.toString() ??
@@ -2029,6 +2307,8 @@ class ReplyInfo {
         'content': content,
         'message_type': messageType,
         if (chatId != null) 'chat_id': chatId,
+        if (senderChatId != null) 'sender_chat_id': senderChatId,
+        if (isFromAnonymousAdmin) 'is_from_anonymous_admin': true,
         if (nameColorPresetId != null) 'name_color_preset_id': nameColorPresetId,
         if (replyStripStyle != null) 'reply_strip_style': replyStripStyle,
         if (replyEmoji != null) 'reply_emoji': replyEmoji!.toJson(),
@@ -2043,6 +2323,8 @@ class ReplyInfo {
     String? content,
     String? messageType,
     String? chatId,
+    String? senderChatId,
+    bool? isFromAnonymousAdmin,
     String? nameColorPresetId,
     String? replyStripStyle,
     ReplyEmojiData? replyEmoji,
@@ -2056,6 +2338,8 @@ class ReplyInfo {
       content: content ?? this.content,
       messageType: messageType ?? this.messageType,
       chatId: chatId ?? this.chatId,
+      senderChatId: senderChatId ?? this.senderChatId,
+      isFromAnonymousAdmin: isFromAnonymousAdmin ?? this.isFromAnonymousAdmin,
       nameColorPresetId: nameColorPresetId ?? this.nameColorPresetId,
       replyStripStyle: replyStripStyle ?? this.replyStripStyle,
       replyEmoji: clearReplyEmoji ? null : (replyEmoji ?? this.replyEmoji),
@@ -2365,6 +2649,100 @@ class Message {
     this.isOwn = false,
   });
 
+  /// True when this message was forwarded from a channel or chat (encoded as `'chat:<chatId>'`).
+  bool get isForwardedFromChat =>
+      (forwardFromId?.trim() ?? '').startsWith('chat:');
+
+  /// Extracted origin chat ID for channel/chat forwards, or null for user forwards.
+  String? get forwardedFromChatId {
+    final r = forwardFromId?.trim() ?? '';
+    if (!r.startsWith('chat:')) return null;
+    final id = r.substring(5).trim();
+    return id.isNotEmpty ? id : null;
+  }
+
+  /// Extracted origin user ID for user forwards, or null for channel/chat forwards.
+  String? get forwardedFromUserId {
+    final r = forwardFromId?.trim() ?? '';
+    if (r.isEmpty || r == '0' || r.startsWith('chat:')) return null;
+    return r;
+  }
+
+  /// Re-applies [ContactsService] overrides on the current isolate (e.g. after
+  /// background isolate JSON decoding or local DB reads).
+  Message withResolvedContacts() {
+    final nextSenderName = ContactsService.resolvePeerName(
+      senderId,
+      senderName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isFromAnonymousAdmin,
+      isMirroredChannelPost: isMirroredChannelPost,
+    );
+    final nextSenderAvatar = ContactsService.resolvePeerAvatarUrl(
+      senderId,
+      senderAvatarUrl,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isFromAnonymousAdmin,
+      isMirroredChannelPost: isMirroredChannelPost,
+    );
+
+    ReplyInfo? nextReply = replyInfo;
+    if (nextReply != null) {
+      final nextReplyName = ContactsService.resolvePeerName(
+        nextReply.senderId,
+        nextReply.senderName,
+        senderChatId: nextReply.senderChatId,
+        isAnonymousAdmin: nextReply.isFromAnonymousAdmin,
+        isMirroredChannelPost: replyToChatType == 'channel',
+      );
+      if (nextReplyName != nextReply.senderName) {
+        nextReply = nextReply.copyWith(senderName: nextReplyName);
+      }
+    }
+
+    String? nextFwdName = forwardFromName;
+    String? nextFwdAvatar = forwardFromAvatarUrl;
+    final fwdUid = forwardedFromUserId;
+    if (fwdUid != null) {
+      if (forwardFromName != null) {
+        nextFwdName = ContactsService.resolvePeerName(fwdUid, forwardFromName!);
+      }
+      nextFwdAvatar =
+          ContactsService.resolvePeerAvatarUrl(fwdUid, forwardFromAvatarUrl);
+    }
+
+    List<RecentReplier> nextRepliers = recentRepliers;
+    if (recentRepliers.isNotEmpty) {
+      bool repliersChanged = false;
+      final resolved = recentRepliers.map((r) {
+        final rResolved = r.withResolvedContacts();
+        if (rResolved != r) repliersChanged = true;
+        return rResolved;
+      }).toList();
+      if (repliersChanged) {
+        nextRepliers = resolved;
+      }
+    }
+
+    if (nextSenderName == senderName &&
+        nextSenderAvatar == senderAvatarUrl &&
+        identical(nextReply, replyInfo) &&
+        nextFwdName == forwardFromName &&
+        nextFwdAvatar == forwardFromAvatarUrl &&
+        identical(nextRepliers, recentRepliers)) {
+      return this;
+    }
+
+    return copyWith(
+      senderName: nextSenderName,
+      senderAvatarUrl: nextSenderAvatar,
+      replyInfo: nextReply,
+      forwardFromName: nextFwdName,
+      forwardFromAvatarUrl: nextFwdAvatar,
+      recentRepliers: nextRepliers,
+    );
+  }
+
   /// Whether this message has a reply or quote
   bool get hasReply => replyToMessageId != null && replyToMessageId!.isNotEmpty;
 
@@ -2514,20 +2892,62 @@ class Message {
     Map<String, dynamic> json, {
     Map<String, PeerCustomization>? outPeerCustomizations,
   }) {
+    final String? parsedReplyToChatId = _nonEmptyString(json['reply_to_chat_id']);
+    final String? parsedReplyToChatName =
+        _nonEmptyString(json['reply_to_chat_name']);
+    final String? parsedReplyToChatType =
+        _nonEmptyString(json['reply_to_chat_type']);
+    final String? flatReplySenderChatId =
+        _nonEmptyString(json['reply_to_sender_chat_id']);
+    final bool flatReplyIsAnon =
+        _parseBoolFlag(json['reply_to_is_from_anonymous_admin']);
+    final bool flatReplyIsBot = _parseBoolFlag(json['reply_to_sender_is_bot']);
+    final bool replyIsChannel = parsedReplyToChatType == 'channel';
+
     // Parse replyInfo from nested object or flat fields
     ReplyInfo? replyInfo;
     if (json['reply_info'] != null && json['reply_info'] is Map) {
-      replyInfo = ReplyInfo.fromJson(
-        Map<String, dynamic>.from(json['reply_info'] as Map),
+      final replyMap = Map<String, dynamic>.from(json['reply_info'] as Map);
+      final parsedReply = ReplyInfo.fromJson(replyMap);
+      final effectiveReplyScid = parsedReply.senderChatId ?? flatReplySenderChatId;
+      final effectiveReplyAnon =
+          parsedReply.isFromAnonymousAdmin || flatReplyIsAnon;
+      final effectiveReplyBot =
+          _parseBoolFlag(replyMap['is_bot']) || flatReplyIsBot;
+      final rawReplyName = replyMap['sender_name']?.toString() ?? '';
+      final resolvedReplyName = ContactsService.resolvePeerName(
+        parsedReply.senderId,
+        rawReplyName,
+        senderChatId: effectiveReplyScid,
+        isAnonymousAdmin: effectiveReplyAnon,
+        isMirroredChannelPost: replyIsChannel,
+        isBot: effectiveReplyBot,
+      );
+      replyInfo = parsedReply.copyWith(
+        senderName: resolvedReplyName,
+        senderChatId: effectiveReplyScid,
+        isFromAnonymousAdmin: effectiveReplyAnon,
       );
     } else if (json['reply_to_message_id'] != null) {
       // Fallback: build ReplyInfo from flat fields
+      final rSid = json['reply_to_sender_id']?.toString() ?? '';
+      final rawRName = json['reply_to_sender_name']?.toString() ?? '';
+      final resolvedRName = ContactsService.resolvePeerName(
+        rSid,
+        rawRName,
+        senderChatId: flatReplySenderChatId,
+        isAnonymousAdmin: flatReplyIsAnon,
+        isMirroredChannelPost: replyIsChannel,
+        isBot: flatReplyIsBot,
+      );
       replyInfo = ReplyInfo(
         messageId: json['reply_to_message_id']?.toString() ?? '',
-        senderId: json['reply_to_sender_id']?.toString() ?? '',
-        senderName: json['reply_to_sender_name']?.toString() ?? '',
+        senderId: rSid,
+        senderName: resolvedRName,
         content: json['reply_to_content']?.toString() ?? '',
         messageType: json['reply_to_message_type']?.toString() ?? 'text',
+        senderChatId: flatReplySenderChatId,
+        isFromAnonymousAdmin: flatReplyIsAnon,
         nameColorPresetId: json['reply_to_sender_name_color_id']?.toString() ??
             json['reply_to_name_color_preset_id']?.toString(),
         replyStripStyle: json['reply_to_sender_strip_style']?.toString() ??
@@ -2684,11 +3104,6 @@ class Message {
       }
     }
 
-    final String? parsedReplyToChatId = _nonEmptyString(json['reply_to_chat_id']);
-    final String? parsedReplyToChatName =
-        _nonEmptyString(json['reply_to_chat_name']);
-    final String? parsedReplyToChatType =
-        _nonEmptyString(json['reply_to_chat_type']);
     if (replyInfo != null &&
         parsedReplyToChatId != null &&
         (replyInfo.chatId == null || replyInfo.chatId!.isEmpty)) {
@@ -2706,6 +3121,72 @@ class Message {
             .toList()
         : const <String>[];
 
+    final String? parsedSenderChatId = _nonEmptyString(json['sender_chat_id']);
+    final String? parsedChannelPostId = _nonEmptyString(json['channel_post_id']);
+    final bool parsedIsAnon = _parseBoolFlag(json['is_from_anonymous_admin']);
+    final bool parsedIsMirrored = parsedChannelPostId != null;
+    final bool parsedSenderIsBot = _parseBoolFlag(
+      json['sender_is_bot'] ?? json['is_bot'],
+    );
+    final String rawSenderName = json['sender_name']?.toString() ?? 'Unknown';
+    final String? rawSenderAvatarUrl = json['sender_avatar_url']?.toString();
+    final String resolvedSenderName = ContactsService.resolvePeerName(
+      parsedSenderId,
+      rawSenderName,
+      senderChatId: parsedSenderChatId,
+      isAnonymousAdmin: parsedIsAnon,
+      isMirroredChannelPost: parsedIsMirrored,
+      isBot: parsedSenderIsBot,
+    );
+    final String? resolvedSenderAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+      parsedSenderId,
+      rawSenderAvatarUrl,
+      senderChatId: parsedSenderChatId,
+      isAnonymousAdmin: parsedIsAnon,
+      isMirroredChannelPost: parsedIsMirrored,
+      isBot: parsedSenderIsBot,
+    );
+
+    final String? rawFwdUserId = _nonEmptyString(json['forwarded_from_user_id']);
+    final String? rawFwdChatId = _nonEmptyString(json['forwarded_from_chat_id']);
+    final String? rawFwdId = _nonEmptyString(json['forward_from_id']);
+    final bool fwdIsBot = _parseBoolFlag(
+      json['forwarded_from_is_bot'] ?? json['forward_from_is_bot'],
+    );
+    String? effectiveForwardFromId;
+    bool isUserForward = false;
+    if (rawFwdUserId != null && rawFwdUserId != '0') {
+      effectiveForwardFromId = rawFwdUserId;
+      isUserForward = true;
+    } else if (rawFwdChatId != null && rawFwdChatId != '0') {
+      effectiveForwardFromId =
+          rawFwdChatId.startsWith('chat:') ? rawFwdChatId : 'chat:$rawFwdChatId';
+    } else if (rawFwdId != null && rawFwdId != '0') {
+      effectiveForwardFromId = rawFwdId;
+      if (!rawFwdId.startsWith('chat:')) {
+        isUserForward = true;
+      }
+    }
+    final String? rawFwdName =
+        (json['forward_from_name'] ?? json['forwarded_from_name'])?.toString();
+    final String? resolvedFwdName = isUserForward && rawFwdName != null
+        ? ContactsService.resolvePeerName(
+            effectiveForwardFromId,
+            rawFwdName,
+            isBot: fwdIsBot,
+          )
+        : rawFwdName;
+    final String? rawFwdAvatar =
+        (json['forwarded_from_avatar_url'] ?? json['forward_from_avatar_url'])
+            ?.toString();
+    final String? resolvedFwdAvatar = isUserForward
+        ? ContactsService.resolvePeerAvatarUrl(
+            effectiveForwardFromId,
+            rawFwdAvatar,
+            isBot: fwdIsBot,
+          )
+        : rawFwdAvatar;
+
     return Message(
       id: json['id']?.toString() ?? '',
       chatId: json['chat_id']?.toString() ?? '',
@@ -2714,8 +3195,8 @@ class Message {
       messageType: json['message_type']?.toString() ?? 'text',
       isEdited: json['is_edited'] ?? false,
       createdAt: json['created_at']?.toString() ?? '',
-      senderName: json['sender_name']?.toString() ?? 'Unknown',
-      senderAvatarUrl: json['sender_avatar_url']?.toString(),
+      senderName: resolvedSenderName,
+      senderAvatarUrl: resolvedSenderAvatarUrl,
       fileUrl: () {
         final raw = json['file_url']?.toString().trim();
         if (raw != null && raw.isNotEmpty) return raw;
@@ -2758,16 +3239,9 @@ class Message {
               json['forward_from_name'].toString().isNotEmpty) ||
           (json['forwarded_from_name'] != null &&
               json['forwarded_from_name'].toString().isNotEmpty),
-      forwardFromId: (json['forward_from_id'] ??
-              json['forwarded_from_user_id'] ??
-              json['forwarded_from_chat_id'])
-          ?.toString(),
-      forwardFromName:
-          (json['forward_from_name'] ?? json['forwarded_from_name'])
-              ?.toString(),
-      forwardFromAvatarUrl:
-          (json['forwarded_from_avatar_url'] ?? json['forward_from_avatar_url'])
-              ?.toString(),
+      forwardFromId: effectiveForwardFromId,
+      forwardFromName: resolvedFwdName,
+      forwardFromAvatarUrl: resolvedFwdAvatar,
       senderCustomization: parsedSenderCust,
       groupedId: json['grouped_id']?.toString(),
       entities: () {
@@ -2824,12 +3298,12 @@ class Message {
       postAuthorId: _nonEmptyString(json['post_author_id']),
       senderRole: _nonEmptyString(json['sender_role']),
       senderAdminTitle: _nonEmptyString(json['sender_admin_title']),
-      isFromAnonymousAdmin: _parseBoolFlag(json['is_from_anonymous_admin']),
+      isFromAnonymousAdmin: parsedIsAnon,
       isSilent: _parseBoolFlag(json['is_silent']),
       commentsCount: _parseIntValue(json['comments_count']),
       canComment: _parseBoolFlag(json['can_comment']),
       recentRepliers: RecentReplier.parseList(json['recent_repliers']),
-      channelPostId: _nonEmptyString(json['channel_post_id']),
+      channelPostId: parsedChannelPostId,
       threadRootMessageId: _nonEmptyString(json['thread_root_message_id']),
       hasMediaSpoiler: _parseBoolFlag(json['has_media_spoiler']) ||
           _parseBoolFlag(parsedMediaPayload?['has_media_spoiler']),
@@ -2845,7 +3319,7 @@ class Message {
       savedTags: parsedSavedTags,
       topicId: _parseNullableInt(json['topic_id']),
       forwardsCount: _parseIntValue(json['forwards_count']),
-      senderChatId: _nonEmptyString(json['sender_chat_id']),
+      senderChatId: parsedSenderChatId,
       senderChatName: _nonEmptyString(json['sender_chat_name']),
       senderChatAvatarUrl: _nonEmptyString(json['sender_chat_avatar_url']),
       isOwn: _parseBoolFlag(json['is_own']) ||
@@ -2859,10 +3333,16 @@ class Message {
     ReplyInfo? replyInfo;
     if (model.replyToMessageId != null) {
       final replySenderId = model.replyToSenderId ?? '';
+      final rawReplyName = model.replyToSenderName ?? '';
+      final resolvedReplyName = ContactsService.resolvePeerName(
+        replySenderId,
+        rawReplyName,
+        isMirroredChannelPost: model.replyToChatType == 'channel',
+      );
       replyInfo = ReplyInfo(
         messageId: model.replyToMessageId!,
         senderId: replySenderId,
-        senderName: model.replyToSenderName ?? '',
+        senderName: resolvedReplyName,
         content: model.replyToContent ?? '',
         messageType: model.replyToMessageType,
         chatId: model.replyToChatId,
@@ -2963,6 +3443,38 @@ class Message {
       );
     }
 
+    final dbSenderChatId = _nonEmptyString(model.senderChatId);
+    final dbChannelPostId = _nonEmptyString(dbMediaPayload?['channel_post_id']);
+    final dbIsMirrored = dbChannelPostId != null;
+    final resolvedDbSenderName = ContactsService.resolvePeerName(
+      model.senderId,
+      model.senderName ?? '',
+      senderChatId: dbSenderChatId,
+      isAnonymousAdmin: model.isFromAnonymousAdmin,
+      isMirroredChannelPost: dbIsMirrored,
+    );
+    final resolvedDbSenderAvatar = ContactsService.resolvePeerAvatarUrl(
+      model.senderId,
+      model.senderAvatarUrl,
+      senderChatId: dbSenderChatId,
+      isAnonymousAdmin: model.isFromAnonymousAdmin,
+      isMirroredChannelPost: dbIsMirrored,
+    );
+
+    final rawDbFwdId = model.forwardFromId?.trim() ?? '';
+    final bool isDbUserFwd = rawDbFwdId.isNotEmpty &&
+        rawDbFwdId != '0' &&
+        !rawDbFwdId.startsWith('chat:');
+    final resolvedDbFwdName = isDbUserFwd && model.forwardFromName != null
+        ? ContactsService.resolvePeerName(rawDbFwdId, model.forwardFromName!)
+        : model.forwardFromName;
+    final resolvedDbFwdAvatar = isDbUserFwd
+        ? ContactsService.resolvePeerAvatarUrl(
+            rawDbFwdId,
+            model.forwardFromAvatarUrl,
+          )
+        : model.forwardFromAvatarUrl;
+
     return Message(
       id: model.serverId ?? model.localId,
       chatId: model.chatId,
@@ -2971,8 +3483,8 @@ class Message {
       messageType: model.messageType,
       isEdited: model.isEdited,
       createdAt: model.createdAt,
-      senderName: model.senderName ?? '',
-      senderAvatarUrl: model.senderAvatarUrl,
+      senderName: resolvedDbSenderName,
+      senderAvatarUrl: resolvedDbSenderAvatar,
       fileUrl: (model.fileUrl != null && model.fileUrl!.trim().isNotEmpty)
           ? model.fileUrl!.trim()
           : () {
@@ -3005,8 +3517,8 @@ class Message {
       sendStatus: model.sendStatus,
       isForward: model.isForward,
       forwardFromId: model.forwardFromId,
-      forwardFromName: model.forwardFromName,
-      forwardFromAvatarUrl: model.forwardFromAvatarUrl,
+      forwardFromName: resolvedDbFwdName,
+      forwardFromAvatarUrl: resolvedDbFwdAvatar,
       senderCustomization: dbSenderCust,
       groupedId: model.groupedId,
       entities: parsedEntities,
@@ -3028,7 +3540,7 @@ class Message {
       commentsCount: model.commentsCount,
       canComment: dbMediaPayload?['can_comment'] == true,
       recentRepliers: RecentReplier.parseList(model.recentRepliersJson),
-      channelPostId: _nonEmptyString(dbMediaPayload?['channel_post_id']),
+      channelPostId: dbChannelPostId,
       threadRootMessageId: _nonEmptyString(model.threadRootMessageId),
       hasMediaSpoiler: model.hasMediaSpoiler ||
           (dbMediaPayload?['has_media_spoiler'] == true),
@@ -3046,7 +3558,7 @@ class Message {
       effectId: _nonEmptyString(model.effectId),
       topicId: model.topicId,
       forwardsCount: model.forwardsCount,
-      senderChatId: _nonEmptyString(model.senderChatId),
+      senderChatId: dbSenderChatId,
       senderChatName: _nonEmptyString(model.senderChatName),
       senderChatAvatarUrl: _nonEmptyString(model.senderChatAvatarUrl),
       isOwn: dbMediaPayload?['is_own'] == true,
@@ -4227,9 +4739,11 @@ class ChatService {
           parsed.peerCustomizations.forEach((uid, cust) {
             PeerCustomizationCache.instance.put(uid, cust, notify: false);
           });
+          final resolvedMessages =
+              parsed.messages.map((m) => m.withResolvedContacts()).toList();
           return {
             'success': true,
-            'messages': parsed.messages,
+            'messages': resolvedMessages,
             'has_more': parsed.hasMore,
             'has_more_newer': parsed.hasMoreNewer,
           };

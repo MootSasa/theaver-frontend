@@ -7,6 +7,7 @@ import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../services/chat_service.dart';
+import '../../../services/contacts_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../services/websocket_service.dart';
 import '../../../utils/haptic_utils.dart';
@@ -49,6 +50,7 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
   void initState() {
     super.initState();
     _primaryLink = (widget.primaryInviteLink ?? '').trim();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     unawaited(_loadLinks());
     _joinRequestsSub = WebSocketService().eventStream.listen((event) {
       if (!mounted) return;
@@ -59,8 +61,13 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
     });
   }
 
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _joinRequestsSub?.cancel();
     super.dispose();
   }
@@ -497,61 +504,74 @@ class _InviteLinksScreenState extends State<InviteLinksScreen> {
                 header: 'ЗАЯВКИ НА ВСТУПЛЕНИЕ (${_joinRequests.length})',
                 children: [
                   for (final req in _joinRequests)
-                    TheavListRow(
-                      leading: AvatarWithStatus(
-                        userId: req.userId,
-                        avatarUrl: req.avatarUrl,
-                        name: req.displayName,
-                        radius: 20,
-                      ),
-                      title: req.displayName.isNotEmpty
-                          ? req.displayName
-                          : '@${req.username}',
-                      subtitle: req.username.isNotEmpty
-                          ? '@${req.username}'
-                          : 'Ожидает одобрения',
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _isBusy ? null : () => _declineRequest(req),
-                            child: Container(
-                              width: 34,
-                              height: 34,
-                              decoration: BoxDecoration(
-                                color: palette.error.withValues(alpha: 0.14),
-                                shape: BoxShape.circle,
-                              ),
-                              alignment: Alignment.center,
-                              child: iconoir.Xmark(
-                                width: 17,
-                                height: 17,
-                                color: palette.error,
-                              ),
-                            ),
+                    Builder(
+                      builder: (_) {
+                        final rawName = req.displayName.isNotEmpty
+                            ? req.displayName
+                            : '@${req.username}';
+                        final reqName = ContactsService.resolvePeerName(
+                          req.userId,
+                          rawName,
+                        );
+                        final reqAvatar = ContactsService.resolvePeerAvatarUrl(
+                          req.userId,
+                          req.avatarUrl,
+                        );
+                        return TheavListRow(
+                          leading: AvatarWithStatus(
+                            userId: req.userId,
+                            avatarUrl: reqAvatar,
+                            name: reqName,
+                            radius: 20,
                           ),
-                          const SizedBox(width: 8),
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _isBusy ? null : () => _approveRequest(req),
-                            child: Container(
-                              width: 34,
-                              height: 34,
-                              decoration: BoxDecoration(
-                                color: palette.primary,
-                                shape: BoxShape.circle,
+                          title: reqName,
+                          subtitle: req.username.isNotEmpty
+                              ? '@${req.username}'
+                              : 'Ожидает одобрения',
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: _isBusy ? null : () => _declineRequest(req),
+                                child: Container(
+                                  width: 34,
+                                  height: 34,
+                                  decoration: BoxDecoration(
+                                    color: palette.error.withValues(alpha: 0.14),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: iconoir.Xmark(
+                                    width: 17,
+                                    height: 17,
+                                    color: palette.error,
+                                  ),
+                                ),
                               ),
-                              alignment: Alignment.center,
-                              child: iconoir.Check(
-                                width: 17,
-                                height: 17,
-                                color: palette.onPrimary,
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: _isBusy ? null : () => _approveRequest(req),
+                                child: Container(
+                                  width: 34,
+                                  height: 34,
+                                  decoration: BoxDecoration(
+                                    color: palette.primary,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: iconoir.Check(
+                                    width: 17,
+                                    height: 17,
+                                    color: palette.onPrimary,
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                 ],
               ),

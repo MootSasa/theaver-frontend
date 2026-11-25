@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
+import '../../services/contacts_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../utils/image_utils.dart';
 import 'avatar_decoration_frame.dart';
@@ -19,6 +20,7 @@ class AvatarWithStatus extends StatefulWidget {
   final AvatarDecorationPreset? decorationOverride;
   final bool showDecoration;
   final bool animateDecoration;
+  final bool resolveContactOverride;
 
   const AvatarWithStatus({
     Key? key,
@@ -32,6 +34,7 @@ class AvatarWithStatus extends StatefulWidget {
     this.decorationOverride,
     this.showDecoration = true,
     this.animateDecoration = true,
+    this.resolveContactOverride = true,
   }) : super(key: key);
 
   @override
@@ -78,7 +81,41 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
 
   @override
   Widget build(BuildContext context) {
-    final provider = avatarImageProvider(widget.avatarUrl);
+    if (widget.resolveContactOverride &&
+        ContactsService.shouldResolveUserIdentity(widget.userId)) {
+      return ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (context, _, __) {
+          final effectiveAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+            widget.userId,
+            widget.avatarUrl,
+          );
+          final effectiveName = ContactsService.resolvePeerName(
+            widget.userId,
+            widget.name,
+          );
+          return _buildAvatarContent(
+            context,
+            effectiveAvatarUrl: effectiveAvatarUrl,
+            effectiveName: effectiveName,
+          );
+        },
+      );
+    }
+
+    return _buildAvatarContent(
+      context,
+      effectiveAvatarUrl: widget.avatarUrl,
+      effectiveName: widget.name,
+    );
+  }
+
+  Widget _buildAvatarContent(
+    BuildContext context, {
+    required String? effectiveAvatarUrl,
+    required String effectiveName,
+  }) {
+    final provider = avatarImageProvider(effectiveAvatarUrl);
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
     final bgColor = widget.backgroundColor ??
@@ -102,7 +139,9 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
         onBackgroundImageError: provider != null ? (_, __) {} : null,
         child: provider == null
             ? Text(
-                widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
+                effectiveName.isNotEmpty
+                    ? effectiveName.characters.first.toUpperCase()
+                    : '?',
                 style: TextStyle(
                   color: textColor,
                   fontSize: widget.radius * 0.8,

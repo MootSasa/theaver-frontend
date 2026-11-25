@@ -10,11 +10,16 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar
 import '../../services/settings_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cache_service.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
+import '../../services/database/app_database.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/user/avatar_with_status.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/image_utils.dart';
 
 /// Экран «Данные и хранилище» — полный пункт 3.6 плана.
 /// Поддерживает два полноценных дизайна:
@@ -51,6 +56,7 @@ class _StorageScreenState extends State<StorageScreen> {
   int _totalUsedBytes = 0;
   List<_MediaTypeStorage> _byType = [];
   List<_ChatStorage> _byChat = [];
+  Map<String, DbChat> _dbChatsById = const {};
 
   // Storage settings from server
   StorageServerSettings _storageSettings = const StorageServerSettings();
@@ -65,7 +71,70 @@ class _StorageScreenState extends State<StorageScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadData();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
+
+  Future<void> _loadDbChats() async {
+    try {
+      final chats = await AppDatabase().getChats();
+      if (!mounted) return;
+      setState(() {
+        _dbChatsById = {for (final c in chats) c.chatId: c};
+      });
+    } catch (_) {}
+  }
+
+  ({
+    String chatName,
+    String? avatarUrl,
+    String? peerUserId,
+    bool isPrivateHuman,
+    bool isPrivate,
+  }) _resolveChatStorageMeta(_ChatStorage item, AppLocalizations l10n) {
+    final cachedChat = ChatInstantCache.instance.getSync(item.chatId)?.chat;
+    final dbChat = _dbChatsById[item.chatId];
+    final chatType = cachedChat?.chatType ?? dbChat?.chatType ?? '';
+    final isBot = cachedChat?.isBot ?? dbChat?.isBot ?? false;
+    final peerId = cachedChat?.otherUserId ?? dbChat?.otherUserId;
+    final isPrivate = chatType == 'private';
+    final isPrivateHuman = isPrivate &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(peerId);
+    final resolvedName = chatType == 'saved'
+        ? l10n.translate('chat_saved_messages')
+        : (isPrivateHuman
+            ? ContactsService.resolvePeerName(
+                peerId,
+                item.chatName,
+                isBot: isBot,
+              )
+            : item.chatName);
+    final rawAvatar = cachedChat?.avatarUrl ?? dbChat?.avatarUrl;
+    final resolvedAvatar = isPrivateHuman
+        ? ContactsService.resolvePeerAvatarUrl(
+            peerId,
+            rawAvatar,
+            isBot: isBot,
+          )
+        : rawAvatar;
+    return (
+      chatName: resolvedName,
+      avatarUrl: resolvedAvatar,
+      peerUserId: peerId,
+      isPrivateHuman: isPrivateHuman,
+      isPrivate: isPrivate,
+    );
   }
 
   Future<void> _loadLocalChatStats() async {
@@ -93,6 +162,7 @@ class _StorageScreenState extends State<StorageScreen> {
   Future<void> _loadData() async {
     _autoDownloadSettings = _settingsService.storageSettings;
     try {
+      await _loadDbChats();
       _keepMediaPeriod = await _cacheService.getKeepMediaPeriod();
       _maxCacheSizeBytes = await _cacheService.getMaxCacheSize();
       if (widget.initialBreakdown != null) {
@@ -300,10 +370,11 @@ class _StorageScreenState extends State<StorageScreen> {
 
   void _showClearChatDialog(_ChatStorage chat) {
     final l10n = context.l10n;
+    final meta = _resolveChatStorageMeta(chat, l10n);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(l10n.translate('storage_clear_chat_cache_title').replaceAll('{chat}', chat.chatName)),
+        title: Text(l10n.translate('storage_clear_chat_cache_title').replaceAll('{chat}', meta.chatName)),
         content: Text(l10n.translate('storage_clear_chat_cache_message')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(l10n.translate('storage_cancel'))),
@@ -964,24 +1035,59 @@ class _StorageScreenState extends State<StorageScreen> {
     final child = Column(
       children: [
         for (int i = 0; i < _byChat.length; i++) ...[
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: CircleAvatar(
-              backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-              child: Icon(Icons.chat_bubble_outline, color: Theme.of(context).colorScheme.primary, size: 20),
-            ),
-            title: Text(_byChat[i].chatName, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text('${_byChat[i].fileCount} ${l10n.translate('storage_files_count')}'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_byChat[i].sizeHuman, style: const TextStyle(fontWeight: FontWeight.w500)),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _showClearChatDialog(_byChat[i]),
+          Builder(
+            builder: (context) {
+              final item = _byChat[i];
+              final meta = _resolveChatStorageMeta(item, l10n);
+              final nonPrivateProvider = !meta.isPrivate
+                  ? avatarImageProvider(meta.avatarUrl)
+                  : null;
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: meta.isPrivate
+                    ? AvatarWithStatus(
+                        userId: meta.peerUserId,
+                        avatarUrl: meta.avatarUrl,
+                        name: meta.chatName,
+                        radius: 20,
+                        resolveContactOverride: meta.isPrivateHuman,
+                      )
+                    : CircleAvatar(
+                        backgroundColor: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                        backgroundImage: nonPrivateProvider,
+                        onBackgroundImageError:
+                            nonPrivateProvider != null ? (_, __) {} : null,
+                        child: nonPrivateProvider == null
+                            ? Icon(
+                                Icons.chat_bubble_outline,
+                                color: Theme.of(context).colorScheme.primary,
+                                size: 20,
+                              )
+                            : null,
+                      ),
+                title: Text(
+                  meta.chatName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
+                subtitle: Text(
+                    '${item.fileCount} ${l10n.translate('storage_files_count')}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(item.sizeHuman,
+                        style: const TextStyle(fontWeight: FontWeight.w500)),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      onPressed: () => _showClearChatDialog(item),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
           if (i < _byChat.length - 1)
             const Divider(height: 1),

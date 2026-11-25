@@ -446,9 +446,7 @@ class ProfileScreenState extends State<ProfileScreen>
     _ballisticScrollController = AnimationController.unbounded(vsync: this);
     _ballisticScrollController.addListener(_onBallisticScrollTick);
 
-    if (_isUser) {
-      ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
-    }
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
 
     // Мгновенная синхронная гидратация всех данных профиля на Frame 0 (без lazy-загрузки);
     // сетевые и SQL-запросы _initializeProfileData() запускаются в didChangeDependencies
@@ -457,7 +455,16 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   void _onContactsRevisionChanged() {
-    if (!mounted || !_isUser) return;
+    if (!mounted) return;
+    if (!_isUser) {
+      if (_hasActiveMemberFilter &&
+          _memberSearchController.text.trim().isNotEmpty) {
+        unawaited(_fetchMembersPage(reset: true));
+      } else {
+        setState(() {});
+      }
+      return;
+    }
     final uid = widget.userId;
     if (uid == null || uid.isEmpty) return;
     final updated = ContactsService.getCached(uid);
@@ -848,9 +855,7 @@ class ProfileScreenState extends State<ProfileScreen>
     if (_isSelf) {
       AvatarSyncService().removeListener(_onAvatarSyncChanged);
     }
-    if (_isUser) {
-      ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
-    }
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _nameController.dispose();
@@ -1690,6 +1695,7 @@ class ProfileScreenState extends State<ProfileScreen>
                   avatarUrl: p.avatarUrl,
                   role: p.role,
                   isOnline: p.isOnline,
+                  isBot: p.isBot,
                   lastSeen: p.lastSeen?.toIso8601String(),
                   lastSeenStatus: p.lastSeenStatus,
                 ),
@@ -2873,45 +2879,68 @@ class ProfileScreenState extends State<ProfileScreen>
     final picked = await showTheavModalSheet<ChatParticipant>(
       context: context,
       title: 'Новый владелец',
-      builder: (ctx) => ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-        children: [
-          TheavInsetGroup(
-            footer:
-                'После передачи прав вы автоматически покинете ${_isChannel ? 'канал' : 'группу'}.',
-            children: [
-              for (final member in candidates)
-                TheavListRow(
-                  leading: AvatarWithStatus(
-                    userId: member.id,
-                    avatarUrl: member.avatarUrl,
-                    name: member.displayName.isNotEmpty
-                        ? member.displayName
-                        : member.username,
-                    radius: 20,
-                    isOnline: member.isOnline,
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) => ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+          children: [
+            TheavInsetGroup(
+              footer:
+                  'После передачи прав вы автоматически покинете ${_isChannel ? 'канал' : 'группу'}.',
+              children: [
+                for (final member in candidates)
+                  Builder(
+                    builder: (_) {
+                      final rawName = member.displayName.isNotEmpty
+                          ? member.displayName
+                          : '@${member.username}';
+                      final resolvedName = ContactsService.resolvePeerName(
+                        member.id,
+                        rawName,
+                        isBot: member.isBot,
+                      );
+                      final resolvedAvatar =
+                          ContactsService.resolvePeerAvatarUrl(
+                        member.id,
+                        member.avatarUrl,
+                        isBot: member.isBot,
+                      );
+                      return TheavListRow(
+                        leading: AvatarWithStatus(
+                          userId: member.id,
+                          avatarUrl: resolvedAvatar,
+                          name: resolvedName,
+                          radius: 20,
+                          isOnline: member.isOnline,
+                          resolveContactOverride: !member.isBot,
+                        ),
+                        title: resolvedName,
+                        subtitle: member.role == 'admin'
+                            ? 'Администратор'
+                            : 'Участник',
+                        onTap: () => Navigator.pop(ctx, member),
+                      );
+                    },
                   ),
-                  title: member.displayName.isNotEmpty
-                      ? member.displayName
-                      : '@${member.username}',
-                  subtitle: member.role == 'admin'
-                      ? 'Администратор'
-                      : 'Участник',
-                  onTap: () => Navigator.pop(ctx, member),
-                ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
     if (picked == null || !mounted) return;
 
+    final pickedName = ContactsService.resolvePeerName(
+      picked.id,
+      picked.displayName.isNotEmpty ? picked.displayName : picked.username,
+      isBot: picked.isBot,
+    );
     final confirmed = await showTheavDialog<bool>(
       context: context,
       title: 'Передать права и выйти?',
       message:
-          'Назначить ${picked.displayName.isNotEmpty ? picked.displayName : picked.username} новым владельцем и выйти?',
+          'Назначить $pickedName новым владельцем и выйти?',
       actions: const [
         TheavDialogAction<bool>(label: 'Отмена', result: false),
         TheavDialogAction<bool>(
@@ -3312,7 +3341,12 @@ class ProfileScreenState extends State<ProfileScreen>
           'profile_member_removed',
           '{name} удалён(а) из чата',
         );
-        _showToast(tmpl.replaceAll('{name}', member.displayName));
+        final resolvedName = ContactsService.resolvePeerName(
+          member.userId,
+          member.displayName,
+          isBot: member.isBot,
+        );
+        _showToast(tmpl.replaceAll('{name}', resolvedName));
       }
     } catch (_) {
       if (mounted) {
@@ -3356,9 +3390,14 @@ class ProfileScreenState extends State<ProfileScreen>
   Future<void> _confirmBanMember(ChatParticipant participant) async {
     final cid = _resolvedChatId;
     if (cid == null || cid.isEmpty) return;
-    final targetName = participant.displayName.isNotEmpty
+    final rawTargetName = participant.displayName.isNotEmpty
         ? participant.displayName
         : '@${participant.username}';
+    final targetName = ContactsService.resolvePeerName(
+      participant.id,
+      rawTargetName,
+      isBot: participant.isBot,
+    );
 
     final confirmed = await showTheavDialog<bool>(
       context: context,
@@ -3419,9 +3458,16 @@ class ProfileScreenState extends State<ProfileScreen>
       (label: '1 месяц', value: const Duration(days: 30)),
     ];
 
+    final resolvedParticipantName = ContactsService.resolvePeerName(
+      participant.id,
+      participant.displayName.isNotEmpty
+          ? participant.displayName
+          : '@${participant.username}',
+      isBot: participant.isBot,
+    );
     final saved = await showTheavModalSheet<bool>(
       context: context,
-      title: 'Ограничить: ${participant.displayName}',
+      title: 'Ограничить: $resolvedParticipantName',
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) => SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
@@ -3933,10 +3979,42 @@ class ProfileScreenState extends State<ProfileScreen>
             avatarUrl: m.avatarUrl,
             role: m.role,
             isOnline: m.isOnline,
+            isBot: m.isBot,
             lastSeenStatus: m.lastSeenStatus,
           ),
         )
         .toList();
+  }
+
+  bool _matchesMemberFilter(ChatParticipant m) {
+    switch (_memberFilter) {
+      case 'admins':
+        return m.role == 'owner' || m.role == 'admin';
+      case 'bots':
+        return m.isBot;
+      case 'restricted':
+        return m.memberRestrictions != null &&
+            (m.restrictedUntil == null ||
+                m.restrictedUntil!.isAfter(DateTime.now()));
+      default:
+        return true;
+    }
+  }
+
+  List<ChatParticipant> _localMemberSearchMatches(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    return _resolvedParticipantsForList.where((m) {
+      if (!_matchesMemberFilter(m)) return false;
+      final resolvedName = ContactsService.resolvePeerName(
+        m.id,
+        m.displayName,
+        isBot: m.isBot,
+      ).toLowerCase();
+      return resolvedName.contains(q) ||
+          m.displayName.toLowerCase().contains(q) ||
+          m.username.toLowerCase().contains(q);
+    }).toList();
   }
 
   void _onMemberSearchChanged(String _) {
@@ -3987,7 +4065,16 @@ class ProfileScreenState extends State<ProfileScreen>
     setState(() {
       _isLoadingMembersPage = false;
       if (reset) {
-        _filteredParticipants = res.members;
+        final merged = List<ChatParticipant>.from(res.members);
+        if (query.isNotEmpty) {
+          final seen = {for (final p in merged) p.id};
+          for (final localMatch in _localMemberSearchMatches(query)) {
+            if (seen.add(localMatch.id)) {
+              merged.add(localMatch);
+            }
+          }
+        }
+        _filteredParticipants = merged;
       } else {
         final base = _hasActiveMemberFilter
             ? List<ChatParticipant>.from(_filteredParticipants)
@@ -4305,11 +4392,21 @@ class ProfileScreenState extends State<ProfileScreen>
         (member.role != 'admin' || _myRole == 'owner');
     final canShowMenu = canManageAdmins || canModerate;
 
-    final memberName = member.displayName.isNotEmpty
+    final rawMemberName = member.displayName.isNotEmpty
         ? member.displayName
         : (member.username.isNotEmpty
             ? '@${member.username}'
             : _tr(l10n, 'profile_default_user', 'Пользователь'));
+    final memberName = ContactsService.resolvePeerName(
+      member.id,
+      rawMemberName,
+      isBot: member.isBot,
+    );
+    final memberAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+      member.id,
+      member.avatarUrl,
+      isBot: member.isBot,
+    );
 
     final isRestricted = member.memberRestrictions != null &&
         (member.restrictedUntil == null ||
@@ -4335,7 +4432,7 @@ class ProfileScreenState extends State<ProfileScreen>
               entityType: ProfileEntityType.user,
               userId: member.id,
               initialName: memberName,
-              initialAvatarUrl: member.avatarUrl,
+              initialAvatarUrl: memberAvatarUrl,
               initialIsOnline: member.isOnline,
             ),
           ),
@@ -4358,10 +4455,11 @@ class ProfileScreenState extends State<ProfileScreen>
           children: [
             AvatarWithStatus(
               userId: member.id,
-              avatarUrl: member.avatarUrl,
+              avatarUrl: memberAvatarUrl,
               name: memberName,
               radius: 22,
               isOnline: member.isOnline,
+              resolveContactOverride: !member.isBot,
               backgroundColor: accentColor.withValues(alpha: 0.2),
               decorationOverride: member.peerCustomization?.avatarDecoration,
             ),
@@ -4527,14 +4625,24 @@ class ProfileScreenState extends State<ProfileScreen>
               ),
               onTap: () {
                 Navigator.pop(ctx);
+                final resolvedName = ContactsService.resolvePeerName(
+                  member.id,
+                  member.displayName,
+                  isBot: member.isBot,
+                );
+                final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+                  member.id,
+                  member.avatarUrl,
+                  isBot: member.isBot,
+                );
                 Navigator.push(
                   context,
                   SwipeBackPageRoute(
                     builder: (_) => ProfileScreen(
                       entityType: ProfileEntityType.user,
                       userId: member.id,
-                      initialName: member.displayName,
-                      initialAvatarUrl: member.avatarUrl,
+                      initialName: resolvedName,
+                      initialAvatarUrl: resolvedAvatar,
                       initialIsOnline: member.isOnline,
                     ),
                   ),
@@ -4626,6 +4734,7 @@ class ProfileScreenState extends State<ProfileScreen>
                       username: member.username,
                       avatarUrl: member.avatarUrl,
                       role: member.role,
+                      isBot: member.isBot,
                     ),
                   );
                 },
@@ -7505,6 +7614,20 @@ class ProfileScreenState extends State<ProfileScreen>
                                                       );
                                                     },
                                                     onMemberTap: (m) {
+                                                      final resolvedName =
+                                                          ContactsService
+                                                              .resolvePeerName(
+                                                        m.userId,
+                                                        m.displayName,
+                                                        isBot: m.isBot,
+                                                      );
+                                                      final resolvedAvatar =
+                                                          ContactsService
+                                                              .resolvePeerAvatarUrl(
+                                                        m.userId,
+                                                        m.avatarUrl,
+                                                        isBot: m.isBot,
+                                                      );
                                                       Navigator.push(
                                                         context,
                                                         SwipeBackPageRoute(
@@ -7515,9 +7638,9 @@ class ProfileScreenState extends State<ProfileScreen>
                                                                     .user,
                                                             userId: m.userId,
                                                             initialName:
-                                                                m.displayName,
+                                                                resolvedName,
                                                             initialAvatarUrl:
-                                                                m.avatarUrl,
+                                                                resolvedAvatar,
                                                             initialIsOnline:
                                                                 m.isOnline,
                                                           ),

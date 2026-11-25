@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../../services/chat_service.dart';
+import '../../../services/contacts_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../services/groups_channels_parity_service.dart';
 import '../../../utils/haptic_utils.dart';
@@ -78,7 +79,18 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     _savedParticipantsHidden = _participantsHidden;
     _savedAggressiveAntiSpam = _aggressiveAntiSpam;
     _mediaExpanded = _permissions.canSendMessages;
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     unawaited(_loadLists());
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
   }
 
   int _nearestSlowModeStop(int raw) {
@@ -726,27 +738,49 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                     ),
                   )
                 else
-                  TheavInsetGroup(
-                    children: [
-                      for (final m in restricted)
-                        TheavListRow(
-                          leading: AvatarWithStatus(
-                            userId: m.id,
-                            avatarUrl: m.avatarUrl,
-                            name: m.displayName,
-                            radius: 20,
-                            decorationOverride:
-                                m.peerCustomization?.avatarDecoration,
+                  ValueListenableBuilder<int>(
+                    valueListenable: ContactsService.revisionNotifier,
+                    builder: (_, __, ___) => TheavInsetGroup(
+                      children: [
+                        for (final m in restricted)
+                          Builder(
+                            builder: (_) {
+                              final rawName = m.displayName.isNotEmpty
+                                  ? m.displayName
+                                  : '@${m.username}';
+                              final mName = ContactsService.resolvePeerName(
+                                m.id,
+                                rawName,
+                                isBot: m.isBot,
+                              );
+                              final mAvatar =
+                                  ContactsService.resolvePeerAvatarUrl(
+                                m.id,
+                                m.avatarUrl,
+                                isBot: m.isBot,
+                              );
+                              return TheavListRow(
+                                leading: AvatarWithStatus(
+                                  userId: m.id,
+                                  avatarUrl: mAvatar,
+                                  name: mName,
+                                  radius: 20,
+                                  resolveContactOverride: !m.isBot,
+                                  decorationOverride:
+                                      m.peerCustomization?.avatarDecoration,
+                                ),
+                                title: mName,
+                                subtitle: _formatRestrictionsSummary(m),
+                                showChevron: true,
+                                onTap: () async {
+                                  await _openRestrictionEditorSheet(m);
+                                  if (ctx.mounted) setSheetState(() {});
+                                },
+                              );
+                            },
                           ),
-                          title: m.displayName,
-                          subtitle: _formatRestrictionsSummary(m),
-                          showChevron: true,
-                          onTap: () async {
-                            await _openRestrictionEditorSheet(m);
-                            if (ctx.mounted) setSheetState(() {});
-                          },
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
               ],
             ),
@@ -785,7 +819,26 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
       if (!mounted) return;
       setSheetState(() {
         if (reset) pagedBanned = [];
-        pagedBanned.addAll(res.bannedMembers);
+        final seen = {for (final b in pagedBanned) b.id};
+        for (final b in res.bannedMembers) {
+          if (seen.add(b.id)) pagedBanned.add(b);
+        }
+        final trimmed = searchCtrl.text.trim().toLowerCase();
+        if (reset && trimmed.isNotEmpty) {
+          for (final b in _bannedMembers) {
+            final resolved = ContactsService.resolvePeerName(
+              b.id,
+              b.displayName,
+              isBot: b.isBot,
+            ).toLowerCase();
+            if ((resolved.contains(trimmed) ||
+                    b.displayName.toLowerCase().contains(trimmed) ||
+                    b.username.toLowerCase().contains(trimmed)) &&
+                seen.add(b.id)) {
+              pagedBanned.add(b);
+            }
+          }
+        }
         hasMore = res.hasMore;
         loading = false;
         loadingMore = false;
@@ -860,41 +913,62 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
                     ),
                   )
                 else ...[
-                  TheavInsetGroup(
-                    children: [
-                      for (final banned in pagedBanned)
-                        TheavListRow(
-                          leading: AvatarWithStatus(
-                            userId: banned.id,
-                            avatarUrl: banned.avatarUrl,
-                            name: banned.displayName,
-                            radius: 20,
-                            decorationOverride:
-                                banned.peerCustomization?.avatarDecoration,
-                          ),
-                          title: banned.displayName.isNotEmpty
-                              ? banned.displayName
-                              : '@${banned.username}',
-                          subtitle: banned.username.isNotEmpty
-                              ? '@${banned.username}'
-                              : null,
-                          trailing: TheavFloatingPillButton(
-                            height: 32,
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            label: 'Разблокировать',
-                            onTap: () async {
-                              await _unbanUser(banned);
-                              if (ctx.mounted) {
-                                setSheetState(() {
-                                  pagedBanned.removeWhere(
-                                    (m) => m.id == banned.id,
-                                  );
-                                });
-                              }
+                  ValueListenableBuilder<int>(
+                    valueListenable: ContactsService.revisionNotifier,
+                    builder: (_, __, ___) => TheavInsetGroup(
+                      children: [
+                        for (final banned in pagedBanned)
+                          Builder(
+                            builder: (_) {
+                              final rawName = banned.displayName.isNotEmpty
+                                  ? banned.displayName
+                                  : '@${banned.username}';
+                              final bannedName = ContactsService.resolvePeerName(
+                                banned.id,
+                                rawName,
+                                isBot: banned.isBot,
+                              );
+                              final bannedAvatar =
+                                  ContactsService.resolvePeerAvatarUrl(
+                                banned.id,
+                                banned.avatarUrl,
+                                isBot: banned.isBot,
+                              );
+                              return TheavListRow(
+                                leading: AvatarWithStatus(
+                                  userId: banned.id,
+                                  avatarUrl: bannedAvatar,
+                                  name: bannedName,
+                                  radius: 20,
+                                  resolveContactOverride: !banned.isBot,
+                                  decorationOverride:
+                                      banned.peerCustomization?.avatarDecoration,
+                                ),
+                                title: bannedName,
+                                subtitle: banned.username.isNotEmpty
+                                    ? '@${banned.username}'
+                                    : null,
+                                trailing: TheavFloatingPillButton(
+                                  height: 32,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10),
+                                  label: 'Разблокировать',
+                                  onTap: () async {
+                                    await _unbanUser(banned);
+                                    if (ctx.mounted) {
+                                      setSheetState(() {
+                                        pagedBanned.removeWhere(
+                                          (m) => m.id == banned.id,
+                                        );
+                                      });
+                                    }
+                                  },
+                                ),
+                              );
                             },
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                   if (hasMore)
                     Padding(
@@ -998,27 +1072,47 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     return showTheavModalSheet<ChatParticipant>(
       context: context,
       title: title,
-      builder: (ctx) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-        child: TheavInsetGroup(
-          children: [
-            for (final m in members)
-              TheavListRow(
-                leading: AvatarWithStatus(
-                  userId: m.id,
-                  avatarUrl: m.avatarUrl,
-                  name: m.displayName,
-                  radius: 20,
-                  decorationOverride: m.peerCustomization?.avatarDecoration,
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) => SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+          child: TheavInsetGroup(
+            children: [
+              for (final m in members)
+                Builder(
+                  builder: (_) {
+                    final rawName = m.displayName.isNotEmpty
+                        ? m.displayName
+                        : '@${m.username}';
+                    final mName = ContactsService.resolvePeerName(
+                      m.id,
+                      rawName,
+                      isBot: m.isBot,
+                    );
+                    final mAvatar = ContactsService.resolvePeerAvatarUrl(
+                      m.id,
+                      m.avatarUrl,
+                      isBot: m.isBot,
+                    );
+                    return TheavListRow(
+                      leading: AvatarWithStatus(
+                        userId: m.id,
+                        avatarUrl: mAvatar,
+                        name: mName,
+                        radius: 20,
+                        resolveContactOverride: !m.isBot,
+                        decorationOverride:
+                            m.peerCustomization?.avatarDecoration,
+                      ),
+                      title: mName,
+                      subtitle: m.username.isNotEmpty ? '@${m.username}' : null,
+                      showChevron: true,
+                      onTap: () => Navigator.pop(ctx, m),
+                    );
+                  },
                 ),
-                title: m.displayName.isNotEmpty
-                    ? m.displayName
-                    : '@${m.username}',
-                subtitle: m.username.isNotEmpty ? '@${m.username}' : null,
-                showChevron: true,
-                onTap: () => Navigator.pop(ctx, m),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1046,9 +1140,14 @@ class _GroupPermissionsScreenState extends State<GroupPermissionsScreen> {
     Duration? duration;
     var saving = false;
 
+    final resolvedMemberName = ContactsService.resolvePeerName(
+      member.id,
+      member.displayName.isNotEmpty ? member.displayName : '@${member.username}',
+      isBot: member.isBot,
+    );
     final saved = await showTheavModalSheet<bool>(
       context: context,
-      title: 'Ограничения: ${member.displayName}',
+      title: 'Ограничения: $resolvedMemberName',
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
           final palette = ctx.theav;

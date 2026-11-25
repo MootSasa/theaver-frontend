@@ -5,6 +5,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/chat_realtime_manager.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/groups_channels_parity_service.dart';
 import '../../services/websocket_service.dart';
@@ -104,6 +105,7 @@ class _ForumTopicsScreenState extends State<ForumTopicsScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _searchController.addListener(_onSearchChanged);
     _bindRealtime();
     unawaited(_loadTopics());
@@ -111,10 +113,15 @@ class _ForumTopicsScreenState extends State<ForumTopicsScreen> {
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _debounce?.cancel();
     _sub?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   void _bindRealtime() {
@@ -670,9 +677,18 @@ class _ForumTopicsScreenState extends State<ForumTopicsScreen> {
 
   Widget _buildTopicRow(ForumTopic topic, TheavPalette palette) {
     final color = Color(topic.iconColor | 0xFF000000);
+    final rawSenderName = topic.lastMessageSenderName?.trim() ?? '';
+    final resolvedSenderName = (topic.lastMessageSenderId != null &&
+            topic.lastMessageSenderId!.isNotEmpty &&
+            rawSenderName.isNotEmpty)
+        ? ContactsService.resolvePeerName(
+            topic.lastMessageSenderId,
+            rawSenderName,
+          )
+        : rawSenderName;
     final preview = topic.lastMessage?.trim().isNotEmpty == true
-        ? (topic.lastMessageSenderName?.isNotEmpty == true
-            ? '${topic.lastMessageSenderName}: ${topic.lastMessage}'
+        ? (resolvedSenderName.isNotEmpty
+            ? '$resolvedSenderName: ${topic.lastMessage}'
             : topic.lastMessage!)
         : 'Нет сообщений';
 

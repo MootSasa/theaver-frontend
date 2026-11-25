@@ -71,11 +71,20 @@ class _ContactPickerSheetBodyState extends State<_ContactPickerSheetBody> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadContacts();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    setState(() {
+      _contacts = ContactsService.getSavedContacts();
+    });
   }
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchCtrl.dispose();
     _firstNameCtrl.dispose();
     _lastNameCtrl.dispose();
@@ -171,15 +180,22 @@ class _ContactPickerSheetBodyState extends State<_ContactPickerSheetBody> {
                           final sub = c.username.isNotEmpty
                               ? '@${c.username}'
                               : 'Контакт Theaver';
+                          final effectiveAvatar = c.effectiveAvatarUrl;
+                          final validAvatar =
+                              getValidAvatarUrl(effectiveAvatar);
+                          final avatarProvider = validAvatar != null
+                              ? avatarImageProvider(effectiveAvatar)
+                              : null;
                           return ListTile(
                             leading: CircleAvatar(
                               radius: 20,
                               backgroundColor:
                                   palette.primary.withValues(alpha: 0.14),
-                              backgroundImage: c.avatarUrl.isNotEmpty
-                                  ? avatarImageProvider(c.avatarUrl)
+                              backgroundImage: avatarProvider,
+                              onBackgroundImageError: avatarProvider != null
+                                  ? (_, __) {}
                                   : null,
-                              child: c.avatarUrl.isEmpty
+                              child: avatarProvider == null
                                   ? Text(
                                       name.isNotEmpty
                                           ? name[0].toUpperCase()

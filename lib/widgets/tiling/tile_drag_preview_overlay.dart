@@ -2,6 +2,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../user/avatar_with_status.dart';
@@ -115,28 +117,61 @@ class TileDragPreviewOverlay extends StatelessWidget {
                         ? Colors.white.withValues(alpha: 0.14)
                         : Colors.black.withValues(alpha: 0.07),
                   ),
-                  child: Row(
-                    children: [
-                      AvatarWithStatus(
-                        avatarUrl: payload.avatarUrl,
-                        name: payload.chatName,
-                        radius: 10,
-                        isOnline: false,
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          payload.chatName.isNotEmpty ? payload.chatName : 'Чат',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                            color: isDark ? Colors.white : Colors.black87,
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: ContactsService.revisionNotifier,
+                    builder: (context, _, __) {
+                      final snap = payload.chatId.isNotEmpty
+                          ? ChatInstantCache.instance.getSync(payload.chatId)
+                          : null;
+                      final bool isBot =
+                          (snap?.isBot ?? snap?.chat?.isBot) == true;
+                      final bool isPrivate = payload.chatType == 'private';
+                      final bool canResolvePeer = isPrivate &&
+                          ContactsService.shouldResolveUserIdentity(
+                            payload.otherUserId,
+                            isBot: isBot,
+                          );
+                      final String resolvedName = canResolvePeer
+                          ? ContactsService.resolvePeerName(
+                              payload.otherUserId,
+                              payload.chatName,
+                              isBot: isBot,
+                            )
+                          : payload.chatName;
+                      final String? resolvedAvatar = canResolvePeer
+                          ? ContactsService.resolvePeerAvatarUrl(
+                              payload.otherUserId,
+                              payload.avatarUrl,
+                              isBot: isBot,
+                            )
+                          : payload.avatarUrl;
+
+                      return Row(
+                        children: [
+                          AvatarWithStatus(
+                            userId: canResolvePeer ? payload.otherUserId : null,
+                            avatarUrl: resolvedAvatar,
+                            name: resolvedName,
+                            radius: 10,
+                            isOnline: false,
+                            resolveContactOverride: canResolvePeer,
                           ),
-                        ),
-                      ),
-                    ],
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              resolvedName.isNotEmpty ? resolvedName : 'Чат',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
@@ -298,11 +333,17 @@ class TileDragPreviewOverlay extends StatelessWidget {
 class GlassDropPlaceholder extends StatelessWidget {
   final TilingDropSlot slot;
   final String chatName;
+  final String? chatId;
+  final String? chatType;
+  final String? otherUserId;
 
   const GlassDropPlaceholder({
     super.key,
     required this.slot,
     required this.chatName,
+    this.chatId,
+    this.chatType,
+    this.otherUserId,
   });
 
   String _slotDescription() {
@@ -387,14 +428,36 @@ class GlassDropPlaceholder extends StatelessWidget {
                     const SizedBox(height: 4),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Text(
-                        chatName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: isDark ? Colors.white70 : Colors.black54,
-                        ),
+                      child: ValueListenableBuilder<int>(
+                        valueListenable: ContactsService.revisionNotifier,
+                        builder: (context, _, __) {
+                          final snap = (chatId != null && chatId!.isNotEmpty)
+                              ? ChatInstantCache.instance.getSync(chatId!)
+                              : null;
+                          final bool isBot =
+                              (snap?.isBot ?? snap?.chat?.isBot) == true;
+                          final bool canResolvePeer = chatType == 'private' &&
+                              ContactsService.shouldResolveUserIdentity(
+                                otherUserId,
+                                isBot: isBot,
+                              );
+                          final displayName = canResolvePeer
+                              ? ContactsService.resolvePeerName(
+                                  otherUserId,
+                                  chatName,
+                                  isBot: isBot,
+                                )
+                              : chatName;
+                          return Text(
+                            displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: isDark ? Colors.white70 : Colors.black54,
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],

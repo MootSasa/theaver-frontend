@@ -2,8 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
+import '../../services/contacts_service.dart';
 import '../../services/search_service.dart';
+import '../../utils/image_utils.dart';
 import '../design_system/theav_design_system.dart';
+import '../user/avatar_with_status.dart';
 
 /// Shared modal sheet for picking a user via [SearchService.searchUsers].
 Future<SearchResultUser?> showUserSearchPickerDialog(
@@ -44,11 +47,17 @@ class _UserSearchPickerDialogState extends State<_UserSearchPickerDialog> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _runSearch('');
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _debounce?.cancel();
     _queryCtrl.dispose();
     super.dispose();
@@ -119,24 +128,31 @@ class _UserSearchPickerDialogState extends State<_UserSearchPickerDialog> {
                             children: [
                               for (final user in _results)
                                 () {
-                                  final titleText = user.name.isNotEmpty
+                                  final rawTitle = user.name.isNotEmpty
                                       ? user.name
                                       : (user.username.isNotEmpty
                                           ? '@${user.username}'
                                           : user.id);
+                                  final titleText = ContactsService.resolvePeerName(
+                                    user.id,
+                                    rawTitle,
+                                    isBot: user.isBot,
+                                  );
+                                  final resolvedAvatar =
+                                      ContactsService.resolvePeerAvatarUrl(
+                                    user.id,
+                                    user.avatarUrl,
+                                    isBot: user.isBot,
+                                  );
                                   return TheavListRow(
-                                    leading: CircleAvatar(
-                                      backgroundColor: palette.primary
-                                          .withValues(alpha: 0.14),
-                                      child: Text(
-                                        titleText.isNotEmpty
-                                            ? titleText[0].toUpperCase()
-                                            : '?',
-                                        style: TextStyle(
-                                          color: palette.primary,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
+                                    leading: AvatarWithStatus(
+                                      userId: user.id,
+                                      avatarUrl:
+                                          getValidAvatarUrl(resolvedAvatar),
+                                      name: titleText,
+                                      radius: 20,
+                                      isOnline: user.isOnline,
+                                      resolveContactOverride: !user.isBot,
                                     ),
                                     title: titleText,
                                     subtitle: user.username.isNotEmpty

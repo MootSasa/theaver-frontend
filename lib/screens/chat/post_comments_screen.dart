@@ -22,6 +22,7 @@ import '../../services/auth_service.dart';
 import '../../services/chat_instant_cache.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/draft_service.dart';
 import '../../services/file_service.dart';
@@ -221,6 +222,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _rootPost = widget.postMessage;
     _commentsCount = widget.postMessage.commentsCount;
     _linkedChatId =
@@ -279,6 +281,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _transitionTimer?.cancel();
     if (!_isEditing) {
       DraftService().flushDraft(_draftKey);
@@ -296,6 +299,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     _groupSubscription?.cancel();
     unawaited(ScreenProtectionService.instance.release(_screenProtectionKey));
     super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   void _syncScreenProtection(bool protect) {
@@ -1192,6 +1199,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                             ? 'channel'
                             : null,
                       ),
+                      senderChatId: replyTo.senderChatId,
+                      isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
                       content: replyTo.content,
                       messageType: replyTo.messageType,
                       entities: replyTo.entities,
@@ -1305,6 +1314,8 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                       ? 'channel'
                       : null,
                 ),
+                senderChatId: replyTo.senderChatId,
+                isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
                 content: replyTo.content,
                 messageType: replyTo.messageType,
                 entities: replyTo.entities,
@@ -2142,16 +2153,50 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
   }
 
   void _openUserProfile(Message msg) {
+    final hasSenderChat = msg.senderChatId != null &&
+        msg.senderChatId!.trim().isNotEmpty &&
+        msg.senderChatId!.trim() != '0';
+    if (hasSenderChat) {
+      _openChannelProfileById(
+        msg.senderChatId!,
+        name: msg.senderChatName?.trim().isNotEmpty == true
+            ? msg.senderChatName
+            : msg.senderName,
+        avatarUrl: msg.senderChatAvatarUrl ?? msg.senderAvatarUrl,
+      );
+      return;
+    }
+    if (msg.isFromAnonymousAdmin) {
+      _openLinkedGroupProfile();
+      return;
+    }
+    if (msg.isMirroredChannelPost ||
+        msg.id == _rootMessageId ||
+        msg.id == _rootPost.id) {
+      return;
+    }
     if (msg.senderId.isEmpty || msg.senderId == '0') return;
     HapticUtils.tap();
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      msg.senderId,
+      senderChatId: msg.senderChatId,
+      isAnonymousAdmin: msg.isFromAnonymousAdmin,
+      isMirroredChannelPost: msg.isMirroredChannelPost,
+    );
+    final effectiveName = canResolve
+        ? ContactsService.resolvePeerName(msg.senderId, msg.senderName)
+        : msg.senderName;
+    final effectiveAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(msg.senderId, msg.senderAvatarUrl)
+        : msg.senderAvatarUrl;
     Navigator.push(
       context,
       SwipeBackPageRoute(
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
           userId: msg.senderId,
-          initialName: msg.senderName,
-          initialAvatarUrl: msg.senderAvatarUrl,
+          initialName: effectiveName,
+          initialAvatarUrl: effectiveAvatar,
         ),
       ),
     );
@@ -2213,8 +2258,25 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     if (!allMine && !_canDeleteOthers) return;
 
     final bool canModerate = !allMine && _canDeleteOthers;
-    final String? authorName =
-        targets.length == 1 ? targets.first.senderName : null;
+    final String? authorName = targets.length == 1
+        ? () {
+            final target = targets.first;
+            final isRootPost = target.id == _rootMessageId ||
+                target.id == _rootPost.id ||
+                target.isMirroredChannelPost;
+            final fallbackTitle = target.resolveEffectiveAuthorTitle(
+              chatName: _linkedGroupName ?? widget.channelName,
+              chatType: isRootPost ? 'channel' : null,
+            );
+            return ContactsService.resolvePeerName(
+              target.senderId,
+              fallbackTitle,
+              senderChatId: target.senderChatId,
+              isAnonymousAdmin: target.isFromAnonymousAdmin,
+              isMirroredChannelPost: isRootPost,
+            );
+          }()
+        : null;
 
     final res = await showTelegramDeleteMessagesSheet(
       context: context,
@@ -2831,16 +2893,30 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final bool isSelected = _selectedCommentIds.contains(comment.id);
 
     final bool hasSenderChat =
-        comment.senderChatId != null && comment.senderChatId!.isNotEmpty;
+        comment.senderChatId != null &&
+        comment.senderChatId!.trim().isNotEmpty &&
+        comment.senderChatId!.trim() != '0';
+    final bool isChannelPostRoot =
+        comment.id == _rootMessageId ||
+        comment.id == _rootPost.id ||
+        comment.isMirroredChannelPost;
 
     final PeerCustomization? senderCust =
         (!hasSenderChat &&
             !comment.isFromAnonymousAdmin &&
+            !isChannelPostRoot &&
             comment.senderId.isNotEmpty &&
             comment.senderId != '0')
         ? (PeerCustomizationCache.instance.getSync(comment.senderId) ??
               comment.senderCustomization)
         : null;
+
+    final bool canResolveCommentAuthor = ContactsService.shouldResolveUserIdentity(
+      comment.senderId,
+      senderChatId: comment.senderChatId,
+      isAnonymousAdmin: comment.isFromAnonymousAdmin,
+      isMirroredChannelPost: isChannelPostRoot,
+    );
 
     final String resolvedSenderName = hasSenderChat
         ? (comment.senderChatName?.trim().isNotEmpty == true
@@ -2853,10 +2929,26 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                         comment.senderName != 'Вы'
                     ? comment.senderName
                     : (_linkedGroupName ?? widget.channelName ?? 'Обсуждение'))
-              : comment.senderName);
+              : (canResolveCommentAuthor
+                    ? ContactsService.resolvePeerName(
+                        comment.senderId,
+                        comment.senderName,
+                        senderChatId: comment.senderChatId,
+                        isAnonymousAdmin: comment.isFromAnonymousAdmin,
+                        isMirroredChannelPost: isChannelPostRoot,
+                      )
+                    : comment.senderName));
     final String? resolvedSenderAvatar = hasSenderChat
         ? comment.senderChatAvatarUrl
-        : comment.senderAvatarUrl;
+        : (canResolveCommentAuthor
+              ? ContactsService.resolvePeerAvatarUrl(
+                  comment.senderId,
+                  comment.senderAvatarUrl,
+                  senderChatId: comment.senderChatId,
+                  isAnonymousAdmin: comment.isFromAnonymousAdmin,
+                  isMirroredChannelPost: isChannelPostRoot,
+                )
+              : comment.senderAvatarUrl);
 
     final VoidCallback? onSenderTap = _isSelectionMode
         ? null
@@ -2893,6 +2985,10 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     final Widget? senderHeaderWidget = showSenderHeader
         ? SenderHeaderRow(
             senderName: resolvedSenderName,
+            senderId: comment.senderId,
+            senderChatId: comment.senderChatId,
+            isFromAnonymousAdmin: comment.isFromAnonymousAdmin,
+            isMirroredChannelPost: isChannelPostRoot,
             nameColor: (hasSenderChat || comment.isFromAnonymousAdmin)
                 ? (isMe
                       ? Theme.of(context).colorScheme.onPrimary
@@ -2963,6 +3059,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
     if (showAvatarGutter) {
       rowWidget = GroupMessageAvatarRow(
         senderId: hasSenderChat ? comment.senderChatId! : comment.senderId,
+        senderChatId: comment.senderChatId,
         senderName: resolvedSenderName,
         senderAvatarUrl: resolvedSenderAvatar,
         showAvatar: lastInCluster,

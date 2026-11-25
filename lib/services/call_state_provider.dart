@@ -14,6 +14,8 @@ import '../screens/call/voice_call_screen.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
 import 'call_service.dart';
+import 'chat_instant_cache.dart';
+import 'contacts_service.dart';
 import 'deep_link_service.dart';
 import 'notification_service.dart';
 import 'websocket_service.dart';
@@ -100,7 +102,25 @@ class CallStateProvider extends ChangeNotifier {
   String? _otherDeviceActiveCallId;
   String? get otherDeviceActiveCallId => _otherDeviceActiveCallId;
   String? _otherDeviceActiveChatTitle;
-  String? get otherDeviceActiveChatTitle => _otherDeviceActiveChatTitle;
+  String? get otherDeviceActiveChatTitle {
+    final raw = _otherDeviceActiveChatTitle;
+    if (raw == null) return null;
+    final chatId = _otherDeviceActiveChatId;
+    if (chatId != null && chatId.isNotEmpty) {
+      final cachedChat = ChatInstantCache.instance.getSync(chatId)?.chat;
+      if (cachedChat != null &&
+          cachedChat.chatType == 'private' &&
+          !cachedChat.isBot &&
+          ContactsService.shouldResolveUserIdentity(cachedChat.otherUserId)) {
+        return ContactsService.resolvePeerName(
+          cachedChat.otherUserId,
+          raw,
+          isBot: cachedChat.isBot,
+        );
+      }
+    }
+    return raw;
+  }
   String? _otherDeviceActiveChatId;
   String? get otherDeviceActiveChatId => _otherDeviceActiveChatId;
 
@@ -442,6 +462,7 @@ class CallStateProvider extends ChangeNotifier {
 
   Future<void> _initProvider() async {
     unawaited(ensureRenderersInitialized());
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _currentUserId = await AuthService.getUserId();
     NotificationService().registerCallActionHandler(_handleNotificationCallAction);
     _wsSubscription = WebSocketService().eventStream.listen((event) {
@@ -558,31 +579,122 @@ class CallStateProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _onContactsRevisionChanged() {
+    if (_activeCall != null ||
+        _incomingCall != null ||
+        _otherDeviceActiveCallId != null) {
+      notifyListeners();
+    }
+  }
+
+  CallParticipant? _findRemotePeer(CallSession session) {
+    final myId = _currentUserId;
+    for (final p in session.participants) {
+      if (p.userId.isNotEmpty && p.userId != 'local' && p.userId != myId) {
+        return p;
+      }
+    }
+    return null;
+  }
+
+  String? _resolveOneOnOnePeerId(CallSession session) {
+    if (session.isGroupOrCommunity) return null;
+    final remotePeer = _findRemotePeer(session);
+    if (remotePeer != null &&
+        ContactsService.shouldResolveUserIdentity(remotePeer.userId)) {
+      return remotePeer.userId;
+    }
+    if (ContactsService.shouldResolveUserIdentity(session.initiatorId)) {
+      return session.initiatorId;
+    }
+    if (session.chatId.isNotEmpty) {
+      final cachedChat = ChatInstantCache.instance.getSync(session.chatId)?.chat;
+      if (cachedChat != null &&
+          cachedChat.chatType == 'private' &&
+          !cachedChat.isBot &&
+          ContactsService.shouldResolveUserIdentity(cachedChat.otherUserId)) {
+        return cachedChat.otherUserId;
+      }
+    }
+    return null;
+  }
+
+  CallParticipant _resolveParticipant(CallParticipant p) {
+    if (!ContactsService.shouldResolveUserIdentity(p.userId)) return p;
+    final nextName = ContactsService.resolvePeerName(p.userId, p.displayName);
+    final nextAvatar =
+        ContactsService.resolvePeerAvatarUrl(p.userId, p.avatarUrl);
+    if (nextName == p.displayName && nextAvatar == p.avatarUrl) return p;
+    return p.copyWith(displayName: nextName, avatarUrl: nextAvatar);
+  }
+
+  CallStream _resolveStream(CallStream s) {
+    if (!ContactsService.shouldResolveUserIdentity(s.streamerId)) return s;
+    final nextName =
+        ContactsService.resolvePeerName(s.streamerId, s.streamerName);
+    if (nextName == s.streamerName) return s;
+    return s.copyWith(streamerName: nextName);
+  }
+
+  CallSession _resolveCallSession(CallSession session) {
+    final resolvedParticipants =
+        session.participants.map(_resolveParticipant).toList();
+    final resolvedStreams = session.streams.map(_resolveStream).toList();
+    String resolvedTitle = session.title;
+    if (!session.isGroupOrCommunity) {
+      final peerId = _resolveOneOnOnePeerId(session);
+      if (peerId != null) {
+        resolvedTitle = ContactsService.resolvePeerName(peerId, session.title);
+      }
+    }
+    return session.copyWith(
+      title: resolvedTitle,
+      participants: resolvedParticipants,
+      streams: resolvedStreams,
+    );
+  }
+
   void _openCallScreenForSession(CallSession call) {
     final nav = DeepLinkService().navigatorKey.currentState;
     if (nav == null) return;
+    final resolvedCall = _resolveCallSession(call);
     _isMinimized = false;
     notifyListeners();
-    if (call.callType == 'group' || call.callType == 'stage') {
+    if (resolvedCall.callType == 'group' || resolvedCall.callType == 'stage') {
       nav.push(
         MaterialPageRoute(
           builder: (_) => GroupCallScreen(
-            callId: call.id,
-            chatId: call.chatId,
+            callId: resolvedCall.id,
+            chatId: resolvedCall.chatId,
             userId: _currentUserId ?? 'local',
-            title: call.title,
-            isStage: call.callType == 'stage',
+            title: resolvedCall.title,
+            isStage: resolvedCall.callType == 'stage',
           ),
         ),
       );
-    } else if (call.isVideo || _isVideoOn) {
+      return;
+    }
+
+    final remotePeer = _findRemotePeer(resolvedCall);
+    final peerUserId = _resolveOneOnOnePeerId(resolvedCall);
+    final cachedChat = resolvedCall.chatId.isNotEmpty
+        ? ChatInstantCache.instance.getSync(resolvedCall.chatId)?.chat
+        : null;
+    final rawAvatar = remotePeer?.avatarUrl ?? cachedChat?.avatarUrl;
+    final peerAvatarUrl = ContactsService.shouldResolveUserIdentity(peerUserId)
+        ? ContactsService.resolvePeerAvatarUrl(peerUserId, rawAvatar)
+        : rawAvatar;
+
+    if (resolvedCall.isVideo || _isVideoOn) {
       nav.push(
         MaterialPageRoute(
           builder: (_) => VideoCallScreen(
-            callId: call.id,
-            chatId: call.chatId,
+            callId: resolvedCall.id,
+            chatId: resolvedCall.chatId,
             isCaller: false,
-            peerName: call.title,
+            peerUserId: peerUserId,
+            peerName: resolvedCall.title,
+            peerAvatarUrl: peerAvatarUrl,
           ),
         ),
       );
@@ -590,10 +702,12 @@ class CallStateProvider extends ChangeNotifier {
       nav.push(
         MaterialPageRoute(
           builder: (_) => VoiceCallScreen(
-            callId: call.id,
-            chatId: call.chatId,
+            callId: resolvedCall.id,
+            chatId: resolvedCall.chatId,
             isCaller: false,
-            peerName: call.title,
+            peerUserId: peerUserId,
+            peerName: resolvedCall.title,
+            peerAvatarUrl: peerAvatarUrl,
           ),
         ),
       );
@@ -649,8 +763,10 @@ class CallStateProvider extends ChangeNotifier {
     });
   }
 
-  CallSession? get activeCall => _activeCall;
-  CallSession? get incomingCall => _incomingCall;
+  CallSession? get activeCall =>
+      _activeCall != null ? _resolveCallSession(_activeCall!) : null;
+  CallSession? get incomingCall =>
+      _incomingCall != null ? _resolveCallSession(_incomingCall!) : null;
   String? get currentUserId => _currentUserId;
   bool get hasActiveCall => _activeCall != null;
   bool get hasIncomingCall => _incomingCall != null && _activeCall == null;
@@ -684,12 +800,16 @@ class CallStateProvider extends ChangeNotifier {
   bool get isRecording => _isRecording;
   Duration get elapsed => _elapsed;
   StreamConfig get streamConfig => _streamConfig;
-  CallStream? get activeLocalStreamInfo => _activeLocalStreamInfo;
-  CallStream? get focusedStream =>
-      _focusedStream ??
-      (_activeCall != null && _activeCall!.streams.isNotEmpty
-          ? _activeCall!.streams.first
-          : _activeLocalStreamInfo);
+  CallStream? get activeLocalStreamInfo => _activeLocalStreamInfo != null
+      ? _resolveStream(_activeLocalStreamInfo!)
+      : null;
+  CallStream? get focusedStream {
+    final raw = _focusedStream ??
+        (_activeCall != null && _activeCall!.streams.isNotEmpty
+            ? _activeCall!.streams.first
+            : _activeLocalStreamInfo);
+    return raw != null ? _resolveStream(raw) : null;
+  }
   ViewerSubscriptionQuality get viewerQuality => _viewerQuality;
   List<FloatingCallReaction> get reactions => List.unmodifiable(_reactions);
 
@@ -915,10 +1035,18 @@ class CallStateProvider extends ChangeNotifier {
     _isScreenSharing = false;
     _isMinimized = false;
 
+    final isOneOnOne = callType == 'voice' || callType == 'video';
+    final cachedPrivatePeerId = isOneOnOne && chatId.isNotEmpty
+        ? ChatInstantCache.instance.getSync(chatId)?.chat?.otherUserId
+        : null;
+    final foregroundTitle = (isOneOnOne &&
+            ContactsService.shouldResolveUserIdentity(cachedPrivatePeerId))
+        ? ContactsService.resolvePeerName(cachedPrivatePeerId, chatTitle)
+        : chatTitle;
     await _ensureCallPermissions(video: isVideo);
     await _configureCallAudioSession();
     await NotificationService().startCallForegroundService(
-      title: chatTitle.isNotEmpty ? chatTitle : 'Активный звонок',
+      title: foregroundTitle.isNotEmpty ? foregroundTitle : 'Активный звонок',
       isVideo: isVideo,
       isScreenShare: false,
     );
@@ -951,7 +1079,6 @@ class CallStateProvider extends ChangeNotifier {
         'You';
     final currentAvatar = AccountManager().currentAccount?.avatarUrl;
 
-    final isOneOnOne = callType == 'voice' || callType == 'video';
     final initialStatus = isOneOnOne ? 'ringing' : 'active';
 
     session ??= CallSession(
@@ -1076,7 +1203,7 @@ class CallStateProvider extends ChangeNotifier {
       }
     });
 
-    return session;
+    return _resolveCallSession(session);
   }
 
   /// Transfers an ongoing call from another device to this device.
@@ -1129,7 +1256,7 @@ class CallStateProvider extends ChangeNotifier {
   /// Accepts the currently ringing [_incomingCall].
   Future<CallSession?> acceptIncomingCall({bool? isVideo}) async {
     final incoming = _incomingCall;
-    if (incoming == null) return _activeCall;
+    if (incoming == null) return activeCall;
 
     _ringingTimeoutTimer?.cancel();
     unawaited(
@@ -1149,10 +1276,13 @@ class CallStateProvider extends ChangeNotifier {
     _isScreenSharing = false;
     _isMinimized = false;
 
+    final resolvedIncoming = _resolveCallSession(incoming);
     await _ensureCallPermissions(video: useVideo);
     await _configureCallAudioSession();
     await NotificationService().startCallForegroundService(
-      title: incoming.title.isNotEmpty ? incoming.title : 'Активный звонок',
+      title: resolvedIncoming.title.isNotEmpty
+          ? resolvedIncoming.title
+          : 'Активный звонок',
       isVideo: useVideo,
       isScreenShare: false,
     );
@@ -1268,7 +1398,7 @@ class CallStateProvider extends ChangeNotifier {
       }
     });
 
-    return session;
+    return _resolveCallSession(session);
   }
 
   /// Declines the currently ringing [_incomingCall].
@@ -3753,11 +3883,20 @@ class CallStateProvider extends ChangeNotifier {
                 : (missedSession.title.isNotEmpty
                     ? missedSession.title
                     : 'Собеседник');
+            final missedCallerId = missedSession.initiatorId.trim();
+            final resolvedMissedCallerName =
+                ContactsService.shouldResolveUserIdentity(missedCallerId)
+                    ? ContactsService.resolvePeerName(
+                        missedCallerId,
+                        callerName,
+                      )
+                    : callerName;
             unawaited(
               NotificationService().showMissedCallNotification(
                 callId: missedSession.id,
                 chatId: missedSession.chatId,
-                callerName: callerName,
+                callerId: missedCallerId,
+                callerName: resolvedMissedCallerName,
                 isVideo: missedSession.isVideo,
                 isGroup:
                     missedSession.callType == 'group' ||
@@ -3772,6 +3911,7 @@ class CallStateProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _wsSubscription?.cancel();
     _ringingTimeoutTimer?.cancel();
     _timer?.cancel();

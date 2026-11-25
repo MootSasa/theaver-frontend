@@ -10,6 +10,7 @@ import '../../models/theav_theme.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/websocket_service.dart';
@@ -1393,6 +1394,12 @@ class MessageBubble extends StatelessWidget {
         quoteLength: message.quoteLength,
         isMe: isMe,
         currentUserId: currentUserId,
+        replySenderChatId: message.replyInfo?.senderChatId ??
+            (message.replyToChatType == 'channel'
+                ? message.replyToChatId
+                : null),
+        replyIsFromAnonymousAdmin:
+            message.replyInfo?.isFromAnonymousAdmin ?? false,
         onTap: () => onReplyTap?.call(
           message.replyToMessageId!,
           message.replyInfo?.chatId,
@@ -1426,12 +1433,21 @@ class MessageBubble extends StatelessWidget {
     } else if ((message.forwardFromName != null &&
             message.forwardFromName!.isNotEmpty) ||
         (chatType == 'saved' && message.senderName.isNotEmpty)) {
+      final bool hasForwardName =
+          message.forwardFromName != null &&
+          message.forwardFromName!.isNotEmpty;
       replyWidget = MessageReplyInfo.forwarded(
-        authorName: (message.forwardFromName != null &&
-                message.forwardFromName!.isNotEmpty)
+        authorName: hasForwardName
             ? message.forwardFromName!
             : message.senderName,
         authorAvatarUrl: message.forwardFromAvatarUrl,
+        authorUserId: hasForwardName
+            ? message.forwardedFromUserId
+            : (chatType == 'saved' &&
+                    !message.isChannelOrPersonaAuthored &&
+                    !message.isMirroredChannelPost
+                ? message.senderId
+                : null),
         isMe: isMe,
       );
     }
@@ -1491,13 +1507,35 @@ class MessageBubble extends StatelessWidget {
         fontWeight: FontWeight.bold,
         color: effectivePreset.primaryColor,
       );
+      final bool canResolveSender = !message.isChannelOrPersonaAuthored &&
+          !message.isMirroredChannelPost &&
+          ContactsService.shouldResolveUserIdentity(
+            message.senderId,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isMirroredChannelPost: message.isMirroredChannelPost,
+          );
 
       senderNameWidget = Padding(
         padding: const EdgeInsets.only(bottom: 4.0),
-        child: Text(
-          senderName!,
-          style: style,
-        ),
+        child: canResolveSender
+            ? ValueListenableBuilder<int>(
+                valueListenable: ContactsService.revisionNotifier,
+                builder: (_, __, ___) => Text(
+                  ContactsService.resolvePeerName(
+                    message.senderId,
+                    senderName!,
+                    senderChatId: message.senderChatId,
+                    isAnonymousAdmin: message.isFromAnonymousAdmin,
+                    isMirroredChannelPost: message.isMirroredChannelPost,
+                  ),
+                  style: style,
+                ),
+              )
+            : Text(
+                senderName!,
+                style: style,
+              ),
       );
     }
 
@@ -2325,9 +2363,40 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    String? resolvePlaybackSenderName() {
+      if (isMe) return null;
+      final raw = (senderName != null && senderName!.isNotEmpty)
+          ? senderName!
+          : message.senderName.trim();
+      if (raw.isEmpty) return null;
+      if (message.isChannelOrPersonaAuthored || message.isMirroredChannelPost) {
+        return message.resolveEffectiveAuthorTitle(
+          chatName: chatTitle,
+          chatType: chatType,
+        );
+      }
+      return ContactsService.resolvePeerName(
+        message.senderId,
+        raw,
+        senderChatId: message.senderChatId,
+        isAnonymousAdmin: message.isFromAnonymousAdmin,
+        isMirroredChannelPost: message.isMirroredChannelPost,
+      );
+    }
+
+    final bool canResolvePlaybackSender = !isMe &&
+        !message.isChannelOrPersonaAuthored &&
+        !message.isMirroredChannelPost &&
+        ContactsService.shouldResolveUserIdentity(
+          message.senderId,
+          senderChatId: message.senderChatId,
+          isAnonymousAdmin: message.isFromAnonymousAdmin,
+          isMirroredChannelPost: message.isMirroredChannelPost,
+        );
+
     if (_isRoundVideo) {
       final double circleSize = math.min(240.0, TileViewportScope.widthOf(context) * 0.68);
-      return VideoMessageWidget(
+      Widget buildRoundWidget(String? effectiveSender) => VideoMessageWidget(
         key: ValueKey('vmsg_${message.id}'),
         messageId: message.id,
         videoUrl: resolvedUrl,
@@ -2342,16 +2411,23 @@ class MessageBubble extends StatelessWidget {
         isRead: message.isRead,
         sendStatus: message.sendStatus,
         timeText: formatTime(message.createdAt),
-        senderName: isMe ? null : senderName,
+        senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
         chatId: message.chatId,
         chatType: chatType,
-        chatTitle: chatTitle ?? (isMe ? null : senderName),
+        chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
       );
+      if (canResolvePlaybackSender) {
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => buildRoundWidget(resolvePlaybackSenderName()),
+        );
+      }
+      return buildRoundWidget(resolvePlaybackSenderName());
     }
 
     if (_isVoice) {
-      return VoiceMessageWidget(
+      Widget buildVoiceWidget(String? effectiveSender) => VoiceMessageWidget(
         key: ValueKey('voice_${message.id}'),
         messageId: message.id,
         audioUrl: resolvedUrl,
@@ -2365,12 +2441,19 @@ class MessageBubble extends StatelessWidget {
         isListened: message.isListened,
         sendStatus: message.sendStatus,
         timeText: formatTime(message.createdAt),
-        senderName: isMe ? null : senderName,
+        senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
         chatId: message.chatId,
         chatType: chatType,
-        chatTitle: chatTitle ?? (isMe ? null : senderName),
+        chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
       );
+      if (canResolvePlaybackSender) {
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => buildVoiceWidget(resolvePlaybackSenderName()),
+        );
+      }
+      return buildVoiceWidget(resolvePlaybackSenderName());
     }
 
     if (_isImage) {
@@ -2451,7 +2534,7 @@ class MessageBubble extends StatelessWidget {
 
     if (_isAudio) {
       final effectiveDurSec = message.duration ?? message.mediaDuration;
-      return VoiceMessageWidget(
+      Widget buildAudioWidget(String? effectiveSender) => VoiceMessageWidget(
         key: ValueKey('audio_${message.id}'),
         messageId: message.id,
         audioUrl: resolvedUrl,
@@ -2466,12 +2549,19 @@ class MessageBubble extends StatelessWidget {
         isListened: true,
         sendStatus: message.sendStatus,
         timeText: _hasCaption ? null : formatTime(message.createdAt),
-        senderName: isMe ? null : senderName,
+        senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
         chatId: message.chatId,
         chatType: chatType,
-        chatTitle: chatTitle ?? (isMe ? null : senderName),
+        chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
       );
+      if (canResolvePlaybackSender) {
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => buildAudioWidget(resolvePlaybackSenderName()),
+        );
+      }
+      return buildAudioWidget(resolvePlaybackSenderName());
     }
 
     // Default: Document / File

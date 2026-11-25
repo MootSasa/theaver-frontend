@@ -10,6 +10,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../screens/stickers/sticker_pack_detail_sheet.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/sticker_service.dart';
@@ -237,6 +238,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _originGradientBounds = ViewportGradientBoundsScope.resolveFromRenderObject(
       widget.messageKey?.currentContext?.findRenderObject(),
     );
@@ -458,12 +460,17 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _reactionSearchController.dispose();
     _releaseBackdropIsolation?.call();
     _releaseBackdropIsolation = null;
     MessageContextMenuService().clearActiveBlurMessage();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted && !_isDismissing) setState(() {});
   }
 
   void _handleDismiss([VoidCallback? onDismissed]) {
@@ -2398,11 +2405,25 @@ class MessageContextMenuState extends State<MessageContextMenu>
               itemCount: _readers.length,
               itemBuilder: (context, index) {
                 final reader = _readers[index];
-                final name = (reader['display_name'] ?? reader['username'] ?? '?')
-                    .toString()
-                    .trim();
+                final readerId =
+                    (reader['user_id'] ?? reader['id'] ?? '').toString().trim();
+                final isBot = reader['is_bot'] == true || reader['is_bot'] == 1;
+                final rawName =
+                    (reader['display_name'] ?? reader['username'] ?? '?')
+                        .toString()
+                        .trim();
+                final name = ContactsService.resolvePeerName(
+                  readerId,
+                  rawName,
+                  isBot: isBot,
+                ).trim();
                 final rawAvatar = reader['avatar_url']?.toString();
-                final validAvatar = getValidAvatarUrl(rawAvatar);
+                final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+                  readerId,
+                  rawAvatar,
+                  isBot: isBot,
+                );
+                final validAvatar = getValidAvatarUrl(resolvedAvatar);
                 final imgProvider = validAvatar != null
                     ? avatarImageProvider(validAvatar)
                     : null;

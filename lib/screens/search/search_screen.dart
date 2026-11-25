@@ -4,6 +4,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/groups_channels_parity_service.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/profile_customization.dart';
@@ -43,6 +44,7 @@ class _SearchScreenState extends State<SearchScreen> {
   String? _messageTypeFilter;
   String? _fromUserId;
   String? _fromUserName;
+  bool _fromUserIsBot = false;
   DateTime? _minDate;
   DateTime? _maxDate;
 
@@ -59,6 +61,11 @@ class _SearchScreenState extends State<SearchScreen> {
       _selectedFilter = 'messages';
     }
     _searchController.addListener(_onSearchChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onSearchChanged() {
@@ -153,42 +160,60 @@ class _SearchScreenState extends State<SearchScreen> {
     final pickedId = await showTheavModalSheet<String>(
       context: context,
       title: 'Сообщения от участника',
-      builder: (ctx) => ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-        children: [
-          TheavInsetGroup(
-            children: [
-              TheavListRow(
-                leading: const iconoir.Group(width: 20, height: 20),
-                title: 'Все участники',
-                trailing: TheavCheckCircle(selected: _fromUserId == null),
-                onTap: () => Navigator.pop(ctx, ''),
-              ),
-              for (final member in page.members)
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) => ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+          children: [
+            TheavInsetGroup(
+              children: [
                 TheavListRow(
-                  leading: AvatarWithStatus(
-                    userId: member.id,
-                    avatarUrl: member.avatarUrl,
-                    name: member.displayName.isNotEmpty
-                        ? member.displayName
-                        : member.username,
-                    radius: 18,
-                    isOnline: member.isOnline,
-                  ),
-                  title: member.displayName.isNotEmpty
-                      ? member.displayName
-                      : '@${member.username}',
-                  subtitle:
-                      member.username.isNotEmpty ? '@${member.username}' : null,
-                  trailing: TheavCheckCircle(
-                    selected: _fromUserId == member.id,
-                  ),
-                  onTap: () => Navigator.pop(ctx, member.id),
+                  leading: const iconoir.Group(width: 20, height: 20),
+                  title: 'Все участники',
+                  trailing: TheavCheckCircle(selected: _fromUserId == null),
+                  onTap: () => Navigator.pop(ctx, ''),
                 ),
-            ],
-          ),
-        ],
+                for (final member in page.members)
+                  Builder(
+                    builder: (_) {
+                      final rawName = member.displayName.isNotEmpty
+                          ? member.displayName
+                          : '@${member.username}';
+                      final memberName = ContactsService.resolvePeerName(
+                        member.id,
+                        rawName,
+                        isBot: member.isBot,
+                      );
+                      final memberAvatar = ContactsService.resolvePeerAvatarUrl(
+                        member.id,
+                        member.avatarUrl,
+                        isBot: member.isBot,
+                      );
+                      return TheavListRow(
+                        leading: AvatarWithStatus(
+                          userId: member.id,
+                          avatarUrl: memberAvatar,
+                          name: memberName,
+                          radius: 18,
+                          isOnline: member.isOnline,
+                          resolveContactOverride: !member.isBot,
+                        ),
+                        title: memberName,
+                        subtitle: member.username.isNotEmpty
+                            ? '@${member.username}'
+                            : null,
+                        trailing: TheavCheckCircle(
+                          selected: _fromUserId == member.id,
+                        ),
+                        onTap: () => Navigator.pop(ctx, member.id),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
     if (!mounted || pickedId == null) return;
@@ -196,11 +221,13 @@ class _SearchScreenState extends State<SearchScreen> {
       setState(() {
         _fromUserId = null;
         _fromUserName = null;
+        _fromUserIsBot = false;
       });
     } else {
       final matched = page.members.where((m) => m.id == pickedId).firstOrNull;
       setState(() {
         _fromUserId = pickedId;
+        _fromUserIsBot = matched?.isBot ?? false;
         _fromUserName = matched == null
             ? pickedId
             : (matched.displayName.isNotEmpty
@@ -269,6 +296,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -423,7 +451,9 @@ class _SearchScreenState extends State<SearchScreen> {
             const SizedBox(width: 8),
           ],
           buildChip(
-            label: hasSender ? '${_fromUserName ?? _fromUserId} ▾' : 'От кого',
+            label: hasSender
+                ? '${ContactsService.resolvePeerName(_fromUserId, _fromUserName ?? _fromUserId!, isBot: _fromUserIsBot)} ▾'
+                : 'От кого',
             selected: hasSender,
             icon: iconoir.User(
               width: 14,
@@ -593,7 +623,22 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildPeerTile(BuildContext context, SearchPeer peer,
       {bool isGlobal = false}) {
-    final validAvatar = getValidAvatarUrl(peer.avatarUrl);
+    final bool isHumanUserPeer = peer.type == 'user' && !peer.isBot;
+    final displayTitle = isHumanUserPeer
+        ? ContactsService.resolvePeerName(
+            peer.id,
+            peer.title,
+            isBot: peer.isBot,
+          )
+        : peer.title;
+    final resolvedAvatarUrl = isHumanUserPeer
+        ? ContactsService.resolvePeerAvatarUrl(
+            peer.id,
+            peer.avatarUrl,
+            isBot: peer.isBot,
+          )
+        : peer.avatarUrl;
+    final validAvatar = getValidAvatarUrl(resolvedAvatarUrl);
     final canJoin = isGlobal &&
         !peer.isMember &&
         (peer.type == 'group' || peer.type == 'channel' || peer.type == 'community');
@@ -634,8 +679,9 @@ class _SearchScreenState extends State<SearchScreen> {
           ? AvatarWithStatus(
               userId: peer.id,
               avatarUrl: validAvatar,
-              name: peer.title,
+              name: displayTitle,
               radius: 20,
+              resolveContactOverride: isHumanUserPeer,
               decorationOverride: cust?.avatarDecoration,
               showDecoration: true,
               animateDecoration: false,
@@ -643,8 +689,9 @@ class _SearchScreenState extends State<SearchScreen> {
           : CircleAvatar(
               backgroundColor:
                   Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
-              backgroundImage:
-                  validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
+              backgroundImage: validAvatar != null
+                  ? avatarImageProvider(resolvedAvatarUrl)
+                  : null,
               child: validAvatar == null
                   ? (peer.type == 'channel'
                       ? Icon(Icons.campaign_rounded,
@@ -656,8 +703,8 @@ class _SearchScreenState extends State<SearchScreen> {
                               ? Icon(Icons.group_rounded,
                                   color: Theme.of(context).colorScheme.primary)
                               : Text(
-                                  peer.title.isNotEmpty
-                                      ? peer.title[0].toUpperCase()
+                                  displayTitle.isNotEmpty
+                                      ? displayTitle[0].toUpperCase()
                                       : '?',
                                   style: TextStyle(
                                     color:
@@ -671,7 +718,7 @@ class _SearchScreenState extends State<SearchScreen> {
         children: [
           Flexible(
             child: Text(
-              peer.title,
+              displayTitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -822,7 +869,21 @@ class _SearchScreenState extends State<SearchScreen> {
 
   void _onPeerTap(SearchPeer peer) {
     if (peer.type == 'user') {
-      Navigator.pop(context, {'type': 'user', 'data': peer.toUser()});
+      final resolvedPeer = !peer.isBot
+          ? peer.copyWith(
+              name: ContactsService.resolvePeerName(
+                peer.id,
+                peer.name,
+                isBot: peer.isBot,
+              ),
+              avatarUrl: ContactsService.resolvePeerAvatarUrl(
+                peer.id,
+                peer.avatarUrl,
+                isBot: peer.isBot,
+              ),
+            )
+          : peer;
+      Navigator.pop(context, {'type': 'user', 'data': resolvedPeer.toUser()});
     } else if (peer.type == 'group') {
       Navigator.pop(context, {'type': 'group', 'data': peer.toGroup()});
     } else if (peer.type == 'channel') {

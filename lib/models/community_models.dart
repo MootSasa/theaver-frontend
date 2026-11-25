@@ -2,6 +2,7 @@ import 'package:flutter/material.dart' show Color;
 
 import 'call_models.dart';
 import 'profile_customization.dart';
+import '../services/contacts_service.dart';
 import '../services/peer_customization_cache.dart';
 
 int _parseCommunityInt(dynamic raw, [int fallback = 0]) {
@@ -402,6 +403,8 @@ class CommunityMember {
   final String userId;
   final String username;
   final String displayName;
+  final String nickname;
+  final String? originalDisplayName;
   final String? avatarUrl;
   final bool isOnline;
   final bool isBot;
@@ -413,6 +416,8 @@ class CommunityMember {
     required this.userId,
     required this.username,
     required this.displayName,
+    this.nickname = '',
+    this.originalDisplayName,
     this.avatarUrl,
     this.isOnline = false,
     this.isBot = false,
@@ -420,6 +425,20 @@ class CommunityMember {
     this.roleIds = const [],
     this.peerCustomization,
   });
+
+  /// Display name fallback when no local personal contact override applies:
+  /// community nickname -> original display name -> displayName -> @username.
+  String get effectiveDisplayName {
+    final nick = nickname.trim();
+    if (nick.isNotEmpty) return nick;
+    final orig = originalDisplayName?.trim();
+    if (orig != null && orig.isNotEmpty) return orig;
+    final disp = displayName.trim();
+    if (disp.isNotEmpty) return disp;
+    final uname = username.trim();
+    if (uname.isNotEmpty) return '@$uname';
+    return '';
+  }
 
   factory CommunityMember.fromJson(Map<String, dynamic> json) {
     final rawRoles = json['role_ids'];
@@ -430,6 +449,8 @@ class CommunityMember {
       }
     }
     final rawAvatar = json['avatar_url']?.toString().trim();
+    final rawNick = (json['nickname'] ?? '').toString().trim();
+    final rawOrigName = json['original_display_name']?.toString().trim();
     final userId = (json['user_id'] ?? '').toString();
     final cust = PeerCustomization.fromJson(json);
     if (!cust.isEmpty && userId.isNotEmpty) {
@@ -439,6 +460,9 @@ class CommunityMember {
       userId: userId,
       username: (json['username'] ?? '').toString(),
       displayName: (json['display_name'] ?? json['username'] ?? 'User').toString(),
+      nickname: rawNick,
+      originalDisplayName:
+          (rawOrigName != null && rawOrigName.isNotEmpty) ? rawOrigName : null,
       avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
       isOnline: json['is_online'] == true,
       isBot: json['is_bot'] == true,
@@ -821,8 +845,20 @@ List<CommunityMemberSection> groupMembersByHoistedRoles(
 
   final sorted = List<CommunityMember>.from(members)
     ..sort((a, b) {
-      final aName = a.displayName.isNotEmpty ? a.displayName : a.username;
-      final bName = b.displayName.isNotEmpty ? b.displayName : b.username;
+      final aFallback =
+          a.effectiveDisplayName.isNotEmpty ? a.effectiveDisplayName : a.username;
+      final bFallback =
+          b.effectiveDisplayName.isNotEmpty ? b.effectiveDisplayName : b.username;
+      final aName = ContactsService.resolvePeerName(
+        a.userId,
+        aFallback,
+        isBot: a.isBot,
+      );
+      final bName = ContactsService.resolvePeerName(
+        b.userId,
+        bFallback,
+        isBot: b.isBot,
+      );
       return aName.toLowerCase().compareTo(bName.toLowerCase());
     });
 

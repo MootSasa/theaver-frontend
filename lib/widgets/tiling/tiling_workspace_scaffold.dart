@@ -16,7 +16,9 @@ import '../../screens/chat/user_profile_screen.dart';
 import '../../screens/community/community_screen.dart';
 import '../../screens/main/main_screen.dart';
 import '../../screens/search/search_screen.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/community_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/sticker_service.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -448,10 +450,32 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       case 'saved':
       case 'private':
       default:
+        final isPrivate = descriptor.chatType == 'private';
+        final snap = ChatInstantCache.instance.getSync(descriptor.chatId);
+        final bool isBot = (snap?.isBot ?? snap?.chat?.isBot) == true;
+        final bool canResolvePeer = isPrivate &&
+            ContactsService.shouldResolveUserIdentity(
+              descriptor.otherUserId,
+              isBot: isBot,
+            );
+        final effectiveOtherName = canResolvePeer
+            ? ContactsService.resolvePeerName(
+                descriptor.otherUserId,
+                descriptor.chatName,
+                isBot: isBot,
+              )
+            : descriptor.chatName;
+        final effectiveOtherAvatar = canResolvePeer
+            ? ContactsService.resolvePeerAvatarUrl(
+                descriptor.otherUserId,
+                descriptor.avatarUrl,
+                isBot: isBot,
+              )
+            : descriptor.avatarUrl;
         return PrivateChatScreen(
           chatId: descriptor.chatId,
-          otherUserName: descriptor.chatName,
-          otherUserAvatar: descriptor.avatarUrl,
+          otherUserName: effectiveOtherName,
+          otherUserAvatar: effectiveOtherAvatar,
           otherUserOnline: descriptor.isOnline,
           otherUserLastSeen: descriptor.lastSeen,
           otherUserId: descriptor.otherUserId,
@@ -797,6 +821,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -860,6 +887,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -943,6 +973,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -1030,6 +1063,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -1084,26 +1120,65 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
               ),
             ),
             child: ListenableBuilder(
-              listenable: StickerService.instance,
+              listenable: Listenable.merge([
+                StickerService.instance,
+                ContactsService.revisionNotifier,
+              ]),
               builder: (context, _) {
+                final currentActiveTile =
+                    _controller.focusedChatTile ?? activeTile;
                 final activeInput = StickerService.instance.activeInputTarget;
-                final targetName = activeTile?.chatName.isNotEmpty == true
-                    ? activeTile!.chatName
-                    : (activeInput?.chatName.isNotEmpty == true
-                        ? activeInput!.chatName
-                        : 'Активный чат');
-                final targetAvatarUrl =
-                    (activeTile?.avatarUrl?.isNotEmpty == true)
-                        ? activeTile!.avatarUrl
+                final rawTargetName =
+                    currentActiveTile?.chatName.isNotEmpty == true
+                        ? currentActiveTile!.chatName
+                        : (activeInput?.chatName.isNotEmpty == true
+                            ? activeInput!.chatName
+                            : 'Активный чат');
+                final rawTargetAvatarUrl =
+                    (currentActiveTile?.avatarUrl?.isNotEmpty == true)
+                        ? currentActiveTile!.avatarUrl
                         : activeInput?.chatAvatarUrl;
+
+                final effectiveChatId =
+                    currentActiveTile?.chatId ?? activeInput?.chatId ?? '';
+                final snap = effectiveChatId.isNotEmpty
+                    ? ChatInstantCache.instance.getSync(effectiveChatId)
+                    : null;
+                final bool isBot =
+                    (snap?.isBot ?? snap?.chat?.isBot) == true;
+                final bool isPrivateTile =
+                    currentActiveTile?.chatType == 'private';
+                final String? targetUserId =
+                    isPrivateTile ? currentActiveTile?.otherUserId : null;
+                final bool canResolvePeer = isPrivateTile &&
+                    ContactsService.shouldResolveUserIdentity(
+                      targetUserId,
+                      isBot: isBot,
+                    );
+                final targetName = canResolvePeer
+                    ? ContactsService.resolvePeerName(
+                        targetUserId,
+                        rawTargetName,
+                        isBot: isBot,
+                      )
+                    : rawTargetName;
+                final targetAvatarUrl = canResolvePeer
+                    ? ContactsService.resolvePeerAvatarUrl(
+                        targetUserId,
+                        rawTargetAvatarUrl,
+                        isBot: isBot,
+                      )
+                    : rawTargetAvatarUrl;
 
                 return Row(
                   children: [
                     AvatarWithStatus(
+                      userId: canResolvePeer ? targetUserId : null,
                       avatarUrl: targetAvatarUrl,
                       name: targetName,
                       radius: 12,
                       isOnline: false,
+                      resolveContactOverride: canResolvePeer,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -1224,6 +1299,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           child: GlassDropPlaceholder(
             slot: dropSlot,
             chatName: drag.chatName,
+            chatId: drag.chatId,
+            chatType: drag.chatType,
+            otherUserId: drag.otherUserId,
           ),
         ),
       ],
@@ -1255,6 +1333,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
             child: GlassDropPlaceholder(
               slot: dropSlot,
               chatName: drag.chatName,
+              chatId: drag.chatId,
+              chatType: drag.chatType,
+              otherUserId: drag.otherUserId,
             ),
           ),
       ],

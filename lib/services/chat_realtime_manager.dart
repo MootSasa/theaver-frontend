@@ -655,27 +655,71 @@ class ChatRealtimeManager {
     final senderChatId = msgData['sender_chat_id']?.toString().trim() ?? '';
     final isAnon = msgData['is_from_anonymous_admin'] == true ||
         msgData['is_from_anonymous_admin'] == 1;
-    final isHumanUser =
-        senderId.isNotEmpty && senderId != '0' && senderChatId.isEmpty && !isAnon;
+    final isMirrored =
+        (msgData['channel_post_id']?.toString().trim() ?? '').isNotEmpty;
+    final senderIsBot = msgData['sender_is_bot'] == true ||
+        msgData['sender_is_bot'] == 1 ||
+        msgData['is_bot'] == true ||
+        msgData['is_bot'] == 1;
+    final isHumanUser = ContactsService.shouldResolveUserIdentity(
+      senderId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: senderIsBot,
+    );
     if (isHumanUser) {
       final rawName = msgData['sender_name']?.toString() ?? '';
-      final resolvedName = ContactsService.resolveName(senderId, rawName);
+      final resolvedName = ContactsService.resolvePeerName(
+        senderId,
+        rawName,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: senderIsBot,
+      );
       if (resolvedName.isNotEmpty || msgData.containsKey('sender_name')) {
         msgData['sender_name'] = resolvedName;
       }
       final rawAvatar = msgData['sender_avatar_url']?.toString();
-      final resolvedAvatar =
-          ContactsService.resolveAvatarUrl(senderId, rawAvatar);
+      final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+        senderId,
+        rawAvatar,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: senderIsBot,
+      );
       if (resolvedAvatar != null || msgData.containsKey('sender_avatar_url')) {
         msgData['sender_avatar_url'] = resolvedAvatar;
       }
     }
 
     final replySenderId = msgData['reply_to_sender_id']?.toString().trim() ?? '';
-    if (replySenderId.isNotEmpty && replySenderId != '0') {
+    final replySenderChatId =
+        msgData['reply_to_sender_chat_id']?.toString().trim() ?? '';
+    final replyIsAnon = msgData['reply_to_is_from_anonymous_admin'] == true ||
+        msgData['reply_to_is_from_anonymous_admin'] == 1;
+    final replyIsChannel =
+        msgData['reply_to_chat_type']?.toString().trim() == 'channel';
+    final replyIsBot = msgData['reply_to_sender_is_bot'] == true ||
+        msgData['reply_to_sender_is_bot'] == 1;
+    if (ContactsService.shouldResolveUserIdentity(
+      replySenderId,
+      senderChatId: replySenderChatId,
+      isAnonymousAdmin: replyIsAnon,
+      isMirroredChannelPost: replyIsChannel,
+      isBot: replyIsBot,
+    )) {
       final rawReplyName = msgData['reply_to_sender_name']?.toString() ?? '';
-      final resolvedReplyName =
-          ContactsService.resolveName(replySenderId, rawReplyName);
+      final resolvedReplyName = ContactsService.resolvePeerName(
+        replySenderId,
+        rawReplyName,
+        senderChatId: replySenderChatId,
+        isAnonymousAdmin: replyIsAnon,
+        isMirroredChannelPost: replyIsChannel,
+        isBot: replyIsBot,
+      );
       if (resolvedReplyName.isNotEmpty) {
         msgData['reply_to_sender_name'] = resolvedReplyName;
       }
@@ -683,31 +727,90 @@ class ChatRealtimeManager {
     if (msgData['reply_info'] is Map) {
       final replyMap = Map<String, dynamic>.from(msgData['reply_info'] as Map);
       final rSid = replyMap['sender_id']?.toString().trim() ?? '';
-      if (rSid.isNotEmpty && rSid != '0') {
+      final rScid =
+          (replyMap['sender_chat_id'] ?? msgData['reply_to_sender_chat_id'])
+              ?.toString()
+              .trim();
+      final rAnon = replyMap['is_from_anonymous_admin'] == true ||
+          replyMap['is_from_anonymous_admin'] == 1 ||
+          replyIsAnon;
+      final rBot = replyMap['is_bot'] == true ||
+          replyMap['is_bot'] == 1 ||
+          replyIsBot;
+      if (ContactsService.shouldResolveUserIdentity(
+        rSid,
+        senderChatId: rScid,
+        isAnonymousAdmin: rAnon,
+        isMirroredChannelPost: replyIsChannel,
+        isBot: rBot,
+      )) {
         final rName = replyMap['sender_name']?.toString() ?? '';
-        replyMap['sender_name'] = ContactsService.resolveName(rSid, rName);
+        replyMap['sender_name'] = ContactsService.resolvePeerName(
+          rSid,
+          rName,
+          senderChatId: rScid,
+          isAnonymousAdmin: rAnon,
+          isMirroredChannelPost: replyIsChannel,
+          isBot: rBot,
+        );
         msgData['reply_info'] = replyMap;
       }
     }
 
-    final fwdId = (msgData['forward_from_id'] ??
-            msgData['forwarded_from_user_id'] ??
-            '')
-        .toString()
-        .trim();
-    if (msgData['forwarded_from_chat_id'] == null &&
-        fwdId.isNotEmpty &&
-        fwdId != '0') {
-      final rawFwdName = msgData['forward_from_name']?.toString();
+    final rawFwdUserId =
+        msgData['forwarded_from_user_id']?.toString().trim() ?? '';
+    final rawFwdChatId =
+        msgData['forwarded_from_chat_id']?.toString().trim() ?? '';
+    final rawFwdId = msgData['forward_from_id']?.toString().trim() ?? '';
+    final fwdIsBot = msgData['forwarded_from_is_bot'] == true ||
+        msgData['forwarded_from_is_bot'] == 1 ||
+        msgData['forward_from_is_bot'] == true ||
+        msgData['forward_from_is_bot'] == 1;
+    String? effectiveFwdId;
+    bool isUserFwd = false;
+    if (rawFwdUserId.isNotEmpty && rawFwdUserId != '0') {
+      effectiveFwdId = rawFwdUserId;
+      isUserFwd = true;
+    } else if (rawFwdChatId.isNotEmpty && rawFwdChatId != '0') {
+      effectiveFwdId = rawFwdChatId.startsWith('chat:')
+          ? rawFwdChatId
+          : 'chat:$rawFwdChatId';
+    } else if (rawFwdId.isNotEmpty && rawFwdId != '0') {
+      effectiveFwdId = rawFwdId;
+      if (!rawFwdId.startsWith('chat:')) {
+        isUserFwd = true;
+      }
+    }
+    if (effectiveFwdId != null) {
+      msgData['forward_from_id'] = effectiveFwdId;
+    }
+    if (isUserFwd &&
+        ContactsService.shouldResolveUserIdentity(
+          effectiveFwdId,
+          isBot: fwdIsBot,
+        )) {
+      final rawFwdName =
+          (msgData['forward_from_name'] ?? msgData['forwarded_from_name'])
+              ?.toString();
       if (rawFwdName != null) {
-        msgData['forward_from_name'] =
-            ContactsService.resolveName(fwdId, rawFwdName);
+        final resolvedFwdName = ContactsService.resolvePeerName(
+          effectiveFwdId,
+          rawFwdName,
+          isBot: fwdIsBot,
+        );
+        msgData['forward_from_name'] = resolvedFwdName;
+        if (msgData.containsKey('forwarded_from_name')) {
+          msgData['forwarded_from_name'] = resolvedFwdName;
+        }
       }
       final rawFwdAvatar = (msgData['forwarded_from_avatar_url'] ??
               msgData['forward_from_avatar_url'])
           ?.toString();
-      final resolvedFwdAvatar =
-          ContactsService.resolveAvatarUrl(fwdId, rawFwdAvatar);
+      final resolvedFwdAvatar = ContactsService.resolvePeerAvatarUrl(
+        effectiveFwdId,
+        rawFwdAvatar,
+        isBot: fwdIsBot,
+      );
       if (msgData.containsKey('forward_from_avatar_url')) {
         msgData['forward_from_avatar_url'] = resolvedFwdAvatar;
       }
@@ -974,24 +1077,27 @@ class ChatRealtimeManager {
       final linkedChatId = chatData['linked_chat_id']?.toString().trim();
 
       final otherUid = chatData['other_user_id']?.toString();
-      final isPrivatePeer =
-          chatType == 'private' && otherUid != null && otherUid.isNotEmpty;
+      final isBot = chatData['is_bot'] == true || chatData['is_bot'] == 1;
+      final isPrivatePeer = chatType == 'private' &&
+          !isBot &&
+          ContactsService.shouldResolveUserIdentity(otherUid, isBot: isBot);
       final rawName = chatData['name']?.toString() ?? '';
-      final resolvedName =
-          isPrivatePeer ? ContactsService.resolveName(otherUid, rawName) : rawName;
+      final resolvedName = isPrivatePeer
+          ? ContactsService.resolvePeerName(otherUid, rawName, isBot: isBot)
+          : rawName;
       final resolvedAvatar = isPrivatePeer
-          ? ContactsService.resolveAvatarUrl(
+          ? ContactsService.resolvePeerAvatarUrl(
               otherUid,
               chatData['avatar_url']?.toString(),
+              isBot: isBot,
             )
           : chatData['avatar_url']?.toString();
       final lastSenderId = chatData['last_message_sender_id']?.toString();
       final rawLastSenderName = chatData['last_message_sender_name']?.toString();
-      final resolvedLastSenderName = (lastSenderId != null &&
-              lastSenderId.isNotEmpty &&
-              lastSenderId != '0' &&
-              rawLastSenderName != null)
-          ? ContactsService.resolveName(lastSenderId, rawLastSenderName)
+      final resolvedLastSenderName = (chatType != 'channel' &&
+              rawLastSenderName != null &&
+              ContactsService.shouldResolveUserIdentity(lastSenderId))
+          ? ContactsService.resolvePeerName(lastSenderId, rawLastSenderName)
           : rawLastSenderName;
 
       await AppDatabase().saveChat(ChatsCompanion(
@@ -1065,19 +1171,27 @@ class ChatRealtimeManager {
 
       final peerUid =
           (event.data['other_user_id'] ?? existing.otherUserId)?.toString();
+      final isBot = event.data.containsKey('is_bot')
+          ? (event.data['is_bot'] == true || event.data['is_bot'] == 1)
+          : existing.isBot;
       final isPrivatePeer = existing.chatType == 'private' &&
-          peerUid != null &&
-          peerUid.isNotEmpty;
+          !isBot &&
+          ContactsService.shouldResolveUserIdentity(peerUid, isBot: isBot);
       final resolvedName = event.data.containsKey('name')
           ? (isPrivatePeer
-              ? ContactsService.resolveName(peerUid, event.data['name'].toString())
+              ? ContactsService.resolvePeerName(
+                  peerUid,
+                  event.data['name'].toString(),
+                  isBot: isBot,
+                )
               : event.data['name'].toString())
           : existing.name;
       final resolvedAvatar = event.data.containsKey('avatar_url')
           ? (isPrivatePeer
-              ? ContactsService.resolveAvatarUrl(
+              ? ContactsService.resolvePeerAvatarUrl(
                   peerUid,
                   event.data['avatar_url']?.toString(),
+                  isBot: isBot,
                 )
               : event.data['avatar_url']?.toString())
           : existing.avatarUrl;
@@ -1157,6 +1271,7 @@ class ChatRealtimeManager {
     final userId = event.data['user_id']?.toString();
     final rawAvatarUrl = event.data['avatar_url']?.toString();
     if (userId == null) return event;
+    ContactsService.applyRemoteUserAvatarUpdate(userId, rawAvatarUrl);
     final effectiveAvatar =
         ContactsService.resolveAvatarUrl(userId, rawAvatarUrl);
     ProfileInstantCache.instance.updateUserAvatar(userId, rawAvatarUrl);
@@ -1322,6 +1437,12 @@ class ChatRealtimeManager {
     final String? fwdAvatarUrl =
         (msgData['forwarded_from_avatar_url'] ?? msgData['forward_from_avatar_url'])
             ?.toString();
+    final Map<String, dynamic>? replyInfoMap = msgData['reply_info'] is Map
+        ? Map<String, dynamic>.from(msgData['reply_info'] as Map)
+        : null;
+    final String? fwdName =
+        (msgData['forward_from_name'] ?? msgData['forwarded_from_name'])
+            ?.toString();
 
     await AppDatabase().saveMessage(MessagesCompanion(
       serverId: drift.Value(serverId),
@@ -1332,19 +1453,31 @@ class ChatRealtimeManager {
       messageType: drift.Value(msgType),
       fileUrl: drift.Value(msgData['file_url']?.toString()),
       fileName: drift.Value(msgData['file_name']?.toString()),
-      replyToMessageId:
-          drift.Value(msgData['reply_to_message_id']?.toString()),
+      replyToMessageId: drift.Value(
+        (msgData['reply_to_message_id'] ?? replyInfoMap?['message_id'])
+            ?.toString(),
+      ),
       isQuote: drift.Value(msgData['is_quote'] as bool? ?? false),
       quoteText: drift.Value(msgData['quote_text']?.toString()),
       quoteOffset: drift.Value(msgData['quote_offset'] as int? ?? 0),
       quoteLength: drift.Value(msgData['quote_length'] as int? ?? 0),
-      replyToSenderId:
-          drift.Value(msgData['reply_to_sender_id']?.toString()),
-      replyToSenderName:
-          drift.Value(msgData['reply_to_sender_name']?.toString()),
-      replyToContent: drift.Value(msgData['reply_to_content']?.toString()),
-      replyToMessageType:
-          drift.Value(msgData['reply_to_message_type']?.toString() ?? 'text'),
+      replyToSenderId: drift.Value(
+        (msgData['reply_to_sender_id'] ?? replyInfoMap?['sender_id'])
+            ?.toString(),
+      ),
+      replyToSenderName: drift.Value(
+        (msgData['reply_to_sender_name'] ?? replyInfoMap?['sender_name'])
+            ?.toString(),
+      ),
+      replyToContent: drift.Value(
+        (msgData['reply_to_content'] ?? replyInfoMap?['content'])?.toString(),
+      ),
+      replyToMessageType: drift.Value(
+        (msgData['reply_to_message_type'] ??
+                replyInfoMap?['message_type'] ??
+                'text')
+            .toString(),
+      ),
       isRead: drift.Value(msgData['is_read'] == true),
       isEdited: drift.Value(msgData['is_edited'] == true),
       sendStatus: drift.Value(MessageSendStatus.sent.index),
@@ -1353,11 +1486,13 @@ class ChatRealtimeManager {
       createdAt: drift.Value(msgData['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
       isForward: drift.Value(msgData['is_forward'] == true ||
+          msgData['is_forwarded'] == true ||
           msgData['forward_from_id'] != null ||
-          (msgData['forward_from_name'] != null &&
-              msgData['forward_from_name'].toString().isNotEmpty)),
+          msgData['forwarded_from_user_id'] != null ||
+          msgData['forwarded_from_chat_id'] != null ||
+          (fwdName != null && fwdName.isNotEmpty)),
       forwardFromId: drift.Value(msgData['forward_from_id']?.toString()),
-      forwardFromName: drift.Value(msgData['forward_from_name']?.toString()),
+      forwardFromName: drift.Value(fwdName),
       entities: drift.Value(entitiesStr),
       linkPreviewOptions: drift.Value(linkPreviewOptionsStr),
       mediaPayload: drift.Value(mediaPayloadStr),

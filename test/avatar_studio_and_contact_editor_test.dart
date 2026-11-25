@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
@@ -15,9 +16,11 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/models/avatar_editor_models.dart';
+import 'package:theaver/models/community_models.dart';
 import 'package:theaver/screens/contacts/contact_edit_screen.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/contacts_service.dart';
+import 'package:theaver/services/database/app_database.dart';
 import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/websocket_service.dart';
@@ -30,7 +33,10 @@ import 'package:theaver/widgets/avatar_editor/avatar_emoji_constructor_view.dart
 import 'package:theaver/widgets/avatar_editor/avatar_rotation_dial.dart';
 import 'package:theaver/widgets/avatar_editor/theav_avatar_editor_screen.dart';
 import 'package:theaver/widgets/avatar_editor/theav_avatar_picker_sheet.dart';
+import 'package:theaver/widgets/chat/message_reply_info.dart';
 import 'package:theaver/widgets/chat/suggested_photo_bubble_card.dart';
+import 'package:theaver/widgets/community/community_members_panel.dart';
+import 'package:theaver/widgets/message/group_message_avatar_row.dart';
 import 'package:theaver/widgets/profile/expandable_avatar.dart';
 import 'package:theaver/widgets/profile/qr_code_dialog.dart';
 import 'package:theaver/widgets/user/avatar_with_status.dart';
@@ -358,8 +364,26 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
+    await AppDatabase.closeAll();
+    AppDatabase.setActiveUser('1');
+    AppDatabase.setTestingInstance(
+      '1',
+      AppDatabase.forTesting(NativeDatabase.memory(), userId: '1'),
+    );
+    AppDatabase.setTestingInstance(
+      '2',
+      AppDatabase.forTesting(NativeDatabase.memory(), userId: '2'),
+    );
+    AppDatabase.setTestingInstance(
+      'default',
+      AppDatabase.forTesting(NativeDatabase.memory(), userId: 'default'),
+    );
     await ContactsService.clearCache(clearDisk: true);
     await ContactsService.init(userId: '1');
+  });
+
+  tearDown(() async {
+    await AppDatabase.closeAll();
   });
 
   group('1. AvatarStudio Models & Offscreen Rendering', () {
@@ -941,6 +965,395 @@ void main() {
           }
         });
       }
+    });
+  });
+
+  group('6. App-Wide Custom Contact Name & Avatar Propagation', () {
+    test('shouldResolveUserIdentity & resolvePeer* guard self, personas, bots, and keep customAvatarUrl on remote updates', () async {
+      await ContactsService.applyRemoteContactEvent(
+        WebSocketEventType.contactUpdated,
+        <String, dynamic>{
+          'user_id': '42',
+          'contact_user_id': '42',
+          'is_contact': true,
+          'custom_first_name': 'Друг',
+          'custom_last_name': 'СорокДва',
+          'original_display_name': 'Public 42',
+          'original_avatar_url': 'https://example.com/orig42.png',
+          'custom_avatar_url': 'https://example.com/custom42.png#acrop=0.1000,0.2000,0.5000,0.5000',
+        },
+      );
+      await ContactsService.applyRemoteContactEvent(
+        WebSocketEventType.contactUpdated,
+        <String, dynamic>{
+          'user_id': '77',
+          'contact_user_id': '77',
+          'is_contact': true,
+          'is_bot': true,
+          'custom_first_name': 'FakeBotOverride',
+          'custom_avatar_url': 'https://example.com/bot_custom.png',
+        },
+      );
+
+      // Guardrails: skip self ('1'), empty, '0', 'local', 'chat:*', channel persona, anon admin, mirrored post, bots.
+      expect(ContactsService.shouldResolveUserIdentity('1'), isFalse);
+      expect(ContactsService.shouldResolveUserIdentity(''), isFalse);
+      expect(ContactsService.shouldResolveUserIdentity('0'), isFalse);
+      expect(ContactsService.shouldResolveUserIdentity('local'), isFalse);
+      expect(ContactsService.shouldResolveUserIdentity('chat:42'), isFalse);
+      expect(
+        ContactsService.shouldResolveUserIdentity('42', senderChatId: '900'),
+        isFalse,
+      );
+      expect(
+        ContactsService.shouldResolveUserIdentity('42', isAnonymousAdmin: true),
+        isFalse,
+      );
+      expect(
+        ContactsService.shouldResolveUserIdentity('42', isMirroredChannelPost: true),
+        isFalse,
+      );
+      expect(
+        ContactsService.shouldResolveUserIdentity('42', isBot: true),
+        isFalse,
+      );
+      expect(ContactsService.shouldResolveUserIdentity('77'), isFalse);
+      expect(ContactsService.shouldResolveUserIdentity('42'), isTrue);
+
+      expect(
+        ContactsService.resolvePeerName('42', 'Public 42'),
+        'Друг СорокДва',
+      );
+      expect(
+        ContactsService.resolvePeerName('42', 'Мой Канал', senderChatId: '900'),
+        'Мой Канал',
+      );
+      expect(
+        ContactsService.resolvePeerName('42', 'Админ', isAnonymousAdmin: true),
+        'Админ',
+      );
+      expect(
+        ContactsService.resolvePeerAvatarUrl(
+          '42',
+          'https://example.com/orig42.png',
+        ),
+        'https://example.com/custom42.png#acrop=0.1000,0.2000,0.5000,0.5000',
+      );
+      expect(
+        ContactsService.resolvePeerAvatarUrl(
+          '77',
+          'https://example.com/bot_orig.png',
+        ),
+        'https://example.com/bot_orig.png',
+      );
+
+      // Remote user_avatar_updated must NOT overwrite customAvatarUrl, while refreshing originalAvatarUrl underneath.
+      ContactsService.applyRemoteUserAvatarUpdate('42', '');
+      expect(
+        ContactsService.getCached('42')?.customAvatarUrl,
+        'https://example.com/custom42.png#acrop=0.1000,0.2000,0.5000,0.5000',
+      );
+      ContactsService.applyRemoteUserAvatarUpdate(
+        '42',
+        'https://example.com/new_pub42.png',
+      );
+      expect(
+        ContactsService.getCached('42')?.originalAvatarUrl,
+        'https://example.com/new_pub42.png',
+      );
+      expect(
+        ContactsService.resolvePeerAvatarUrl('42', null),
+        'https://example.com/custom42.png#acrop=0.1000,0.2000,0.5000,0.5000',
+      );
+    });
+
+    testWidgets('SenderHeaderRow & AvatarWithStatus update live on revisionNotifier while skipping personas & resolveContactOverride:false', (tester) async {
+      await tester.pumpWidget(
+        _wrapTestApp(
+          home: const Scaffold(
+            body: Column(
+              children: [
+                SenderHeaderRow(
+                  senderId: '42',
+                  senderName: 'Исходный Пользователь',
+                  nameColor: Colors.blue,
+                ),
+                SenderHeaderRow(
+                  senderId: '42',
+                  senderChatId: '500',
+                  senderName: 'Имя Канала',
+                  nameColor: Colors.green,
+                ),
+                SenderHeaderRow(
+                  senderId: '42',
+                  isFromAnonymousAdmin: true,
+                  senderName: 'Анонимный Админ',
+                  nameColor: Colors.orange,
+                ),
+                AvatarWithStatus(
+                  key: ValueKey('auto_avatar'),
+                  userId: '42',
+                  avatarUrl: 'https://example.com/orig42.jpg',
+                  name: 'Исходный Пользователь',
+                  showDecoration: false,
+                ),
+                AvatarWithStatus(
+                  key: ValueKey('orig_preview_avatar'),
+                  userId: '42',
+                  avatarUrl: 'https://example.com/orig42.jpg',
+                  name: 'Исходный Пользователь',
+                  showDecoration: false,
+                  resolveContactOverride: false,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await _pumpFrames(tester);
+
+      expect(find.text('Исходный Пользователь'), findsOneWidget);
+      expect(find.text('Имя Канала'), findsOneWidget);
+      expect(find.text('Анонимный Админ'), findsOneWidget);
+
+      await tester.runAsync(
+        () => ContactsService.applyRemoteContactEvent(
+          WebSocketEventType.contactUpdated,
+          <String, dynamic>{
+            'user_id': '42',
+            'contact_user_id': '42',
+            'is_contact': true,
+            'custom_first_name': 'Личное Имя 42',
+            'custom_avatar_url':
+                'https://example.com/custom42_live.jpg#acrop=0.2000,0.2000,0.4000,0.4000',
+          },
+        ),
+      );
+      await _pumpFrames(tester);
+
+      expect(find.text('Личное Имя 42'), findsOneWidget);
+      expect(find.text('Исходный Пользователь'), findsNothing);
+      // Channel & anon-admin headers must remain untouched.
+      expect(find.text('Имя Канала'), findsOneWidget);
+      expect(find.text('Анонимный Админ'), findsOneWidget);
+
+      final CircleAvatar autoCircle = tester.widget<CircleAvatar>(
+        find.descendant(
+          of: find.byKey(const ValueKey('auto_avatar')),
+          matching: find.byType(CircleAvatar),
+        ),
+      );
+      final CircleAvatar previewCircle = tester.widget<CircleAvatar>(
+        find.descendant(
+          of: find.byKey(const ValueKey('orig_preview_avatar')),
+          matching: find.byType(CircleAvatar),
+        ),
+      );
+      expect(autoCircle.backgroundImage, isA<AvatarSubregionImageProvider>());
+      expect(
+        previewCircle.backgroundImage,
+        isNot(isA<AvatarSubregionImageProvider>()),
+      );
+    });
+
+    testWidgets('CommunityMembersPane renders custom contact name & #acrop avatar, sorts by resolved name, and searches both names', (tester) async {
+      await tester.runAsync(
+        () => ContactsService.applyRemoteContactEvent(
+          WebSocketEventType.contactUpdated,
+          <String, dynamic>{
+            'user_id': '42',
+            'contact_user_id': '42',
+            'is_contact': true,
+            'custom_first_name': 'Алиса Кастомная',
+            'original_display_name': 'Zack',
+            'custom_avatar_url':
+                'https://example.com/custom_member42.jpg#acrop=0.1000,0.1000,0.5000,0.5000',
+          },
+        ),
+      );
+
+      const role = CommunityRole(
+        id: 'r1',
+        communityId: 'c1',
+        name: 'Модераторы',
+        isHoisted: true,
+        position: 10,
+      );
+      final community = Community(
+        id: 'c1',
+        name: 'Тестовое сообщество',
+        roles: [role],
+        createdAt: DateTime(2026, 1, 1),
+      );
+      final members = [
+        const CommunityMember(
+          userId: '43',
+          username: 'boris',
+          displayName: 'Борис',
+          isOnline: true,
+          roleIds: ['r1'],
+        ),
+        const CommunityMember(
+          userId: '42',
+          username: 'zack',
+          displayName: 'Zack',
+          originalDisplayName: 'Zack',
+          avatarUrl: 'https://example.com/orig_member42.jpg',
+          isOnline: true,
+          roleIds: ['r1'],
+        ),
+        const CommunityMember(
+          userId: '77',
+          username: 'helper_bot',
+          displayName: 'Хелпер Бот',
+          isOnline: true,
+          isBot: true,
+          roleIds: ['r1'],
+        ),
+      ];
+
+      final sections = groupMembersByHoistedRoles(members, [role]);
+      expect(sections.first.members.map((m) => m.userId).toList(), ['42', '43', '77']);
+
+      await tester.pumpWidget(
+        _wrapTestApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 340,
+              height: 600,
+              child: CommunityMembersPane(
+                community: community,
+                members: members,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpFrames(tester);
+
+      expect(find.text('Алиса Кастомная'), findsOneWidget);
+      expect(find.text('Борис'), findsOneWidget);
+      expect(find.text('Хелпер Бот'), findsOneWidget);
+      expect(find.text('Zack'), findsNothing);
+
+      // Resolved name 'Алиса Кастомная' must appear above 'Борис'.
+      expect(
+        tester.getTopLeft(find.text('Алиса Кастомная')).dy,
+        lessThan(tester.getTopLeft(find.text('Борис')).dy),
+      );
+
+      // Search by custom contact name.
+      await tester.enterText(find.byType(TextField), 'Алиса');
+      await _pumpFrames(tester);
+      expect(find.text('Алиса Кастомная'), findsOneWidget);
+      expect(find.text('Борис'), findsNothing);
+
+      // Search by original display name also matches the renamed contact.
+      await tester.enterText(find.byType(TextField), 'Zack');
+      await _pumpFrames(tester);
+      expect(find.text('Алиса Кастомная'), findsOneWidget);
+      expect(find.text('Борис'), findsNothing);
+    });
+
+    testWidgets('Message.fromJson & MessageReplyInfo.forwarded separate user forwards from same-ID channel forwards', (tester) async {
+      await tester.runAsync(
+        () => ContactsService.applyRemoteContactEvent(
+          WebSocketEventType.contactUpdated,
+          <String, dynamic>{
+            'user_id': '42',
+            'contact_user_id': '42',
+            'is_contact': true,
+            'custom_first_name': 'Друг 42',
+            'custom_avatar_url': 'https://example.com/cust42.jpg',
+          },
+        ),
+      );
+
+      final userForwardMsg = Message.fromJson(<String, dynamic>{
+        'id': 'm1',
+        'chat_id': '100',
+        'sender_id': '2',
+        'sender_name': 'Peer',
+        'content': 'From friend',
+        'message_type': 'text',
+        'is_edited': false,
+        'created_at': '2026-11-25T00:00:00Z',
+        'is_forward': true,
+        'forwarded_from_user_id': '42',
+        'forwarded_from_name': 'Raw User 42',
+        'forwarded_from_avatar_url': 'https://example.com/orig42.jpg',
+      });
+
+      final channelForwardMsg = Message.fromJson(<String, dynamic>{
+        'id': 'm2',
+        'chat_id': '100',
+        'sender_id': '2',
+        'sender_name': 'Peer',
+        'content': 'From channel',
+        'message_type': 'text',
+        'is_edited': false,
+        'created_at': '2026-11-25T00:00:00Z',
+        'is_forward': true,
+        'forwarded_from_chat_id': '42',
+        'forwarded_from_name': 'Канал Новости',
+        'forwarded_from_avatar_url': 'https://example.com/chan42.jpg',
+      });
+
+      expect(userForwardMsg.isForwardedFromChat, isFalse);
+      expect(userForwardMsg.forwardedFromUserId, '42');
+      expect(userForwardMsg.forwardFromName, 'Друг 42');
+      expect(userForwardMsg.forwardFromAvatarUrl, 'https://example.com/cust42.jpg');
+
+      // Channel ID '42' collides numerically with contact '42', yet must NEVER be overridden!
+      expect(channelForwardMsg.isForwardedFromChat, isTrue);
+      expect(channelForwardMsg.forwardedFromChatId, '42');
+      expect(channelForwardMsg.forwardedFromUserId, isNull);
+      expect(channelForwardMsg.forwardFromName, 'Канал Новости');
+      expect(channelForwardMsg.forwardFromAvatarUrl, 'https://example.com/chan42.jpg');
+
+      await tester.pumpWidget(
+        _wrapTestApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                MessageReplyInfo.forwarded(
+                  authorName: userForwardMsg.forwardFromName!,
+                  authorAvatarUrl: userForwardMsg.forwardFromAvatarUrl,
+                  authorUserId: userForwardMsg.forwardedFromUserId,
+                  content: userForwardMsg.content,
+                ),
+                MessageReplyInfo.forwarded(
+                  authorName: channelForwardMsg.forwardFromName!,
+                  authorAvatarUrl: channelForwardMsg.forwardFromAvatarUrl,
+                  authorUserId: channelForwardMsg.forwardedFromUserId,
+                  content: channelForwardMsg.content,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await _pumpFrames(tester);
+
+      expect(find.textContaining('Друг 42'), findsOneWidget);
+      expect(find.textContaining('Канал Новости'), findsOneWidget);
+
+      await tester.runAsync(
+        () => ContactsService.applyRemoteContactEvent(
+          WebSocketEventType.contactUpdated,
+          <String, dynamic>{
+            'user_id': '42',
+            'contact_user_id': '42',
+            'is_contact': true,
+            'custom_first_name': 'Обновлённый 42',
+            'custom_avatar_url': 'https://example.com/cust42_v2.jpg',
+          },
+        ),
+      );
+      await _pumpFrames(tester);
+
+      expect(find.textContaining('Обновлённый 42'), findsOneWidget);
+      expect(find.textContaining('Канал Новости'), findsOneWidget);
     });
   });
 }

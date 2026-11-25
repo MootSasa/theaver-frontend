@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/date_time_utils.dart';
@@ -37,8 +38,19 @@ class _PinnedMessagesScreenState extends State<PinnedMessagesScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _pinned = List<Message>.from(widget.initialPinnedMessages);
     _loadPinned();
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadPinned() async {
@@ -225,9 +237,21 @@ class _PinnedMessagesScreenState extends State<PinnedMessagesScreen> {
                 TheavInsetGroup(
                   header: 'Закреплено: ${_pinned.length}',
                   children: _pinned.map((msg) {
-                    final sender = msg.senderName.trim().isNotEmpty
+                    final rawSender = msg.senderName.trim().isNotEmpty
                         ? msg.senderName.trim()
                         : widget.chatTitle;
+                    final sender = (msg.isChannelOrPersonaAuthored ||
+                            msg.isMirroredChannelPost)
+                        ? msg.resolveEffectiveAuthorTitle(
+                            chatName: widget.chatTitle,
+                          )
+                        : ContactsService.resolvePeerName(
+                            msg.senderId,
+                            rawSender,
+                            senderChatId: msg.senderChatId,
+                            isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                            isMirroredChannelPost: msg.isMirroredChannelPost,
+                          );
                     final timeStr = DateTimeUtils.formatTimeHHmm(msg.createdAt);
                     return TheavListRow(
                       leading: _iconForMessage(msg, palette),

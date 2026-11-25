@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../config/app_config.dart';
 import '../account_manager.dart';
+import '../contacts_service.dart';
 import '../update_service.dart';
 import 'call_notifications.dart';
 import 'message_notification_presenter.dart';
@@ -130,9 +131,31 @@ Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
     case 'incoming_call':
       final callId = data['call_id']?.toString() ?? '';
       if (!await CallNotifications.markCallShown(callId)) return;
-      final callerName = payloadString(data, const ['caller_name', 'chat_name'], 'Входящий звонок');
-      final isVideo = payloadBool(data['is_video']) || data['call_type'] == 'video';
-      final isGroup = data['chat_type'] == 'group' || payloadBool(data['is_group']);
+      await _initContactsForBackground();
+      final callerId = payloadString(data, const ['caller_id']).trim();
+      final rawCallerName =
+          payloadString(data, const ['caller_name', 'chat_name'], 'Входящий звонок');
+      final rawCallerAvatar =
+          payloadString(data, const ['caller_avatar', 'avatar_url']);
+      final isVideo =
+          payloadBool(data['is_video']) || data['call_type'] == 'video';
+      final isGroup =
+          data['chat_type'] == 'group' || payloadBool(data['is_group']);
+      final canResolveCaller = ContactsService.shouldResolveUserIdentity(callerId);
+      final callerName = canResolveCaller
+          ? ContactsService.resolvePeerName(callerId, rawCallerName)
+          : rawCallerName;
+      final resolvedCallerAvatar = canResolveCaller
+          ? ContactsService.resolvePeerAvatarUrl(
+              callerId,
+              rawCallerAvatar.isNotEmpty ? rawCallerAvatar : null,
+            )
+          : (rawCallerAvatar.isNotEmpty ? rawCallerAvatar : null);
+      final rawChatTitle = data['chat_title']?.toString();
+      final resolvedChatTitle =
+          (!isGroup && canResolveCaller && rawChatTitle != null)
+              ? ContactsService.resolvePeerName(callerId, rawChatTitle)
+              : rawChatTitle;
       await CallNotifications.showIncoming(
         plugin,
         payload: <String, dynamic>{
@@ -140,10 +163,13 @@ Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
           'type': 'incoming_call',
           'call_id': callId,
           'caller_name': callerName,
+          if (resolvedCallerAvatar != null)
+            'caller_avatar': resolvedCallerAvatar,
+          if (resolvedChatTitle != null) 'chat_title': resolvedChatTitle,
           'is_video': isVideo,
         },
         callerName: callerName,
-        callerAvatar: payloadString(data, const ['caller_avatar', 'avatar_url']),
+        callerAvatar: resolvedCallerAvatar,
         isVideo: isVideo,
         isGroup: isGroup,
       );
@@ -161,8 +187,10 @@ Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
       return;
     case 'new_message':
       // Legacy data-only chat push (no notification block): render it ourselves.
-      final m = ChatMessageNotification.fromPush(data);
-      if (m == null) return;
+      final rawMsg = ChatMessageNotification.fromPush(data);
+      if (rawMsg == null) return;
+      await _initContactsForBackground();
+      final m = _applyBackgroundContactOverrides(rawMsg, rawData: data);
       final key = NotificationDedupStore.keyFor(
           kind: 'msg', chatId: m.chatId, messageId: m.messageId, fallbackText: m.text);
       if (await NotificationDedupStore().checkAndMark(key)) return;
@@ -265,6 +293,145 @@ Future<bool> handleMessageNotificationAction(NotificationResponse response) asyn
   await _post('${AppConfig.baseUrl}/api/chats/$chatId/messages/read', token, null);
   await presenter.cancelChat(chatId);
   return true;
+}
+
+Future<void> _initContactsForBackground() async {
+  try {
+    final manager = AccountManager();
+    if (manager.currentAccount == null) {
+      await manager.init();
+    }
+    await ContactsService.init(userId: manager.currentAccount?.userId);
+  } catch (e) {
+    debugPrint('BackgroundPush: ContactsService init failed: $e');
+  }
+}
+
+ChatMessageNotification _applyBackgroundContactOverrides(
+  ChatMessageNotification m, {
+  required Map<String, dynamic> rawData,
+}) {
+  if (m.isChannel) return m;
+  final msgMap = rawData['message'] is Map
+      ? Map<String, dynamic>.from(rawData['message'] as Map)
+      : rawData;
+  final senderChatId =
+      (msgMap['sender_chat_id'] ?? rawData['sender_chat_id'])
+              ?.toString()
+              .trim() ??
+          '';
+  final isAnon = payloadBool(msgMap['is_from_anonymous_admin']) ||
+      payloadBool(rawData['is_from_anonymous_admin']);
+  final isMirrored =
+      ((msgMap['channel_post_id'] ?? rawData['channel_post_id'])
+                  ?.toString()
+                  .trim() ??
+              '')
+          .isNotEmpty;
+  final isBot = payloadBool(msgMap['sender_is_bot']) ||
+      payloadBool(rawData['sender_is_bot']) ||
+      payloadBool(rawData['is_bot']);
+
+  if (m.isGroup) {
+    final sid = m.senderId.trim();
+    if (!ContactsService.shouldResolveUserIdentity(
+      sid,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    )) {
+      return m;
+    }
+    return ChatMessageNotification(
+      chatId: m.chatId,
+      chatName: m.chatName,
+      senderName: ContactsService.resolvePeerName(
+        sid,
+        m.senderName,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: isBot,
+      ),
+      senderId: m.senderId,
+      text: m.text,
+      messageId: m.messageId,
+      avatarUrl: m.avatarUrl,
+      senderAvatarUrl: ContactsService.resolvePeerAvatarUrl(
+        sid,
+        m.senderAvatarUrl,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: isBot,
+      ),
+      mediaUrl: m.mediaUrl,
+      isGroup: m.isGroup,
+      isChannel: m.isChannel,
+      isMention: m.isMention,
+      isSilent: m.isSilent,
+      isOwn: m.isOwn,
+      messageType: m.messageType,
+    );
+  }
+
+  if (m.isOwn) return m;
+  final peerId = m.senderId.trim();
+  if (!ContactsService.shouldResolveUserIdentity(
+    peerId,
+    senderChatId: senderChatId,
+    isAnonymousAdmin: isAnon,
+    isMirroredChannelPost: isMirrored,
+    isBot: isBot,
+  )) {
+    return m;
+  }
+  return ChatMessageNotification(
+    chatId: m.chatId,
+    chatName: ContactsService.resolvePeerName(
+      peerId,
+      m.chatName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    senderName: ContactsService.resolvePeerName(
+      peerId,
+      m.senderName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    senderId: m.senderId,
+    text: m.text,
+    messageId: m.messageId,
+    avatarUrl: ContactsService.resolvePeerAvatarUrl(
+      peerId,
+      m.avatarUrl,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    senderAvatarUrl: ContactsService.resolvePeerAvatarUrl(
+      peerId,
+      m.senderAvatarUrl,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    mediaUrl: m.mediaUrl,
+    isGroup: m.isGroup,
+    isChannel: m.isChannel,
+    isMention: m.isMention,
+    isSilent: m.isSilent,
+    isOwn: m.isOwn,
+    messageType: m.messageType,
+  );
 }
 
 Future<String?> _authToken() async {

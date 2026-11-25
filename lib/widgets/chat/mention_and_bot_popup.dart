@@ -6,6 +6,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
 import '../../models/theav_theme.dart';
 import '../../services/bot_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/image_utils.dart';
@@ -112,7 +113,18 @@ class MentionAndBotPopup extends StatelessWidget {
         continue;
       }
       final dnameLower = p.displayName.toLowerCase();
-      if (q.isEmpty || unameLower.contains(q) || dnameLower.contains(q)) {
+      final resolvedName = !p.isBot
+          ? ContactsService.resolvePeerName(
+              p.id,
+              p.displayName,
+              isBot: p.isBot,
+            )
+          : p.displayName;
+      final resolvedLower = resolvedName.toLowerCase();
+      if (q.isEmpty ||
+          unameLower.contains(q) ||
+          dnameLower.contains(q) ||
+          resolvedLower.contains(q)) {
         if (seenParticipants.add(unameLower)) {
           rows.add(_MentionPopupRow.participant(p));
         }
@@ -152,6 +164,13 @@ class MentionAndBotPopup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) => _buildPopup(context),
+    );
+  }
+
+  Widget _buildPopup(BuildContext context) {
     final rows = _buildFilteredRows();
     if (rows.isEmpty) {
       return const SizedBox.shrink();
@@ -254,14 +273,31 @@ class MentionAndBotPopup extends StatelessWidget {
   ) {
     final isInlineBot = row.kind == _MentionRowKind.inlineBot;
     final String username = row.username;
+    final bool isBot = isInlineBot || (row.candidate?.isBot ?? false);
+    final candidate = row.candidate;
+    final bool canResolveCandidate = !isInlineBot &&
+        candidate != null &&
+        ContactsService.shouldResolveUserIdentity(candidate.id, isBot: isBot);
     final String displayName = isInlineBot
         ? (row.bot!.displayName.isNotEmpty
             ? row.bot!.displayName
             : '@$username')
-        : row.candidate!.effectiveName;
-    final String? avatarUrl =
-        isInlineBot ? row.bot!.avatarUrl : row.candidate!.avatarUrl;
-    final bool isBot = isInlineBot || (row.candidate?.isBot ?? false);
+        : (canResolveCandidate
+            ? ContactsService.resolvePeerName(
+                candidate.id,
+                candidate.effectiveName,
+                isBot: isBot,
+              )
+            : candidate!.effectiveName);
+    final String? avatarUrl = isInlineBot
+        ? row.bot!.avatarUrl
+        : (canResolveCandidate
+            ? ContactsService.resolvePeerAvatarUrl(
+                candidate.id,
+                candidate.avatarUrl,
+                isBot: isBot,
+              )
+            : candidate?.avatarUrl);
     final String? badgeLabel = isInlineBot
         ? 'INLINE'
         : (row.candidate?.roleLabel?.isNotEmpty == true

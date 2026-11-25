@@ -4,6 +4,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/chat_folder.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_folder_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
@@ -88,11 +89,17 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
     _includeChannels = f?.includedTypes.contains('channel') ?? false;
     _includedChatIds = List<String>.from(f?.includedChatIds ?? const []);
     _excludedChatIds = List<String>.from(f?.excludedChatIds ?? const []);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadChats();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _nameController.dispose();
     super.dispose();
   }
@@ -113,12 +120,35 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
     }
   }
 
+  String _resolvedChatTitle(DbChat c) {
+    if (c.chatType == 'saved') {
+      return context.l10n.translate('chat_saved_messages');
+    }
+    if (c.chatType == 'private' && !c.isBot) {
+      return ContactsService.resolvePeerName(
+        c.otherUserId,
+        c.name,
+        isBot: c.isBot,
+      );
+    }
+    return c.name;
+  }
+
+  String? _resolvedChatAvatar(DbChat c) {
+    if (c.chatType == 'private' && !c.isBot) {
+      return ContactsService.resolvePeerAvatarUrl(
+        c.otherUserId,
+        c.avatarUrl,
+        isBot: c.isBot,
+      );
+    }
+    return c.avatarUrl;
+  }
+
   String _chatDisplayName(String chatId) {
     for (final c in _allChats) {
       if (c.chatId == chatId) {
-        return c.chatType == 'saved'
-            ? context.l10n.translate('chat_saved_messages')
-            : c.name;
+        return _resolvedChatTitle(c);
       }
     }
     return chatId;
@@ -135,14 +165,18 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
       enableDrag: false,
       builder: (_) => const SizedBox.shrink(),
       customSheetBuilder: (sheetCtx) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final q = searchQuery.trim().toLowerCase();
-            final filtered = _allChats.where((c) {
-              if (q.isEmpty) return true;
-              return c.name.toLowerCase().contains(q) ||
-                  (c.username?.toLowerCase().contains(q) ?? false);
-            }).toList();
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => StatefulBuilder(
+            builder: (context, setSheetState) {
+              final q = searchQuery.trim().toLowerCase();
+              final filtered = _allChats.where((c) {
+                if (q.isEmpty) return true;
+                final resolvedName = _resolvedChatTitle(c).toLowerCase();
+                return resolvedName.contains(q) ||
+                    c.name.toLowerCase().contains(q) ||
+                    (c.username?.toLowerCase().contains(q) ?? false);
+              }).toList();
             final media = MediaQuery.of(context);
             final double sheetHeight = media.size.height * 0.78;
 
@@ -242,22 +276,24 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
                                           final chat = filtered[idx];
                                           final checked = initialSelected
                                               .contains(chat.chatId);
+                                          final resolvedAvatar =
+                                              _resolvedChatAvatar(chat);
                                           final provider =
-                                              chat.avatarUrl != null &&
-                                                      chat.avatarUrl!.isNotEmpty
+                                              resolvedAvatar != null &&
+                                                      resolvedAvatar.isNotEmpty
                                                   ? avatarImageProvider(
-                                                      chat.avatarUrl!)
+                                                      resolvedAvatar)
                                                   : null;
-                                          final title =
-                                              chat.chatType == 'saved'
-                                                  ? l10n.translate(
-                                                      'chat_saved_messages')
-                                                  : chat.name;
+                                          final title = _resolvedChatTitle(chat);
                                           return CheckboxListTile(
                                             value: checked,
                                             secondary: CircleAvatar(
                                               radius: 18,
                                               backgroundImage: provider,
+                                              onBackgroundImageError:
+                                                  provider != null
+                                                      ? (_, __) {}
+                                                      : null,
                                               child: provider == null
                                                   ? Text(
                                                       title.isNotEmpty
@@ -302,8 +338,9 @@ class _FolderEditScreenState extends State<FolderEditScreen> {
               ),
             );
           },
-        );
-      },
+        ),
+      );
+    },
     );
 
     if (result != null && mounted) {

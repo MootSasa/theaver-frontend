@@ -7,6 +7,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../models/avatar_editor_models.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
@@ -92,11 +93,42 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       }
     });
     _searchController.addListener(_onSearchChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadInitialUsers();
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final q = _searchQuery.trim().toLowerCase();
+    setState(() {
+      if (q.isNotEmpty) {
+        _filteredUsers = _allUsers
+            .where((u) =>
+                _resolvedUserName(u).toLowerCase().contains(q) ||
+                u.name.toLowerCase().contains(q) ||
+                u.username.toLowerCase().contains(q))
+            .toList();
+      }
+    });
+  }
+
+  String _resolvedUserName(SearchResultUser user) =>
+      ContactsService.resolvePeerName(
+        user.id,
+        user.name,
+        isBot: user.isBot,
+      );
+
+  String? _resolvedUserAvatar(SearchResultUser user) =>
+      ContactsService.resolvePeerAvatarUrl(
+        user.id,
+        user.avatarUrl,
+        isBot: user.isBot,
+      );
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchDebounce?.cancel();
     _nameController.dispose();
     _descriptionController.dispose();
@@ -178,6 +210,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         setState(() {
           _filteredUsers = _allUsers
               .where((u) =>
+                  _resolvedUserName(u).toLowerCase().contains(q) ||
                   u.name.toLowerCase().contains(q) ||
                   u.username.toLowerCase().contains(q))
               .toList();
@@ -756,6 +789,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                       separatorBuilder: (_, __) => const SizedBox(width: 10),
                       itemBuilder: (context, index) {
                         final member = _selectedMembers[index];
+                        final memberName = _resolvedUserName(member);
+                        final memberAvatar = _resolvedUserAvatar(member);
                         return GestureDetector(
                           onTap: () => _removeMember(member),
                           child: SizedBox(
@@ -768,10 +803,11 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                   children: [
                                     AvatarWithStatus(
                                       userId: member.id,
-                                      avatarUrl: member.avatarUrl,
-                                      name: member.name,
+                                      avatarUrl: memberAvatar,
+                                      name: memberName,
                                       radius: 24,
                                       isOnline: member.isOnline,
+                                      resolveContactOverride: !member.isBot,
                                     ),
                                     Positioned(
                                       right: -2,
@@ -799,7 +835,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                 ),
                                 const SizedBox(height: 5),
                                 Text(
-                                  member.name,
+                                  memberName,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   textAlign: TextAlign.center,
@@ -889,20 +925,23 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     required TheavPalette palette,
   }) {
     final isSelected = _selectedMembers.any((m) => m.id == user.id);
+    final userName = _resolvedUserName(user);
+    final userAvatar = getValidAvatarUrl(_resolvedUserAvatar(user));
 
     return TheavListRow(
       leading: AvatarWithStatus(
         userId: user.id,
-        avatarUrl: getValidAvatarUrl(user.avatarUrl),
-        name: user.name,
+        avatarUrl: userAvatar,
+        name: userName,
         radius: 21,
         isOnline: user.isOnline,
+        resolveContactOverride: !user.isBot,
       ),
       titleWidget: Row(
         children: [
           Flexible(
             child: Text(
-              user.name,
+              userName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(

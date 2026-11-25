@@ -24,6 +24,7 @@ class PlaybackTrack {
   final String chatType; // 'private', 'group', 'channel'
   final String mediaType; // 'voice', 'video_note'
   final String mediaUrl;
+  final String? senderId;
   final String? senderName;
   final String? chatTitle;
   final Duration? duration;
@@ -36,6 +37,7 @@ class PlaybackTrack {
     required this.chatType,
     required this.mediaType,
     required this.mediaUrl,
+    this.senderId,
     this.senderName,
     this.chatTitle,
     this.duration,
@@ -240,6 +242,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       await VoicePlaybackService().playVoice(
         messageId: track.messageId,
         audioUrl: resolvedUrl,
+        senderId: track.senderId,
         senderName: track.senderName,
         initialDuration: track.duration,
         chatId: track.chatId,
@@ -264,6 +267,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
           messageId: track.messageId,
           videoUrl: resolvedUrl,
           controller: cached,
+          senderId: track.senderId,
           senderName: track.senderName,
           chatId: track.chatId,
           chatType: track.chatType,
@@ -305,6 +309,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
             messageId: track.messageId,
             videoUrl: resolvedUrl,
             controller: ctrl,
+            senderId: track.senderId,
             senderName: track.senderName,
             chatId: track.chatId,
             chatType: track.chatType,

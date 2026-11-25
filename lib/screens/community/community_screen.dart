@@ -1,21 +1,21 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 
-import '../../config/app_config.dart';
 import '../../models/call_models.dart';
 import '../../models/community_models.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/community_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/image_utils.dart';
 import '../../widgets/community/community_channel_icon.dart';
 import '../../widgets/community/community_members_panel.dart';
 import '../../widgets/design_system/theav_design_system.dart';
@@ -66,6 +66,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
       _members = widget.initialMembers!;
     }
     _selectInitialChannel();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     if (widget.autoFetch) {
       _fetchFreshCommunity();
       if (_community.isMember) {
@@ -75,8 +76,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
     }
   }
 
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _wsSub?.cancel();
     super.dispose();
   }
@@ -736,12 +742,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   ImageProvider? _resolveAvatarImage(String? rawUrl) {
-    final resolved = AppConfig.resolveMediaUrl(rawUrl);
-    if (resolved == null || resolved.isEmpty) return null;
-    if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
-      return NetworkImage(resolved);
-    }
-    return FileImage(File(resolved));
+    return avatarImageProvider(rawUrl, maxDecodeDimension: 96);
   }
 
   @override
@@ -1526,7 +1527,21 @@ class _CommunityScreenState extends State<CommunityScreen> {
             padding: const EdgeInsets.fromLTRB(44, 0, 14, 8),
             child: Column(
               children: liveParticipants.map((part) {
-                final partAvatar = _resolveAvatarImage(part.avatarUrl);
+                final member = _members
+                    .where((m) => m.userId == part.userId)
+                    .firstOrNull;
+                final isBot = member?.isBot ?? false;
+                final partName = ContactsService.resolvePeerName(
+                  part.userId,
+                  part.displayName,
+                  isBot: isBot,
+                );
+                final partAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+                  part.userId,
+                  part.avatarUrl,
+                  isBot: isBot,
+                );
+                final partAvatar = _resolveAvatarImage(partAvatarUrl);
                 final isStreaming = part.isScreenSharing ||
                     (isThisVoiceActive &&
                         (callProvider?.activeCall?.streams
@@ -1546,6 +1561,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                               ? DecorationImage(
                                   image: partAvatar,
                                   fit: BoxFit.cover,
+                                  onError: (_, __) {},
                                 )
                               : null,
                           border: Border.all(
@@ -1558,8 +1574,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
                         alignment: Alignment.center,
                         child: partAvatar == null
                             ? Text(
-                                part.displayName.isNotEmpty
-                                    ? part.displayName[0].toUpperCase()
+                                partName.isNotEmpty
+                                    ? partName.characters.first.toUpperCase()
                                     : '?',
                                 style: TextStyle(
                                   fontSize: 10,
@@ -1572,7 +1588,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          part.displayName,
+                          partName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(

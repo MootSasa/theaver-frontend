@@ -59,6 +59,18 @@ class MessageReplyInfo extends StatelessWidget {
   /// Optional override for the forward author avatar URL
   final String? authorAvatarUrl;
 
+  /// Optional human user ID for forwarded messages (NEVER `'chat:...'`)
+  final String? authorUserId;
+
+  /// Optional sender chat ID for replies to send-as-channel messages
+  final String? replySenderChatId;
+
+  /// Whether the replied-to message was sent by an anonymous admin
+  final bool replyIsFromAnonymousAdmin;
+
+  /// Whether the replied-to sender is a bot
+  final bool replyIsBot;
+
   const MessageReplyInfo({
     Key? key,
     this.replyInfo,
@@ -73,12 +85,17 @@ class MessageReplyInfo extends StatelessWidget {
     this.contentOverride,
     this.entitiesOverride = const [],
     this.authorAvatarUrl,
+    this.authorUserId,
+    this.replySenderChatId,
+    this.replyIsFromAnonymousAdmin = false,
+    this.replyIsBot = false,
   }) : super(key: key);
 
   /// Helper to create a forwarded message header
   factory MessageReplyInfo.forwarded({
     required String authorName,
     String? authorAvatarUrl,
+    String? authorUserId,
     String? content,
     bool isMe = false,
     VoidCallback? onTap,
@@ -86,6 +103,7 @@ class MessageReplyInfo extends StatelessWidget {
     return MessageReplyInfo(
       titleOverride: authorName,
       authorAvatarUrl: authorAvatarUrl,
+      authorUserId: authorUserId,
       contentOverride: content,
       isMe: isMe,
       onTap: onTap,
@@ -546,10 +564,22 @@ class MessageReplyInfo extends StatelessWidget {
     final youTitle = context.l10n.translate('chat_reply_you');
     final String? replySenderId =
         (!isReplyingToMe && replyInfo != null) ? replyInfo!.senderId.trim() : null;
+    final String? effectiveReplySenderChatId =
+        replySenderChatId ?? replyInfo?.senderChatId;
+    final bool effectiveReplyIsAnon =
+        replyIsFromAnonymousAdmin || (replyInfo?.isFromAnonymousAdmin ?? false);
     final bool canResolveContactReplyName = titleOverride == null &&
-        replySenderId != null &&
-        replySenderId.isNotEmpty &&
-        replySenderId != '0';
+        ContactsService.shouldResolveUserIdentity(
+          replySenderId,
+          senderChatId: effectiveReplySenderChatId,
+          isAnonymousAdmin: effectiveReplyIsAnon,
+          isBot: replyIsBot,
+        );
+    final bool canResolveForwardAuthor = titleOverride != null &&
+        ContactsService.shouldResolveUserIdentity(authorUserId);
+    final bool shouldListenContacts =
+        canResolveContactReplyName || canResolveForwardAuthor;
+
     String resolveTitleText() {
       String resolvedTitle = titleOverride ?? '';
       if (resolvedTitle.isEmpty) {
@@ -558,18 +588,37 @@ class MessageReplyInfo extends StatelessWidget {
         } else if (replyInfo != null) {
           final rawSenderName = replyInfo!.senderName;
           final contactResolved = canResolveContactReplyName
-              ? ContactsService.resolveName(replySenderId, rawSenderName)
+              ? ContactsService.resolvePeerName(
+                  replySenderId,
+                  rawSenderName,
+                  senderChatId: effectiveReplySenderChatId,
+                  isAnonymousAdmin: effectiveReplyIsAnon,
+                  isBot: replyIsBot,
+                )
               : rawSenderName;
           resolvedTitle =
               contactResolved.isNotEmpty ? contactResolved : 'Сообщение';
         } else {
           resolvedTitle = 'Сообщение';
         }
+      } else if (canResolveForwardAuthor) {
+        resolvedTitle = ContactsService.resolvePeerName(
+          authorUserId,
+          resolvedTitle,
+        );
       }
       if (resolvedTitle == 'Вы' || resolvedTitle == 'You') {
         resolvedTitle = youTitle;
       }
       return resolvedTitle;
+    }
+
+    String? resolveForwardAvatarUrl() {
+      if (!canResolveForwardAuthor) return authorAvatarUrl;
+      return ContactsService.resolvePeerAvatarUrl(
+        authorUserId,
+        authorAvatarUrl,
+      );
     }
 
     final String title = resolveTitleText();
@@ -579,13 +628,51 @@ class MessageReplyInfo extends StatelessWidget {
       if (isReplyingToMe) {
         effectiveReplyEmoji = profileTheme.currentReplyEmoji;
       } else {
-        final cachedPeer = (replyInfo!.senderId.isNotEmpty && replyInfo!.senderId != '0')
+        final bool hasReplySenderChat = effectiveReplySenderChatId != null &&
+            effectiveReplySenderChatId.trim().isNotEmpty &&
+            effectiveReplySenderChatId.trim() != '0';
+        final cachedPeer = (!effectiveReplyIsAnon &&
+                !hasReplySenderChat &&
+                replyInfo!.senderId.isNotEmpty &&
+                replyInfo!.senderId != '0')
             ? PeerCustomizationCache.instance.getSync(replyInfo!.senderId)
             : null;
         effectiveReplyEmoji = cachedPeer?.replyEmoji ?? replyInfo!.replyEmoji;
       }
     } else {
       effectiveReplyEmoji = null;
+    }
+
+    Widget buildHeaderRow(String displayTitle, String? displayAvatarUrl) {
+      final avatarProvider =
+          (displayAvatarUrl != null && displayAvatarUrl.isNotEmpty)
+              ? avatarImageProvider(displayAvatarUrl)
+              : null;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (avatarProvider != null) ...[
+            CircleAvatar(
+              radius: 8,
+              backgroundColor: accentColor.withValues(alpha: 0.2),
+              backgroundImage: avatarProvider,
+            ),
+            const SizedBox(width: 5),
+          ],
+          Flexible(
+            child: Text(
+              displayTitle,
+              style: TextStyle(
+                color: accentColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
     }
 
     return GestureDetector(
@@ -643,49 +730,15 @@ class MessageReplyInfo extends StatelessWidget {
                 children: [
                   // Sender name / Title (with optional 16dp forwarded author mini-avatar)
                   if (!isDeleted && title.isNotEmpty)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (authorAvatarUrl != null &&
-                            authorAvatarUrl!.isNotEmpty &&
-                            avatarImageProvider(authorAvatarUrl!) != null) ...[
-                          CircleAvatar(
-                            radius: 8,
-                            backgroundColor: accentColor.withValues(alpha: 0.2),
-                            backgroundImage:
-                                avatarImageProvider(authorAvatarUrl!),
-                          ),
-                          const SizedBox(width: 5),
-                        ],
-                        Flexible(
-                          child: canResolveContactReplyName
-                              ? ValueListenableBuilder<int>(
-                                  valueListenable:
-                                      ContactsService.revisionNotifier,
-                                  builder: (_, __, ___) => Text(
-                                    resolveTitleText(),
-                                    style: TextStyle(
-                                      color: accentColor,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                )
-                              : Text(
-                                  title,
-                                  style: TextStyle(
-                                    color: accentColor,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                        ),
-                      ],
-                    ),
+                    shouldListenContacts
+                        ? ValueListenableBuilder<int>(
+                            valueListenable: ContactsService.revisionNotifier,
+                            builder: (_, __, ___) => buildHeaderRow(
+                              resolveTitleText(),
+                              resolveForwardAvatarUrl(),
+                            ),
+                          )
+                        : buildHeaderRow(title, authorAvatarUrl),
                   if (!isDeleted && title.isNotEmpty && hasPreview)
                     const SizedBox(height: 2),
                   // Preview text

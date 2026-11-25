@@ -51,11 +51,42 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadInitialUsers();
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final lower = _searchQuery.trim().toLowerCase();
+    setState(() {
+      if (lower.isNotEmpty) {
+        _searchResults = _recentUsers
+            .where((u) =>
+                _resolvedUserName(u).toLowerCase().contains(lower) ||
+                u.name.toLowerCase().contains(lower) ||
+                u.username.toLowerCase().contains(lower))
+            .toList();
+      }
+    });
+  }
+
+  String _resolvedUserName(SearchResultUser user) =>
+      ContactsService.resolvePeerName(
+        user.id,
+        user.name,
+        isBot: user.isBot,
+      );
+
+  String? _resolvedUserAvatar(SearchResultUser user) =>
+      ContactsService.resolvePeerAvatarUrl(
+        user.id,
+        user.avatarUrl,
+        isBot: user.isBot,
+      );
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -108,7 +139,7 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
           id: ct.contactUserId,
           username: ct.username,
           name: ct.effectiveName,
-          avatarUrl: ct.avatarUrl,
+          avatarUrl: ct.effectiveAvatarUrl ?? '',
           bio: '',
           isOnline: ct.isOnline,
           isBot: ct.isBot,
@@ -152,6 +183,7 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
       setState(() {
         _searchResults = _recentUsers
             .where((u) =>
+                _resolvedUserName(u).toLowerCase().contains(lower) ||
                 u.name.toLowerCase().contains(lower) ||
                 u.username.toLowerCase().contains(lower))
             .toList();
@@ -174,7 +206,7 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
           merged[u.id] = u;
         }
         for (final u in users) {
-          merged[u.id] = u;
+          merged.putIfAbsent(u.id, () => u);
         }
         setState(() {
           _searchResults = merged.values.toList();
@@ -241,13 +273,15 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
       if (!mounted) return;
       if (result['success'] == true) {
         final chat = result['chat'] as Chat;
+        final resolvedName = _resolvedUserName(user);
+        final resolvedAvatar = _resolvedUserAvatar(user);
         if (TilingLayoutController.instance.isWorkspaceMounted) {
           Navigator.of(context).pop();
           TilingLayoutController.instance.openChatInActiveTile(
             chatId: chat.id,
             chatType: 'private',
-            chatName: user.name,
-            avatarUrl: user.avatarUrl,
+            chatName: resolvedName,
+            avatarUrl: resolvedAvatar,
             otherUserId: user.id,
           );
           return;
@@ -257,8 +291,8 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: user.name,
-              otherUserAvatar: user.avatarUrl,
+              otherUserName: resolvedName,
+              otherUserAvatar: resolvedAvatar,
               otherUserOnline: user.isOnline,
               otherUserId: user.id,
             ),
@@ -669,6 +703,8 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
     required TheavPalette palette,
     required Color primaryColor,
   }) {
+    final userName = _resolvedUserName(user);
+    final userAvatar = getValidAvatarUrl(_resolvedUserAvatar(user));
     final subtitleParts = <String>[];
     if (user.username.isNotEmpty) {
       subtitleParts.add('@${user.username}');
@@ -680,16 +716,18 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
       leading: AvatarWithStatus(
-        avatarUrl: getValidAvatarUrl(user.avatarUrl),
-        name: user.name,
+        userId: user.id,
+        avatarUrl: userAvatar,
+        name: userName,
         radius: 21,
         isOnline: user.isOnline,
+        resolveContactOverride: !user.isBot,
       ),
       title: Row(
         children: [
           Flexible(
             child: Text(
-              user.name,
+              userName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(

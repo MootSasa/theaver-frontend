@@ -761,6 +761,7 @@ class _ContactEditScreenState extends State<ContactEditScreen> {
                         avatarUrl: _originalAvatarUrl,
                         name: _avatarPlaceholderName,
                         showDecoration: false,
+                        resolveContactOverride: false,
                       ),
                       title: context.trOr(
                         'contact_reset_original_photo',

@@ -10,6 +10,7 @@ import '../../services/account_manager.dart';
 import '../../services/archive_preferences_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/draft_service.dart';
 import '../../services/glass_toast_service.dart';
@@ -61,7 +62,9 @@ class ArchivedChatsScreen extends StatefulWidget {
 
 class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
   final WebSocketService _wsService = WebSocketService();
-  final Map<String, ({String action, String? userName, Timer timer})>
+  final Map<
+      String,
+      ({String action, String? userId, String? userName, Timer timer})>
       _chatTypingStates = {};
   final Map<String, List<MessageEntity>> _chatLastMessageEntities = {};
   final Map<String, String> _hydratedEntitySignatures = {};
@@ -84,6 +87,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     DraftService().draftsNotifier.addListener(_onServiceUpdate);
     ChatSwipeService().addListener(_onServiceUpdate);
     ArchivePreferencesService().addListener(_onServiceUpdate);
+    ContactsService.revisionNotifier.addListener(_onServiceUpdate);
     TilingLayoutController.instance.addListener(_onTilingUpdate);
     _wsService.subscribe(WebSocketEventType.typing, _onChatTyping);
   }
@@ -93,6 +97,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     DraftService().draftsNotifier.removeListener(_onServiceUpdate);
     ChatSwipeService().removeListener(_onServiceUpdate);
     ArchivePreferencesService().removeListener(_onServiceUpdate);
+    ContactsService.revisionNotifier.removeListener(_onServiceUpdate);
     TilingLayoutController.instance.removeListener(_onTilingUpdate);
     _wsService.unsubscribe(WebSocketEventType.typing, _onChatTyping);
     for (final entry in _chatTypingStates.values) {
@@ -136,7 +141,10 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
       return;
     }
 
-    final userName = event.data['user_name']?.toString();
+    final rawUserName = event.data['user_name']?.toString();
+    final resolvedUserName = (typingUserId != null && typingUserId.isNotEmpty)
+        ? ContactsService.resolvePeerName(typingUserId, rawUserName ?? '')
+        : rawUserName;
     _chatTypingStates[chatId]?.timer.cancel();
     final timer = Timer(const Duration(seconds: 4), () {
       _chatTypingStates.remove(chatId);
@@ -144,7 +152,10 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
     });
     _chatTypingStates[chatId] = (
       action: action,
-      userName: userName,
+      userId: typingUserId,
+      userName: (resolvedUserName != null && resolvedUserName.isNotEmpty)
+          ? resolvedUserName
+          : rawUserName,
       timer: timer,
     );
     if (mounted) setState(() {});
@@ -943,6 +954,20 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
             ) ??
             false;
         final typing = _chatTypingStates[chat.id];
+        final String? resolvedTypingName;
+        if (typing != null) {
+          final uid = typing.userId;
+          if (uid != null && uid.isNotEmpty) {
+            final resolved =
+                ContactsService.resolvePeerName(uid, typing.userName ?? '');
+            resolvedTypingName =
+                resolved.isNotEmpty ? resolved : typing.userName;
+          } else {
+            resolvedTypingName = typing.userName;
+          }
+        } else {
+          resolvedTypingName = null;
+        }
 
         return ChatListTileItem(
           key: ValueKey<String>('archived_row_${chat.id}'),
@@ -953,7 +978,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
           currentUserId: _currentUserId,
           fallbackSavedAvatarUrl: fallbackSavedAvatar,
           typingInfo: typing != null
-              ? (action: typing.action, userName: typing.userName)
+              ? (action: typing.action, userName: resolvedTypingName)
               : null,
           fallbackEntities: _chatLastMessageEntities[chat.id] ?? const [],
           isOpenInTile: tiling.isChatOpen(chat.id),

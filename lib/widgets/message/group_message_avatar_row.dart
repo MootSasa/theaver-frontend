@@ -464,6 +464,7 @@ class SenderHeaderRow extends StatelessWidget {
   final String? senderId;
   final String? senderChatId;
   final bool isFromAnonymousAdmin;
+  final bool isMirroredChannelPost;
 
   const SenderHeaderRow({
     super.key,
@@ -479,6 +480,7 @@ class SenderHeaderRow extends StatelessWidget {
     this.senderId,
     this.senderChatId,
     this.isFromAnonymousAdmin = false,
+    this.isMirroredChannelPost = false,
   });
 
   String? get _resolvedRankLabel {
@@ -500,70 +502,88 @@ class SenderHeaderRow extends StatelessWidget {
         (themeExt?.palette.chatBubbleIncomingText ?? theme.colorScheme.onSurface)
             .withValues(alpha: 0.65);
     final bool hasAnyBadge = isBot || isVerified || badge != null;
-    final sid = senderId?.trim() ?? '';
-    final scid = senderChatId?.trim() ?? '';
-    final bool isHumanSender = !isFromAnonymousAdmin &&
-        !isBot &&
-        !(ContactsService.getCached(sid)?.isBot ?? false) &&
-        sid.isNotEmpty &&
-        sid != '0' &&
-        (scid.isEmpty || scid == '0');
-    final String effectiveName =
-        isHumanSender ? ContactsService.resolveName(sid, senderName) : senderName;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTapSender,
-      child: _SenderHeaderLayout(
-        nameWidget: Text(
-          effectiveName,
-          maxLines: 1,
-          softWrap: false,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-            color: nameColor,
-          ),
-        ),
-        emojiStatusWidget: status != null
-            ? EmojiStatusBadge(
-                status: status,
-                size: 15,
-                animate: false,
-                interactive: true,
-                fallbackColor: nameColor,
-              )
-            : null,
-        badgesWidget: hasAnyBadge
-            ? FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: PeerBadgesRow(
-                  isBot: isBot,
-                  isVerified: isVerified,
-                  badge: badge,
-                  interactiveBadge: true,
-                  verifiedIconSize: 14,
-                  accentColor: nameColor,
-                ),
-              )
-            : null,
-        rankWidget: rankLabel != null
-            ? Text(
-                rankLabel,
-                maxLines: 1,
-                softWrap: false,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
-                  color: effectiveRankColor,
-                ),
-              )
-            : null,
-      ),
+    final bool isHumanSender = ContactsService.shouldResolveUserIdentity(
+      senderId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isFromAnonymousAdmin,
+      isMirroredChannelPost: isMirroredChannelPost,
+      isBot: isBot,
     );
+
+    Widget buildHeader(String effectiveName) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTapSender,
+        child: _SenderHeaderLayout(
+          nameWidget: Text(
+            effectiveName,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: nameColor,
+            ),
+          ),
+          emojiStatusWidget: status != null
+              ? EmojiStatusBadge(
+                  status: status,
+                  size: 15,
+                  animate: false,
+                  interactive: true,
+                  fallbackColor: nameColor,
+                )
+              : null,
+          badgesWidget: hasAnyBadge
+              ? FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: PeerBadgesRow(
+                    isBot: isBot,
+                    isVerified: isVerified,
+                    badge: badge,
+                    interactiveBadge: true,
+                    verifiedIconSize: 14,
+                    accentColor: nameColor,
+                  ),
+                )
+              : null,
+          rankWidget: rankLabel != null
+              ? Text(
+                  rankLabel,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: effectiveRankColor,
+                  ),
+                )
+              : null,
+        ),
+      );
+    }
+
+    if (isHumanSender) {
+      return ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) {
+          final effectiveName = ContactsService.resolvePeerName(
+            senderId,
+            senderName,
+            senderChatId: senderChatId,
+            isAnonymousAdmin: isFromAnonymousAdmin,
+            isMirroredChannelPost: isMirroredChannelPost,
+            isBot: isBot,
+          );
+          return buildHeader(effectiveName);
+        },
+      );
+    }
+
+    return buildHeader(senderName);
   }
 }
 
@@ -625,14 +645,15 @@ class GroupMessageAvatarRow extends StatelessWidget {
         senderChatId ?? wrappedMessage?.senderChatId;
     final bool effectiveAnon =
         isFromAnonymousAdmin || (wrappedMessage?.isFromAnonymousAdmin ?? false);
-    final bool isHumanSender = !effectiveAnon &&
-        !isBot &&
-        !(ContactsService.getCached(effectiveSenderId)?.isBot ?? false) &&
-        effectiveSenderId.isNotEmpty &&
-        effectiveSenderId != '0' &&
-        (effectiveSenderChatId == null ||
-            effectiveSenderChatId.trim().isEmpty ||
-            effectiveSenderChatId.trim() == '0');
+    final bool effectiveMirrored =
+        wrappedMessage?.isMirroredChannelPost ?? false;
+    final bool isHumanSender = ContactsService.shouldResolveUserIdentity(
+      effectiveSenderId,
+      senderChatId: effectiveSenderChatId,
+      isAnonymousAdmin: effectiveAnon,
+      isMirroredChannelPost: effectiveMirrored,
+      isBot: isBot,
+    );
 
     PeerCustomization? cached;
     if (!effectiveAnon) {
@@ -663,9 +684,13 @@ class GroupMessageAvatarRow extends StatelessWidget {
               ? groupAvatarUrl
               : senderAvatarUrl)
           : (isHumanSender
-              ? ContactsService.resolveAvatarUrl(
+              ? ContactsService.resolvePeerAvatarUrl(
                   effectiveSenderId,
                   senderAvatarUrl,
+                  senderChatId: effectiveSenderChatId,
+                  isAnonymousAdmin: effectiveAnon,
+                  isMirroredChannelPost: effectiveMirrored,
+                  isBot: isBot,
                 )
               : senderAvatarUrl);
       final effectiveName = effectiveAnon
@@ -673,13 +698,22 @@ class GroupMessageAvatarRow extends StatelessWidget {
               ? groupName!
               : senderName)
           : (isHumanSender
-              ? ContactsService.resolveName(effectiveSenderId, senderName)
+              ? ContactsService.resolvePeerName(
+                  effectiveSenderId,
+                  senderName,
+                  senderChatId: effectiveSenderChatId,
+                  isAnonymousAdmin: effectiveAnon,
+                  isMirroredChannelPost: effectiveMirrored,
+                  isBot: isBot,
+                )
               : senderName);
       return GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: effectiveTap,
         child: AvatarWithStatus(
-          userId: effectiveAnon ? null : senderId,
+          userId: effectiveAnon
+              ? null
+              : (effectiveSenderId.isNotEmpty ? effectiveSenderId : senderId),
           avatarUrl: effectiveAvatarUrl,
           name: effectiveName,
           radius: avatarRadius,
@@ -687,6 +721,7 @@ class GroupMessageAvatarRow extends StatelessWidget {
           decorationOverride: effectiveCustomization?.avatarDecoration,
           showDecoration: !effectiveAnon,
           animateDecoration: false,
+          resolveContactOverride: false,
         ),
       );
     }

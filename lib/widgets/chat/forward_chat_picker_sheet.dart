@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/image_utils.dart';
@@ -88,13 +89,45 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadChats();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchController.dispose();
     super.dispose();
+  }
+
+  bool _isPrivateHumanChat(DbChat chat) =>
+      chat.chatType == 'private' && !chat.isBot;
+
+  String _resolvedChatTitle(DbChat chat) {
+    if (chat.chatType == 'saved') return 'Избранное';
+    if (_isPrivateHumanChat(chat)) {
+      return ContactsService.resolvePeerName(
+        chat.otherUserId,
+        chat.name,
+        isBot: chat.isBot,
+      );
+    }
+    return chat.name;
+  }
+
+  String? _resolvedChatAvatar(DbChat chat) {
+    if (_isPrivateHumanChat(chat)) {
+      return ContactsService.resolvePeerAvatarUrl(
+        chat.otherUserId,
+        chat.avatarUrl,
+        isBot: chat.isBot,
+      );
+    }
+    return chat.avatarUrl;
   }
 
   Future<void> _loadChats() async {
@@ -155,8 +188,7 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
 
     if (res['success'] == true) {
       final count = widget.messageIds.length;
-      final displayTarget =
-          targetChat.chatType == 'saved' ? 'Избранное' : targetChat.name;
+      final displayTarget = _resolvedChatTitle(targetChat);
       final label = count == 1
           ? 'Сообщение переслано в «$displayTarget»'
           : 'Переслано сообщений ($count) в «$displayTarget»';
@@ -185,10 +217,13 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
 
     final filtered = _chats.where((c) {
       if (query.isEmpty) return true;
-      final displayName =
+      final resolvedName = _resolvedChatTitle(c).toLowerCase();
+      final rawName =
           c.chatType == 'saved' ? 'избранное' : c.name.toLowerCase();
       final uname = (c.username ?? '').toLowerCase();
-      return displayName.contains(query) || uname.contains(query);
+      return resolvedName.contains(query) ||
+          rawName.contains(query) ||
+          uname.contains(query);
     }).toList();
 
     return SizedBox(
@@ -264,10 +299,14 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
                             final chat = filtered[index];
                             final isSaved = chat.chatType == 'saved';
                             final isCurrent = chat.chatId == widget.fromChatId;
-                            final title = isSaved ? 'Избранное' : chat.name;
+                            final title = _resolvedChatTitle(chat);
                             final isBusy = _forwardingToChatId == chat.chatId;
+                            final resolvedAvatar = _resolvedChatAvatar(chat);
                             final validAvatar =
-                                getValidAvatarUrl(chat.avatarUrl);
+                                getValidAvatarUrl(resolvedAvatar);
+                            final avatarProvider = validAvatar != null
+                                ? avatarImageProvider(resolvedAvatar)
+                                : null;
 
                             return ListTile(
                               leading: isSaved
@@ -284,10 +323,12 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
                                       radius: 21,
                                       backgroundColor: palette.primary
                                           .withValues(alpha: 0.16),
-                                      backgroundImage: validAvatar != null
-                                          ? avatarImageProvider(chat.avatarUrl)
-                                          : null,
-                                      child: validAvatar == null
+                                      backgroundImage: avatarProvider,
+                                      onBackgroundImageError:
+                                          avatarProvider != null
+                                              ? (_, __) {}
+                                              : null,
+                                      child: avatarProvider == null
                                           ? Text(
                                               title.isNotEmpty
                                                   ? title.characters.first

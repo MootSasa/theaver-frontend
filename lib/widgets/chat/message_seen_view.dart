@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/date_time_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
@@ -38,9 +39,20 @@ class _MessageSeenViewState extends State<MessageSeenView> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     if (widget.chatType == 'group' && widget.message.sendStatus == 1) {
       _loadReaders();
     }
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadReaders() async {
@@ -190,11 +202,19 @@ class _MessageSeenViewState extends State<MessageSeenView> {
                     ),
                     itemBuilder: (_, i) {
                       final r = _readers[i];
-                      final name = (r['display_name'] ??
+                      final readerId =
+                          (r['user_id'] ?? r['id'] ?? '').toString().trim();
+                      final isBot = r['is_bot'] == true || r['is_bot'] == 1;
+                      final rawName = (r['display_name'] ??
                               r['name'] ??
                               r['username'] ??
                               'Пользователь')
                           .toString();
+                      final name = ContactsService.resolvePeerName(
+                        readerId,
+                        rawName,
+                        isBot: isBot,
+                      );
                       final readAt = r['read_at']?.toString();
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 5),

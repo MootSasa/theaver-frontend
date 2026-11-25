@@ -1,14 +1,55 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
+import '../../services/database/app_database.dart';
 import '../../services/notification_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/user/avatar_with_status.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/image_utils.dart';
 import 'chat_notification_settings_screen.dart';
 
-class NotificationExceptionsScreen extends StatelessWidget {
+class NotificationExceptionsScreen extends StatefulWidget {
   const NotificationExceptionsScreen({Key? key}) : super(key: key);
+
+  @override
+  State<NotificationExceptionsScreen> createState() =>
+      _NotificationExceptionsScreenState();
+}
+
+class _NotificationExceptionsScreenState
+    extends State<NotificationExceptionsScreen> {
+  Map<String, DbChat> _dbChatsById = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+    _loadDbChats();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadDbChats() async {
+    try {
+      final chats = await AppDatabase().getChats();
+      if (!mounted) return;
+      setState(() {
+        _dbChatsById = {for (final c in chats) c.chatId: c};
+      });
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
 
   String _formatExceptionDescription(ChatNotificationSettings s) {
     final parts = <String>[];
@@ -162,19 +203,61 @@ class NotificationExceptionsScreen extends StatelessWidget {
     ChatNotificationException ex,
   ) {
     final isMuted = ex.settings.muteState == MuteState.muted;
+    final cachedChat = ChatInstantCache.instance.getSync(ex.settings.chatId)?.chat;
+    final dbChat = _dbChatsById[ex.settings.chatId];
+    final isPrivate = ex.chatType == 'private';
+    final isBot = cachedChat?.isBot ?? dbChat?.isBot ?? false;
+    final rawPeerId = (ex.otherUserId != null && ex.otherUserId!.isNotEmpty)
+        ? ex.otherUserId
+        : (cachedChat?.otherUserId ?? dbChat?.otherUserId);
+    final canResolvePrivate = isPrivate &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(rawPeerId);
+    final resolvedTitle = canResolvePrivate
+        ? ContactsService.resolvePeerName(
+            rawPeerId,
+            ex.chatTitle,
+            isBot: isBot,
+          )
+        : ex.chatTitle;
+    final baseAvatar = ex.avatarUrl ?? cachedChat?.avatarUrl ?? dbChat?.avatarUrl;
+    final resolvedAvatar = canResolvePrivate
+        ? ContactsService.resolvePeerAvatarUrl(
+            rawPeerId,
+            baseAvatar,
+            isBot: isBot,
+          )
+        : baseAvatar;
+    final avatarProvider = !isPrivate ? avatarImageProvider(resolvedAvatar) : null;
 
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: const Color(0xFF0088CC).withValues(alpha: 0.15),
-        child: Text(
-          ex.chatTitle.isNotEmpty ? ex.chatTitle[0].toUpperCase() : '?',
-          style: const TextStyle(
-            color: Color(0xFF0088CC),
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-      title: Text(ex.chatTitle),
+      leading: isPrivate
+          ? AvatarWithStatus(
+              userId: rawPeerId,
+              avatarUrl: resolvedAvatar,
+              name: resolvedTitle,
+              radius: 20,
+              resolveContactOverride: canResolvePrivate,
+            )
+          : CircleAvatar(
+              backgroundColor:
+                  const Color(0xFF0088CC).withValues(alpha: 0.15),
+              backgroundImage: avatarProvider,
+              onBackgroundImageError:
+                  avatarProvider != null ? (_, __) {} : null,
+              child: avatarProvider == null
+                  ? Text(
+                      resolvedTitle.isNotEmpty
+                          ? resolvedTitle[0].toUpperCase()
+                          : '?',
+                      style: const TextStyle(
+                        color: Color(0xFF0088CC),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    )
+                  : null,
+            ),
+      title: Text(resolvedTitle),
       subtitle: Text(
         _formatExceptionDescription(ex.settings),
         style: TextStyle(
@@ -197,7 +280,7 @@ class NotificationExceptionsScreen extends StatelessWidget {
           MaterialPageRoute(
             builder: (_) => ChatNotificationSettingsScreen(
               chatId: ex.settings.chatId,
-              chatName: ex.chatTitle,
+              chatName: resolvedTitle,
               isGroup: ex.chatType != 'private',
               isChannel: ex.chatType == 'channel',
             ),

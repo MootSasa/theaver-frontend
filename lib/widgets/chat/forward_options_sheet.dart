@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
 
@@ -54,102 +55,125 @@ class ForwardPreviewBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
-    final senders = payload.messages
-        .map((m) => m.resolveEffectiveAuthorTitle().trim())
-        .where((s) => s.isNotEmpty)
-        .toSet()
-        .toList();
-    final String senderSummary = payload.hideSender
-        ? 'Имя отправителя скрыто'
-        : (senders.isEmpty
-            ? 'Пересылка сообщений'
-            : (senders.length == 1
-                ? senders.first
-                : '${senders.first} и ещё ${senders.length - 1}'));
-
     final int count = payload.messages.length;
     final String titleText = count == 1
         ? 'Переслать 1 сообщение'
         : 'Переслать сообщений: $count';
 
-    final String subtitleText = payload.hideCaption && payload.hasAnyCaption
-        ? '$senderSummary • Подпись скрыта'
-        : senderSummary;
+    Widget buildBar(String senderSummary) {
+      final String subtitleText = payload.hideCaption && payload.hasAnyCaption
+          ? '$senderSummary • Подпись скрыта'
+          : senderSummary;
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        HapticUtils.tap();
-        onTapOptions();
-      },
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(12, 4, 12, 2),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: palette.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: palette.divider, width: 0.5),
-        ),
-        child: Row(
-          children: [
-            iconoir.ForwardMessage(
-              width: 20,
-              height: 20,
-              color: palette.primary,
-            ),
-            const SizedBox(width: 10),
-            Container(
-              width: 2.5,
-              height: 30,
-              decoration: BoxDecoration(
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticUtils.tap();
+          onTapOptions();
+        },
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 4, 12, 2),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: palette.divider, width: 0.5),
+          ),
+          child: Row(
+            children: [
+              iconoir.ForwardMessage(
+                width: 20,
+                height: 20,
                 color: palette.primary,
-                borderRadius: BorderRadius.circular(2),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    titleText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: palette.primary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
+              const SizedBox(width: 10),
+              Container(
+                width: 2.5,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: palette.primary,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      titleText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.primary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  Text(
-                    subtitleText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: palette.subtext,
-                      fontSize: 12.5,
+                    Text(
+                      subtitleText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: palette.subtext,
+                        fontSize: 12.5,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              tooltip: 'Отменить пересылку',
-              icon: iconoir.Xmark(
-                width: 18,
-                height: 18,
-                color: palette.subtext,
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Отменить пересылку',
+                icon: iconoir.Xmark(
+                  width: 18,
+                  height: 18,
+                  color: palette.subtext,
+                ),
+                onPressed: () {
+                  HapticUtils.tap();
+                  onCancel();
+                },
               ),
-              onPressed: () {
-                HapticUtils.tap();
-                onCancel();
-              },
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
+      );
+    }
+
+    if (payload.hideSender) {
+      return buildBar('Имя отправителя скрыто');
+    }
+
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (_, __, ___) {
+        final senders = payload.messages
+            .map((m) {
+              final raw = m.resolveEffectiveAuthorTitle().trim();
+              if (raw.isEmpty) return '';
+              if (m.isChannelOrPersonaAuthored || m.isMirroredChannelPost) {
+                return raw;
+              }
+              return ContactsService.resolvePeerName(
+                m.senderId,
+                raw,
+                senderChatId: m.senderChatId,
+                isAnonymousAdmin: m.isFromAnonymousAdmin,
+                isMirroredChannelPost: m.isMirroredChannelPost,
+              ).trim();
+            })
+            .where((s) => s.isNotEmpty)
+            .toSet()
+            .toList();
+        final String senderSummary = senders.isEmpty
+            ? 'Пересылка сообщений'
+            : (senders.length == 1
+                ? senders.first
+                : '${senders.first} и ещё ${senders.length - 1}');
+        return buildBar(senderSummary);
+      },
     );
   }
 }

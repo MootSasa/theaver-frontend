@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../models/theav_theme.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../design_system/theav_design_system.dart';
+import '../user/avatar_with_status.dart';
 import 'sticker_item_widget.dart';
 
 /// Панель реакций — появляется при длинном нажатии на сообщение.
@@ -299,32 +301,49 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
             ),
           );
         }
-        return SingleChildScrollView(
-          child: TheavInsetGroup(
-            children: [
-              for (final u in users.take(25))
-                () {
-                  final name =
-                      (u['display_name'] ?? u['username'] ?? 'Пользователь')
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) {
+            return SingleChildScrollView(
+              child: TheavInsetGroup(
+                children: [
+                  for (final u in users.take(25))
+                    () {
+                      final uid =
+                          (u['user_id'] ?? u['id'] ?? '').toString().trim();
+                      final isBot = u['is_bot'] == true || u['is_bot'] == 1;
+                      final rawName = (u['display_name'] ??
+                              u['username'] ??
+                              'Пользователь')
                           .toString();
-                  return TheavListRow(
-                    leading: CircleAvatar(
-                      radius: 14,
-                      backgroundColor: palette.primary.withValues(alpha: 0.2),
-                      child: Text(
-                        name.isNotEmpty ? name[0].toUpperCase() : '?',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: palette.primary,
+                      final name = ContactsService.resolvePeerName(
+                        uid,
+                        rawName,
+                        isBot: isBot,
+                      );
+                      final rawAvatar = u['avatar_url']?.toString();
+                      final avatarUrl = ContactsService.resolvePeerAvatarUrl(
+                        uid,
+                        rawAvatar,
+                        isBot: isBot,
+                      );
+                      return TheavListRow(
+                        leading: AvatarWithStatus(
+                          userId: uid.isNotEmpty && uid != '0' ? uid : null,
+                          avatarUrl: avatarUrl,
+                          name: name,
+                          radius: 14,
+                          isOnline: false,
+                          showDecoration: false,
+                          resolveContactOverride: false,
                         ),
-                      ),
-                    ),
-                    title: name,
-                  );
-                }(),
-            ],
-          ),
+                        title: name,
+                      );
+                    }(),
+                ],
+              ),
+            );
+          },
         );
       },
     );

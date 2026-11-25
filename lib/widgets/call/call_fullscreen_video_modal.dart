@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
+import '../../services/contacts_service.dart';
 import 'stream_quality_sheet.dart';
 
 /// Fullscreen interactive viewer for any video tile or screen-share stream
@@ -142,6 +143,35 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
   void _resetZoom() {
     _transformCtrl.value = Matrix4.identity();
     setState(() {});
+  }
+
+  String _resolveModalTitle(
+    CallStateProvider callProvider,
+    CallStream? stream,
+    bool isSelfScreenShare,
+  ) {
+    if (isSelfScreenShare) return 'Ваша трансляция экрана';
+    if (widget.isScreenShare) {
+      if (stream != null &&
+          ContactsService.shouldResolveUserIdentity(stream.streamerId)) {
+        return 'Трансляция ${ContactsService.resolvePeerName(stream.streamerId, stream.streamerName)}';
+      }
+      if (ContactsService.shouldResolveUserIdentity(widget.participantUserId)) {
+        const prefix = 'Трансляция ';
+        final raw = widget.title.startsWith(prefix)
+            ? widget.title.substring(prefix.length)
+            : widget.title;
+        return '$prefix${ContactsService.resolvePeerName(widget.participantUserId, raw)}';
+      }
+      return widget.title;
+    }
+    if (ContactsService.shouldResolveUserIdentity(widget.participantUserId)) {
+      return ContactsService.resolvePeerName(
+        widget.participantUserId,
+        widget.title,
+      );
+    }
+    return widget.title;
   }
 
   RTCVideoRenderer? _resolveRenderer(CallStateProvider provider) {
@@ -502,12 +532,20 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                                     color: Colors.white54,
                                   ),
                                   const SizedBox(height: 12),
-                                  Text(
-                                    widget.title,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.white70,
+                                  ValueListenableBuilder<int>(
+                                    valueListenable:
+                                        ContactsService.revisionNotifier,
+                                    builder: (_, __, ___) => Text(
+                                      _resolveModalTitle(
+                                        callProvider,
+                                        stream,
+                                        isSelfScreenShare,
+                                      ),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.white70,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -610,16 +648,21 @@ class _CallFullscreenVideoModalState extends State<CallFullscreenVideoModal> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          isSelfScreenShare
-                              ? 'Ваша трансляция экрана'
-                              : widget.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
+                        ValueListenableBuilder<int>(
+                          valueListenable: ContactsService.revisionNotifier,
+                          builder: (_, __, ___) => Text(
+                            _resolveModalTitle(
+                              callProvider,
+                              stream,
+                              isSelfScreenShare,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
                           ),
                         ),
                         Text(

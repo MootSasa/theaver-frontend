@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
 import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/image_utils.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
@@ -53,6 +54,40 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   bool _showingTransferDialog = false;
   bool _hadActiveCall = false;
   bool _isLeavingCall = false;
+
+  String _resolvedParticipantName(
+    CallStateProvider callProvider,
+    CallParticipant p,
+  ) {
+    final isSelf = p.userId == callProvider.currentUserId || p.userId == 'local';
+    if (isSelf || !ContactsService.shouldResolveUserIdentity(p.userId)) {
+      return p.displayName;
+    }
+    return ContactsService.resolvePeerName(p.userId, p.displayName);
+  }
+
+  String? _resolvedParticipantAvatar(
+    CallStateProvider callProvider,
+    CallParticipant p,
+  ) {
+    final isSelf = p.userId == callProvider.currentUserId || p.userId == 'local';
+    final raw = (isSelf || !ContactsService.shouldResolveUserIdentity(p.userId))
+        ? p.avatarUrl
+        : ContactsService.resolvePeerAvatarUrl(p.userId, p.avatarUrl);
+    return AppConfig.resolveMediaUrl(raw) ?? raw;
+  }
+
+  String _resolvedStreamerName(
+    CallStateProvider callProvider,
+    CallStream s,
+  ) {
+    final isMine =
+        s.streamerId == callProvider.currentUserId || s.streamerId == 'local';
+    if (isMine || !ContactsService.shouldResolveUserIdentity(s.streamerId)) {
+      return s.streamerName;
+    }
+    return ContactsService.resolvePeerName(s.streamerId, s.streamerName);
+  }
 
   void _leaveGroupCall(CallStateProvider callProvider) {
     if (_isLeavingCall) return;
@@ -164,7 +199,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    isMine ? 'Ваш экран' : s.streamerName,
+                    isMine ? 'Ваш экран' : _resolvedStreamerName(callProvider, s),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
@@ -230,7 +265,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                     const Icon(Icons.screen_share_rounded, size: 36, color: Color(0xFF5865F2)),
                     const SizedBox(height: 6),
                     Text(
-                      isMine ? 'Ваш стрим' : s.streamerName,
+                      isMine ? 'Ваш стрим' : _resolvedStreamerName(callProvider, s),
                       style: const TextStyle(fontSize: 12, color: Colors.white70),
                     ),
                   ],
@@ -262,7 +297,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  isMine ? 'Ваш экран' : s.streamerName,
+                  isMine ? 'Ваш экран' : _resolvedStreamerName(callProvider, s),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
@@ -278,6 +313,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final provider = context.read<CallStateProvider>();
@@ -296,6 +332,16 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
         );
       }
     });
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
   }
 
   Future<void> _onTapGoLive(CallStateProvider provider) async {
@@ -381,46 +427,69 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 22,
-                      backgroundColor:
-                          Theme.of(context).colorScheme.primary.withValues(alpha: 0.25),
-                      child: Text(
-                        participant.displayName.isNotEmpty
-                            ? participant.displayName[0].toUpperCase()
-                            : '?',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+                ValueListenableBuilder<int>(
+                  valueListenable: ContactsService.revisionNotifier,
+                  builder: (_, __, ___) {
+                    final resolvedName =
+                        _resolvedParticipantName(provider, participant);
+                    final resolvedAvatar =
+                        _resolvedParticipantAvatar(provider, participant);
+                    final avatarProvider = (resolvedAvatar != null &&
+                            resolvedAvatar.isNotEmpty)
+                        ? avatarImageProvider(
+                            resolvedAvatar,
+                            maxDecodeDimension: 240,
+                          )
+                        : null;
+                    return Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 22,
+                          backgroundColor: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.25),
+                          backgroundImage: avatarProvider,
+                          onBackgroundImageError:
+                              avatarProvider != null ? (_, __) {} : null,
+                          child: avatarProvider == null
+                              ? Text(
+                                  resolvedName.isNotEmpty
+                                      ? resolvedName[0].toUpperCase()
+                                      : '?',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : null,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            participant.displayName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                resolvedName,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                'Роль: ${participant.role}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white60,
+                                ),
+                              ),
+                            ],
                           ),
-                          Text(
-                            'Роль: ${participant.role}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white60,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 18),
                 if (participant.userId != provider.currentUserId &&
@@ -850,13 +919,18 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   onTap: () {
                     final streamRenderer = callProvider.rendererForStream(stream.streamerId) ??
                         callProvider.screenShareRenderer;
+                    final streamerName =
+                        _resolvedStreamerName(callProvider, stream);
                     CallFullscreenVideoModal.show(
                       context,
                       title: callProvider.isSelfScreenShare
                           ? 'Ваша трансляция экрана'
-                          : 'Трансляция ${stream.streamerName}',
+                          : 'Трансляция $streamerName',
                       subtitle:
                           '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec}',
+                      participantUserId: callProvider.isSelfScreenShare
+                          ? null
+                          : stream.streamerId,
                       isScreenShare: true,
                       fallbackRenderer: streamRenderer,
                     );
@@ -907,7 +981,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                     Text(
                                       callProvider.isSelfScreenShare
                                           ? 'Вы делитесь экраном'
-                                          : 'Трансляция ${stream.streamerName}',
+                                          : 'Трансляция ${_resolvedStreamerName(callProvider, stream)}',
                                       style: const TextStyle(
                                         fontSize: 15,
                                         fontWeight: FontWeight.w700,
@@ -1221,8 +1295,11 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   final canOpenScreenShare = participant.isScreenSharing &&
                       (callProvider.hasScreenShareStream ||
                           (isSelf && callProvider.isScreenSharing));
+                  final participantName =
+                      _resolvedParticipantName(callProvider, participant);
                   final resolvedAvatar =
-                      AppConfig.resolveMediaUrl(participant.avatarUrl) ?? '';
+                      _resolvedParticipantAvatar(callProvider, participant) ??
+                          '';
                   final isSpeaking =
                       participant.isSpeaking && !participant.isMuted;
                   return GestureDetector(
@@ -1230,7 +1307,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       if (showVideo) {
                         CallFullscreenVideoModal.show(
                           context,
-                          title: participant.displayName,
+                          title: participantName,
                           subtitle: callProvider.formattedDuration,
                           participantUserId: participant.userId,
                           mirror: isSelf,
@@ -1241,7 +1318,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                           context,
                           title: isSelf
                               ? 'Ваша трансляция экрана'
-                              : 'Трансляция ${participant.displayName}',
+                              : 'Трансляция $participantName',
+                          participantUserId: isSelf ? null : participant.userId,
                           isScreenShare: true,
                           fallbackRenderer: callProvider.screenShareRenderer,
                         );
@@ -1415,7 +1493,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                     ),
                                   ),
                                   child: Text(
-                                    participant.displayName,
+                                    participantName,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
@@ -1446,10 +1524,14 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                               primaryColor.withValues(alpha: 0.26),
                                           backgroundImage:
                                               participantAvatarProvider,
+                                          onBackgroundImageError:
+                                              participantAvatarProvider != null
+                                                  ? (_, __) {}
+                                                  : null,
                                           child: participantAvatarProvider == null
                                               ? Text(
-                                                  participant.displayName.isNotEmpty
-                                                      ? participant.displayName[0]
+                                                  participantName.isNotEmpty
+                                                      ? participantName[0]
                                                           .toUpperCase()
                                                       : '?',
                                                   style: const TextStyle(
@@ -1468,7 +1550,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                         horizontal: 10,
                                       ),
                                       child: Text(
-                                        participant.displayName,
+                                        participantName,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(

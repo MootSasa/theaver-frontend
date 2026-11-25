@@ -8,7 +8,10 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../models/call_models.dart';
 import '../../services/call_state_provider.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/image_utils.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
@@ -20,6 +23,7 @@ class VideoCallScreen extends StatefulWidget {
   final String callId;
   final bool isCaller;
   final String? chatId;
+  final String? peerUserId;
   final String? peerName;
   final String? peerAvatarUrl;
 
@@ -28,6 +32,7 @@ class VideoCallScreen extends StatefulWidget {
     required this.callId,
     required this.isCaller,
     this.chatId,
+    this.peerUserId,
     this.peerName,
     this.peerAvatarUrl,
   });
@@ -100,6 +105,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final provider = context.read<CallStateProvider>();
@@ -115,6 +121,61 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
         provider.toggleVideo();
       }
     });
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
+
+  String? _resolvePeerUserId(CallStateProvider callProvider) {
+    final explicit = widget.peerUserId?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final myId = callProvider.currentUserId;
+    final call = callProvider.activeCall;
+    if (call != null) {
+      for (final p in call.participants) {
+        if (p.userId.isNotEmpty && p.userId != 'local' && p.userId != myId) {
+          return p.userId;
+        }
+      }
+      if (call.chatId.isNotEmpty) {
+        final cached =
+            ChatInstantCache.instance.getSync(call.chatId)?.chat?.otherUserId;
+        if (cached != null && cached.isNotEmpty) return cached;
+      }
+    }
+    final wCid = widget.chatId;
+    if (wCid != null && wCid.isNotEmpty) {
+      final cached = ChatInstantCache.instance.getSync(wCid)?.chat?.otherUserId;
+      if (cached != null && cached.isNotEmpty) return cached;
+    }
+    return null;
+  }
+
+  String _resolvePeerTitle(CallStateProvider callProvider, String? peerUserId) {
+    final raw =
+        widget.peerName ?? callProvider.activeCall?.title ?? 'Видеозвонок';
+    if (!ContactsService.shouldResolveUserIdentity(peerUserId)) return raw;
+    return ContactsService.resolvePeerName(peerUserId, raw);
+  }
+
+  String? _resolvePeerAvatar(
+    CallStateProvider callProvider,
+    String? peerUserId,
+  ) {
+    final remoteAvatar = callProvider.activeCall?.participants
+        .where((p) => p.userId == peerUserId)
+        .firstOrNull
+        ?.avatarUrl;
+    final raw = widget.peerAvatarUrl ?? remoteAvatar;
+    if (!ContactsService.shouldResolveUserIdentity(peerUserId)) return raw;
+    return ContactsService.resolvePeerAvatarUrl(peerUserId, raw);
   }
 
   void _minimizeCall(CallStateProvider provider) {
@@ -168,8 +229,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
 
   void _openMainStageFullscreen(
     CallStateProvider callProvider,
-    String peerTitle,
-  ) {
+    String peerTitle, {
+    String? peerUserId,
+  }) {
     final hasScreenShare =
         callProvider.hasScreenShareStream || callProvider.isScreenSharing;
     final hasRemoteVideo = callProvider.hasRemoteVideoStream;
@@ -180,14 +242,23 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final stream = callProvider.focusedStream;
     final openAsScreenShare = callProvider.hasScreenShareStream ||
         (callProvider.isScreenSharing && !hasRemoteVideo);
+    final streamerTitle = stream != null
+        ? ContactsService.resolvePeerName(
+            stream.streamerId,
+            stream.streamerName,
+          )
+        : peerTitle;
     CallFullscreenVideoModal.show(
       context,
       title: openAsScreenShare
           ? (callProvider.isSelfScreenShare
               ? 'Ваша трансляция экрана'
-              : 'Трансляция ${stream?.streamerName ?? peerTitle}')
+              : 'Трансляция $streamerTitle')
           : (hasRemoteVideo ? peerTitle : 'Вы'),
       subtitle: callProvider.formattedDuration,
+      participantUserId: openAsScreenShare
+          ? (callProvider.isSelfScreenShare ? null : stream?.streamerId)
+          : (hasRemoteVideo ? peerUserId : 'local'),
       isScreenShare: openAsScreenShare,
       mirror: !openAsScreenShare && !hasRemoteVideo && hasLocalVideo && callProvider.isFrontCamera,
       fallbackRenderer: openAsScreenShare
@@ -216,8 +287,9 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
     final useGlass = glassProvider.enabled;
     final isFullGlass = glassProvider.isFull;
     final primaryColor = Theme.of(context).colorScheme.primary;
-    final peerTitle =
-        widget.peerName ?? callProvider.activeCall?.title ?? 'Видеозвонок';
+    final resolvedPeerUserId = _resolvePeerUserId(callProvider);
+    final peerTitle = _resolvePeerTitle(callProvider, resolvedPeerUserId);
+    final peerAvatarUrl = _resolvePeerAvatar(callProvider, resolvedPeerUserId);
     final stream = callProvider.focusedStream;
 
     if (callProvider.conflictCallId != null) {
@@ -309,20 +381,38 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      CircleAvatar(
-                                        radius: 48,
-                                        backgroundColor:
-                                            primaryColor.withValues(alpha: 0.25),
-                                        child: Text(
-                                          peerTitle.isNotEmpty
-                                              ? peerTitle[0].toUpperCase()
-                                              : '?',
-                                          style: const TextStyle(
-                                            fontSize: 36,
-                                            fontWeight: FontWeight.w700,
-                                            color: Colors.white,
-                                          ),
-                                        ),
+                                      Builder(
+                                        builder: (_) {
+                                          final ImageProvider? peerAvatarProvider =
+                                              avatarImageProvider(
+                                            peerAvatarUrl,
+                                            maxDecodeDimension: 360,
+                                          );
+                                          return CircleAvatar(
+                                            radius: 48,
+                                            backgroundColor: primaryColor
+                                                .withValues(alpha: 0.25),
+                                            backgroundImage: peerAvatarProvider,
+                                            onBackgroundImageError:
+                                                peerAvatarProvider != null
+                                                    ? (_, __) {}
+                                                    : null,
+                                            child: peerAvatarProvider == null
+                                                ? Text(
+                                                    peerTitle.isNotEmpty
+                                                        ? peerTitle[0]
+                                                            .toUpperCase()
+                                                        : '?',
+                                                    style: const TextStyle(
+                                                      fontSize: 36,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: Colors.white,
+                                                    ),
+                                                  )
+                                                : null,
+                                          );
+                                        },
                                       ),
                                       const SizedBox(height: 16),
                                       Text(
@@ -550,6 +640,7 @@ class _VideoCallScreenState extends State<VideoCallScreen> {
                               onTap: () => _openMainStageFullscreen(
                                 callProvider,
                                 peerTitle,
+                                peerUserId: resolvedPeerUserId,
                               ),
                             ),
                           ],

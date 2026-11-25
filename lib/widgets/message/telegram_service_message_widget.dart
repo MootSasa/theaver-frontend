@@ -7,6 +7,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/image_utils.dart';
@@ -63,19 +64,60 @@ class TelegramServiceMessageWidget extends StatelessWidget {
     return '$secondsс';
   }
 
-  String _resolveActorName(Map<String, dynamic>? payload) {
-    return _stringField(payload, 'actor_name') ??
-        (message.senderName.trim().isNotEmpty
-            ? message.senderName.trim()
-            : 'Администратор');
-  }
-
   String _resolveActorId(Map<String, dynamic>? payload) {
     return _stringField(payload, 'actor_id') ?? message.senderId.trim();
   }
 
+  bool _canResolveUser(String userId) {
+    return ContactsService.shouldResolveUserIdentity(
+      userId,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: message.isFromAnonymousAdmin,
+      isMirroredChannelPost: message.isMirroredChannelPost,
+    );
+  }
+
+  String _resolveActorName(Map<String, dynamic>? payload) {
+    final fallback = _stringField(payload, 'actor_name') ??
+        (message.senderName.trim().isNotEmpty
+            ? message.senderName.trim()
+            : 'Администратор');
+    final actorId = _resolveActorId(payload);
+    if (!_canResolveUser(actorId)) return fallback;
+    return ContactsService.resolvePeerName(
+      actorId,
+      fallback,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: message.isFromAnonymousAdmin,
+      isMirroredChannelPost: message.isMirroredChannelPost,
+    );
+  }
+
+  String? _resolveOptionalActorName(Map<String, dynamic>? payload) {
+    final actorId = _resolveActorId(payload);
+    final raw = _stringField(payload, 'actor_name');
+    if (actorId.isNotEmpty && _canResolveUser(actorId)) {
+      final resolved = ContactsService.resolvePeerName(
+        actorId,
+        raw ?? '',
+        senderChatId: message.senderChatId,
+        isAnonymousAdmin: message.isFromAnonymousAdmin,
+        isMirroredChannelPost: message.isMirroredChannelPost,
+      ).trim();
+      if (resolved.isNotEmpty) return resolved;
+    }
+    return raw;
+  }
+
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) => _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final payload = message.mediaPayload;
@@ -273,10 +315,13 @@ class TelegramServiceMessageWidget extends StatelessWidget {
             _stringField(payload, 'member_id') ??
             _stringField(payload, 'user_id') ??
             '';
-        final targetName = _stringField(payload, 'target_name') ??
+        final rawTargetName = _stringField(payload, 'target_name') ??
             _stringField(payload, 'member_name') ??
             _stringField(payload, 'display_name') ??
             '';
+        final targetName = targetId.isNotEmpty
+            ? ContactsService.resolvePeerName(targetId, rawTargetName)
+            : rawTargetName;
 
         final bool isSelfJoin = action == 'member_joined' ||
             targetName.isEmpty ||
@@ -316,7 +361,7 @@ class TelegramServiceMessageWidget extends StatelessWidget {
         break;
 
       case 'voice_chat_started':
-        final actorName = _stringField(payload, 'actor_name');
+        final actorName = _resolveOptionalActorName(payload);
         final text = actorName != null
             ? (effectiveIsChannel
                 ? '$actorName начал(а) прямую трансляцию'
@@ -332,7 +377,7 @@ class TelegramServiceMessageWidget extends StatelessWidget {
         break;
 
       case 'voice_chat_ended':
-        final actorName = _stringField(payload, 'actor_name');
+        final actorName = _resolveOptionalActorName(payload);
         final durationSec = _intField(payload, 'duration_seconds');
         final formattedDur = _formatDuration(durationSec);
         final base = actorName != null
@@ -355,7 +400,8 @@ class TelegramServiceMessageWidget extends StatelessWidget {
         final ttlSeconds = rawTtl > 0
             ? rawTtl
             : _intField(payload, 'message_auto_delete_time');
-        final actorName = _stringField(payload, 'actor_name');
+        final actorId = _resolveActorId(payload);
+        final actorName = _resolveOptionalActorName(payload);
         final label = ttlSeconds <= 0
             ? 'отключил(а) автоудаление сообщений'
             : (ttlSeconds >= 31536000
@@ -367,12 +413,21 @@ class TelegramServiceMessageWidget extends StatelessWidget {
                         : (ttlSeconds >= 86400
                             ? 'установил(а) автоудаление сообщений: 24 ч.'
                             : 'установил(а) автоудаление сообщений: $ttlSeconds сек.'))));
+        final String autoDeleteText;
+        if (actorId.isNotEmpty &&
+            _canResolveUser(actorId) &&
+            actorName != null &&
+            actorName.isNotEmpty) {
+          autoDeleteText = '$actorName $label';
+        } else if (message.content.trim().isNotEmpty) {
+          autoDeleteText = message.content.trim();
+        } else {
+          autoDeleteText = actorName != null ? '$actorName $label' : label;
+        }
         pillWidget = buildPill(
           leadingIcon: iconoir.Timer(width: 14, height: 14, color: pillText),
           child: Text(
-            message.content.trim().isNotEmpty
-                ? message.content.trim()
-                : (actorName != null ? '$actorName $label' : label),
+            autoDeleteText,
             textAlign: TextAlign.center,
             style: baseStyle,
           ),
@@ -380,12 +435,21 @@ class TelegramServiceMessageWidget extends StatelessWidget {
         break;
 
       case 'screenshot_taken':
-        final actorName = _stringField(payload, 'actor_name');
-        final text = message.content.trim().isNotEmpty
-            ? message.content.trim()
-            : (actorName != null
-                ? '$actorName сделал(а) снимок экрана'
-                : 'Сделан снимок экрана');
+        final actorId = _resolveActorId(payload);
+        final actorName = _resolveOptionalActorName(payload);
+        final String text;
+        if (actorId.isNotEmpty &&
+            _canResolveUser(actorId) &&
+            actorName != null &&
+            actorName.isNotEmpty) {
+          text = '$actorName сделал(а) снимок экрана';
+        } else if (message.content.trim().isNotEmpty) {
+          text = message.content.trim();
+        } else {
+          text = actorName != null
+              ? '$actorName сделал(а) снимок экрана'
+              : 'Сделан снимок экрана';
+        }
         pillWidget = buildPill(
           leadingIcon:
               iconoir.ShieldCheck(width: 14, height: 14, color: pillText),

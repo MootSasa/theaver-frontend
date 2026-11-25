@@ -11,6 +11,7 @@ import '../../models/call_models.dart';
 import '../../models/community_models.dart';
 import '../../services/auth_service.dart';
 import '../../services/community_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
@@ -177,9 +178,15 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
     if (widget.initialInvites != null) _invites = widget.initialInvites!;
     if (widget.initialSounds != null) _sounds = widget.initialSounds!;
 
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+
     if (widget.autoFetch) {
       _loadInitialData();
     }
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadInitialData() async {
@@ -256,11 +263,54 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _nameCtrl.dispose();
     _descCtrl.dispose();
     _roleNameCtrl.dispose();
     _memberSearchCtrl.dispose();
     super.dispose();
+  }
+
+  String _resolveMemberName(
+    CommunityMember m, {
+    String emptyFallback = '',
+  }) {
+    final resolved = ContactsService.resolvePeerName(
+      m.userId,
+      m.effectiveDisplayName,
+      isBot: m.isBot,
+    ).trim();
+    if (resolved.isNotEmpty) return resolved;
+    if (m.username.trim().isNotEmpty) return m.username.trim();
+    return emptyFallback;
+  }
+
+  String? _resolveMemberAvatar(CommunityMember m) {
+    return ContactsService.resolvePeerAvatarUrl(
+      m.userId,
+      m.avatarUrl,
+      isBot: m.isBot,
+    );
+  }
+
+  String _resolveBanName(CommunityBan b) {
+    final fallback = b.displayName.trim().isNotEmpty
+        ? b.displayName.trim()
+        : (b.username.trim().isNotEmpty ? '@${b.username.trim()}' : '');
+    final resolved = ContactsService.resolvePeerName(
+      b.userId,
+      fallback,
+    ).trim();
+    if (resolved.isNotEmpty) return resolved;
+    if (b.username.trim().isNotEmpty) return b.username.trim();
+    return 'Пользователь';
+  }
+
+  String? _resolveBanAvatar(CommunityBan b) {
+    return ContactsService.resolvePeerAvatarUrl(
+      b.userId,
+      b.avatarUrl,
+    );
   }
 
   String _tr(BuildContext context, String key, String fallback) {
@@ -1167,9 +1217,7 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
     final assignableRoles =
         _community.roles.where((r) => !r.isEveryone).toList();
     final selectedRoleIds = Set<String>.from(member.roleIds);
-    final memberName = member.displayName.isNotEmpty
-        ? member.displayName
-        : member.username;
+    final memberName = _resolveMemberName(member, emptyFallback: 'Пользователь');
 
     await showTheavModalSheet<void>(
       context: context,
@@ -1236,9 +1284,13 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
                           member.userId,
                         );
                         if (ok && mounted && widget.autoFetch) {
+                          final latestName = _resolveMemberName(
+                            member,
+                            emptyFallback: memberName,
+                          );
                           GlassToastService().show(
                             context,
-                            '$memberName исключён',
+                            '$latestName исключён',
                           );
                           _loadRolesAndMembers();
                         }
@@ -1265,9 +1317,7 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
 
   Future<void> _promptBanMember(CommunityMember member) async {
     final reasonCtrl = TextEditingController();
-    final name = member.displayName.isNotEmpty
-        ? member.displayName
-        : member.username;
+    final name = _resolveMemberName(member, emptyFallback: 'Пользователь');
     final confirmed = await showTheavDialog<bool>(
       context: context,
       title: 'Заблокировать $name?',
@@ -1297,7 +1347,8 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
     );
     if (!mounted) return;
     if (ok) {
-      GlassToastService().show(context, '$name заблокирован');
+      final latestName = _resolveMemberName(member, emptyFallback: name);
+      GlassToastService().show(context, '$latestName заблокирован');
       if (widget.autoFetch) {
         _loadRolesAndMembers();
         _loadBans();
@@ -2148,7 +2199,12 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
     final filteredMembers = qLower.isEmpty
         ? _members
         : _members.where((m) {
-            return m.displayName.toLowerCase().contains(qLower) ||
+            final resolvedName = _resolveMemberName(m).toLowerCase();
+            return resolvedName.contains(qLower) ||
+                m.effectiveDisplayName.toLowerCase().contains(qLower) ||
+                m.displayName.toLowerCase().contains(qLower) ||
+                (m.originalDisplayName?.toLowerCase().contains(qLower) ?? false) ||
+                m.nickname.toLowerCase().contains(qLower) ||
                 m.username.toLowerCase().contains(qLower);
           }).toList();
 
@@ -2213,11 +2269,15 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
                                   ),
                                 ]
                               : filteredMembers.map((m) {
-                                  final memberName = m.displayName.isNotEmpty
-                                      ? m.displayName
-                                      : (m.username.isNotEmpty
-                                          ? m.username
-                                          : 'U');
+                                  final memberName =
+                                      _resolveMemberName(m, emptyFallback: 'U');
+                                  final memberAvatarUrl =
+                                      _resolveMemberAvatar(m);
+                                  final canResolveIdentity =
+                                      ContactsService.shouldResolveUserIdentity(
+                                    m.userId,
+                                    isBot: m.isBot,
+                                  );
                                   final roleNames = _community.roles
                                       .where((r) => m.roleIds.contains(r.id))
                                       .map((r) => r.name)
@@ -2231,13 +2291,15 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
                                   return TheavListRow(
                                     leading: AvatarWithStatus(
                                       userId: m.userId,
-                                      avatarUrl: m.avatarUrl,
+                                      avatarUrl: memberAvatarUrl,
                                       name: memberName,
                                       radius: 19,
                                       isOnline: m.isOnline,
                                       decorationOverride: cust?.avatarDecoration,
                                       showDecoration: true,
                                       animateDecoration: false,
+                                      resolveContactOverride:
+                                          canResolveIdentity,
                                     ),
                                     titleWidget: Row(
                                       children: [
@@ -2296,16 +2358,20 @@ class _CommunitySettingsSheetState extends State<CommunitySettingsSheet> {
                                   ),
                                 ]
                               : _bans.map((b) {
+                                  final banName = _resolveBanName(b);
+                                  final banAvatarUrl = _resolveBanAvatar(b);
                                   return TheavListRow(
                                     leading: AvatarWithStatus(
                                       userId: b.userId,
-                                      avatarUrl: b.avatarUrl,
-                                      name: b.displayName,
+                                      avatarUrl: banAvatarUrl,
+                                      name: banName,
                                       radius: 18,
                                       isOnline: false,
                                       showDecoration: false,
+                                      resolveContactOverride: ContactsService
+                                          .shouldResolveUserIdentity(b.userId),
                                     ),
-                                    title: b.displayName,
+                                    title: banName,
                                     subtitle: b.reason.isNotEmpty
                                         ? 'Причина: ${b.reason}'
                                         : (b.username.isNotEmpty

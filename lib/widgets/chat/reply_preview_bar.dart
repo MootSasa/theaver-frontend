@@ -6,6 +6,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
@@ -170,19 +171,29 @@ class ReplyPreviewBar extends StatelessWidget {
     final profileTheme = context.watch<ProfileThemeProvider>();
 
     final bool isPersonaOrChannel =
-        isChannelPost || replyToMessage.isChannelOrPersonaAuthored;
+        isChannelPost ||
+        replyToMessage.isChannelOrPersonaAuthored ||
+        replyToMessage.isMirroredChannelPost;
     final bool isSenderMe = !isPersonaOrChannel &&
         currentUserId != null &&
         currentUserId!.isNotEmpty &&
         replyToMessage.senderId.isNotEmpty &&
         replyToMessage.senderId != '0' &&
         replyToMessage.senderId == currentUserId;
-    final String displayName = isSenderMe
+    final String rawDisplayName = isSenderMe
         ? context.l10n.translate('chat_reply_you')
         : replyToMessage.resolveEffectiveAuthorTitle(
             chatName: fallbackAuthorName,
             chatType: isChannelPost ? 'channel' : null,
           );
+    final bool canResolveContact = !isSenderMe &&
+        !isPersonaOrChannel &&
+        ContactsService.shouldResolveUserIdentity(
+          replyToMessage.senderId,
+          senderChatId: replyToMessage.senderChatId,
+          isAnonymousAdmin: replyToMessage.isFromAnonymousAdmin,
+          isMirroredChannelPost: replyToMessage.isMirroredChannelPost,
+        );
 
     // Telegram-style: Color and style of original message in reply preview match what that user selected in their settings
     final NameColorPreset authorPreset;
@@ -347,15 +358,38 @@ class ReplyPreviewBar extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             Flexible(
-                              child: Text(
-                                displayName,
-                                style: TextStyle(
-                                  color: theme.colorScheme.onSurface,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                              child: canResolveContact
+                                  ? ValueListenableBuilder<int>(
+                                      valueListenable:
+                                          ContactsService.revisionNotifier,
+                                      builder: (_, __, ___) => Text(
+                                        ContactsService.resolvePeerName(
+                                          replyToMessage.senderId,
+                                          rawDisplayName,
+                                          senderChatId:
+                                              replyToMessage.senderChatId,
+                                          isAnonymousAdmin: replyToMessage
+                                              .isFromAnonymousAdmin,
+                                          isMirroredChannelPost: replyToMessage
+                                              .isMirroredChannelPost,
+                                        ),
+                                        style: TextStyle(
+                                          color: theme.colorScheme.onSurface,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    )
+                                  : Text(
+                                      rawDisplayName,
+                                      style: TextStyle(
+                                        color: theme.colorScheme.onSurface,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                             ),
                           ],
                         ),

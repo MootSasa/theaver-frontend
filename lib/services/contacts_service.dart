@@ -303,12 +303,87 @@ class ContactsService {
   /// Returns all saved contacts (`isContact == true`), excluding override-only entries.
   static List<ContactItem> getSavedContacts() => contactsNotifier.value;
 
+  /// Returns true when [userId] represents a non-self human peer whose local
+  /// contact name/avatar override may safely be applied.
+  static bool shouldResolveUserIdentity(
+    String? userId, {
+    String? senderChatId,
+    bool isAnonymousAdmin = false,
+    bool isMirroredChannelPost = false,
+    bool isBot = false,
+  }) {
+    if (isAnonymousAdmin || isMirroredChannelPost || isBot) return false;
+    final scid = senderChatId?.trim() ?? '';
+    if (scid.isNotEmpty && scid != '0') return false;
+    final uid = userId?.trim() ?? '';
+    if (uid.isEmpty ||
+        uid == '0' ||
+        uid == 'local' ||
+        uid.startsWith('chat:')) {
+      return false;
+    }
+    final selfUid = _resolveUserId()?.trim();
+    if (selfUid != null && selfUid.isNotEmpty && uid == selfUid) {
+      return false;
+    }
+    if (_cache[uid]?.isBot == true) return false;
+    return true;
+  }
+
+  /// Resolves a peer's display name synchronously when [shouldResolveUserIdentity]
+  /// allows contact overrides, otherwise returns [fallback] untouched.
+  static String resolvePeerName(
+    String? userId,
+    String fallback, {
+    String? senderChatId,
+    bool isAnonymousAdmin = false,
+    bool isMirroredChannelPost = false,
+    bool isBot = false,
+    bool allowAtFallback = false,
+  }) {
+    if (!shouldResolveUserIdentity(
+      userId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnonymousAdmin,
+      isMirroredChannelPost: isMirroredChannelPost,
+      isBot: isBot,
+    )) {
+      return fallback;
+    }
+    return resolveName(userId, fallback, allowAtFallback: allowAtFallback);
+  }
+
+  /// Resolves a peer's avatar URL synchronously when [shouldResolveUserIdentity]
+  /// allows contact overrides, otherwise returns [fallback] untouched.
+  static String? resolvePeerAvatarUrl(
+    String? userId,
+    String? fallback, {
+    String? senderChatId,
+    bool isAnonymousAdmin = false,
+    bool isMirroredChannelPost = false,
+    bool isBot = false,
+  }) {
+    if (!shouldResolveUserIdentity(
+      userId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnonymousAdmin,
+      isMirroredChannelPost: isMirroredChannelPost,
+      isBot: isBot,
+    )) {
+      return fallback;
+    }
+    return resolveAvatarUrl(userId, fallback);
+  }
+
   /// Resolves a user's display name synchronously with local contact overrides.
   static String resolveName(
     String? userId,
     String fallback, {
     bool allowAtFallback = false,
   }) {
+    if (!shouldResolveUserIdentity(userId)) {
+      return fallback;
+    }
     final c = getCached(userId);
     if (c != null) {
       final custom = c.customName;
@@ -341,6 +416,9 @@ class ContactsService {
 
   /// Resolves a user's avatar URL synchronously, preferring any local custom contact photo.
   static String? resolveAvatarUrl(String? userId, String? fallback) {
+    if (!shouldResolveUserIdentity(userId)) {
+      return fallback;
+    }
     final c = getCached(userId);
     if (c != null && c.hasCustomAvatar) {
       return c.customAvatarUrl;
@@ -350,8 +428,38 @@ class ContactsService {
 
   /// Returns true if a local custom avatar override exists for [userId].
   static bool hasCustomAvatarFor(String? userId) {
+    if (!shouldResolveUserIdentity(userId)) return false;
     final c = getCached(userId);
     return c?.hasCustomAvatar ?? false;
+  }
+
+  /// Updates the cached global/original avatar URL for [userId] (e.g. from a
+  /// `user_avatar_updated` WS event) while preserving any viewer-local
+  /// [ContactItem.customAvatarUrl].
+  static void applyRemoteUserAvatarUpdate(
+    String userId,
+    String? rawAvatarUrl,
+  ) {
+    final uid = userId.trim();
+    if (uid.isEmpty || uid == '0' || uid == 'local' || uid.startsWith('chat:')) {
+      return;
+    }
+    final existing = _cache[uid];
+    if (existing == null) return;
+    final nextOrig = _optNonEmptyString(rawAvatarUrl);
+    final nextAvatarStr = nextOrig ?? '';
+    if (existing.avatarUrl == nextAvatarStr &&
+        existing.originalAvatarUrl == nextOrig) {
+      return;
+    }
+    final updated = existing.copyWith(
+      avatarUrl: nextAvatarStr,
+      originalAvatarUrl: nextOrig,
+      clearOriginalAvatarUrl: nextOrig == null,
+    );
+    _cache[uid] = updated;
+    _publishCacheUpdate();
+    _persistToDisk();
   }
 
   static void _publishCacheUpdate() {
@@ -575,19 +683,38 @@ class ContactsService {
           'contact_user_id': fallbackUserId,
         ...map,
       });
-      return parsed.copyWith(
-        isContact: map.containsKey('is_contact')
-            ? parsed.isContact
-            : (existing?.isContact ?? parsed.isContact),
-        originalAvatarUrl: parsed.originalAvatarUrl ??
+      final hasExplicitOriginalAvatar = map.containsKey('original_avatar_url');
+      final hasExplicitAvatar = map.containsKey('avatar_url');
+      final String? resolvedOriginalAvatar;
+      if (hasExplicitOriginalAvatar) {
+        resolvedOriginalAvatar = parsed.originalAvatarUrl;
+      } else if (hasExplicitAvatar && !parsed.hasCustomAvatar) {
+        resolvedOriginalAvatar =
+            parsed.avatarUrl.isNotEmpty ? parsed.avatarUrl : null;
+      } else {
+        resolvedOriginalAvatar = parsed.originalAvatarUrl ??
             (existing?.originalAvatarUrl ??
                 (existing != null &&
                         !existing.hasCustomAvatar &&
                         existing.avatarUrl.isNotEmpty
                     ? existing.avatarUrl
-                    : null)),
-        originalDisplayName:
-            parsed.originalDisplayName ?? existing?.originalDisplayName,
+                    : null));
+      }
+      final String? resolvedOriginalDisplayName =
+          map.containsKey('original_display_name')
+              ? parsed.originalDisplayName
+              : (parsed.originalDisplayName ?? existing?.originalDisplayName);
+
+      return parsed.copyWith(
+        isContact: map.containsKey('is_contact')
+            ? parsed.isContact
+            : (existing?.isContact ?? parsed.isContact),
+        originalAvatarUrl: resolvedOriginalAvatar,
+        clearOriginalAvatarUrl:
+            hasExplicitOriginalAvatar && resolvedOriginalAvatar == null,
+        originalDisplayName: resolvedOriginalDisplayName,
+        clearOriginalDisplayName: map.containsKey('original_display_name') &&
+            resolvedOriginalDisplayName == null,
       );
     }
 
@@ -880,6 +1007,10 @@ class ContactsService {
     bool? isFavorite,
     bool? isContact,
   }) async {
+    final uid = userId.trim();
+    if (uid.isEmpty) {
+      return {'success': false, 'message': 'Invalid user ID'};
+    }
     try {
       final token = await AuthService.getToken();
       if (token == null || token.isEmpty) {
@@ -894,7 +1025,7 @@ class ContactsService {
         if (isContact != null) 'is_contact': isContact,
       };
       final response = await http.patch(
-        Uri.parse('${AppConfig.baseUrl}/api/contacts/$userId'),
+        Uri.parse('${AppConfig.baseUrl}/api/contacts/$uid'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
@@ -907,9 +1038,9 @@ class ContactsService {
           data['success'] == true) {
         if (data['contact'] is Map) {
           final merged = _mergeServerContact(
-            _cache[userId],
+            _cache[uid],
             Map<String, dynamic>.from(data['contact'] as Map),
-            fallbackUserId: userId,
+            fallbackUserId: uid,
           );
           _upsertCacheItem(merged);
           unawaited(_propagateOverride(merged));
@@ -918,12 +1049,12 @@ class ContactsService {
           }
         } else {
           await getContacts(forceRefresh: true);
-          final refreshed = _cache[userId];
+          final refreshed = _cache[uid];
           if (refreshed != null) {
             unawaited(_propagateOverride(refreshed));
           }
         }
-        return {'success': true, 'contact': _cache[userId]};
+        return {'success': true, 'contact': _cache[uid]};
       }
       return {
         'success': false,
@@ -939,14 +1070,18 @@ class ContactsService {
 
   /// Removes a user from contacts (`DELETE /api/contacts/:userId`).
   static Future<Map<String, dynamic>> deleteContact(String userId) async {
+    final uid = userId.trim();
+    if (uid.isEmpty) {
+      return {'success': false, 'message': 'Invalid user ID'};
+    }
     try {
       final token = await AuthService.getToken();
       if (token == null || token.isEmpty) {
         return {'success': false, 'message': 'Not authenticated'};
       }
-      final previous = _cache[userId];
+      final previous = _cache[uid];
       final response = await http.delete(
-        Uri.parse('${AppConfig.baseUrl}/api/contacts/$userId'),
+        Uri.parse('${AppConfig.baseUrl}/api/contacts/$uid'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = _tryDecodeJson(response.body);
@@ -957,18 +1092,18 @@ class ContactsService {
           final remaining = _mergeServerContact(
             previous,
             Map<String, dynamic>.from(data['contact'] as Map),
-            fallbackUserId: userId,
+            fallbackUserId: uid,
           );
           _upsertCacheItem(remaining);
           unawaited(_propagateOverride(remaining));
           return {'success': true, 'contact': remaining};
         }
-        _cache.remove(userId);
+        _cache.remove(uid);
         _publishCacheUpdate();
         _persistToDisk();
         unawaited(
           _propagateDeleted(
-            userId,
+            uid,
             previous: previous,
             eventData: Map<String, dynamic>.from(data),
           ),
@@ -995,8 +1130,12 @@ class ContactsService {
     String? fileName,
     String? avatarCrop,
   }) async {
+    final uid = userId.trim();
+    if (uid.isEmpty) {
+      return {'success': false, 'message': 'Invalid user ID'};
+    }
     final res = await _sendAvatarMultipart(
-      '/api/contacts/$userId/avatar',
+      '/api/contacts/$uid/avatar',
       file,
       bytes: bytes,
       fileName: fileName,
@@ -1006,13 +1145,13 @@ class ContactsService {
     if (res['success'] != true) return res;
 
     final data = res['data'] as Map<String, dynamic>;
-    final prev = _cache[userId];
+    final prev = _cache[uid];
     ContactItem? updated;
     if (data['contact'] is Map) {
       updated = _mergeServerContact(
         prev,
         Map<String, dynamic>.from(data['contact'] as Map),
-        fallbackUserId: userId,
+        fallbackUserId: uid,
       );
     } else {
       final customUrl = _optNonEmptyString(
@@ -1028,9 +1167,9 @@ class ContactsService {
         );
       } else if (customUrl != null) {
         updated = ContactItem(
-          id: userId,
-          userId: userId,
-          contactUserId: userId,
+          id: uid,
+          userId: uid,
+          contactUserId: uid,
           isContact: false,
           customAvatarUrl: customUrl,
         );
@@ -1052,14 +1191,18 @@ class ContactsService {
 
   /// Removes a previously set custom photo for [userId] (`DELETE /api/contacts/:userId/avatar`).
   static Future<Map<String, dynamic>> resetCustomAvatar(String userId) async {
+    final uid = userId.trim();
+    if (uid.isEmpty) {
+      return {'success': false, 'message': 'Invalid user ID'};
+    }
     try {
       final token = await AuthService.getToken();
       if (token == null || token.isEmpty) {
         return {'success': false, 'message': 'Not authenticated'};
       }
-      final prev = _cache[userId];
+      final prev = _cache[uid];
       final response = await http.delete(
-        Uri.parse('${AppConfig.baseUrl}/api/contacts/$userId/avatar'),
+        Uri.parse('${AppConfig.baseUrl}/api/contacts/$uid/avatar'),
         headers: {'Authorization': 'Bearer $token'},
       );
       final data = _tryDecodeJson(response.body);
@@ -1070,7 +1213,7 @@ class ContactsService {
           final updated = _mergeServerContact(
             prev,
             Map<String, dynamic>.from(data['contact'] as Map),
-            fallbackUserId: userId,
+            fallbackUserId: uid,
           );
           _upsertCacheItem(updated);
           unawaited(_propagateOverride(updated));
@@ -1085,12 +1228,12 @@ class ContactsService {
           final hasRemainingData =
               prev.isContact || prev.hasCustomName || prev.note.trim().isNotEmpty;
           if (!hasRemainingData) {
-            _cache.remove(userId);
+            _cache.remove(uid);
             _publishCacheUpdate();
             _persistToDisk();
             unawaited(
               _propagateDeleted(
-                userId,
+                uid,
                 previous: prev,
                 eventData: Map<String, dynamic>.from(data),
               ),
@@ -1100,14 +1243,15 @@ class ContactsService {
               'message': data['message'] ?? 'Custom photo removed',
             };
           }
-          final restoredAvatar =
-              _optNonEmptyString(data['original_avatar_url']) ??
-                  _optNonEmptyString(data['avatar_url']) ??
+          final restoredAvatar = data.containsKey('original_avatar_url')
+              ? (_optNonEmptyString(data['original_avatar_url']) ?? '')
+              : (_optNonEmptyString(data['avatar_url']) ??
                   prev.originalAvatarUrl ??
-                  (prev.avatarUrl != prev.customAvatarUrl ? prev.avatarUrl : '');
+                  (prev.avatarUrl != prev.customAvatarUrl ? prev.avatarUrl : ''));
           final updated = prev.copyWith(
             clearCustomAvatarUrl: true,
             avatarUrl: restoredAvatar,
+            clearOriginalAvatarUrl: restoredAvatar.isEmpty,
           );
           _upsertCacheItem(updated);
           unawaited(_propagateOverride(updated));
@@ -1120,7 +1264,7 @@ class ContactsService {
 
         unawaited(
           _propagateDeleted(
-            userId,
+            uid,
             eventData: Map<String, dynamic>.from(data),
           ),
         );

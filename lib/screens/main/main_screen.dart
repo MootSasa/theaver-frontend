@@ -146,8 +146,15 @@ class _MainScreenState extends State<MainScreen>
   StreamSubscription<List<DbChat>>? _archivedChatsStreamSubscription;
   String? _currentUserId;
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
-  final Map<String, ({String action, String? userName, Timer timer})>
-      _chatTypingStates = {};
+  final Map<
+      String,
+      ({
+        String action,
+        String? userId,
+        String? rawUserName,
+        String? userName,
+        Timer timer,
+      })> _chatTypingStates = {};
   final Map<String, List<MessageEntity>> _chatLastMessageEntities = {};
 
   Future<void> _loadCommunities() async {
@@ -635,7 +642,10 @@ class _MainScreenState extends State<MainScreen>
       return;
     }
 
-    final userName = event.data['user_name']?.toString();
+    final rawUserName = event.data['user_name']?.toString();
+    final resolvedUserName = (typingUserId != null && typingUserId.isNotEmpty)
+        ? ContactsService.resolveName(typingUserId, rawUserName ?? '')
+        : rawUserName;
     _chatTypingStates[chatId]?.timer.cancel();
     final timer = Timer(const Duration(seconds: 4), () {
       _chatTypingStates.remove(chatId);
@@ -645,7 +655,11 @@ class _MainScreenState extends State<MainScreen>
     });
     _chatTypingStates[chatId] = (
       action: action,
-      userName: userName,
+      userId: typingUserId,
+      rawUserName: rawUserName,
+      userName: (resolvedUserName != null && resolvedUserName.isNotEmpty)
+          ? resolvedUserName
+          : rawUserName,
       timer: timer,
     );
     if (mounted) {
@@ -1516,6 +1530,7 @@ class _MainScreenState extends State<MainScreen>
     for (int i = 0; i < _chats.length; i++) {
       final c = _chats[i];
       if (c.chatType == 'private' &&
+          !c.isBot &&
           c.otherUserId != null &&
           c.otherUserId!.isNotEmpty) {
         final uid = c.otherUserId!;
@@ -1526,16 +1541,45 @@ class _MainScreenState extends State<MainScreen>
                 : ((contact?.displayName.trim().isNotEmpty ?? false)
                     ? contact!.displayName.trim()
                     : c.name);
-        final nextName = ContactsService.resolveName(uid, baseName);
+        final nextName = ContactsService.resolvePeerName(
+          uid,
+          baseName,
+          isBot: c.isBot,
+        );
         final baseAvatar = (contact != null &&
                 !contact.hasCustomAvatar &&
                 (contact.originalAvatarUrl?.trim().isNotEmpty ?? false))
             ? contact.originalAvatarUrl!.trim()
             : c.avatarUrl;
-        final nextAvatar = ContactsService.resolveAvatarUrl(uid, baseAvatar);
+        final nextAvatar = ContactsService.resolvePeerAvatarUrl(
+          uid,
+          baseAvatar,
+          isBot: c.isBot,
+        );
         if (nextName != c.name || nextAvatar != c.avatarUrl) {
           _chats[i] = c.copyWith(name: nextName, avatarUrl: nextAvatar);
           changed = true;
+        }
+      }
+    }
+    if (_chatTypingStates.isNotEmpty) {
+      final keys = _chatTypingStates.keys.toList();
+      for (final k in keys) {
+        final t = _chatTypingStates[k]!;
+        final uid = t.userId;
+        if (uid == null || uid.isEmpty) continue;
+        final nextTyping =
+            ContactsService.resolveName(uid, t.rawUserName ?? '');
+        final effective =
+            nextTyping.isNotEmpty ? nextTyping : t.rawUserName;
+        if (effective != t.userName) {
+          _chatTypingStates[k] = (
+            action: t.action,
+            userId: uid,
+            rawUserName: t.rawUserName,
+            userName: effective,
+            timer: t.timer,
+          );
         }
       }
     }
@@ -2895,6 +2939,17 @@ class _MainScreenState extends State<MainScreen>
     );
     final isSelected = _selectedChatIds.contains(chat.id);
     final typing = _chatTypingStates[chat.id];
+    final String? resolvedTypingName = typing != null
+        ? ((typing.userId != null && typing.userId!.isNotEmpty)
+            ? () {
+                final resolved = ContactsService.resolveName(
+                  typing.userId,
+                  typing.rawUserName ?? '',
+                );
+                return resolved.isNotEmpty ? resolved : typing.userName;
+              }()
+            : typing.userName)
+        : null;
     final fallbackSavedAvatar = _accountManager.currentAccount?.avatarUrl ??
         _accountManager.currentAccount?.localAvatarPath;
 
@@ -2907,7 +2962,7 @@ class _MainScreenState extends State<MainScreen>
       currentUserId: _currentUserId,
       fallbackSavedAvatarUrl: fallbackSavedAvatar,
       typingInfo: typing != null
-          ? (action: typing.action, userName: typing.userName)
+          ? (action: typing.action, userName: resolvedTypingName)
           : null,
       fallbackEntities: _chatLastMessageEntities[chat.id] ?? const [],
       isOpenInTile: tiling.windowSize.width >=

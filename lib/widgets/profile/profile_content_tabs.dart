@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/file_service.dart';
@@ -33,6 +34,7 @@ class ProfileMemberItem {
   final String? avatarUrl;
   final String role; // 'owner', 'admin', 'member'
   final bool isOnline;
+  final bool isBot;
   final String? lastSeen;
   final String? lastSeenStatus;
 
@@ -44,6 +46,7 @@ class ProfileMemberItem {
     this.avatarUrl,
     this.role = 'member',
     this.isOnline = false,
+    this.isBot = false,
     this.lastSeen,
     this.lastSeenStatus,
   });
@@ -64,6 +67,7 @@ class ProfileMemberItem {
       avatarUrl: json['avatar_url']?.toString(),
       role: (json['role'] ?? 'member').toString(),
       isOnline: json['is_online'] == true,
+      isBot: json['is_bot'] == true,
       lastSeen: json['last_seen']?.toString(),
       lastSeenStatus: json['last_seen_status']?.toString(),
     );
@@ -127,34 +131,39 @@ class ProfileSectionPageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    switch (sectionType) {
-      case ProfileSectionType.members:
-        return _buildMembersTab(context);
-      case ProfileSectionType.commonGroups:
-        return _buildCommonGroupsTab(context);
-      case ProfileSectionType.wall:
-        return _buildEmptyState(
-          context,
-          iconBuilder: (color, size) => iconoir.ViewGrid(color: color, width: size, height: size),
-          title: _tr(context, 'profile_wall_empty_title', 'Публикаций пока нет'),
-          subtitle: _tr(context, 'profile_wall_empty_subtitle', 'Записи на стене профиля появятся здесь'),
-        );
-      case ProfileSectionType.gifts:
-        return _buildEmptyState(
-          context,
-          iconBuilder: (color, size) => iconoir.Gift(color: color, width: size, height: size),
-          title: _tr(context, 'profile_gifts_empty_title', 'Подарков пока нет'),
-          subtitle: _tr(context, 'profile_gifts_empty_subtitle', 'Полученные подарки будут отображаться в этом разделе'),
-        );
-      case ProfileSectionType.media:
-        return _buildMediaTab(context);
-      case ProfileSectionType.files:
-        return _buildFilesTab(context);
-      case ProfileSectionType.links:
-        return _buildLinksTab(context);
-      case ProfileSectionType.voice:
-        return _buildVoiceTab(context);
-    }
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) {
+        switch (sectionType) {
+          case ProfileSectionType.members:
+            return _buildMembersTab(context);
+          case ProfileSectionType.commonGroups:
+            return _buildCommonGroupsTab(context);
+          case ProfileSectionType.wall:
+            return _buildEmptyState(
+              context,
+              iconBuilder: (color, size) => iconoir.ViewGrid(color: color, width: size, height: size),
+              title: _tr(context, 'profile_wall_empty_title', 'Публикаций пока нет'),
+              subtitle: _tr(context, 'profile_wall_empty_subtitle', 'Записи на стене профиля появятся здесь'),
+            );
+          case ProfileSectionType.gifts:
+            return _buildEmptyState(
+              context,
+              iconBuilder: (color, size) => iconoir.Gift(color: color, width: size, height: size),
+              title: _tr(context, 'profile_gifts_empty_title', 'Подарков пока нет'),
+              subtitle: _tr(context, 'profile_gifts_empty_subtitle', 'Полученные подарки будут отображаться в этом разделе'),
+            );
+          case ProfileSectionType.media:
+            return _buildMediaTab(context);
+          case ProfileSectionType.files:
+            return _buildFilesTab(context);
+          case ProfileSectionType.links:
+            return _buildLinksTab(context);
+          case ProfileSectionType.voice:
+            return _buildVoiceTab(context);
+        }
+      },
+    );
   }
 
   String _tr(BuildContext context, String key, String fallback) {
@@ -358,9 +367,19 @@ class ProfileSectionPageContent extends StatelessWidget {
     final canEditThisMember = canManageMembers &&
         member.userId != currentUserId &&
         member.role != 'owner';
-    final memberName = member.displayName == 'Пользователь'
+    final rawMemberName = member.displayName == 'Пользователь'
         ? _tr(context, 'profile_default_user', 'Пользователь')
         : member.displayName;
+    final memberName = ContactsService.resolvePeerName(
+      member.userId,
+      rawMemberName,
+      isBot: member.isBot,
+    );
+    final memberAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+      member.userId,
+      member.avatarUrl,
+      isBot: member.isBot,
+    );
 
     String? roleBadge;
     if (member.role == 'owner') {
@@ -396,10 +415,11 @@ class ProfileSectionPageContent extends StatelessWidget {
           children: [
             AvatarWithStatus(
               userId: member.userId,
-              avatarUrl: member.avatarUrl,
+              avatarUrl: memberAvatarUrl,
               name: memberName,
               radius: 22,
               isOnline: member.isOnline,
+              resolveContactOverride: !member.isBot,
               backgroundColor: accentColor.withValues(alpha: 0.2),
             ),
             const SizedBox(width: 12),
@@ -490,10 +510,15 @@ class ProfileSectionPageContent extends StatelessWidget {
 
   void _showMemberActionsSheet(BuildContext context, ProfileMemberItem member) {
     final isAdmin = member.role == 'admin';
+    final resolvedTitle = ContactsService.resolvePeerName(
+      member.userId,
+      member.displayName,
+      isBot: member.isBot,
+    );
 
     showTheavModalSheet<void>(
       context: context,
-      title: member.displayName,
+      title: resolvedTitle,
       showCloseButton: true,
       padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
@@ -1017,8 +1042,28 @@ class ProfileSectionPageContent extends StatelessWidget {
                   final msgId = msg.serverId ?? msg.localId;
                   final isRound = msg.isRound || msg.messageType == 'round';
                   final isActive = activeId == msgId && isPlayingVoice;
-                  final sender = (msg.senderName != null && msg.senderName!.isNotEmpty)
-                      ? msg.senderName!
+                  final isChannelChat = chatType == 'channel';
+                  final voiceSenderId = isChannelChat
+                      ? (msg.postAuthorId?.trim() ?? '')
+                      : msg.senderId.trim();
+                  final canResolveSender =
+                      (!isChannelChat || voiceSenderId.isNotEmpty) &&
+                          ContactsService.shouldResolveUserIdentity(
+                            voiceSenderId,
+                            senderChatId: msg.senderChatId,
+                            isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                          );
+                  final rawSender = msg.senderName ?? '';
+                  final resolvedSender = canResolveSender
+                      ? ContactsService.resolvePeerName(
+                          voiceSenderId,
+                          rawSender,
+                          senderChatId: msg.senderChatId,
+                          isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                        )
+                      : rawSender;
+                  final sender = resolvedSender.isNotEmpty
+                      ? resolvedSender
                       : (isRound
                           ? _tr(context, 'chat_video_note', 'Видеосообщение')
                           : _tr(context, 'chat_voice_message', 'Голосовое сообщение'));
@@ -1136,6 +1181,24 @@ class ProfileSectionPageContent extends StatelessWidget {
     }
 
     final isRound = msg.isRound || msg.messageType == 'round';
+    final isChannelChat = chatType == 'channel';
+    final voiceSenderId = isChannelChat
+        ? (msg.postAuthorId?.trim() ?? '')
+        : msg.senderId.trim();
+    final canResolveSender = (!isChannelChat || voiceSenderId.isNotEmpty) &&
+        ContactsService.shouldResolveUserIdentity(
+          voiceSenderId,
+          senderChatId: msg.senderChatId,
+          isAnonymousAdmin: msg.isFromAnonymousAdmin,
+        );
+    final resolvedSenderName = canResolveSender
+        ? ContactsService.resolvePeerName(
+            voiceSenderId,
+            msg.senderName ?? '',
+            senderChatId: msg.senderChatId,
+            isAnonymousAdmin: msg.isFromAnonymousAdmin,
+          )
+        : msg.senderName;
     coordinator.startPlayback(
       track: PlaybackTrack(
         messageId: msgId,
@@ -1143,7 +1206,10 @@ class ProfileSectionPageContent extends StatelessWidget {
         chatType: chatType,
         mediaType: isRound ? 'video_note' : 'voice',
         mediaUrl: rawUrl,
-        senderName: msg.senderName,
+        senderId: canResolveSender ? voiceSenderId : null,
+        senderName: (resolvedSenderName != null && resolvedSenderName.isNotEmpty)
+            ? resolvedSenderName
+            : msg.senderName,
         chatTitle: chatTitle,
       ),
     );

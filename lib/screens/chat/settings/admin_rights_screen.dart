@@ -4,8 +4,10 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../../services/account_manager.dart';
 import '../../../services/chat_service.dart';
+import '../../../services/contacts_service.dart';
 import '../../../services/glass_toast_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../utils/image_utils.dart';
 import '../../../widgets/design_system/theav_design_system.dart';
 import '../../../widgets/message/group_message_avatar_row.dart';
 import '../../../widgets/settings/settings_floating_header.dart';
@@ -141,22 +143,39 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
         : widget.participant.adminTitle;
     _isAnonymous = !_isChannel && widget.participant.isAnonymous;
     _titleController = TextEditingController(text: _adminTitle);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _titleController.dispose();
     super.dispose();
   }
 
   String get _displayName {
     final name = widget.participant.displayName.trim();
-    if (name.isNotEmpty) return name;
-    if (widget.participant.username.trim().isNotEmpty) {
-      return '@${widget.participant.username.trim()}';
-    }
-    return 'Пользователь';
+    final fallback = name.isNotEmpty
+        ? name
+        : (widget.participant.username.trim().isNotEmpty
+            ? '@${widget.participant.username.trim()}'
+            : 'Пользователь');
+    return ContactsService.resolvePeerName(
+      widget.participant.id,
+      fallback,
+      isBot: widget.participant.isBot,
+    );
   }
+
+  String? get _avatarUrl => ContactsService.resolvePeerAvatarUrl(
+        widget.participant.id,
+        widget.participant.avatarUrl,
+        isBot: widget.participant.isBot,
+      );
 
   Future<void> _saveRights() async {
     if (!_effectiveCanEdit || _isSaving) return;
@@ -560,10 +579,11 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
         TheavListRow(
           leading: AvatarWithStatus(
             userId: widget.participant.id,
-            avatarUrl: widget.participant.avatarUrl,
+            avatarUrl: _avatarUrl,
             name: _displayName,
             radius: 24,
             isOnline: false,
+            resolveContactOverride: !widget.participant.isBot,
             decorationOverride:
                 widget.participant.peerCustomization?.avatarDecoration,
           ),
@@ -599,8 +619,11 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
     required Color subColor,
   }) {
     final trimmedTitle = _adminTitle.trim();
+    final isAnonGroup = _isAnonymous && !_isChannel;
     final effectiveSenderName =
-        (_isAnonymous && !_isChannel) ? 'Группа (анонимно)' : _displayName;
+        isAnonGroup ? 'Группа (анонимно)' : _displayName;
+    final previewAvatarProvider =
+        isAnonGroup ? null : avatarImageProvider(_avatarUrl);
     final previewBubbleColor =
         isDark ? const Color(0xFF23252C) : Colors.white;
     final gradientColors = isDark
@@ -629,18 +652,23 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
           CircleAvatar(
             radius: 17,
             backgroundColor: accentColor.withValues(alpha: 0.22),
-            child: _isAnonymous && !_isChannel
+            backgroundImage: previewAvatarProvider,
+            onBackgroundImageError:
+                previewAvatarProvider != null ? (_, __) {} : null,
+            child: isAnonGroup
                 ? iconoir.Group(width: 17, height: 17, color: accentColor)
-                : Text(
-                    effectiveSenderName.isNotEmpty
-                        ? effectiveSenderName[0].toUpperCase()
-                        : '?',
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w700,
-                      color: accentColor,
-                    ),
-                  ),
+                : (previewAvatarProvider == null
+                    ? Text(
+                        effectiveSenderName.isNotEmpty
+                            ? effectiveSenderName[0].toUpperCase()
+                            : '?',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          color: accentColor,
+                        ),
+                      )
+                    : null),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -667,6 +695,7 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
                 children: [
                   SenderHeaderRow(
                     senderName: effectiveSenderName,
+                    senderId: _isAnonymous ? null : widget.participant.id,
                     nameColor: accentColor,
                     customization: _isAnonymous
                         ? null
@@ -676,6 +705,7 @@ class _AdminRightsScreenState extends State<AdminRightsScreen> {
                     adminTitle: trimmedTitle.isNotEmpty ? trimmedTitle : null,
                     role: _isOwnerTarget ? 'owner' : 'admin',
                     rankColor: subColor,
+                    isFromAnonymousAdmin: _isAnonymous,
                   ),
                   const SizedBox(height: 4),
                   Text(

@@ -7,6 +7,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../models/whiteboard_models.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/whiteboard_service.dart';
 
@@ -922,7 +923,10 @@ class _InteractiveWhiteboardState extends State<InteractiveWhiteboard> {
       child: Focus(
         focusNode: _boardFocusNode,
         child: AnimatedBuilder(
-          animation: _controller,
+          animation: Listenable.merge([
+            _controller,
+            ContactsService.revisionNotifier,
+          ]),
           builder: (context, _) {
             final isPanMode = _controller.activeTool == WhiteboardTool.pan ||
                 _activePointers >= 2;
@@ -2254,10 +2258,14 @@ class _WhiteboardScenePainter extends CustomPainter {
       Paint()..color = Colors.black.withValues(alpha: 0.06),
     );
 
+    final resolvedAuthorName = ContactsService.resolvePeerName(
+      elem.authorId,
+      elem.authorName,
+    );
     // Author label in top band
     final authorTp = TextPainter(
       text: TextSpan(
-        text: elem.authorName,
+        text: resolvedAuthorName,
         style: TextStyle(
           color: Colors.black.withValues(alpha: 0.55),
           fontSize: 10.5,
@@ -2524,10 +2532,14 @@ class _WhiteboardScenePainter extends CustomPainter {
       );
     }
 
+    final resolvedUserName = ContactsService.resolvePeerName(
+      cursor.userId,
+      cursor.userName,
+    );
     // Participant Name Pill
     final tp = TextPainter(
       text: TextSpan(
-        text: cursor.userName,
+        text: resolvedUserName,
         style: const TextStyle(
           color: Colors.white,
           fontSize: 11,

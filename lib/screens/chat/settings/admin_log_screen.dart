@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
+import '../../../services/contacts_service.dart';
 import '../../../services/groups_channels_parity_service.dart';
 import '../../../utils/date_time_utils.dart';
 import '../../../utils/haptic_utils.dart';
@@ -41,6 +42,7 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
 
   final TextEditingController _searchController = TextEditingController();
   final List<AdminLogEvent> _events = [];
+  final List<AdminLogEvent> _unfilteredEvents = [];
   String _selectedCategory = 'all';
   bool _loading = true;
   bool _loadingMore = false;
@@ -51,6 +53,7 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _searchController.addListener(() {
       _debounce?.cancel();
       _debounce = Timer(const Duration(milliseconds: 280), () {
@@ -60,16 +63,72 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
     unawaited(_load(reset: true));
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final q = _searchController.text.trim();
+    if (q.isNotEmpty && _unfilteredEvents.isNotEmpty) {
+      unawaited(_load(reset: true));
+    } else {
+      setState(() {});
+    }
+  }
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
+  bool _canResolveLogUserId(String? userId) {
+    final uid = userId?.trim() ?? '';
+    if (uid.isEmpty || uid == '0') return false;
+    final numeric = int.tryParse(uid);
+    if (numeric != null && numeric <= 0) return false;
+    return ContactsService.shouldResolveUserIdentity(uid);
+  }
+
+  String _resolveActorName(AdminLogEvent ev) {
+    final raw = ev.actorName.isNotEmpty
+        ? ev.actorName
+        : (ev.actorUsername.isNotEmpty ? '@${ev.actorUsername}' : '');
+    if (!_canResolveLogUserId(ev.actorId)) return raw;
+    return ContactsService.resolvePeerName(ev.actorId, raw);
+  }
+
+  String? _resolveActorAvatar(AdminLogEvent ev) {
+    if (!_canResolveLogUserId(ev.actorId)) return ev.actorAvatar;
+    return ContactsService.resolvePeerAvatarUrl(ev.actorId, ev.actorAvatar);
+  }
+
+  String _resolveTargetUserName(AdminLogEvent ev) {
+    final raw = ev.targetUserName.isNotEmpty
+        ? ev.targetUserName
+        : (ev.targetUserUsername.isNotEmpty ? '@${ev.targetUserUsername}' : '');
+    if (!_canResolveLogUserId(ev.targetUserId)) return raw;
+    return ContactsService.resolvePeerName(ev.targetUserId, raw);
+  }
+
+  bool _matchesSearchQuery(AdminLogEvent ev, String queryLower) {
+    if (_resolveActorName(ev).toLowerCase().contains(queryLower)) return true;
+    if (_resolveTargetUserName(ev).toLowerCase().contains(queryLower)) {
+      return true;
+    }
+    if (ev.actorName.toLowerCase().contains(queryLower) ||
+        ev.actorUsername.toLowerCase().contains(queryLower) ||
+        ev.targetUserName.toLowerCase().contains(queryLower) ||
+        ev.targetUserUsername.toLowerCase().contains(queryLower)) {
+      return true;
+    }
+    return _formatActionTitle(ev).toLowerCase().contains(queryLower) ||
+        _formatDetails(ev).toLowerCase().contains(queryLower);
+  }
+
   Future<void> _load({bool reset = false}) async {
     if (!reset && (_loadingMore || !_hasMore)) return;
     final int reqSeq = ++_loadRequestSeq;
+    final trimmedQuery = _searchController.text.trim();
     if (mounted) {
       setState(() {
         if (reset) {
@@ -80,18 +139,53 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
         }
       });
     }
-    final res = await GroupsChannelsParityService.getAdminLog(
+    final category = _selectedCategory == 'all' ? null : _selectedCategory;
+    final needsUnfilteredSeed =
+        reset && trimmedQuery.isNotEmpty && _unfilteredEvents.isEmpty;
+    final resFuture = GroupsChannelsParityService.getAdminLog(
       widget.chatId,
-      category: _selectedCategory == 'all' ? null : _selectedCategory,
-      query: _searchController.text,
+      category: category,
+      query: trimmedQuery,
       hours: 48,
       limit: 50,
       offset: reset ? 0 : _events.length,
     );
+    final seedFuture = needsUnfilteredSeed
+        ? GroupsChannelsParityService.getAdminLog(
+            widget.chatId,
+            category: category,
+            hours: 48,
+            limit: 50,
+            offset: 0,
+          )
+        : null;
+    final res = await resFuture;
+    final seedRes = seedFuture != null ? await seedFuture : null;
     if (!mounted || reqSeq != _loadRequestSeq) return;
     setState(() {
+      if (seedRes != null) {
+        _unfilteredEvents
+          ..clear()
+          ..addAll(seedRes.events);
+      }
+      if (trimmedQuery.isEmpty) {
+        if (reset) _unfilteredEvents.clear();
+        _unfilteredEvents.addAll(res.events);
+      }
       if (reset) _events.clear();
-      _events.addAll(res.events);
+      final seenIds = {for (final e in _events) e.id};
+      for (final e in res.events) {
+        if (seenIds.add(e.id)) _events.add(e);
+      }
+      if (reset && trimmedQuery.isNotEmpty) {
+        final qLower = trimmedQuery.toLowerCase();
+        for (final e in _unfilteredEvents) {
+          if (_matchesSearchQuery(e, qLower) && seenIds.add(e.id)) {
+            _events.add(e);
+          }
+        }
+        _events.sort((a, b) => b.id.compareTo(a.id));
+      }
       _hasMore = res.hasMore;
       _loading = false;
       _loadingMore = false;
@@ -155,8 +249,9 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
 
   String _formatDetails(AdminLogEvent ev) {
     final parts = <String>[];
-    if (ev.targetUserName.isNotEmpty) {
-      parts.add('Пользователь: ${ev.targetUserName}');
+    final targetName = _resolveTargetUserName(ev);
+    if (targetName.isNotEmpty) {
+      parts.add('Пользователь: $targetName');
     }
     if (ev.oldValue != null && ev.newValue != null) {
       final oldContent = ev.oldValue!['content']?.toString();
@@ -236,7 +331,10 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
                     onTap: () {
                       if (_selectedCategory == cat.id) return;
                       HapticUtils.selection();
-                      setState(() => _selectedCategory = cat.id);
+                      setState(() {
+                        _selectedCategory = cat.id;
+                        _unfilteredEvents.clear();
+                      });
                       unawaited(_load(reset: true));
                     },
                   );
@@ -264,18 +362,28 @@ class _AdminLogScreenState extends State<AdminLogScreen> {
               TheavInsetGroup(
                 children: [
                   for (final ev in _events)
-                    TheavListRow(
-                      leading: AvatarWithStatus(
-                        userId: ev.actorId,
-                        avatarUrl: ev.actorAvatar,
-                        name: ev.actorName.isNotEmpty ? ev.actorName : 'A',
-                        radius: 19,
-                        isOnline: false,
-                      ),
-                      title: ev.actorName.isNotEmpty
-                          ? '${ev.actorName} — ${_formatActionTitle(ev)}'
-                          : _formatActionTitle(ev),
-                      subtitle: _formatDetails(ev),
+                    Builder(
+                      builder: (_) {
+                        final actorName = _resolveActorName(ev);
+                        final actorAvatar = _resolveActorAvatar(ev);
+                        return TheavListRow(
+                          leading: AvatarWithStatus(
+                            userId: _canResolveLogUserId(ev.actorId)
+                                ? ev.actorId
+                                : null,
+                            avatarUrl: actorAvatar,
+                            name: actorName.isNotEmpty ? actorName : 'A',
+                            radius: 19,
+                            isOnline: false,
+                            resolveContactOverride:
+                                _canResolveLogUserId(ev.actorId),
+                          ),
+                          title: actorName.isNotEmpty
+                              ? '$actorName — ${_formatActionTitle(ev)}'
+                              : _formatActionTitle(ev),
+                          subtitle: _formatDetails(ev),
+                        );
+                      },
                     ),
                 ],
               ),

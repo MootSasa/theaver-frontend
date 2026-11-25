@@ -3,9 +3,11 @@ import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
+import '../../services/contacts_service.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/user_search_picker_dialog.dart';
+import '../../widgets/user/avatar_with_status.dart';
 
 /// Screen "Blocked Users" — list, search/add block, and unblock with confirmation.
 class BlockedUsersScreen extends StatefulWidget {
@@ -91,57 +93,71 @@ class _BlockedUsersScreenState extends State<BlockedUsersScreen> {
               ),
             );
           }
-          return ListView.builder(
-            padding: EdgeInsets.only(
-              top: SettingsFloatingHeader.topClearanceOf(context) + 8,
-              bottom: 24,
-            ),
-            itemCount: blocked.length,
-            itemBuilder: (context, index) {
-              final user = blocked[index];
-              final label = user.displayName.isNotEmpty
-                  ? user.displayName
-                  : user.username;
-              return ListTile(
-                leading: CircleAvatar(
-                  child: Text(label.isNotEmpty ? label[0].toUpperCase() : '?'),
-                ),
-                title: Text(label),
-                subtitle: Text('@${user.username}'),
-                trailing: TextButton(
-                  onPressed: () async {
-                    final confirmed = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: Text(l10n.translate('security_unblock_confirm_title')),
-                        content: Text(
-                          l10n
-                              .translate('security_unblock_confirm_body')
-                              .replaceAll('{name}', label),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: Text(l10n.translate('cancel')),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: Text(l10n.translate('security_unblock')),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirmed == true) {
-                      await provider.unblockUser(user.userId);
-                    }
-                  },
-                  child: Text(
-                    l10n.translate('security_unblock'),
-                    style: const TextStyle(color: Colors.blue),
+          return ValueListenableBuilder<int>(
+            valueListenable: ContactsService.revisionNotifier,
+            builder: (context, _, __) => ListView.builder(
+              padding: EdgeInsets.only(
+                top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+                bottom: 24,
+              ),
+              itemCount: blocked.length,
+              itemBuilder: (context, index) {
+                final user = blocked[index];
+                final rawLabel = user.displayName.isNotEmpty
+                    ? user.displayName
+                    : user.username;
+                final label = ContactsService.resolvePeerName(
+                  user.userId,
+                  rawLabel,
+                );
+                final avatarUrl = ContactsService.resolvePeerAvatarUrl(
+                  user.userId,
+                  user.avatarUrl,
+                );
+                return ListTile(
+                  leading: AvatarWithStatus(
+                    userId: user.userId,
+                    avatarUrl: avatarUrl,
+                    name: label,
+                    radius: 20,
                   ),
-                ),
-              );
-            },
+                  title: Text(label),
+                  subtitle: Text('@${user.username}'),
+                  trailing: TextButton(
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: Text(l10n.translate('security_unblock_confirm_title')),
+                          content: Text(
+                            l10n
+                                .translate('security_unblock_confirm_body')
+                                .replaceAll('{name}', label),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: Text(l10n.translate('cancel')),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: Text(l10n.translate('security_unblock')),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        await provider.unblockUser(user.userId);
+                      }
+                    },
+                    child: Text(
+                      l10n.translate('security_unblock'),
+                      style: const TextStyle(color: Colors.blue),
+                    ),
+                  ),
+                );
+              },
+            ),
           );
         },
       ),

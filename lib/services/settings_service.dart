@@ -1338,20 +1338,26 @@ class ChatNotificationException {
   final String chatType;
   final String chatTitle;
   final String? avatarUrl;
+  final String? otherUserId;
 
   const ChatNotificationException({
     required this.settings,
     required this.chatType,
     required this.chatTitle,
     this.avatarUrl,
+    this.otherUserId,
   });
 
   factory ChatNotificationException.fromJson(Map<String, dynamic> json) {
+    final rawOtherUserId = json['other_user_id']?.toString().trim();
     return ChatNotificationException(
       settings: ChatNotificationSettings.fromJson(json),
       chatType: json['chat_type'] ?? 'private',
       chatTitle: json['chat_title'] ?? 'Chat',
       avatarUrl: json['avatar_url'],
+      otherUserId: (rawOtherUserId != null && rawOtherUserId.isNotEmpty)
+          ? rawOtherUserId
+          : null,
     );
   }
 }
@@ -1495,6 +1501,7 @@ class PrivacyException {
   final String ruleType;
   final String targetUserId;
   final String targetUserName;
+  final String? targetUserAvatarUrl;
   final String exceptionType; // always / never
 
   const PrivacyException({
@@ -1502,16 +1509,23 @@ class PrivacyException {
     required this.ruleType,
     required this.targetUserId,
     required this.targetUserName,
+    this.targetUserAvatarUrl,
     required this.exceptionType,
   });
 
-  factory PrivacyException.fromJson(Map<String, dynamic> json) => PrivacyException(
-        id: json['id'] ?? '',
-        ruleType: json['rule_type'] ?? '',
-        targetUserId: json['target_user_id'] ?? '',
-        targetUserName: json['target_user_name'] ?? '',
-        exceptionType: json['exception_type'] ?? 'always',
-      );
+  factory PrivacyException.fromJson(Map<String, dynamic> json) {
+    final rawAvatar =
+        (json['target_user_avatar'] ?? json['avatar_url'])?.toString().trim();
+    return PrivacyException(
+      id: json['id'] ?? '',
+      ruleType: json['rule_type'] ?? '',
+      targetUserId: json['target_user_id'] ?? '',
+      targetUserName: json['target_user_name'] ?? '',
+      targetUserAvatarUrl:
+          (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      exceptionType: json['exception_type'] ?? 'always',
+    );
+  }
 }
 
 /// Настройки двухэтапной аутентификации

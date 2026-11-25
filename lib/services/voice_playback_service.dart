@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'video_note_playback_service.dart';
+import 'contacts_service.dart';
 import 'media_cache_manager.dart';
 import 'proximity_audio_service.dart';
 
@@ -29,6 +30,7 @@ class VoicePlaybackService with ChangeNotifier {
 
   String? _activeMessageId;
   String? _activeAudioUrl;
+  String? _activeSenderId;
   String? _activeSenderName;
   String? _activeChatId;
   String? _activeChatType;
@@ -50,6 +52,7 @@ class VoicePlaybackService with ChangeNotifier {
 
   String? get activeMessageId => _activeMessageId;
   String? get activeAudioUrl => _activeAudioUrl;
+  String? get activeSenderId => _activeSenderId;
   String? get activeSenderName => _activeSenderName;
   String? get activeChatId => _activeChatId;
   String? get activeChatType => _activeChatType;
@@ -174,8 +177,15 @@ class VoicePlaybackService with ChangeNotifier {
     }
     _lastMediaSessionPosUpdate = now;
 
-    final title = (_activeSenderName != null && _activeSenderName!.isNotEmpty)
-        ? _activeSenderName!
+    final String resolvedSender =
+        (_activeSenderName != null && _activeSenderName!.isNotEmpty)
+            ? ContactsService.resolvePeerName(
+                _activeSenderId,
+                _activeSenderName!,
+              )
+            : '';
+    final title = resolvedSender.isNotEmpty
+        ? resolvedSender
         : 'Голосовое сообщение';
     final artist = (_activeChatTitle != null && _activeChatTitle!.isNotEmpty)
         ? _activeChatTitle!
@@ -239,6 +249,7 @@ class VoicePlaybackService with ChangeNotifier {
   Future<void> playVoice({
     required String messageId,
     required String audioUrl,
+    String? senderId,
     String? senderName,
     Duration? initialDuration,
     String? chatId,
@@ -258,7 +269,8 @@ class VoicePlaybackService with ChangeNotifier {
 
     _activeMessageId = messageId;
     _activeAudioUrl = audioUrl;
-    if (senderName != null) _activeSenderName = senderName;
+    _activeSenderId = senderId;
+    _activeSenderName = senderName;
     if (chatId != null) _activeChatId = chatId;
     if (chatType != null) _activeChatType = chatType;
     if (chatTitle != null) _activeChatTitle = chatTitle;
@@ -379,6 +391,7 @@ class VoicePlaybackService with ChangeNotifier {
 
     _activeMessageId = null;
     _activeAudioUrl = null;
+    _activeSenderId = null;
     _activeSenderName = null;
     _activeChatId = null;
     _activeChatType = null;

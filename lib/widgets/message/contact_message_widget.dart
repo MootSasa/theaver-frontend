@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/image_utils.dart';
 
@@ -52,6 +53,30 @@ class ContactMessageWidget extends StatelessWidget {
 
     final canOpenProfile =
         payloadUserId.isNotEmpty && payloadUserId != '0' && onOpenUserProfile != null;
+    final bool canResolveAvatar =
+        ContactsService.shouldResolveUserIdentity(payloadUserId);
+
+    Widget buildAvatar(String? effectiveAvatarUrl) {
+      final validAvatar = getValidAvatarUrl(effectiveAvatarUrl);
+      final provider =
+          validAvatar != null ? avatarImageProvider(validAvatar) : null;
+      return CircleAvatar(
+        radius: 22,
+        backgroundColor: accentColor.withValues(alpha: 0.18),
+        backgroundImage: provider,
+        onBackgroundImageError: provider != null ? (_, __) {} : null,
+        child: provider == null
+            ? Text(
+                title.isNotEmpty ? title[0].toUpperCase() : '?',
+                style: TextStyle(
+                  color: isMe ? textColor : accentColor,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              )
+            : null,
+      );
+    }
 
     return Container(
       constraints: const BoxConstraints(minWidth: 210, maxWidth: 280),
@@ -62,22 +87,17 @@ class ContactMessageWidget extends StatelessWidget {
         children: [
           Row(
             children: [
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: accentColor.withValues(alpha: 0.18),
-                backgroundImage:
-                    avatarUrl.isNotEmpty ? avatarImageProvider(avatarUrl) : null,
-                child: avatarUrl.isEmpty
-                    ? Text(
-                        title.isNotEmpty ? title[0].toUpperCase() : '?',
-                        style: TextStyle(
-                          color: isMe ? textColor : accentColor,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
+              canResolveAvatar
+                  ? ValueListenableBuilder<int>(
+                      valueListenable: ContactsService.revisionNotifier,
+                      builder: (_, __, ___) => buildAvatar(
+                        ContactsService.resolvePeerAvatarUrl(
+                          payloadUserId,
+                          avatarUrl,
                         ),
-                      )
-                    : null,
-              ),
+                      ),
+                    )
+                  : buildAvatar(avatarUrl),
               const SizedBox(width: 11),
               Expanded(
                 child: Column(

@@ -7,6 +7,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
 import '../../models/media_album.dart';
 import '../../models/theav_theme.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/media_cache_manager.dart';
 import 'blurred_media_placeholder.dart';
@@ -87,6 +88,44 @@ class MediaAlbumWidget extends StatelessWidget {
     this.onCommandTap,
     this.onHashtagTap,
   }) : super(key: key);
+
+  Widget _buildFallbackSenderName(ThemeData theme) {
+    final primary = album.primaryMessage;
+    final bool canResolveSender = !isMe &&
+        !primary.isChannelOrPersonaAuthored &&
+        !primary.isMirroredChannelPost &&
+        ContactsService.shouldResolveUserIdentity(
+          primary.senderId,
+          senderChatId: primary.senderChatId,
+          isAnonymousAdmin: primary.isFromAnonymousAdmin,
+          isMirroredChannelPost: primary.isMirroredChannelPost,
+        );
+    Widget buildText(String name) => Text(
+          name,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+            color: theme.colorScheme.primary,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        );
+    if (!canResolveSender) {
+      return buildText(senderName!);
+    }
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (_, __, ___) => buildText(
+        ContactsService.resolvePeerName(
+          primary.senderId,
+          senderName!,
+          senderChatId: primary.senderChatId,
+          isAnonymousAdmin: primary.isFromAnonymousAdmin,
+          isMirroredChannelPost: primary.isMirroredChannelPost,
+        ),
+      ),
+    );
+  }
 
   MediaAlbumWidget copyWithKey(Key? newKey) {
     return MediaAlbumWidget(
@@ -266,16 +305,7 @@ class MediaAlbumWidget extends StatelessWidget {
                   showReplyOrForward ? 2 : 4,
                 ),
                 child: resolvedHeaderWidget ??
-                    Text(
-                      senderName!,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        color: theme.colorScheme.primary,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    _buildFallbackSenderName(theme),
               ),
             if (showReplyOrForward)
               Padding(

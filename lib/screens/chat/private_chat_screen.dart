@@ -158,6 +158,37 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String? _otherUserId;
   String? _otherUsername;
   String _chatType = 'private'; // 'private', 'saved'
+
+  bool get _isSavedChat =>
+      _chatType == 'saved' ||
+      widget.chatId.startsWith('saved_') ||
+      (_currentUserId != null &&
+          _otherUserId != null &&
+          _otherUserId!.isNotEmpty &&
+          _otherUserId == _currentUserId);
+
+  String get _rawPeerTitle =>
+      _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? '');
+
+  String get _resolvedPeerTitle {
+    final raw = _rawPeerTitle;
+    if (_isSavedChat || _isBot) return raw;
+    return ContactsService.resolvePeerName(
+      _otherUserId,
+      raw,
+      isBot: _isBot,
+    );
+  }
+
+  String? get _resolvedPeerAvatar {
+    final raw = _chatAvatar ?? widget.otherUserAvatar;
+    if (_isSavedChat || _isBot) return raw;
+    return ContactsService.resolvePeerAvatarUrl(
+      _otherUserId,
+      raw,
+      isBot: _isBot,
+    );
+  }
   bool _isOtherUserOnline = false;
   DateTime? _otherUserLastSeen;
   bool _isBot = false;
@@ -1092,10 +1123,29 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       for (int i = 0; i < _messages.length; i++) {
         final m = _messages[i];
         if (m.senderId == uid &&
-            (m.senderChatId == null || m.senderChatId!.isEmpty)) {
-          final nextName = ContactsService.resolveName(uid, m.senderName);
-          final nextAvatar =
-              ContactsService.resolveAvatarUrl(uid, m.senderAvatarUrl);
+            ContactsService.shouldResolveUserIdentity(
+              uid,
+              senderChatId: m.senderChatId,
+              isAnonymousAdmin: m.isFromAnonymousAdmin,
+              isMirroredChannelPost: m.isMirroredChannelPost,
+              isBot: _isBot,
+            )) {
+          final nextName = ContactsService.resolvePeerName(
+            uid,
+            m.senderName,
+            senderChatId: m.senderChatId,
+            isAnonymousAdmin: m.isFromAnonymousAdmin,
+            isMirroredChannelPost: m.isMirroredChannelPost,
+            isBot: _isBot,
+          );
+          final nextAvatar = ContactsService.resolvePeerAvatarUrl(
+            uid,
+            m.senderAvatarUrl,
+            senderChatId: m.senderChatId,
+            isAnonymousAdmin: m.isFromAnonymousAdmin,
+            isMirroredChannelPost: m.isMirroredChannelPost,
+            isBot: _isBot,
+          );
           if (nextName != m.senderName || nextAvatar != m.senderAvatarUrl) {
             _messages[i] = m.copyWith(
               senderName: nextName,
@@ -4651,6 +4701,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               messageId: replyTo.id,
               senderId: replyTo.senderId,
               senderName: replyTo.senderName,
+              senderChatId: replyTo.senderChatId,
+              isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
@@ -4934,28 +4986,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   @override
   Widget build(BuildContext context) {
     _updateInputHeight();
-    final isSavedChat = _chatType == 'saved' ||
-        widget.chatId.startsWith('saved_') ||
-        (_currentUserId != null &&
-            _otherUserId != null &&
-            _otherUserId!.isNotEmpty &&
-            _otherUserId == _currentUserId);
-    final rawFallbackName =
-        _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? '');
-    final resolvedPeerName = isSavedChat
-        ? rawFallbackName
-        : ContactsService.resolveName(_otherUserId, rawFallbackName);
+    final isSavedChat = _isSavedChat;
+    final resolvedPeerName = _resolvedPeerTitle;
     final displayName = (isSavedChat ||
             resolvedPeerName == 'chat_saved_messages' ||
             resolvedPeerName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
         : resolvedPeerName;
-    final resolvedPeerAvatar = isSavedChat
-        ? (_chatAvatar ?? widget.otherUserAvatar)
-        : ContactsService.resolveAvatarUrl(
-            _otherUserId,
-            _chatAvatar ?? widget.otherUserAvatar,
-          );
+    final resolvedPeerAvatar = _resolvedPeerAvatar;
 
     return Consumer<LiquidGlassProvider>(
       builder: (context, glassProvider, _) {
@@ -5354,9 +5392,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                             SwipeBackPageRoute(
                               builder: (_) => PinnedMessagesScreen(
                                 chatId: widget.chatId,
-                                chatTitle: _chatName.isNotEmpty
-                                    ? _chatName
-                                    : (widget.otherUserName ?? 'Чат'),
+                                chatTitle: _isSavedChat
+                                    ? context.l10n
+                                        .translate('chat_saved_messages')
+                                    : (_resolvedPeerTitle.isNotEmpty
+                                        ? _resolvedPeerTitle
+                                        : 'Чат'),
                                 canPinMessages: true,
                                 initialPinnedMessages: _pinnedMessages,
                               ),
@@ -5803,10 +5844,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     final isHighlighted = _highlightMessageId == message.id;
     final bool isSelected = _selectedMessageIds.contains(message.id);
-    final String resolvedChatTitle = ContactsService.resolveName(
-      _otherUserId,
-      _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? ''),
-    );
+    final String resolvedChatTitle = _resolvedPeerTitle;
 
     Widget messageWidget = MessageBubble(
       key: key,
@@ -5852,7 +5890,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         ChatActionsHelper.openSearch(
           context: context,
           chatId: widget.chatId,
-          chatName: _chatName,
+          chatName: _resolvedPeerTitle.isNotEmpty
+              ? _resolvedPeerTitle
+              : _chatName,
           onMessageSelected: (msgId) => _scrollToMessage(msgId),
         );
       },
@@ -6248,7 +6288,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         final pinChoice = await showPinOptionsSheet(
           context,
           isPrivateChat: true,
-          peerName: _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? ''),
+          peerName: _resolvedPeerTitle,
         );
         if (!mounted || pinChoice == null) return;
         onlyForMe = pinChoice.onlyForMe;
@@ -6367,7 +6407,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       SwipeBackPageRoute(
         builder: (_) => ScheduledMessagesScreen(
           chatId: widget.chatId,
-          chatTitle: _chatName,
+          chatTitle: _resolvedPeerTitle.isNotEmpty
+              ? _resolvedPeerTitle
+              : _chatName,
         ),
       ),
     );
@@ -6569,8 +6611,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 MentionCandidate(
                   id: _otherUserId!,
                   username: _otherUsername!,
-                  displayName: _chatName,
-                  avatarUrl: _chatAvatar,
+                  displayName: _resolvedPeerTitle.isNotEmpty
+                      ? _resolvedPeerTitle
+                      : _chatName,
+                  avatarUrl: _resolvedPeerAvatar,
                   isBot: _isBot,
                   supportsInlineQueries: _botInfo?.supportsInlineQueries ?? false,
                   inlinePlaceholder: _botInfo?.inlinePlaceholder,
@@ -6997,6 +7041,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               messageId: replyTo.id,
               senderId: replyTo.senderId,
               senderName: replyTo.senderName,
+              senderChatId: replyTo.senderChatId,
+              isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
@@ -7193,6 +7239,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               messageId: replyTo.id,
               senderId: replyTo.senderId,
               senderName: replyTo.senderName,
+              senderChatId: replyTo.senderChatId,
+              isFromAnonymousAdmin: replyTo.isFromAnonymousAdmin,
               content: replyTo.content,
               messageType: replyTo.messageType,
               entities: replyTo.entities,
@@ -7334,26 +7382,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Navigate to user profile screen
   void _viewUserProfile() {
-    final isSavedChat = _chatType == 'saved' ||
+    final isSavedChat = _isSavedChat ||
         _otherUserId == null ||
-        _otherUserId!.isEmpty ||
-        (_currentUserId != null && _otherUserId == _currentUserId);
-    final rawDisplayName =
-        _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? '');
-    final resolvedPeerName = isSavedChat
-        ? rawDisplayName
-        : ContactsService.resolveName(_otherUserId, rawDisplayName);
+        _otherUserId!.isEmpty;
+    final resolvedPeerName = _resolvedPeerTitle;
     final displayName = (isSavedChat ||
             resolvedPeerName == 'chat_saved_messages' ||
             resolvedPeerName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
         : resolvedPeerName;
-    final resolvedPeerAvatar = isSavedChat
-        ? (_chatAvatar ?? widget.otherUserAvatar)
-        : ContactsService.resolveAvatarUrl(
-            _otherUserId,
-            _chatAvatar ?? widget.otherUserAvatar,
-          );
+    final resolvedPeerAvatar = _resolvedPeerAvatar;
     final heroTag = _stableHeroTag;
     Navigator.push(
       context,
@@ -7380,7 +7418,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     ChatActionsHelper.openSearch(
       context: context,
       chatId: widget.chatId,
-      chatName: _chatName,
+      chatName: _resolvedPeerTitle.isNotEmpty
+          ? _resolvedPeerTitle
+          : _chatName,
       onMessageSelected: (msgId) => _scrollToMessage(msgId),
     );
   }
@@ -8236,14 +8276,29 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
         if (resolvedUrl.isEmpty) continue;
 
+        final canResolveSender = ContactsService.shouldResolveUserIdentity(
+          m.senderId,
+          senderChatId: m.senderChatId,
+          isAnonymousAdmin: m.isFromAnonymousAdmin,
+          isMirroredChannelPost: m.isMirroredChannelPost,
+          isBot: _isBot && m.senderId == _otherUserId,
+        );
+        final trackSenderName = canResolveSender
+            ? ContactsService.resolvePeerName(m.senderId, m.senderName)
+            : m.senderName;
+        final trackChatTitle = _resolvedPeerTitle.isNotEmpty
+            ? _resolvedPeerTitle
+            : widget.otherUserName;
+
         final track = PlaybackTrack(
           messageId: m.id,
           chatId: widget.chatId,
           chatType: 'private',
           mediaType: 'voice',
           mediaUrl: resolvedUrl,
-          senderName: m.senderName,
-          chatTitle: widget.otherUserName,
+          senderId: canResolveSender ? m.senderId : null,
+          senderName: trackSenderName,
+          chatTitle: trackChatTitle,
           duration: m.duration != null && m.duration! > 0
               ? Duration(seconds: m.duration!)
               : null,
@@ -8266,11 +8321,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final startIndex = _messages.indexWhere(
         (m) => m.id == startMessageId || m.localId == startMessageId);
     if (startIndex >= 0) {
+      final trackChatTitle = _resolvedPeerTitle.isNotEmpty
+          ? _resolvedPeerTitle
+          : widget.otherUserName;
       for (int i = startIndex - 1; i >= 0; i--) {
         final m = _messages[i];
         final rawUrl = m.fileUrl ?? '';
         final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
         if (resolvedUrl.isEmpty) continue;
+
+        final canResolveSender = ContactsService.shouldResolveUserIdentity(
+          m.senderId,
+          senderChatId: m.senderChatId,
+          isAnonymousAdmin: m.isFromAnonymousAdmin,
+          isMirroredChannelPost: m.isMirroredChannelPost,
+          isBot: _isBot && m.senderId == _otherUserId,
+        );
+        final trackSenderName = canResolveSender
+            ? ContactsService.resolvePeerName(m.senderId, m.senderName)
+            : m.senderName;
 
         if (m.messageType == 'voice') {
           playlist.add(PlaybackTrack(
@@ -8279,8 +8348,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             chatType: 'private',
             mediaType: 'voice',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
-            chatTitle: widget.otherUserName,
+            senderId: canResolveSender ? m.senderId : null,
+            senderName: trackSenderName,
+            chatTitle: trackChatTitle,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
             waveform: m.waveform,
           ));
@@ -8291,8 +8361,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             chatType: 'private',
             mediaType: 'video_note',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
-            chatTitle: widget.otherUserName,
+            senderId: canResolveSender ? m.senderId : null,
+            senderName: trackSenderName,
+            chatTitle: trackChatTitle,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
           ));
         }
@@ -9115,7 +9186,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        _selectedSavedPeerName ?? _selectedSavedPeerKey!,
+                        () {
+                          final key = _selectedSavedPeerKey!;
+                          for (final p in _savedPeers) {
+                            if (p.savedPeerKey == key &&
+                                p.peerType == 'user' &&
+                                ContactsService.shouldResolveUserIdentity(
+                                  p.peerId,
+                                )) {
+                              final resolved = ContactsService.resolvePeerName(
+                                p.peerId,
+                                p.title,
+                              );
+                              if (resolved.isNotEmpty) return resolved;
+                            }
+                          }
+                          return _selectedSavedPeerName ?? key;
+                        }(),
                         style: TextStyle(
                           fontSize: 12.5,
                           fontWeight: FontWeight.w600,
@@ -9231,6 +9318,22 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       separatorBuilder: (_, __) => Divider(height: 1, color: palette.divider),
       itemBuilder: (ctx, i) {
         final peer = _savedPeers[i];
+        final bool canResolvePeer = peer.peerType == 'user' &&
+            ContactsService.shouldResolveUserIdentity(peer.peerId);
+        final String peerTitle = canResolvePeer
+            ? ContactsService.resolvePeerName(peer.peerId, peer.title)
+            : peer.title;
+        final String peerAvatar = canResolvePeer
+            ? (ContactsService.resolvePeerAvatarUrl(
+                  peer.peerId,
+                  peer.avatarUrl,
+                ) ??
+                peer.avatarUrl)
+            : peer.avatarUrl;
+        final validPeerAvatar = getValidAvatarUrl(peerAvatar);
+        final avatarProvider = validPeerAvatar != null
+            ? avatarImageProvider(validPeerAvatar)
+            : null;
         return ListTile(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
@@ -9238,12 +9341,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           leading: CircleAvatar(
             radius: 22,
             backgroundColor: palette.primary.withValues(alpha: 0.16),
-            backgroundImage: peer.avatarUrl.isNotEmpty
-                ? avatarImageProvider(peer.avatarUrl)
-                : null,
-            child: peer.avatarUrl.isEmpty
+            backgroundImage: avatarProvider,
+            onBackgroundImageError: avatarProvider != null ? (_, __) {} : null,
+            child: avatarProvider == null
                 ? Text(
-                    peer.title.isNotEmpty ? peer.title[0].toUpperCase() : '?',
+                    peerTitle.isNotEmpty ? peerTitle[0].toUpperCase() : '?',
                     style: TextStyle(
                       color: palette.primary,
                       fontWeight: FontWeight.w700,
@@ -9252,7 +9354,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 : null,
           ),
           title: Text(
-            peer.title.isNotEmpty ? peer.title : peer.savedPeerKey,
+            peerTitle.isNotEmpty ? peerTitle : peer.savedPeerKey,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
@@ -9279,7 +9381,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           onTap: () {
             setState(() {
               _selectedSavedPeerKey = peer.savedPeerKey;
-              _selectedSavedPeerName = peer.title;
+              _selectedSavedPeerName = peerTitle;
               _isSavedPeersMode = false;
             });
             unawaited(_loadMessages());
@@ -9337,9 +9439,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             otherUserId: target.otherUserId,
             initialReplyMessage: message,
             initialReplyChatId: widget.chatId,
-            initialReplyChatName: _chatName.isNotEmpty
-                ? _chatName
-                : (widget.otherUserName ?? 'Чат'),
+            initialReplyChatName: _isSavedChat
+                ? context.l10n.translate('chat_saved_messages')
+                : (_resolvedPeerTitle.isNotEmpty ? _resolvedPeerTitle : 'Чат'),
           ),
         ),
       );
@@ -9371,7 +9473,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       context: context,
       messageCount: targets.length,
       chatType: isSaved ? 'saved' : 'private',
-      peerName: _chatName,
+      peerName: _resolvedPeerTitle,
       isSavedMessages: isSaved,
       canRevoke: !isSaved,
       defaultRevoke: !isSaved,

@@ -6,13 +6,14 @@ import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../screens/chat/user_profile_screen.dart';
 import '../../services/auth_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
-import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../chat/telegram_avatar_stack.dart';
 import '../design_system/theav_design_system.dart';
+import '../user/avatar_with_status.dart';
 
 /// Interactive Telegram-style Poll / Quiz widget rendered inside a message bubble.
 class PollMessageWidget extends StatefulWidget {
@@ -1025,9 +1026,20 @@ class _PollResultsBottomSheetState extends State<_PollResultsBottomSheet> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _pollData = Map<String, dynamic>.from(widget.initialPollData);
     _selectedFilterOptionId = widget.initialOptionId;
     _refreshResults();
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _refreshResults() async {
@@ -1317,40 +1329,46 @@ class _PollResultsBottomSheetState extends State<_PollResultsBottomSheet> {
                           ...voters.map((voter) {
                             final voterId =
                                 (voter['user_id'] ?? voter['id'] ?? '')
-                                    .toString();
-                            final displayName = (voter['display_name'] ??
+                                    .toString()
+                                    .trim();
+                            final isBot = voter['is_bot'] == true ||
+                                voter['is_bot'] == 1;
+                            final rawDisplayName = (voter['display_name'] ??
                                     voter['username'] ??
                                     'User')
                                 .toString()
                                 .trim();
+                            final displayName = ContactsService.resolvePeerName(
+                              voterId,
+                              rawDisplayName,
+                              isBot: isBot,
+                            );
                             final username =
                                 (voter['username'] ?? '').toString().trim();
-                            final avatarUrl = voter['avatar_url']?.toString();
-                            final validAvatar = getValidAvatarUrl(avatarUrl);
-                            final initial = displayName.isNotEmpty
-                                ? displayName.characters.first.toUpperCase()
-                                : '?';
+                            final rawAvatarUrl =
+                                voter['avatar_url']?.toString();
+                            final avatarUrl =
+                                ContactsService.resolvePeerAvatarUrl(
+                              voterId,
+                              rawAvatarUrl,
+                              isBot: isBot,
+                            );
 
                             return ListTile(
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 20,
                                 vertical: 2,
                               ),
-                              leading: CircleAvatar(
+                              leading: AvatarWithStatus(
+                                userId: voterId.isNotEmpty && voterId != '0'
+                                    ? voterId
+                                    : null,
+                                avatarUrl: avatarUrl,
+                                name: displayName,
                                 radius: 19,
-                                backgroundColor: theme.colorScheme.primary,
-                                backgroundImage: validAvatar != null
-                                    ? avatarImageProvider(validAvatar)
-                                    : null,
-                                child: validAvatar == null
-                                    ? Text(
-                                        initial,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      )
-                                    : null,
+                                isOnline: false,
+                                showDecoration: false,
+                                resolveContactOverride: false,
                               ),
                               title: Text(
                                 displayName,

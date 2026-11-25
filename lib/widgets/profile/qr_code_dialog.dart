@@ -192,24 +192,49 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
     return (raw != null && raw.isNotEmpty) ? raw : null;
   }
 
+  String get _effectiveDisplayName {
+    if (ContactsService.shouldResolveUserIdentity(widget.userId)) {
+      return ContactsService.resolvePeerName(
+        widget.userId,
+        widget.displayName,
+      );
+    }
+    return widget.displayName;
+  }
+
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _setMaxBrightness();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final effectiveUrl = _effectiveAvatarUrl;
+    final effectiveName = _effectiveDisplayName;
+    final isDark = _loadedIsDark ?? Theme.of(context).brightness == Brightness.dark;
+    if (_loadedAvatarUrl != effectiveUrl || _loadedDisplayName != effectiveName) {
+      _loadedAvatarUrl = effectiveUrl;
+      _loadedDisplayName = effectiveName;
+      _refreshAvatarGraphics(effectiveUrl: effectiveUrl, isDark: isDark);
+    }
+    setState(() {});
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final String? effectiveUrl = _effectiveAvatarUrl;
+    final String effectiveName = _effectiveDisplayName;
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     if (!_hasLoadedAvatar ||
         _loadedAvatarUrl != effectiveUrl ||
-        _loadedDisplayName != widget.displayName ||
+        _loadedDisplayName != effectiveName ||
         (effectiveUrl == null && _loadedIsDark != isDark)) {
       _hasLoadedAvatar = true;
       _loadedAvatarUrl = effectiveUrl;
-      _loadedDisplayName = widget.displayName;
+      _loadedDisplayName = effectiveName;
       _loadedIsDark = isDark;
       _refreshAvatarGraphics(effectiveUrl: effectiveUrl, isDark: isDark);
     }
@@ -222,9 +247,10 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
         oldWidget.userId != widget.userId ||
         oldWidget.displayName != widget.displayName) {
       final String? effectiveUrl = _effectiveAvatarUrl;
+      final String effectiveName = _effectiveDisplayName;
       final bool isDark = Theme.of(context).brightness == Brightness.dark;
       _loadedAvatarUrl = effectiveUrl;
-      _loadedDisplayName = widget.displayName;
+      _loadedDisplayName = effectiveName;
       _loadedIsDark = isDark;
       _refreshAvatarGraphics(effectiveUrl: effectiveUrl, isDark: isDark);
     }
@@ -241,7 +267,7 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
   Future<void> _loadFallbackInitials(int gen, {required bool isDark}) async {
     try {
       final bytes =
-          await _createInitialsAvatarBytes(widget.displayName, isDark: isDark);
+          await _createInitialsAvatarBytes(_effectiveDisplayName, isDark: isDark);
       if (!mounted || gen != _avatarLoadGen) return;
       setState(() {
         _fallbackAvatarBytes = bytes;
@@ -308,6 +334,7 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _avatarLoadGen++;
     _clearAvatarStream();
     _restoreBrightness();
@@ -448,9 +475,9 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
               const SizedBox(height: 20),
 
               // Имя пользователя (если задано)
-              if (widget.displayName.isNotEmpty) ...[
+              if (_effectiveDisplayName.isNotEmpty) ...[
                 Text(
-                  widget.displayName,
+                  _effectiveDisplayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

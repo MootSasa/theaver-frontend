@@ -3,9 +3,11 @@ import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
+import '../../services/contacts_service.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
 import '../../widgets/settings/user_search_picker_dialog.dart';
+import '../../widgets/user/avatar_with_status.dart';
 
 /// Экран детальной настройки одного правила приватности.
 /// Выбор видимости + исключения (всегда/никогда для конкретных пользователей).
@@ -133,16 +135,36 @@ class _PrivacyDetailScreenState extends State<PrivacyDetailScreen> {
   }
 
   Widget _exceptionTile(PrivacyException e, String type) {
-    return ListTile(
-      leading: CircleAvatar(child: Text(e.targetUserName.isNotEmpty ? e.targetUserName[0] : '?')),
-      title: Text(e.targetUserName),
-      trailing: IconButton(
-        icon: const Icon(Icons.close, size: 20),
-        onPressed: () async {
-          await context.read<PrivacySettingsProvider>().removeException(e.id, widget.field);
-          _loadExceptions();
-        },
-      ),
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) {
+        final resolvedName = ContactsService.resolvePeerName(
+          e.targetUserId,
+          e.targetUserName,
+        );
+        final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+          e.targetUserId,
+          e.targetUserAvatarUrl,
+        );
+        return ListTile(
+          leading: AvatarWithStatus(
+            userId: e.targetUserId,
+            avatarUrl: resolvedAvatar,
+            name: resolvedName,
+            radius: 20,
+          ),
+          title: Text(resolvedName),
+          trailing: IconButton(
+            icon: const Icon(Icons.close, size: 20),
+            onPressed: () async {
+              await context
+                  .read<PrivacySettingsProvider>()
+                  .removeException(e.id, widget.field);
+              _loadExceptions();
+            },
+          ),
+        );
+      },
     );
   }
 

@@ -5,6 +5,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../common/peer_badges_widget.dart';
@@ -74,12 +75,17 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     if (widget.debugChatsOverride != null) {
       _chats = _parseOverrideChats(widget.debugChatsOverride!);
       _isLoading = false;
     } else {
       unawaited(_fetchChats());
     }
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -97,6 +103,7 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchController.dispose();
     super.dispose();
   }
@@ -159,18 +166,27 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
   }
 
   String _chatDisplayTitle(BuildContext context, Chat chat) {
-    if (chat.chatType.toLowerCase().trim() == 'saved') {
+    final type = chat.chatType.toLowerCase().trim();
+    if (type == 'saved') {
       return context.trOr('miniapp_chat_saved_favorites', 'Избранное');
     }
-    if (chat.name.trim().isNotEmpty) return chat.name.trim();
-    if (chat.username != null && chat.username!.trim().isNotEmpty) {
-      return '@${chat.username!.trim()}';
+    final rawTitle = chat.name.trim().isNotEmpty
+        ? chat.name.trim()
+        : (chat.username != null && chat.username!.trim().isNotEmpty
+            ? '@${chat.username!.trim()}'
+            : context.trOr(
+                'miniapp_chat_fallback_name',
+                'Чат {id}',
+                {'id': chat.id},
+              ));
+    if (type == 'private' && !chat.isBot) {
+      return ContactsService.resolvePeerName(
+        chat.otherUserId,
+        rawTitle,
+        isBot: chat.isBot,
+      );
     }
-    return context.trOr(
-      'miniapp_chat_fallback_name',
-      'Чат {id}',
-      {'id': chat.id},
-    );
+    return rawTitle;
   }
 
   String _chatSubtitle(BuildContext context, Chat chat) {
@@ -211,8 +227,15 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
       );
     }
 
-    final validUrl = getValidAvatarUrl(chat.avatarUrl);
-    final provider = validUrl != null ? avatarImageProvider(chat.avatarUrl) : null;
+    final rawAvatar = (type == 'private' && !chat.isBot)
+        ? ContactsService.resolvePeerAvatarUrl(
+            chat.otherUserId,
+            chat.avatarUrl,
+            isBot: chat.isBot,
+          )
+        : chat.avatarUrl;
+    final validUrl = getValidAvatarUrl(rawAvatar);
+    final provider = validUrl != null ? avatarImageProvider(rawAvatar) : null;
     final initial = title.isNotEmpty
         ? String.fromCharCode(title.runes.first).toUpperCase()
         : '?';
@@ -245,8 +268,11 @@ class _MiniAppChatPickerSheetState extends State<MiniAppChatPickerSheet> {
       if (!_matchesChatTypeFilter(chat)) return false;
       if (query.isEmpty) return true;
       final title = _chatDisplayTitle(context, chat).toLowerCase();
+      final rawName = chat.name.toLowerCase();
       final uname = (chat.username ?? '').toLowerCase();
-      return title.contains(query) || uname.contains(query);
+      return title.contains(query) ||
+          rawName.contains(query) ||
+          uname.contains(query);
     }).toList();
 
     return SizedBox(

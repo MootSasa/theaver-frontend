@@ -3,6 +3,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../models/community_models.dart';
 import '../../screens/settings/profile_screen.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../common/peer_badges_widget.dart';
 import '../design_system/theav_design_system.dart';
@@ -65,22 +66,54 @@ class _CommunityMembersPaneState extends State<CommunityMembersPane> {
   String _query = '';
 
   @override
+  void initState() {
+    super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchCtrl.dispose();
     super.dispose();
   }
 
+  String _resolveMemberName(
+    CommunityMember m, {
+    String emptyFallback = '',
+  }) {
+    final resolved = ContactsService.resolvePeerName(
+      m.userId,
+      m.effectiveDisplayName,
+      isBot: m.isBot,
+    ).trim();
+    if (resolved.isNotEmpty) return resolved;
+    if (m.username.trim().isNotEmpty) return m.username.trim();
+    return emptyFallback;
+  }
+
+  String? _resolveMemberAvatar(CommunityMember m) {
+    return ContactsService.resolvePeerAvatarUrl(
+      m.userId,
+      m.avatarUrl,
+      isBot: m.isBot,
+    );
+  }
+
   void _openMemberProfile(CommunityMember m) {
-    final name = m.displayName.isNotEmpty
-        ? m.displayName
-        : (m.username.isNotEmpty ? m.username : 'Пользователь');
+    final name = _resolveMemberName(m, emptyFallback: 'Пользователь');
+    final avatarUrl = _resolveMemberAvatar(m);
     Navigator.of(context).push(
       SwipeBackPageRoute(
         builder: (_) => ProfileScreen(
           entityType: ProfileEntityType.user,
           userId: m.userId,
           initialName: name,
-          initialAvatarUrl: m.avatarUrl,
+          initialAvatarUrl: avatarUrl,
           initialIsOnline: m.isOnline,
         ),
       ),
@@ -95,7 +128,12 @@ class _CommunityMembersPaneState extends State<CommunityMembersPane> {
     final filtered = qLower.isEmpty
         ? widget.members
         : widget.members.where((m) {
-            return m.displayName.toLowerCase().contains(qLower) ||
+            final resolvedName = _resolveMemberName(m).toLowerCase();
+            return resolvedName.contains(qLower) ||
+                m.effectiveDisplayName.toLowerCase().contains(qLower) ||
+                m.displayName.toLowerCase().contains(qLower) ||
+                (m.originalDisplayName?.toLowerCase().contains(qLower) ?? false) ||
+                m.nickname.toLowerCase().contains(qLower) ||
                 m.username.toLowerCase().contains(qLower);
           }).toList();
     final sections = groupMembersByHoistedRoles(
@@ -184,9 +222,13 @@ class _CommunityMembersPaneState extends State<CommunityMembersPane> {
                               '${section.title.toUpperCase()} — ${section.members.length}',
                           dividerIndent: 58,
                           children: section.members.map((m) {
-                            final name = m.displayName.isNotEmpty
-                                ? m.displayName
-                                : (m.username.isNotEmpty ? m.username : 'U');
+                            final name = _resolveMemberName(m, emptyFallback: 'U');
+                            final avatarUrl = _resolveMemberAvatar(m);
+                            final canResolveIdentity =
+                                ContactsService.shouldResolveUserIdentity(
+                              m.userId,
+                              isBot: m.isBot,
+                            );
                             final topRole = highestColoredRoleForMember(
                               m,
                               widget.community.roles,
@@ -203,13 +245,14 @@ class _CommunityMembersPaneState extends State<CommunityMembersPane> {
                               ),
                               leading: AvatarWithStatus(
                                 userId: m.userId,
-                                avatarUrl: m.avatarUrl,
+                                avatarUrl: avatarUrl,
                                 name: name,
                                 radius: 18,
                                 isOnline: m.isOnline,
                                 decorationOverride: cust?.avatarDecoration,
                                 showDecoration: true,
                                 animateDecoration: false,
+                                resolveContactOverride: canResolveIdentity,
                               ),
                               titleWidget: Row(
                                 children: [

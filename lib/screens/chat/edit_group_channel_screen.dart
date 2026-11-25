@@ -10,6 +10,7 @@ import '../../models/avatar_editor_models.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_instant_cache.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
 import '../../utils/haptic_utils.dart';
@@ -153,6 +154,7 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     _reactionSettings = widget.initialReactionSettings ?? const ReactionSettings();
     _inviteLink = widget.inviteLink;
     _myRole = widget.canEditAdminSettings ? 'admin' : 'member';
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
 
     _usernameController.addListener(() {
       if (!_isApplyingServerSettings) {
@@ -300,8 +302,13 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     } catch (_) {}
   }
 
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _nameController.dispose();
     _descriptionController.dispose();
     _usernameController.dispose();
@@ -864,62 +871,99 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     final picked = await showTheavModalSheet<ChatParticipant>(
       context: context,
       title: 'Администраторы',
-      builder: (ctx) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (admins.isNotEmpty)
-              TheavInsetGroup(
-                children: [
-                  for (final admin in admins)
-                    TheavListRow(
-                      leading: AvatarWithStatus(
-                        userId: admin.id,
-                        avatarUrl: admin.avatarUrl,
-                        name: admin.displayName,
-                        radius: 20,
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) => SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (admins.isNotEmpty)
+                TheavInsetGroup(
+                  children: [
+                    for (final admin in admins)
+                      Builder(
+                        builder: (_) {
+                          final rawName = admin.displayName.isNotEmpty
+                              ? admin.displayName
+                              : '@${admin.username}';
+                          final adminName = ContactsService.resolvePeerName(
+                            admin.id,
+                            rawName,
+                            isBot: admin.isBot,
+                          );
+                          final adminAvatar =
+                              ContactsService.resolvePeerAvatarUrl(
+                            admin.id,
+                            admin.avatarUrl,
+                            isBot: admin.isBot,
+                          );
+                          return TheavListRow(
+                            leading: AvatarWithStatus(
+                              userId: admin.id,
+                              avatarUrl: adminAvatar,
+                              name: adminName,
+                              radius: 20,
+                              resolveContactOverride: !admin.isBot,
+                            ),
+                            title: adminName,
+                            subtitle: admin.adminTitle.isNotEmpty
+                                ? admin.adminTitle
+                                : (admin.role == 'owner'
+                                    ? 'Владелец'
+                                    : 'Администратор'),
+                            showChevron: true,
+                            onTap: () => Navigator.pop(ctx, admin),
+                          );
+                        },
                       ),
-                      title: admin.displayName.isNotEmpty
-                          ? admin.displayName
-                          : '@${admin.username}',
-                      subtitle: admin.adminTitle.isNotEmpty
-                          ? admin.adminTitle
-                          : (admin.role == 'owner'
-                              ? 'Владелец'
-                              : 'Администратор'),
-                      showChevron: true,
-                      onTap: () => Navigator.pop(ctx, admin),
-                    ),
-                ],
-              ),
-            if (canAddAdmins && regularMembers.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              TheavInsetGroup(
-                header: 'НАЗНАЧИТЬ ИЗ УЧАСТНИКОВ',
-                children: [
-                  for (final member in regularMembers)
-                    TheavListRow(
-                      leading: AvatarWithStatus(
-                        userId: member.id,
-                        avatarUrl: member.avatarUrl,
-                        name: member.displayName,
-                        radius: 19,
+                  ],
+                ),
+              if (canAddAdmins && regularMembers.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                TheavInsetGroup(
+                  header: 'НАЗНАЧИТЬ ИЗ УЧАСТНИКОВ',
+                  children: [
+                    for (final member in regularMembers)
+                      Builder(
+                        builder: (_) {
+                          final rawName = member.displayName.isNotEmpty
+                              ? member.displayName
+                              : '@${member.username}';
+                          final memberName = ContactsService.resolvePeerName(
+                            member.id,
+                            rawName,
+                            isBot: member.isBot,
+                          );
+                          final memberAvatar =
+                              ContactsService.resolvePeerAvatarUrl(
+                            member.id,
+                            member.avatarUrl,
+                            isBot: member.isBot,
+                          );
+                          return TheavListRow(
+                            leading: AvatarWithStatus(
+                              userId: member.id,
+                              avatarUrl: memberAvatar,
+                              name: memberName,
+                              radius: 19,
+                              resolveContactOverride: !member.isBot,
+                            ),
+                            title: memberName,
+                            trailing: iconoir.Plus(
+                              width: 18,
+                              height: 18,
+                              color: palette.primary,
+                            ),
+                            onTap: () => Navigator.pop(ctx, member),
+                          );
+                        },
                       ),
-                      title: member.displayName.isNotEmpty
-                          ? member.displayName
-                          : '@${member.username}',
-                      trailing: iconoir.Plus(
-                        width: 18,
-                        height: 18,
-                        color: palette.primary,
-                      ),
-                      onTap: () => Navigator.pop(ctx, member),
-                    ),
-                ],
-              ),
+                  ],
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -968,7 +1012,17 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
         final aIsAdmin = a.role == 'admin' ? 0 : 1;
         final bIsAdmin = b.role == 'admin' ? 0 : 1;
         if (aIsAdmin != bIsAdmin) return aIsAdmin.compareTo(bIsAdmin);
-        return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
+        final aName = ContactsService.resolvePeerName(
+          a.id,
+          a.displayName.isNotEmpty ? a.displayName : '@${a.username}',
+          isBot: a.isBot,
+        ).toLowerCase();
+        final bName = ContactsService.resolvePeerName(
+          b.id,
+          b.displayName.isNotEmpty ? b.displayName : '@${b.username}',
+          isBot: b.isBot,
+        ).toLowerCase();
+        return aName.compareTo(bName);
       });
 
     if (candidates.isEmpty) {
@@ -979,38 +1033,61 @@ class _EditGroupChannelScreenState extends State<EditGroupChannelScreen> {
     final picked = await showTheavModalSheet<ChatParticipant>(
       context: context,
       title: 'Передать права владельца',
-      builder: (ctx) => SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-        child: TheavInsetGroup(
-          children: [
-            for (final member in candidates)
-              TheavListRow(
-                leading: AvatarWithStatus(
-                  userId: member.id,
-                  avatarUrl: member.avatarUrl,
-                  name: member.displayName,
-                  radius: 20,
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) => SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+          child: TheavInsetGroup(
+            children: [
+              for (final member in candidates)
+                Builder(
+                  builder: (_) {
+                    final rawName = member.displayName.isNotEmpty
+                        ? member.displayName
+                        : '@${member.username}';
+                    final memberName = ContactsService.resolvePeerName(
+                      member.id,
+                      rawName,
+                      isBot: member.isBot,
+                    );
+                    final memberAvatar = ContactsService.resolvePeerAvatarUrl(
+                      member.id,
+                      member.avatarUrl,
+                      isBot: member.isBot,
+                    );
+                    return TheavListRow(
+                      leading: AvatarWithStatus(
+                        userId: member.id,
+                        avatarUrl: memberAvatar,
+                        name: memberName,
+                        radius: 20,
+                        resolveContactOverride: !member.isBot,
+                      ),
+                      title: memberName,
+                      subtitle: member.role == 'admin'
+                          ? (member.adminTitle.isNotEmpty
+                              ? member.adminTitle
+                              : 'Администратор')
+                          : (widget.isChannel ? 'Подписчик' : 'Участник'),
+                      showChevron: true,
+                      onTap: () => Navigator.pop(ctx, member),
+                    );
+                  },
                 ),
-                title: member.displayName.isNotEmpty
-                    ? member.displayName
-                    : '@${member.username}',
-                subtitle: member.role == 'admin'
-                    ? (member.adminTitle.isNotEmpty
-                        ? member.adminTitle
-                        : 'Администратор')
-                    : (widget.isChannel ? 'Подписчик' : 'Участник'),
-                showChevron: true,
-                onTap: () => Navigator.pop(ctx, member),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
     if (picked == null || !mounted) return;
 
-    final candidateName = picked.displayName.isNotEmpty
-        ? picked.displayName
-        : '@${picked.username}';
+    final candidateName = ContactsService.resolvePeerName(
+      picked.id,
+      picked.displayName.isNotEmpty
+          ? picked.displayName
+          : '@${picked.username}',
+      isBot: picked.isBot,
+    );
     final confirmed = await showTheavDialog<bool>(
       context: context,
       title: 'Передать права владельца?',
