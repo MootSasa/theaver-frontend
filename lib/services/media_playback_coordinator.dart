@@ -15,6 +15,7 @@ import 'deep_link_service.dart';
 import 'media_cache_manager.dart';
 import 'tiling_layout_controller.dart';
 import 'video_note_playback_service.dart';
+import 'video_pip_service.dart';
 import 'voice_playback_service.dart';
 
 /// Single unified track item for voice messages and video notes («кружочки»).
@@ -363,11 +364,14 @@ class MediaPlaybackCoordinator with ChangeNotifier {
   }
 
   /// Stops all media notes and clears active session and queue.
-  Future<void> stopAll() async {
+  Future<void> stopAll({bool stopVideoPip = true}) async {
     _activeTrack = null;
     _queue.clear();
     await VoicePlaybackService().stopVoice();
     VideoNotePlaybackService().stopActivePlayback();
+    if (stopVideoPip) {
+      await VideoPipService.instance.pause();
+    }
     notifyListeners();
   }
 

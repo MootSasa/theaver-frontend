@@ -11,8 +11,6 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:photo_view/photo_view.dart';
-import 'package:photo_view/photo_view_gallery.dart';
 import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -39,6 +37,7 @@ import 'package:theaver/widgets/chat/message_reply_info.dart';
 import 'package:theaver/widgets/chat/suggested_photo_bubble_card.dart';
 import 'package:theaver/widgets/community/community_members_panel.dart';
 import 'package:theaver/widgets/design_system/theav_design_system.dart';
+import 'package:theaver/widgets/media_viewer/theav_media_viewer.dart';
 import 'package:theaver/widgets/message/group_message_avatar_row.dart';
 import 'package:theaver/widgets/profile/avatar_gallery_viewer.dart';
 import 'package:theaver/widgets/profile/expandable_avatar.dart';
@@ -1430,11 +1429,15 @@ void main() {
         }
         expect(tester.takeException(), isNull);
         expect(find.byType(AvatarGalleryViewer), findsOneWidget);
-        expect(find.byType(PhotoViewGallery), findsOneWidget);
+        expect(find.byType(TheavMediaViewer), findsOneWidget);
 
-        final PhotoView photoView =
-            tester.widget<PhotoView>(find.byType(PhotoView));
-        expect(photoView.initialScale, PhotoViewComputedScale.contained);
+        final Image fullImage = tester.widget<Image>(
+          find.descendant(
+            of: find.byType(TheavMediaViewer),
+            matching: find.byType(Image),
+          ).first,
+        );
+        expect(fullImage.fit, BoxFit.contain);
 
         // Close fullscreen viewer back to the square profile header cleanly.
         await tester.tap(find.byIcon(Icons.arrow_back));

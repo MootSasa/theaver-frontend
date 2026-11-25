@@ -51,6 +51,7 @@ import 'utils/swipe_back_route.dart';
 import 'services/tiling_layout_controller.dart';
 import 'widgets/bot/mini_app_webview_sheet.dart';
 import 'widgets/chat/floating_video_note_overlay.dart';
+import 'widgets/media_viewer/floating_video_pip_overlay.dart';
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:audio_session/audio_session.dart';
@@ -291,6 +292,7 @@ class TheaverApp extends StatelessWidget {
                       onRestoreCall: () => _restoreActiveCall(context),
                     ),
                     const FloatingVideoNoteOverlay(),
+                    const FloatingVideoPipOverlay(),
                   ],
                 ),
               );

@@ -80,6 +80,8 @@ import '../../services/tiling_layout_controller.dart';
 import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../models/media_album.dart';
+import '../../models/theav_media_item.dart';
+import '../../widgets/media_viewer/theav_media_viewer.dart';
 import '../../widgets/chat/chat_history_calendar.dart';
 import '../../widgets/chat/channel_post_card.dart';
 import '../../widgets/chat/channel_bottom_capsule_bar.dart';
@@ -5401,6 +5403,62 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
   }
 
+  void _openChatMediaViewer(
+    Message targetMessage, {
+    String? localFilePath,
+  }) {
+    final timeline = buildChatMediaTimeline(
+      _messages,
+      isReversed: true,
+      hasProtectedContent: _hasProtectedContent,
+    );
+    int initialIndex = timeline.indexWhere(
+      (it) =>
+          it.messageId == targetMessage.id ||
+          (targetMessage.localId != null && it.id == targetMessage.localId),
+    );
+    final List<TheavMediaItem> items;
+    if (initialIndex == -1 || timeline.isEmpty) {
+      items = <TheavMediaItem>[
+        TheavMediaItem.fromMessage(
+          targetMessage,
+          localFilePathOverride: localFilePath,
+          hasProtectedContent: _hasProtectedContent,
+        ),
+      ];
+      initialIndex = 0;
+    } else {
+      items = timeline;
+    }
+
+    TheavMediaViewer.open<void>(
+      context,
+      items: items,
+      initialIndex: initialIndex,
+      config: TheavMediaViewerConfig(
+        onJumpToMessage: (viewerCtx, item) {
+          Navigator.of(viewerCtx).pop();
+          final mid = item.messageId;
+          if (mid != null && mid.isNotEmpty) {
+            unawaited(_scrollToMessage(mid));
+          }
+        },
+        onForwardItem: _hasProtectedContent
+            ? null
+            : (viewerCtx, item) async {
+                final mid = item.messageId;
+                if (mid != null && mid.isNotEmpty) {
+                  await ForwardChatPickerSheet.show(
+                    viewerCtx,
+                    fromChatId: widget.channelId,
+                    messageIds: <String>[mid],
+                  );
+                }
+              },
+      ),
+    );
+  }
+
   Widget _buildChannelFeedItem(FeedItem item, int feedIndex) {
     final MediaAlbum? album = item is FeedAlbumItem ? item.album : null;
     final Message message = _feedItemPrimaryMessage(item);
@@ -5542,6 +5600,12 @@ class _ChannelScreenState extends State<ChannelScreen>
         }
         _openFile(url, name, type);
       },
+      onMediaTap: _isSelectionMode
+          ? null
+          : (post, {localFilePath}) => _openChatMediaViewer(
+                post,
+                localFilePath: localFilePath,
+              ),
       onRetry: (msg) => _retryMessage(msg),
       hasProtectedContent: _hasProtectedContent,
       onInsertInlineQuery: _canPostInChannel ? _insertInlineQueryText : null,

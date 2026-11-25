@@ -10,19 +10,23 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_media_item.dart';
 import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/dm_parity_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../services/media_cache_manager.dart';
 import '../../services/media_playback_coordinator.dart';
 import '../../services/voice_playback_service.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
+import '../chat/sticker_item_widget.dart';
 import '../design_system/theav_design_system.dart';
+import '../media_viewer/theav_media_viewer.dart';
+import '../message/blurred_media_placeholder.dart';
 import '../user/avatar_with_status.dart';
-import 'avatar_gallery_viewer.dart';
 import 'profile_section_pill.dart';
 
 /// Модель участника группы/канала для вкладки «Участники».
@@ -88,6 +92,7 @@ class ProfileSectionPageContent extends StatelessWidget {
   final List<ProfileMemberItem> members;
   final List<CommonGroupItem> commonGroups;
   final List<DbMessage> mediaMessages;
+  final List<DbMessage> gifMessages;
   final List<DbMessage> fileMessages;
   final List<DbMessage> linkMessages;
   final List<DbMessage> voiceMessages;
@@ -116,6 +121,7 @@ class ProfileSectionPageContent extends StatelessWidget {
     this.members = const [],
     this.commonGroups = const [],
     this.mediaMessages = const [],
+    this.gifMessages = const [],
     this.fileMessages = const [],
     this.linkMessages = const [],
     this.voiceMessages = const [],
@@ -155,6 +161,8 @@ class ProfileSectionPageContent extends StatelessWidget {
             );
           case ProfileSectionType.media:
             return _buildMediaTab(context);
+          case ProfileSectionType.gifs:
+            return _buildGifsTab(context);
           case ProfileSectionType.files:
             return _buildFilesTab(context);
           case ProfileSectionType.links:
@@ -573,8 +581,23 @@ class ProfileSectionPageContent extends StatelessWidget {
   }
 
   // ============================================================
-  // 2. Вкладка «Медиа» (сетка 3xN)
+  // 2. Вкладка «Медиа» (сетка 3xN, фото + видео без BackdropFilter)
   // ============================================================
+
+  DbMessage? _findDbMessageForViewerItem(
+    List<DbMessage> source,
+    TheavMediaItem item,
+  ) {
+    final targetId = item.messageId ?? item.id;
+    for (final m in source) {
+      if ((m.serverId ?? m.localId) == targetId ||
+          m.localId == targetId ||
+          m.serverId == targetId) {
+        return m;
+      }
+    }
+    return null;
+  }
 
   Widget _buildMediaTab(BuildContext context) {
     if (mediaMessages.isEmpty) {
@@ -587,10 +610,14 @@ class ProfileSectionPageContent extends StatelessWidget {
     }
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final imageUrls = mediaMessages
-        .where((m) => m.messageType == 'image' && m.fileUrl != null)
-        .map((m) => AppConfig.resolveMediaUrl(m.fileUrl!) ?? m.fileUrl!)
-        .toList();
+    final viewerItems = mediaMessages
+        .map(
+          (m) => TheavMediaItem.fromDbMessage(
+            m,
+            chatTitle: chatTitle,
+          ),
+        )
+        .toList(growable: false);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
@@ -607,24 +634,30 @@ class ProfileSectionPageContent extends StatelessWidget {
         ),
         itemBuilder: (context, index) {
           final msg = mediaMessages[index];
-          final rawUrl = msg.fileUrl ?? '';
-          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-          final isVideo = msg.messageType == 'video';
+          final item = viewerItems[index];
+          final resolvedUrl = item.resolvedUrl;
+          final isVideo = item.kind == TheavMediaKind.video;
 
           return GestureDetector(
             onTap: () {
               HapticUtils.tap();
-              if (!isVideo && imageUrls.isNotEmpty) {
-                final imgIdx = imageUrls.indexOf(resolvedUrl);
-                AvatarGalleryViewer.open(
-                  context,
-                  avatarUrls: imageUrls,
-                  initialIndex: imgIdx >= 0 ? imgIdx : 0,
-                  displayName: chatTitle,
-                );
-              } else {
-                _showMessageItemSheet(context, msg, resolvedUrl: resolvedUrl);
-              }
+              TheavMediaViewer.open<void>(
+                context,
+                items: viewerItems,
+                initialIndex: index,
+                config: TheavMediaViewerConfig(
+                  onJumpToMessage: onJumpToMessage != null
+                      ? (viewerCtx, jumped) {
+                          Navigator.of(viewerCtx).pop();
+                          final match = _findDbMessageForViewerItem(
+                            mediaMessages,
+                            jumped,
+                          );
+                          if (match != null) onJumpToMessage!(match);
+                        }
+                      : null,
+                ),
+              );
             },
             onSecondaryTapUp: (details) {
               HapticUtils.selection();
@@ -642,68 +675,291 @@ class ProfileSectionPageContent extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Container(
-                  color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
-                  child: resolvedUrl.isNotEmpty && !isVideo
-                      ? CachedNetworkImage(
-                          imageUrl: resolvedUrl,
-                          fit: BoxFit.cover,
-                          fadeInDuration: Duration.zero,
-                          fadeOutDuration: Duration.zero,
-                          errorWidget: (_, __, ___) => Center(
-                            child: iconoir.MediaImage(
-                              width: 24,
-                              height: 24,
-                              color: isDark ? Colors.white38 : Colors.black38,
-                            ),
-                          ),
-                        )
-                      : Center(
-                          child: iconoir.VideoCamera(
-                            width: 28,
-                            height: 28,
-                            color: isDark ? Colors.white70 : Colors.black54,
-                          ),
-                        ),
+                Hero(
+                  tag: item.heroTag,
+                  child: Container(
+                    color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                    child: _buildSharedGridThumb(
+                      item: item,
+                      isDark: isDark,
+                    ),
+                  ),
                 ),
                 if (isVideo)
                   Positioned(
                     left: 6,
                     bottom: 6,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.48),
-                            borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xA6000000),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const iconoir.Play(
+                            width: 11,
+                            height: 11,
+                            color: Colors.white,
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const iconoir.Play(
-                                width: 12,
-                                height: 12,
-                                color: Colors.white,
-                              ),
-                              const SizedBox(width: 3),
-                              Text(
-                                _extractDurationText(msg) ??
-                                    _tr(context, 'chat_video', 'Видео'),
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
+                          const SizedBox(width: 3),
+                          Text(
+                            _extractDurationText(msg) ??
+                                _tr(context, 'chat_video', 'Видео'),
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSharedGridThumb({
+    required TheavMediaItem item,
+    required bool isDark,
+  }) {
+    final resolvedUrl = item.resolvedUrl;
+    final cachedFile = resolvedUrl.isNotEmpty
+        ? MediaCacheManager.instance.getCachedFileSync(resolvedUrl)
+        : null;
+
+    if (item.kind == TheavMediaKind.photo) {
+      if (cachedFile != null) {
+        return Image.file(
+          cachedFile,
+          fit: BoxFit.cover,
+          cacheWidth: 360,
+          filterQuality: FilterQuality.low,
+          gaplessPlayback: true,
+        );
+      }
+      if (resolvedUrl.startsWith('http://') ||
+          resolvedUrl.startsWith('https://')) {
+        return CachedNetworkImage(
+          imageUrl: resolvedUrl,
+          fit: BoxFit.cover,
+          memCacheWidth: 360,
+          filterQuality: FilterQuality.low,
+          fadeInDuration: Duration.zero,
+          fadeOutDuration: Duration.zero,
+          errorWidget: (_, __, ___) => Center(
+            child: iconoir.MediaImage(
+              width: 24,
+              height: 24,
+              color: isDark ? Colors.white38 : Colors.black38,
+            ),
+          ),
+        );
+      }
+      return Center(
+        child: iconoir.MediaImage(
+          width: 24,
+          height: 24,
+          color: isDark ? Colors.white38 : Colors.black38,
+        ),
+      );
+    }
+
+    // Video thumbnail chain: extracted first frame -> thumbUrl -> thumbBase64 -> icon
+    if (cachedFile != null) {
+      final firstFrame = MediaCacheManager.instance
+          .getCachedVideoThumbnailSync(cachedFile.path);
+      if (firstFrame != null) {
+        return Image.memory(
+          firstFrame,
+          fit: BoxFit.cover,
+          cacheWidth: 360,
+          filterQuality: FilterQuality.low,
+          gaplessPlayback: true,
+        );
+      }
+    }
+    final resolvedThumb = item.resolvedThumbUrl;
+    if (resolvedThumb != null && resolvedThumb.startsWith('http')) {
+      return CachedNetworkImage(
+        imageUrl: resolvedThumb,
+        fit: BoxFit.cover,
+        memCacheWidth: 360,
+        filterQuality: FilterQuality.low,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        errorWidget: (_, __, ___) => Center(
+          child: iconoir.VideoCamera(
+            width: 26,
+            height: 26,
+            color: isDark ? Colors.white60 : Colors.black54,
+          ),
+        ),
+      );
+    }
+    if (item.thumbBase64 != null && item.thumbBase64!.isNotEmpty) {
+      return BlurredMediaPlaceholder(
+        thumbBase64: item.thumbBase64,
+        fit: BoxFit.cover,
+      );
+    }
+    return Center(
+      child: iconoir.VideoCamera(
+        width: 28,
+        height: 28,
+        color: isDark ? Colors.white70 : Colors.black54,
+      ),
+    );
+  }
+
+  // ============================================================
+  // 2b. Вкладка «GIF» (сетка 3xN)
+  // ============================================================
+
+  Widget _buildGifsTab(BuildContext context) {
+    if (gifMessages.isEmpty) {
+      return _buildEmptyState(
+        context,
+        iconBuilder: (color, size) => Icon(
+          Icons.gif_box_outlined,
+          color: color,
+          size: size,
+        ),
+        title: _tr(context, 'profile_gifs_empty_title', 'GIF пока нет'),
+        subtitle: _tr(
+          context,
+          'profile_gifs_empty_subtitle',
+          'Отправленные в чате GIF-анимации появятся здесь',
+        ),
+      );
+    }
+
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final viewerItems = gifMessages
+        .map(
+          (m) => TheavMediaItem.fromDbMessage(
+            m,
+            heroTagOverride: 'profile_gif_${m.serverId ?? m.localId}',
+            chatTitle: chatTitle,
+          ),
+        )
+        .toList(growable: false);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        itemCount: gifMessages.length,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 2,
+          mainAxisSpacing: 2,
+          childAspectRatio: 1.0,
+        ),
+        itemBuilder: (context, index) {
+          final msg = gifMessages[index];
+          final item = viewerItems[index];
+          final resolvedUrl = item.resolvedUrl;
+          final resolvedThumb = item.resolvedThumbUrl;
+
+          return GestureDetector(
+            onTap: () {
+              HapticUtils.tap();
+              TheavMediaViewer.open<void>(
+                context,
+                items: viewerItems,
+                initialIndex: index,
+                config: TheavMediaViewerConfig(
+                  onJumpToMessage: onJumpToMessage != null
+                      ? (viewerCtx, jumped) {
+                          Navigator.of(viewerCtx).pop();
+                          final match = _findDbMessageForViewerItem(
+                            gifMessages,
+                            jumped,
+                          );
+                          if (match != null) onJumpToMessage!(match);
+                        }
+                      : null,
+                ),
+              );
+            },
+            onSecondaryTapUp: (details) {
+              HapticUtils.selection();
+              _showMessageContextMenuAtPosition(
+                context,
+                details.globalPosition,
+                msg,
+                resolvedUrl: resolvedUrl,
+              );
+            },
+            onLongPress: () {
+              HapticUtils.selection();
+              _showMessageItemSheet(context, msg, resolvedUrl: resolvedUrl);
+            },
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Hero(
+                  tag: item.heroTag,
+                  child: Container(
+                    color: isDark
+                        ? const Color(0xFF2C2C2E)
+                        : const Color(0xFFE5E5EA),
+                    child: !item.isVideoBackedGif && resolvedUrl.isNotEmpty
+                        ? ControlledAnimatedNetworkImage(
+                            url: resolvedUrl,
+                            fit: BoxFit.cover,
+                            cacheWidth: 320,
+                            filterQuality: FilterQuality.low,
+                            isAnimatedWebpOrGif: true,
+                            animate: true,
+                          )
+                        : (resolvedThumb != null && resolvedThumb.startsWith('http')
+                            ? CachedNetworkImage(
+                                imageUrl: resolvedThumb,
+                                fit: BoxFit.cover,
+                                memCacheWidth: 320,
+                                filterQuality: FilterQuality.low,
+                              )
+                            : BlurredMediaPlaceholder(
+                                thumbBase64: item.thumbBase64,
+                                fit: BoxFit.cover,
+                              )),
+                  ),
+                ),
+                Positioned(
+                  left: 6,
+                  top: 6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xA6000000),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: const Text(
+                      'GIF',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           );

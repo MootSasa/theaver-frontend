@@ -67,6 +67,8 @@ import 'scheduled_messages_screen.dart';
 import '../../widgets/message/message_bubble.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/media_album.dart';
+import '../../models/theav_media_item.dart';
+import '../../widgets/media_viewer/theav_media_viewer.dart';
 import '../../widgets/message/media_album_widget.dart';
 import 'group_chat_screen.dart';
 import 'channel_screen.dart';
@@ -5615,6 +5617,62 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     return const SizedBox.shrink();
   }
 
+  void _openChatMediaViewer(
+    Message targetMessage, {
+    String? localFilePath,
+  }) {
+    final timeline = buildChatMediaTimeline(
+      _messages,
+      isReversed: true,
+      hasProtectedContent: _hasProtectedContent,
+    );
+    int initialIndex = timeline.indexWhere(
+      (it) =>
+          it.messageId == targetMessage.id ||
+          (targetMessage.localId != null && it.id == targetMessage.localId),
+    );
+    final List<TheavMediaItem> items;
+    if (initialIndex == -1 || timeline.isEmpty) {
+      items = <TheavMediaItem>[
+        TheavMediaItem.fromMessage(
+          targetMessage,
+          localFilePathOverride: localFilePath,
+          hasProtectedContent: _hasProtectedContent,
+        ),
+      ];
+      initialIndex = 0;
+    } else {
+      items = timeline;
+    }
+
+    TheavMediaViewer.open<void>(
+      context,
+      items: items,
+      initialIndex: initialIndex,
+      config: TheavMediaViewerConfig(
+        onJumpToMessage: (viewerCtx, item) {
+          Navigator.of(viewerCtx).pop();
+          final mid = item.messageId;
+          if (mid != null && mid.isNotEmpty) {
+            unawaited(_scrollToMessage(mid));
+          }
+        },
+        onForwardItem: _hasProtectedContent
+            ? null
+            : (viewerCtx, item) async {
+                final mid = item.messageId;
+                if (mid != null && mid.isNotEmpty) {
+                  await ForwardChatPickerSheet.show(
+                    viewerCtx,
+                    fromChatId: widget.chatId,
+                    messageIds: <String>[mid],
+                  );
+                }
+              },
+      ),
+    );
+  }
+
   Widget _buildAlbumFeedItem(MediaAlbum album, int index) {
     final message = album.primaryMessage;
     final key = _obtainPrimaryMessageKey(message);
@@ -5633,6 +5691,9 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       chatType: _chatType,
       formatTime: _formatTime,
       onFileTap: (url, name, type) => _openFile(url, name, type),
+      onAlbumItemTap: _isSelectionMode
+          ? null
+          : (_, __, item) => _openChatMediaViewer(item.message),
       isHighlighted: isAlbumTargeted,
       highlightItemId: _highlightMessageId,
       isSelected: isSelected,
@@ -5866,6 +5927,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         fromMessageId: message.id,
       ),
       onFileTap: (url, name, type) => _openFile(url, name, type),
+      onMediaTap: _isSelectionMode
+          ? null
+          : (msg, {localFilePath}) => _openChatMediaViewer(
+                msg,
+                localFilePath: localFilePath,
+              ),
       formatTime: _formatTime,
       hasProtectedContent: _hasProtectedContent,
       translation: _translationsByMsgId[message.id],

@@ -2,7 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
+import '../../models/theav_media_item.dart';
 import '../../services/media_cache_manager.dart';
+import '../media_viewer/theav_media_viewer.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
 
@@ -16,6 +18,7 @@ class MediaMessageWidget extends StatefulWidget {
   final int? fileSize;
   final int? duration;
   final double? aspectRatio;
+  final String? heroTag;
   final VoidCallback? onTap; // Callback when the media is tapped
 
   const MediaMessageWidget({
@@ -27,6 +30,7 @@ class MediaMessageWidget extends StatefulWidget {
     this.fileSize,
     this.duration,
     this.aspectRatio,
+    this.heroTag,
     this.onTap,
   }) : super(key: key);
 
@@ -70,6 +74,32 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
+  void _handleMediaTap(BuildContext context) {
+    if (widget.onTap != null) {
+      widget.onTap!.call();
+      return;
+    }
+    final resolvedUrl = AppConfig.resolveMediaUrl(widget.url) ?? widget.url;
+    final tag = widget.heroTag ?? 'media_$resolvedUrl';
+    final isVideo = widget.mediaType == 'video';
+    TheavMediaViewer.open<void>(
+      context,
+      items: <TheavMediaItem>[
+        TheavMediaItem(
+          id: tag,
+          kind: isVideo ? TheavMediaKind.video : TheavMediaKind.photo,
+          url: resolvedUrl,
+          localFilePath: _cachedFile?.path,
+          thumbUrl: widget.thumbnailUrl,
+          thumbBase64: widget.thumbBase64,
+          durationSeconds: widget.duration,
+          fileSize: widget.fileSize,
+          heroTag: tag,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isCached = _cachedFile != null;
@@ -79,7 +109,7 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
           _downloadButtonKey.currentState?.handleTap();
           return;
         }
-        widget.onTap?.call();
+        _handleMediaTap(context);
       },
       child: _buildMediaPreview(),
     );
@@ -120,11 +150,21 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
 
             // 2. Full local image ONLY after cached
             if (_cachedFile != null)
-              Image.file(
-                _cachedFile!,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              ),
+              if (widget.heroTag != null && widget.heroTag!.isNotEmpty)
+                Hero(
+                  tag: widget.heroTag!,
+                  child: Image.file(
+                    _cachedFile!,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                )
+              else
+                Image.file(
+                  _cachedFile!,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
 
             // 3. Download button with size pill if needed
             if (resolvedUrl.isNotEmpty && !isCached)
@@ -185,7 +225,7 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
                 isVideo: true,
                 autoDownload: autoDownload,
                 onDownloaded: _checkCache,
-                onPlayVideo: widget.onTap,
+                onPlayVideo: () => _handleMediaTap(context),
               ),
 
             // 4. Video duration pill in top-left

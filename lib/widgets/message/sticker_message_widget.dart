@@ -226,6 +226,8 @@ class GifMessageWidget extends StatefulWidget {
   final String? previewUrl;
   final int? width;
   final int? height;
+  final String? heroTag;
+  final VoidCallback? onTap;
   final Widget? floatingTimestampBadge;
 
   const GifMessageWidget({
@@ -234,6 +236,8 @@ class GifMessageWidget extends StatefulWidget {
     this.previewUrl,
     this.width,
     this.height,
+    this.heroTag,
+    this.onTap,
     this.floatingTimestampBadge,
   });
 
@@ -306,7 +310,7 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
             ? StickerService.resolveUrl(widget.previewUrl!.trim())
             : '';
 
-    return VisibilityDetector(
+    final Widget gifContent = VisibilityDetector(
       key: _visibilityKey,
       onVisibilityChanged: (info) {
         final visible = info.visibleFraction > 0.01;
@@ -405,6 +409,17 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
           ),
         ),
       ),
+    );
+
+    final Widget heroWrapped = (widget.heroTag != null && widget.heroTag!.isNotEmpty)
+        ? Hero(tag: widget.heroTag!, child: gifContent)
+        : gifContent;
+
+    if (widget.onTap == null) return heroWrapped;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      child: heroWrapped,
     );
   }
 }

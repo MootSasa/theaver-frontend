@@ -8,6 +8,7 @@ import '../../config/app_config.dart';
 import '../../models/media_album.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
+import '../../models/theav_media_item.dart';
 import '../../models/theav_theme.dart';
 import '../../screens/settings/profile_screen.dart';
 import '../../services/chat_service.dart';
@@ -27,9 +28,8 @@ import '../message/call_message_widget.dart';
 import '../message/contact_message_widget.dart';
 import '../message/dice_message_widget.dart';
 import '../message/document_message_widget.dart';
-import '../message/fullscreen_photo_viewer.dart';
+import '../media_viewer/theav_media_viewer.dart';
 import '../message/inline_keyboard_widget.dart';
-import '../message/inline_video_player.dart';
 import '../message/location_message_widget.dart';
 import '../message/media_album_widget.dart';
 import '../message/media_download_button.dart';
@@ -83,6 +83,7 @@ class ChannelPostCard extends StatelessWidget {
   final VoidCallback? onAuthorTap;
   final void Function(String replyToId, String? chatId)? onReplyTap;
   final void Function(String url, String name, String type)? onFileTap;
+  final void Function(Message post, {String? localFilePath})? onMediaTap;
   final ValueChanged<Message>? onRetry;
   final VoidCallback? onBodyTap;
   final VoidCallback? onDoubleTap;
@@ -120,6 +121,7 @@ class ChannelPostCard extends StatelessWidget {
     this.onAuthorTap,
     this.onReplyTap,
     this.onFileTap,
+    this.onMediaTap,
     this.onRetry,
     this.onBodyTap,
     this.onDoubleTap,
@@ -194,6 +196,7 @@ class ChannelPostCard extends StatelessWidget {
       onAuthorTap: onAuthorTap,
       onReplyTap: onReplyTap,
       onFileTap: onFileTap,
+      onMediaTap: onMediaTap,
       onRetry: onRetry,
       onBodyTap: onBodyTap,
       onDoubleTap: onDoubleTap,
@@ -857,6 +860,28 @@ class ChannelPostCard extends StatelessWidget {
         chatType: 'channel',
         formatTime: formatTime,
         onFileTap: onFileTap,
+        onAlbumItemTap: isSelectionMode
+            ? null
+            : (alb, idx, item) {
+                if (onMediaTap != null) {
+                  onMediaTap!(item.message);
+                } else {
+                  TheavMediaViewer.open<void>(
+                    context,
+                    items: alb.items
+                        .map(
+                          (it) => TheavMediaItem.fromMessage(
+                            it.message,
+                            fallbackCaption: alb.caption,
+                            fallbackEntities: alb.entities,
+                            hasProtectedContent: hasProtectedContent,
+                          ),
+                        )
+                        .toList(growable: false),
+                    initialIndex: idx,
+                  );
+                }
+              },
         isHighlighted: isHighlighted,
         highlightItemId: highlightItemId,
         isSelected: false,
@@ -1169,6 +1194,10 @@ class ChannelPostCard extends StatelessWidget {
     if (hasMedia) {
       if (_isImage || _isVideo) {
         final double mediaHeight = _computeSingleMediaHeight(msg, cardWidth);
+        final String heroTag = TheavMediaItem.heroTagForMessage(
+          messageId: msg.id,
+          rawOrResolvedUrl: resolvedFileUrl,
+        );
         final Widget mediaWidget = MediaSpoilerOverlay(
           messageId: msg.id,
           hasSpoiler: msg.hasMediaSpoiler,
@@ -1185,24 +1214,24 @@ class ChannelPostCard extends StatelessWidget {
             width: cardWidth,
             height: mediaHeight,
             topRadius: hasTopHeader ? 0.0 : 16.0,
+            heroTag: heroTag,
             autoDownload: MediaCacheManager.instance.shouldAutoDownload(
               messageType: _isVideo ? 'video' : 'image',
               fileSize: msg.mediaFileSize,
             ),
             onTap: ([localPath]) {
-              if (_isVideo) {
-                onFileTap?.call(
-                  localPath ?? resolvedFileUrl,
-                  msg.fileName ?? 'video.mp4',
-                  'video',
-                );
+              if (onMediaTap != null) {
+                onMediaTap!(msg, localFilePath: localPath);
               } else {
-                FullscreenPhotoViewer.open(
+                TheavMediaViewer.open<void>(
                   context,
-                  resolvedFileUrl,
-                  tag: 'ch_photo_${msg.id}_$resolvedFileUrl',
-                  localFilePath: localPath,
-                  hasProtectedContent: hasProtectedContent,
+                  items: <TheavMediaItem>[
+                    TheavMediaItem.fromMessage(
+                      msg,
+                      localFilePathOverride: localPath,
+                      hasProtectedContent: hasProtectedContent,
+                    ),
+                  ],
                 );
               }
             },
@@ -1256,6 +1285,27 @@ class ChannelPostCard extends StatelessWidget {
                 previewUrl: meta['preview_url']?.toString(),
                 width: msg.mediaWidth,
                 height: msg.mediaHeight,
+                heroTag: TheavMediaItem.heroTagForMessage(
+                  messageId: msg.id,
+                  rawOrResolvedUrl: resolvedFileUrl,
+                ),
+                onTap: isSelectionMode
+                    ? null
+                    : () {
+                        if (onMediaTap != null) {
+                          onMediaTap!(msg);
+                        } else {
+                          TheavMediaViewer.open<void>(
+                            context,
+                            items: <TheavMediaItem>[
+                              TheavMediaItem.fromMessage(
+                                msg,
+                                hasProtectedContent: hasProtectedContent,
+                              ),
+                            ],
+                          );
+                        }
+                      },
               ),
             ),
           ),
@@ -1878,6 +1928,7 @@ class _SingleChannelMediaView extends StatefulWidget {
   final double width;
   final double height;
   final double topRadius;
+  final String? heroTag;
   final bool autoDownload;
   final void Function([String? localPath]) onTap;
 
@@ -1893,6 +1944,7 @@ class _SingleChannelMediaView extends StatefulWidget {
     required this.width,
     required this.height,
     required this.topRadius,
+    this.heroTag,
     required this.autoDownload,
     required this.onTap,
   });
@@ -1907,7 +1959,6 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
       GlobalKey<MediaDownloadButtonState>();
   File? _cachedFile;
   Uint8List? _cachedFirstFrame;
-  bool _isPlayingInline = false;
 
   @override
   void initState() {
@@ -1922,7 +1973,6 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
     if (oldWidget.url != widget.url) {
       _cachedFile = null;
       _cachedFirstFrame = null;
-      _isPlayingInline = false;
       _syncCacheImmediate();
       _checkCache();
     }
@@ -1992,22 +2042,16 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
         : null;
     final radius = BorderRadius.vertical(top: Radius.circular(widget.topRadius));
 
-    if (widget.isVideo && isCached && _isPlayingInline) {
-      return ClipRRect(
-        borderRadius: radius,
-        child: SizedBox(
-          width: widget.width,
-          height: math.max(widget.height, 220.0),
-          child: InlineVideoPlayer(url: _cachedFile!.path, autoplay: true),
-        ),
-      );
-    }
-
     final bool hasOpaqueMedia =
         (!widget.isVideo && _cachedFile != null) ||
         (widget.isVideo && isCached && _cachedFirstFrame != null);
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     final int targetCacheWidth = (widget.width * dpr).round().clamp(240, 1280);
+    final String effectiveHeroTag = widget.heroTag ??
+        TheavMediaItem.heroTagForMessage(
+          messageId: widget.messageId,
+          rawOrResolvedUrl: widget.url,
+        );
 
     return GestureDetector(
       onTap: () {
@@ -2015,11 +2059,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
           _downloadButtonKey.currentState?.handleTap();
           return;
         }
-        if (!widget.isVideo) {
-          widget.onTap(_cachedFile?.path);
-        } else {
-          setState(() => _isPlayingInline = true);
-        }
+        widget.onTap(_cachedFile?.path);
       },
       child: ClipRRect(
         borderRadius: radius,
@@ -2035,33 +2075,39 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
                   thumbBase64: widget.thumbBase64,
                   fit: BoxFit.cover,
                 ),
-              if (widget.isVideo && isCached) ...[
-                if (_cachedFirstFrame != null)
-                  Image.memory(
-                    _cachedFirstFrame!,
-                    width: widget.width,
-                    height: widget.height,
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.low,
-                    gaplessPlayback: true,
-                  )
-                else if (resolvedThumbUrl != null &&
-                    resolvedThumbUrl.isNotEmpty)
-                  Image.network(
-                    resolvedThumbUrl,
-                    width: widget.width,
-                    height: widget.height,
-                    fit: BoxFit.cover,
-                    cacheWidth: targetCacheWidth,
-                    filterQuality: FilterQuality.low,
-                    loadingBuilder: (context, child, progress) =>
-                        progress == null ? child : const SizedBox.shrink(),
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-              ],
+              if (widget.isVideo && isCached)
+                Hero(
+                  tag: effectiveHeroTag,
+                  child: _cachedFirstFrame != null
+                      ? Image.memory(
+                          _cachedFirstFrame!,
+                          width: widget.width,
+                          height: widget.height,
+                          fit: BoxFit.cover,
+                          filterQuality: FilterQuality.low,
+                          gaplessPlayback: true,
+                        )
+                      : (resolvedThumbUrl != null &&
+                              resolvedThumbUrl.isNotEmpty
+                          ? Image.network(
+                              resolvedThumbUrl,
+                              width: widget.width,
+                              height: widget.height,
+                              fit: BoxFit.cover,
+                              cacheWidth: targetCacheWidth,
+                              filterQuality: FilterQuality.low,
+                              loadingBuilder: (context, child, progress) =>
+                                  progress == null
+                                  ? child
+                                  : const SizedBox.shrink(),
+                              errorBuilder: (_, __, ___) =>
+                                  const SizedBox.shrink(),
+                            )
+                          : const SizedBox.shrink()),
+                ),
               if (!widget.isVideo && _cachedFile != null)
                 Hero(
-                  tag: 'ch_photo_${widget.messageId}_${widget.url}',
+                  tag: effectiveHeroTag,
                   child: Image.file(
                     _cachedFile!,
                     width: widget.width,
@@ -2080,11 +2126,7 @@ class _SingleChannelMediaViewState extends State<_SingleChannelMediaView> {
                   isVideo: widget.isVideo,
                   autoDownload: widget.autoDownload,
                   onDownloaded: _checkCache,
-                  onPlayVideo: () {
-                    if (_cachedFile != null) {
-                      setState(() => _isPlayingInline = true);
-                    }
-                  },
+                  onPlayVideo: () => widget.onTap(_cachedFile?.path),
                 ),
               if (widget.isVideo &&
                   widget.duration != null &&

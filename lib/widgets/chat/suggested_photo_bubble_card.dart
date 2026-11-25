@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File;
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -10,11 +9,11 @@ import 'package:http/http.dart' as http;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:photo_view/photo_view.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/avatar_editor_models.dart';
+import '../../models/theav_media_item.dart';
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/avatar_sync_service.dart';
@@ -26,6 +25,7 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../avatar_editor/theav_avatar_editor_screen.dart';
 import '../design_system/theav_design_system.dart';
+import '../media_viewer/theav_media_viewer.dart';
 
 /// Telegram-style centered service card rendered inside private chats when a
 /// peer suggests a profile photo (`system_action == 'suggest_profile_photo'`).
@@ -62,6 +62,11 @@ class SuggestedPhotoBubbleCard extends StatelessWidget {
         rawPhotoUrl;
   }
 
+  String _heroTagFor(String resolvedPhotoUrl) {
+    final msgId = message.id.isNotEmpty ? message.id : (message.localId ?? '');
+    return 'suggested_photo_${msgId}_$resolvedPhotoUrl';
+  }
+
   Future<void> _openViewer(
     BuildContext context, {
     required String apiPhotoUrl,
@@ -74,21 +79,34 @@ class SuggestedPhotoBubbleCard extends StatelessWidget {
       'contact_suggest_applied',
       'Фото профиля обновлено',
     );
-    final applied = await Navigator.of(context, rootNavigator: true).push<bool>(
-      PageRouteBuilder<bool>(
-        opaque: false,
-        fullscreenDialog: true,
-        transitionDuration: const Duration(milliseconds: 240),
-        reverseTransitionDuration: const Duration(milliseconds: 200),
-        pageBuilder: (_, __, ___) => _SuggestedPhotoViewerPage(
-          apiPhotoUrl: apiPhotoUrl,
-          resolvedPhotoUrl: resolvedPhotoUrl,
-          isRecipient: isRecipient,
-          onPhotoApplied: onPhotoApplied,
+    final item = TheavMediaItem(
+      id: 'suggested_${message.id.isNotEmpty ? message.id : resolvedPhotoUrl}',
+      kind: TheavMediaKind.avatar,
+      url: resolvedPhotoUrl,
+      heroTag: _heroTagFor(resolvedPhotoUrl),
+      senderId: message.senderId,
+      senderName: context.trOr(
+        'contact_suggest_title',
+        'Предложенное фото',
+      ),
+    );
+    final applied = await TheavMediaViewer.open<bool>(
+      context,
+      items: <TheavMediaItem>[item],
+      initialIndex: 0,
+      config: TheavMediaViewerConfig(
+        titleOverride: context.trOr(
+          'contact_suggest_title',
+          'Предложенное фото',
         ),
-        transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
+        bottomAccessoryBuilder: isRecipient
+            ? (viewerCtx, _, __) => _SuggestedPhotoActionsBar(
+                  apiPhotoUrl: apiPhotoUrl,
+                  resolvedPhotoUrl: resolvedPhotoUrl,
+                  onPhotoApplied: onPhotoApplied,
+                  viewerContext: viewerCtx,
+                )
+            : null,
       ),
     );
     if (applied == true && context.mounted) {
@@ -178,15 +196,20 @@ class SuggestedPhotoBubbleCard extends StatelessWidget {
                       child: SizedBox(
                         width: 116,
                         height: 116,
-                        child: thumbProvider != null
-                            ? Image(
-                                image: thumbProvider,
-                                width: 116,
-                                height: 116,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => _AvatarPlaceholder(
-                                  backgroundColor: style.trackFill,
-                                  iconColor: palette.subtext,
+                        child: resolvedPhotoUrl.isNotEmpty && thumbProvider != null
+                            ? Hero(
+                                tag: _heroTagFor(resolvedPhotoUrl),
+                                child: Image(
+                                  image: thumbProvider,
+                                  width: 116,
+                                  height: 116,
+                                  fit: BoxFit.cover,
+                                  filterQuality: FilterQuality.medium,
+                                  errorBuilder: (_, __, ___) =>
+                                      _AvatarPlaceholder(
+                                    backgroundColor: style.trackFill,
+                                    iconColor: palette.subtext,
+                                  ),
                                 ),
                               )
                             : _AvatarPlaceholder(
@@ -314,26 +337,25 @@ class _AvatarPlaceholder extends StatelessWidget {
   }
 }
 
-class _SuggestedPhotoViewerPage extends StatefulWidget {
+class _SuggestedPhotoActionsBar extends StatefulWidget {
   final String apiPhotoUrl;
   final String resolvedPhotoUrl;
-  final bool isRecipient;
   final VoidCallback? onPhotoApplied;
+  final BuildContext viewerContext;
 
-  const _SuggestedPhotoViewerPage({
+  const _SuggestedPhotoActionsBar({
     required this.apiPhotoUrl,
     required this.resolvedPhotoUrl,
-    required this.isRecipient,
+    required this.viewerContext,
     this.onPhotoApplied,
   });
 
   @override
-  State<_SuggestedPhotoViewerPage> createState() =>
-      _SuggestedPhotoViewerPageState();
+  State<_SuggestedPhotoActionsBar> createState() =>
+      _SuggestedPhotoActionsBarState();
 }
 
-class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
-  bool _circlePreview = true;
+class _SuggestedPhotoActionsBarState extends State<_SuggestedPhotoActionsBar> {
   bool _isApplying = false;
   bool _isOpeningStudio = false;
 
@@ -356,8 +378,8 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
           ProfileInstantCache.instance.updateUserAvatar(uid, nextUrl);
         }
         widget.onPhotoApplied?.call();
-        if (mounted) {
-          Navigator.of(context).pop(true);
+        if (mounted && widget.viewerContext.mounted) {
+          Navigator.of(widget.viewerContext).pop(true);
         }
         return;
       }
@@ -474,7 +496,9 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
             ProfileInstantCache.instance.updateUserAvatar(uid, remoteUrl);
           }
           widget.onPhotoApplied?.call();
-          Navigator.of(context).pop(true);
+          if (widget.viewerContext.mounted) {
+            Navigator.of(widget.viewerContext).pop(true);
+          }
           return;
         }
         GlassToastService().showError(
@@ -515,8 +539,8 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
       );
       ProfileInstantCache.instance.updateUserAvatar(uid, permanentPath);
       widget.onPhotoApplied?.call();
-      if (mounted) {
-        Navigator.of(context).pop(true);
+      if (mounted && widget.viewerContext.mounted) {
+        Navigator.of(widget.viewerContext).pop(true);
       }
     } catch (e) {
       if (mounted) {
@@ -531,251 +555,38 @@ class _SuggestedPhotoViewerPageState extends State<_SuggestedPhotoViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = _circlePreview
-        ? avatarImageProvider(
-            widget.resolvedPhotoUrl,
-            maxDecodeDimension: 720,
-          )
-        : avatarFullImageProvider(widget.resolvedPhotoUrl);
     final palette = context.theav;
-
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (provider == null)
-            const Center(
-              child: iconoir.MediaImage(
-                color: Colors.white54,
-                width: 64,
-                height: 64,
-              ),
-            )
-          else if (_circlePreview)
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final side = (math.min(
-                          constraints.maxWidth,
-                          constraints.maxHeight,
-                        ) *
-                        0.78)
-                    .clamp(180.0, 360.0);
-                return Center(
-                  child: Container(
-                    width: side,
-                    height: side,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.36),
-                        width: 1.5,
-                      ),
-                    ),
-                    child: ClipOval(
-                      child: PhotoView(
-                        key: const ValueKey<String>('suggested_photo_circle'),
-                        imageProvider: provider,
-                        backgroundDecoration:
-                            const BoxDecoration(color: Colors.black),
-                        initialScale: PhotoViewComputedScale.covered,
-                        minScale: PhotoViewComputedScale.covered,
-                        maxScale: PhotoViewComputedScale.covered * 3.0,
-                        loadingBuilder: (_, event) => Center(
-                          child: CircularProgressIndicator(
-                            value: event?.expectedTotalBytes != null &&
-                                    event!.expectedTotalBytes! > 0
-                                ? event.cumulativeBytesLoaded /
-                                    event.expectedTotalBytes!
-                                : null,
-                            color: Colors.white,
-                          ),
-                        ),
-                        errorBuilder: (_, __, ___) => const Center(
-                          child: iconoir.MediaImage(
-                            color: Colors.white54,
-                            width: 56,
-                            height: 56,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            )
-          else
-            PhotoView(
-              key: const ValueKey<String>('suggested_photo_original'),
-              imageProvider: provider,
-              backgroundDecoration: const BoxDecoration(color: Colors.black),
-              initialScale: PhotoViewComputedScale.contained,
-              minScale: PhotoViewComputedScale.contained,
-              maxScale: PhotoViewComputedScale.covered * 3.0,
-              loadingBuilder: (_, event) => Center(
-                child: CircularProgressIndicator(
-                  value: event?.expectedTotalBytes != null &&
-                          event!.expectedTotalBytes! > 0
-                      ? event.cumulativeBytesLoaded / event.expectedTotalBytes!
-                      : null,
-                  color: Colors.white,
-                ),
-              ),
-              errorBuilder: (_, __, ___) => const Center(
-                child: iconoir.MediaImage(
-                  color: Colors.white54,
-                  width: 64,
-                  height: 64,
-                ),
-              ),
+          _ViewerActionButton(
+            label: context.trOr(
+              'contact_suggest_apply_photo',
+              'Установить как моё фото',
             ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              bottom: false,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _ViewerTopPillButton(
-                      onTap: _isBusy ? null : () => Navigator.of(context).pop(),
-                      child: const iconoir.Xmark(
-                        color: Colors.white,
-                        width: 22,
-                        height: 22,
-                      ),
-                    ),
-                    _ViewerTopPillButton(
-                      onTap: () {
-                        HapticUtils.selection();
-                        setState(() => _circlePreview = !_circlePreview);
-                      },
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _circlePreview
-                                ? Icons.crop_free_rounded
-                                : Icons.circle_outlined,
-                            size: 18,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _circlePreview ? '1:1' : 'Ориг.',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              decoration: TextDecoration.none,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            isLoading: _isApplying,
+            enabled: !_isBusy,
+            backgroundColor: palette.primary,
+            foregroundColor: palette.onPrimary,
+            onTap: _applyDirectly,
           ),
-          if (widget.isRecipient)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: 0.78),
-                      Colors.black.withValues(alpha: 0.94),
-                    ],
-                  ),
-                ),
-                child: SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _ViewerActionButton(
-                          label: context.trOr(
-                            'contact_suggest_apply_photo',
-                            'Установить как моё фото',
-                          ),
-                          isLoading: _isApplying,
-                          enabled: !_isBusy,
-                          backgroundColor: palette.primary,
-                          foregroundColor: palette.onPrimary,
-                          onTap: _applyDirectly,
-                        ),
-                        const SizedBox(height: 10),
-                        _ViewerActionButton(
-                          label: context.trOr(
-                            'avatar_editor_open_in_studio',
-                            'Открыть в студии',
-                          ),
-                          isLoading: _isOpeningStudio,
-                          enabled: !_isBusy,
-                          backgroundColor:
-                              Colors.white.withValues(alpha: 0.14),
-                          foregroundColor: Colors.white,
-                          borderColor: Colors.white.withValues(alpha: 0.20),
-                          onTap: _openInStudio,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+          const SizedBox(height: 10),
+          _ViewerActionButton(
+            label: context.trOr(
+              'avatar_editor_open_in_studio',
+              'Открыть в студии',
             ),
+            isLoading: _isOpeningStudio,
+            enabled: !_isBusy,
+            backgroundColor: const Color(0xB3101218),
+            foregroundColor: Colors.white,
+            borderColor: Colors.white.withValues(alpha: 0.16),
+            onTap: _openInStudio,
+          ),
         ],
-      ),
-    );
-  }
-}
-
-class _ViewerTopPillButton extends StatelessWidget {
-  final VoidCallback? onTap;
-  final Widget child;
-
-  const _ViewerTopPillButton({
-    required this.onTap,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(999),
-        child: Ink(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.56),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.16),
-              width: 0.75,
-            ),
-          ),
-          child: Container(
-            constraints: const BoxConstraints(minWidth: 42, minHeight: 42),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            alignment: Alignment.center,
-            child: child,
-          ),
-        ),
       ),
     );
   }

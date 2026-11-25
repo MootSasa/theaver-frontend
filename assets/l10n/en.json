@@ -1939,5 +1939,18 @@
   "weekday_sun": "Sun",
   "weekday_thu": "Thu",
   "weekday_tue": "Tue",
-  "weekday_wed": "Wed"
+  "weekday_wed": "Wed",
+  "media_viewer_of": "{current} of {total}",
+  "media_viewer_save_to_gallery": "Save to Gallery",
+  "media_viewer_save_to_downloads": "Save to Downloads",
+  "media_viewer_saved_to_gallery": "Saved to Gallery",
+  "media_viewer_saved_to_downloads": "Saved to Downloads",
+  "media_viewer_save_gif": "Save GIF",
+  "media_viewer_gif_saved": "GIF added to saved GIFs",
+  "media_viewer_jump_to_message": "Show in Chat",
+  "media_viewer_pip": "Picture-in-Picture",
+  "media_viewer_protected_content": "Saving and forwarding restricted",
+  "media_viewer_more": "more",
+  "media_viewer_file_unavailable": "File unavailable",
+  "profile_tab_gifs": "GIFs"
 }

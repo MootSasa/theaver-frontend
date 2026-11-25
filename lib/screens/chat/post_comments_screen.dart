@@ -14,9 +14,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/media_album.dart';
 import '../../models/name_color_preset.dart';
 import '../../models/profile_customization.dart';
+import '../../models/theav_media_item.dart';
 import '../../models/theav_theme.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_instant_cache.dart';
@@ -51,9 +51,9 @@ import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/telegram_delete_messages_sheet.dart';
 import '../../widgets/chat/unread_separator.dart';
 import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/media_viewer/theav_media_viewer.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import '../../widgets/message/group_message_avatar_row.dart';
-import '../../widgets/message/media_album_viewer.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../settings/profile_screen.dart';
 import 'channel_screen.dart';
@@ -2043,25 +2043,7 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         fileName: fileName.isNotEmpty ? fileName : sourceMessage?.fileName,
         messageType: 'video',
       );
-      final singleAlbum = MediaAlbum(
-        groupedId: 'comment_video_${baseMsg.id}',
-        items: [
-          MediaAlbumItem(message: baseMsg, index: 0, totalCount: 1),
-        ],
-        primaryMessage: baseMsg,
-        caption: baseMsg.content.isNotEmpty ? baseMsg.content : null,
-        entities: baseMsg.entities,
-      );
-      Navigator.of(context, rootNavigator: true).push(
-        MaterialPageRoute(
-          fullscreenDialog: true,
-          builder: (_) => MediaAlbumViewer(
-            album: singleAlbum,
-            initialIndex: 0,
-            hasProtectedContent: _hasProtectedContent,
-          ),
-        ),
-      );
+      _openThreadMediaViewer(baseMsg, localFilePath: fileUrl != resolved ? fileUrl : null);
       return;
     }
     final sheetTitle = fileName.trim().isNotEmpty
@@ -2587,6 +2569,11 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
                         type,
                         sourceMessage: _rootPost,
                       ),
+                      onMediaTap: (post, {localFilePath}) =>
+                          _openThreadMediaViewer(
+                        post,
+                        localFilePath: localFilePath,
+                      ),
                     );
                   }
                   if (index == 1) {
@@ -2803,6 +2790,71 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _openThreadMediaViewer(
+    Message targetMessage, {
+    String? localFilePath,
+  }) {
+    final timeline = buildChatMediaTimeline(
+      <Message>[_rootPost, ..._comments],
+      isReversed: false,
+      hasProtectedContent: _hasProtectedContent,
+    );
+    int initialIndex = timeline.indexWhere(
+      (it) =>
+          it.messageId == targetMessage.id ||
+          (targetMessage.localId != null && it.id == targetMessage.localId),
+    );
+    final List<TheavMediaItem> items;
+    if (initialIndex == -1 || timeline.isEmpty) {
+      items = <TheavMediaItem>[
+        TheavMediaItem.fromMessage(
+          targetMessage,
+          localFilePathOverride: localFilePath,
+          hasProtectedContent: _hasProtectedContent,
+        ),
+      ];
+      initialIndex = 0;
+    } else {
+      items = timeline;
+    }
+
+    TheavMediaViewer.open<void>(
+      context,
+      items: items,
+      initialIndex: initialIndex,
+      config: TheavMediaViewerConfig(
+        onJumpToMessage: (viewerCtx, item) {
+          Navigator.of(viewerCtx).pop();
+          final mid = item.messageId;
+          if (mid == _rootPost.id) {
+            if (_scrollController.hasClients) {
+              _scrollController.animateTo(
+                0.0,
+                duration: const Duration(milliseconds: 260),
+                curve: Curves.easeOutCubic,
+              );
+            }
+          } else if (mid != null && mid.isNotEmpty) {
+            _scrollToComment(mid);
+          }
+        },
+        onForwardItem: _hasProtectedContent
+            ? null
+            : (viewerCtx, item) async {
+                final mid = item.messageId;
+                final fromCid = _linkedChatId ?? widget.channelId;
+                if (mid != null && mid.isNotEmpty && fromCid.isNotEmpty) {
+                  await ForwardChatPickerSheet.show(
+                    viewerCtx,
+                    fromChatId: fromCid,
+                    messageIds: <String>[mid],
+                  );
+                }
+              },
       ),
     );
   }
@@ -3053,6 +3105,12 @@ class _PostCommentsScreenState extends State<PostCommentsScreen>
         }
         _openFile(url, name, type, sourceMessage: comment);
       },
+      onMediaTap: _isSelectionMode
+          ? null
+          : (msg, {localFilePath}) => _openThreadMediaViewer(
+                msg,
+                localFilePath: localFilePath,
+              ),
       formatTime: _formatTime,
     );
 

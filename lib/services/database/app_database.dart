@@ -2236,6 +2236,21 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Получить GIF-анимации чата
+  Future<List<DbMessage>> getSharedGifsForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('gif') | t.messageType.equals('animation')) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
   /// Получить документы/файлы чата
   Future<List<DbMessage>> getSharedFilesForChat(String chatId, {int limit = 300}) async {
     if (chatId.isEmpty) return [];

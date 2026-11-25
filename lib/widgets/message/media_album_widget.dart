@@ -6,15 +6,16 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
 import '../../models/media_album.dart';
+import '../../models/theav_media_item.dart';
 import '../../models/theav_theme.dart';
 import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/media_cache_manager.dart';
+import '../media_viewer/theav_media_viewer.dart';
 import 'blurred_media_placeholder.dart';
 import 'bubble_tail_painter.dart';
 import 'group_message_avatar_row.dart' show GroupMessageAvatarRow;
 import 'media_album_layout.dart';
-import 'media_album_viewer.dart';
 import 'media_download_button.dart';
 import 'media_spoiler_overlay.dart';
 import 'message_bubble.dart';
@@ -40,6 +41,8 @@ class MediaAlbumWidget extends StatelessWidget {
   final bool hasAvatarGutter;
   final String Function(String)? formatTime;
   final Function(String url, String name, String type)? onFileTap;
+  final void Function(MediaAlbum album, int itemIndex, MediaAlbumItem item)?
+      onAlbumItemTap;
   final bool isHighlighted;
   final bool isSelected;
   final bool isSelectionMode;
@@ -72,6 +75,7 @@ class MediaAlbumWidget extends StatelessWidget {
     this.hasAvatarGutter = false,
     this.formatTime,
     this.onFileTap,
+    this.onAlbumItemTap,
     this.isHighlighted = false,
     this.isSelected = false,
     this.isSelectionMode = false,
@@ -144,6 +148,7 @@ class MediaAlbumWidget extends StatelessWidget {
       hasAvatarGutter: hasAvatarGutter,
       formatTime: formatTime,
       onFileTap: onFileTap,
+      onAlbumItemTap: onAlbumItemTap,
       isHighlighted: false,
       isSelected: false,
       isSelectionMode: false,
@@ -163,15 +168,24 @@ class MediaAlbumWidget extends StatelessWidget {
   }
 
   void _openViewer(BuildContext context, int index) {
-    Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute(
-        fullscreenDialog: true,
-        builder: (_) => MediaAlbumViewer(
-          album: album,
-          initialIndex: index,
-          hasProtectedContent: hasProtectedContent,
-        ),
-      ),
+    if (onAlbumItemTap != null) {
+      onAlbumItemTap!(album, index, album.items[index]);
+      return;
+    }
+    final items = album.items
+        .map(
+          (it) => TheavMediaItem.fromMessage(
+            it.message,
+            fallbackCaption: album.caption,
+            fallbackEntities: album.entities,
+            hasProtectedContent: hasProtectedContent,
+          ),
+        )
+        .toList(growable: false);
+    TheavMediaViewer.open<void>(
+      context,
+      items: items,
+      initialIndex: index,
     );
   }
 
@@ -728,6 +742,59 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
       fileSize: item.fileSize,
     );
 
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
+    final Widget visualLayer = Hero(
+      tag: TheavMediaItem.heroTagForMessage(
+        messageId: item.id,
+        rawOrResolvedUrl: resolvedUrl,
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 1. Blurred placeholder (only mounted until opaque media is ready)
+          if (!((!item.isVideo && _cachedFile != null) ||
+              (item.isVideo && isCached && _cachedFirstFrame != null)))
+            BlurredMediaPlaceholder(
+              thumbBase64: item.thumbBase64,
+              aspectRatio: item.aspectRatio,
+            ),
+
+          // 2. Real first frame for video ONLY after video is cached locally
+          if (item.isVideo && isCached) ...[
+            if (_cachedFirstFrame != null)
+              Image.memory(
+                _cachedFirstFrame!,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.low,
+                gaplessPlayback: true,
+              )
+            else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
+              Image.network(
+                resolvedThumbUrl,
+                fit: BoxFit.cover,
+                cacheWidth: 600,
+                filterQuality: FilterQuality.low,
+                loadingBuilder: (context, child, progress) {
+                  if (progress == null) return child;
+                  return const SizedBox.shrink();
+                },
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+          ],
+
+          // 3. Display photo ONLY after file is cached locally on disk
+          if (!item.isVideo && _cachedFile != null)
+            Image.file(
+              _cachedFile!,
+              cacheWidth: (pos.width * dpr).round().clamp(180, 960),
+              filterQuality: FilterQuality.low,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+            ),
+        ],
+      ),
+    );
+
     return Positioned(
       left: pos.left,
       top: pos.top,
@@ -748,48 +815,7 @@ class _AlbumTileWidgetState extends State<_AlbumTileWidget> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                // 1. Blurred placeholder (only mounted until opaque media is ready)
-                if (!((!item.isVideo && _cachedFile != null) ||
-                    (item.isVideo && isCached && _cachedFirstFrame != null)))
-                  BlurredMediaPlaceholder(
-                    thumbBase64: item.thumbBase64,
-                    aspectRatio: item.aspectRatio,
-                  ),
-
-                // 2. Real first frame for video ONLY after video is cached locally
-                if (item.isVideo && isCached) ...[
-                  if (_cachedFirstFrame != null)
-                    Image.memory(
-                      _cachedFirstFrame!,
-                      fit: BoxFit.cover,
-                      filterQuality: FilterQuality.low,
-                      gaplessPlayback: true,
-                    )
-                  else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
-                    Image.network(
-                      resolvedThumbUrl,
-                      fit: BoxFit.cover,
-                      cacheWidth: 600,
-                      filterQuality: FilterQuality.low,
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return const SizedBox.shrink();
-                      },
-                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                    ),
-                ],
-
-                // 3. Display photo ONLY after file is cached locally on disk
-                if (!item.isVideo && _cachedFile != null)
-                  Image.file(
-                    _cachedFile!,
-                    cacheWidth: (pos.width * MediaQuery.devicePixelRatioOf(context))
-                        .round()
-                        .clamp(180, 960),
-                    filterQuality: FilterQuality.low,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                  ),
+                visualLayer,
 
                 // 4. Download button / progress / size pill
                 if (resolvedUrl.isNotEmpty && (!isCached || item.isVideo))

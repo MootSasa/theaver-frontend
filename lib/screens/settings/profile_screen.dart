@@ -233,6 +233,7 @@ class ProfileScreenState extends State<ProfileScreen>
 
   // Общие материалы из локальной БД Drift и сервера + общие группы
   List<DbMessage> _mediaMessages = [];
+  List<DbMessage> _gifMessages = [];
   List<DbMessage> _fileMessages = [];
   List<DbMessage> _linkMessages = [];
   List<DbMessage> _voiceMessages = [];
@@ -695,6 +696,7 @@ class ProfileScreenState extends State<ProfileScreen>
     final shared = cache.getSharedContentSync(_resolvedChatId);
     if (shared != null) {
       _mediaMessages = shared.mediaMessages;
+      _gifMessages = shared.gifMessages;
       _fileMessages = shared.fileMessages;
       _linkMessages = shared.linkMessages;
       _voiceMessages = shared.voiceMessages;
@@ -1889,11 +1891,13 @@ class ProfileScreenState extends State<ProfileScreen>
         db.getSharedFilesForChat(cid),
         db.getSharedLinksForChat(cid),
         db.getSharedVoiceForChat(cid),
+        db.getSharedGifsForChat(cid),
       ]);
       ProfileInstantCache.instance.putSharedContent(
         cid,
         CachedSharedContentSnapshot(
           mediaMessages: results[0],
+          gifMessages: results[4],
           fileMessages: results[1],
           linkMessages: results[2],
           voiceMessages: results[3],
@@ -1905,6 +1909,7 @@ class ProfileScreenState extends State<ProfileScreen>
         _fileMessages = results[1];
         _linkMessages = results[2];
         _voiceMessages = results[3];
+        _gifMessages = results[4];
       });
 
       final cloudPages = await Future.wait([
@@ -1918,10 +1923,12 @@ class ProfileScreenState extends State<ProfileScreen>
       final mergedFiles = _mergeCloudSharedMessages(results[1], cloudPages[1].messages);
       final mergedLinks = _mergeCloudSharedMessages(results[2], cloudPages[2].messages);
       final mergedVoice = _mergeCloudSharedMessages(results[3], cloudPages[3].messages);
+      final localGifs = results[4];
       ProfileInstantCache.instance.putSharedContent(
         cid,
         CachedSharedContentSnapshot(
           mediaMessages: mergedMedia,
+          gifMessages: localGifs,
           fileMessages: mergedFiles,
           linkMessages: mergedLinks,
           voiceMessages: mergedVoice,
@@ -1929,6 +1936,7 @@ class ProfileScreenState extends State<ProfileScreen>
       );
       setState(() {
         _mediaMessages = mergedMedia;
+        _gifMessages = localGifs;
         _fileMessages = mergedFiles;
         _linkMessages = mergedLinks;
         _voiceMessages = mergedVoice;
@@ -2288,6 +2296,13 @@ class ProfileScreenState extends State<ProfileScreen>
       label: _tr(l10n, 'profile_tab_media', 'Медиа'),
       count: _mediaMessages.length,
     );
+    final gifsItem = _gifMessages.isNotEmpty
+        ? ProfileSectionItem(
+            type: ProfileSectionType.gifs,
+            label: _tr(l10n, 'profile_tab_gifs', 'GIF'),
+            count: _gifMessages.length,
+          )
+        : null;
     final filesItem = ProfileSectionItem(
       type: ProfileSectionType.files,
       label: _tr(l10n, 'profile_tab_files', 'Файлы'),
@@ -2323,6 +2338,7 @@ class ProfileScreenState extends State<ProfileScreen>
         ),
         giftsItem,
         mediaItem,
+        if (gifsItem != null) gifsItem,
         filesItem,
         linksItem,
         voiceItem,
@@ -2333,6 +2349,7 @@ class ProfileScreenState extends State<ProfileScreen>
       return [
         giftsItem,
         mediaItem,
+        if (gifsItem != null) gifsItem,
         filesItem,
         linksItem,
         voiceItem,
@@ -2344,6 +2361,7 @@ class ProfileScreenState extends State<ProfileScreen>
       wallItem,
       giftsItem,
       mediaItem,
+      if (gifsItem != null) gifsItem,
       filesItem,
       linksItem,
       voiceItem,
@@ -2566,6 +2584,7 @@ class ProfileScreenState extends State<ProfileScreen>
         if (mounted) {
           setState(() {
             _mediaMessages.clear();
+            _gifMessages.clear();
             _fileMessages.clear();
             _linkMessages.clear();
             _voiceMessages.clear();
@@ -6827,10 +6846,12 @@ class ProfileScreenState extends State<ProfileScreen>
                       }
                     }
                   : null)),
-      onPageChanged: (index) {
-        setState(() {
-          _currentAvatarIndex = index;
-        });
+      onBeforeCloseSyncIndex: (index) {
+        if (mounted && _currentAvatarIndex != index) {
+          setState(() {
+            _currentAvatarIndex = index;
+          });
+        }
       },
     );
 
@@ -7579,6 +7600,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                                     commonGroups: _commonGroups,
                                                     mediaMessages:
                                                         _mediaMessages,
+                                                    gifMessages: _gifMessages,
                                                     fileMessages: _fileMessages,
                                                     linkMessages: _linkMessages,
                                                     voiceMessages:

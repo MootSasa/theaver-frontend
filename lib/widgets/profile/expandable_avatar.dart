@@ -271,7 +271,9 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         if (count > 1) {
           _currentVirtualPage = _virtualPageForRealIndex(targetReal, count);
           if (_loopPageController.hasClients) {
-            if (widget.expandFactor < 0.98) {
+            final bool isCoveredByFullscreenViewer =
+                ModalRoute.of(context)?.isCurrent == false;
+            if (widget.expandFactor < 0.98 && !isCoveredByFullscreenViewer) {
               _loopPageController.animateToPage(
                 _currentVirtualPage,
                 duration: const Duration(milliseconds: 300),
@@ -996,48 +998,48 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         fromHeroContext,
         toHeroContext,
       ) {
-        final CurvedAnimation curvedAnimation = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return AnimatedBuilder(
-          animation: curvedAnimation,
-          builder: (context, child) {
-            final double tFlight = curvedAnimation.value;
-            final double currentRadius = lerpDouble(initialRadius, 0.0, tFlight);
-            final double shuttleExpand = lerpDouble(clampedExpand, 1.0, tFlight);
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(currentRadius),
-              child: Material(
-                type: MaterialType.transparency,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final double bw = constraints.maxWidth.isFinite &&
-                            constraints.maxWidth > 0.0
-                        ? constraints.maxWidth
-                        : math.max(1.0, width);
-                    final double bh = constraints.maxHeight.isFinite &&
-                            constraints.maxHeight > 0.0
-                        ? constraints.maxHeight
-                        : math.max(1.0, height);
-                    return _buildFramedAvatarBox(
-                      cleanUrl: cleanUrl,
-                      miniCrop: miniCrop,
-                      boxWidth: bw,
-                      boxHeight: bh,
-                      expandT: shuttleExpand,
-                      lockToSquareScale: false,
-                      bgColor: bgColor,
-                      iconSize: iconSize,
-                      isDark: isDark,
-                      imgAlignment: imgAlignment,
-                    );
-                  },
+        return RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: animation,
+            builder: (context, child) {
+              final double rawT = animation.value.clamp(0.0, 1.0);
+              final double tFlight = flightDirection == HeroFlightDirection.push
+                  ? Curves.easeOutCubic.transform(rawT)
+                  : Curves.easeInCubic.transform(rawT);
+              final double currentRadius = lerpDouble(initialRadius, 0.0, tFlight);
+              final double shuttleExpand = lerpDouble(clampedExpand, 1.0, tFlight);
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(currentRadius),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double bw = constraints.maxWidth.isFinite &&
+                              constraints.maxWidth > 0.0
+                          ? constraints.maxWidth
+                          : math.max(1.0, width);
+                      final double bh = constraints.maxHeight.isFinite &&
+                              constraints.maxHeight > 0.0
+                          ? constraints.maxHeight
+                          : math.max(1.0, height);
+                      return _buildFramedAvatarBox(
+                        cleanUrl: cleanUrl,
+                        miniCrop: miniCrop,
+                        boxWidth: bw,
+                        boxHeight: bh,
+                        expandT: shuttleExpand,
+                        lockToSquareScale: false,
+                        bgColor: bgColor,
+                        iconSize: iconSize,
+                        isDark: isDark,
+                        imgAlignment: imgAlignment,
+                      );
+                    },
+                  ),
                 ),
-              ),
-            );
-          },
+              );
+            },
+          ),
         );
       },
       child: imageWidget,

@@ -16,6 +16,7 @@ enum ProfileSectionType {
   wall,
   gifts,
   media,
+  gifs,
   files,
   links,
   voice,
@@ -50,6 +51,8 @@ class ProfileSectionItem {
         return iconoir.Gift(color: color, width: size, height: size);
       case ProfileSectionType.media:
         return iconoir.MediaImageList(color: color, width: size, height: size);
+      case ProfileSectionType.gifs:
+        return Icon(Icons.gif_box_outlined, color: color, size: size);
       case ProfileSectionType.files:
         return iconoir.Page(color: color, width: size, height: size);
       case ProfileSectionType.links:

@@ -244,15 +244,17 @@ class CachedGroupProfileSnapshot {
   }
 }
 
-/// Синхронный снимок вкладок общих материалов чата (Медиа, Файлы, Ссылки, Голосовые).
+/// Синхронный снимок вкладок общих материалов чата (Медиа, GIF, Файлы, Ссылки, Голосовые).
 class CachedSharedContentSnapshot {
   final List<DbMessage> mediaMessages;
+  final List<DbMessage> gifMessages;
   final List<DbMessage> fileMessages;
   final List<DbMessage> linkMessages;
   final List<DbMessage> voiceMessages;
 
   const CachedSharedContentSnapshot({
     this.mediaMessages = const [],
+    this.gifMessages = const [],
     this.fileMessages = const [],
     this.linkMessages = const [],
     this.voiceMessages = const [],
@@ -1067,9 +1069,11 @@ class ProfileInstantCache {
         db.getSharedFilesForChat(chatId),
         db.getSharedLinksForChat(chatId),
         db.getSharedVoiceForChat(chatId),
+        db.getSharedGifsForChat(chatId),
       ]);
       _sharedContentSnapshots[chatId] = CachedSharedContentSnapshot(
         mediaMessages: results[0],
+        gifMessages: results[4],
         fileMessages: results[1],
         linkMessages: results[2],
         voiceMessages: results[3],

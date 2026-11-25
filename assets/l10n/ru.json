@@ -1939,5 +1939,18 @@
   "weekday_sun": "Вс",
   "weekday_thu": "Чт",
   "weekday_tue": "Вт",
-  "weekday_wed": "Ср"
+  "weekday_wed": "Ср",
+  "media_viewer_of": "{current} из {total}",
+  "media_viewer_save_to_gallery": "Сохранить в галерею",
+  "media_viewer_save_to_downloads": "Сохранить в загрузки",
+  "media_viewer_saved_to_gallery": "Сохранено в галерею",
+  "media_viewer_saved_to_downloads": "Сохранено в загрузки",
+  "media_viewer_save_gif": "Сохранить в GIF",
+  "media_viewer_gif_saved": "GIF добавлена в избранные",
+  "media_viewer_jump_to_message": "Перейти к сообщению",
+  "media_viewer_pip": "Мини-окно",
+  "media_viewer_protected_content": "Копирование и сохранение запрещены",
+  "media_viewer_more": "ещё",
+  "media_viewer_file_unavailable": "Не удалось подготовить файл",
+  "profile_tab_gifs": "GIF"
 }
