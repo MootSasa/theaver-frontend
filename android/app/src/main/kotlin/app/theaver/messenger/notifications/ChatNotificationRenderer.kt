@@ -628,7 +628,7 @@ object ChatNotificationRenderer {
                     val bytes = Base64.decode(url.substring(comma + 1), Base64.DEFAULT)
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                 } else {
-                    loadCached(context, url)
+                    loadCached(context, store, url)
                 }
                 if (bitmap != null) return circle(bitmap)
             } catch (e: Throwable) {
@@ -639,14 +639,36 @@ object ChatNotificationRenderer {
     }
 
     private fun resolveUrl(store: NotificationStore, raw: String): String? {
-        val url = raw.trim()
+        var url = raw.trim()
         if (url.isEmpty()) return null
         if (url.startsWith("data:")) return url
         val storage = store.storageUrl.trimEnd('/')
         val base = store.baseUrl.trimEnd('/')
-        for (local in listOf("http://localhost:9000", "http://127.0.0.1:9000", "http://minio:9000",
-            "https://localhost:9000", "https://127.0.0.1:9000", "https://minio:9000")) {
-            if (url.startsWith(local) && storage.isNotEmpty()) return storage + url.removePrefix(local)
+        for (local in listOf(
+            "http://localhost:8333", "http://127.0.0.1:8333", "http://seaweedfs:8333",
+            "https://localhost:8333", "https://127.0.0.1:8333", "https://seaweedfs:8333",
+            "http://localhost:9000", "http://127.0.0.1:9000", "http://minio:9000",
+            "https://localhost:9000", "https://127.0.0.1:9000", "https://minio:9000"
+        )) {
+            if (url.startsWith(local) && storage.isNotEmpty()) {
+                url = storage + url.removePrefix(local)
+                break
+            }
+        }
+        val isPresigned = url.contains("X-Amz-Signature", ignoreCase = true)
+        if (!isPresigned && base.isNotEmpty()) {
+            if (url.startsWith("/avatars/")) {
+                return "$base/api/files/avatar/${url.removePrefix("/avatars/")}"
+            }
+            if (storage.isNotEmpty() && url.startsWith("$storage/avatars/")) {
+                return "$base/api/files/avatar/${url.removePrefix("$storage/avatars/")}"
+            }
+            if (url.startsWith("https://storage.theaver.app/avatars/")) {
+                return "$base/api/files/avatar/${url.removePrefix("https://storage.theaver.app/avatars/")}"
+            }
+            if (url.startsWith("http://storage.theaver.app/avatars/")) {
+                return "$base/api/files/avatar/${url.removePrefix("http://storage.theaver.app/avatars/")}"
+            }
         }
         if (url.startsWith("http://") || url.startsWith("https://")) return url
         if (url.startsWith("/")) {
@@ -656,9 +678,23 @@ object ChatNotificationRenderer {
         return null
     }
 
-    private fun loadCached(context: Context, url: String): Bitmap? {
+    private fun stableCacheKeyUrl(url: String): String {
+        val noFrag = url.substringBefore('#')
+        val qIdx = noFrag.indexOf('?')
+        if (qIdx == -1) return noFrag
+        val path = noFrag.substring(0, qIdx)
+        val kept = noFrag.substring(qIdx + 1)
+            .split('&')
+            .filter { part ->
+                val name = part.substringBefore('=').lowercase()
+                name.isNotEmpty() && name != "mt" && !name.startsWith("x-amz-")
+            }
+        return if (kept.isEmpty()) path else "$path?${kept.joinToString("&")}"
+    }
+
+    private fun loadCached(context: Context, store: NotificationStore, url: String): Bitmap? {
         val dir = File(context.cacheDir, "notif_avatars").apply { mkdirs() }
-        val file = File(dir, sha1(url) + ".img")
+        val file = File(dir, sha1(stableCacheKeyUrl(url)) + ".img")
         if (file.exists() && file.length() > 0 && System.currentTimeMillis() - file.lastModified() < 7 * 24 * 3600_000L) {
             decodeSampled(file)?.let { return it }
         }
@@ -666,6 +702,12 @@ object ChatNotificationRenderer {
             connectTimeout = 4000
             readTimeout = 4000
             instanceFollowRedirects = true
+            if (url.contains("/api/files/") &&
+                !url.contains("X-Amz-Signature", ignoreCase = true) &&
+                store.authToken.isNotBlank()
+            ) {
+                setRequestProperty("Authorization", "Bearer ${store.authToken}")
+            }
         }
         try {
             if (conn.responseCode != 200) return null

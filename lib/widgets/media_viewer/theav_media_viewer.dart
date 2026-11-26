@@ -737,7 +737,11 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
           AppConfig.resolveMediaUrl(resolved) ?? resolved,
         ) ??
         resolved;
-    return CachedNetworkImageProvider(cleanUrl);
+    return CachedNetworkImageProvider(
+      cleanUrl,
+      cacheKey: AppConfig.cacheKeyForUrl(cleanUrl),
+      headers: AppConfig.authHeadersForUrl(cleanUrl),
+    );
   }
 
   Widget _buildStaticMediaChild(

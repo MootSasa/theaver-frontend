@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
+import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_media_item.dart';
 import '../../services/contacts_service.dart';
@@ -1029,6 +1030,8 @@ class _FilmstripThumbImage extends StatelessWidget {
       if (validUrl.startsWith('http://') || validUrl.startsWith('https://')) {
         return CachedNetworkImage(
           imageUrl: validUrl,
+          cacheKey: AppConfig.cacheKeyForUrl(validUrl),
+          httpHeaders: AppConfig.authHeadersForUrl(validUrl),
           fit: BoxFit.cover,
           memCacheWidth: 96,
           filterQuality: FilterQuality.low,
@@ -1059,6 +1062,8 @@ class _FilmstripThumbImage extends StatelessWidget {
     if (thumbUrl != null && thumbUrl.startsWith('http')) {
       return CachedNetworkImage(
         imageUrl: thumbUrl,
+        cacheKey: AppConfig.cacheKeyForUrl(thumbUrl),
+        httpHeaders: AppConfig.authHeadersForUrl(thumbUrl),
         fit: BoxFit.cover,
         memCacheWidth: 96,
         filterQuality: FilterQuality.low,

@@ -803,7 +803,7 @@ jobs:
           files: dist/**/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Deploy to Theaver API & MinIO Storage
+      - name: Deploy to Theaver API & SeaweedFS Storage
         continue-on-error: true
         env:
           THEAVER_API_URL: ${{ secrets.THEAVER_API_URL }}

@@ -619,8 +619,15 @@ class StickerService extends ChangeNotifier {
   static String resolveUrl(String rawUrl) {
     final trimmed = rawUrl.trim();
     if (trimmed.isEmpty) return '';
+    if (trimmed.startsWith('/avatars/') || trimmed.startsWith('avatars/')) {
+      return AppConfig.resolveMediaUrl(trimmed) ?? '';
+    }
+    final rewrittenInternal = AppConfig.rewriteInternalStorageUrl(trimmed);
+    if (rewrittenInternal != null) {
+      return AppConfig.resolveMediaUrl(rewrittenInternal) ?? rewrittenInternal;
+    }
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return trimmed;
+      return AppConfig.resolveMediaUrl(trimmed) ?? trimmed;
     }
     final base = AppConfig.baseUrl.replaceAll(RegExp(r'/$'), '');
     if (trimmed.startsWith('/')) {
@@ -1784,7 +1791,8 @@ class StickerService extends ChangeNotifier {
       final cacheDir = await _getRasterCacheDir();
       if (cacheDir == null) return null;
 
-      final safeKey = base64Url.encode(utf8.encode(fullUrl)).replaceAll('=', '');
+      final cacheKeySource = AppConfig.cacheKeyForUrl(fullUrl) ?? fullUrl;
+      final safeKey = base64Url.encode(utf8.encode(cacheKeySource)).replaceAll('=', '');
       final ext = fullUrl.toLowerCase().contains('.gif') ? '.gif' : '.webp';
       final file = File(p.join(cacheDir.path, '$safeKey$ext'));
       if (await file.exists() && await file.length() > 16) {
@@ -1799,7 +1807,10 @@ class StickerService extends ChangeNotifier {
       }
       _activeRasterDownloads++;
       try {
-        final resp = await http.get(Uri.parse(fullUrl));
+        final resp = await http.get(
+          Uri.parse(fullUrl),
+          headers: AppConfig.authHeadersForUrl(fullUrl),
+        );
         if (resp.statusCode == 200 && resp.bodyBytes.length > 16) {
           await file.writeAsBytes(resp.bodyBytes, flush: false);
           _rasterFileCache[fullUrl] = file;

@@ -99,8 +99,8 @@ class EntityParser {
     return cleaned;
   }
 
-  /// Returns whether a URL points to an internal object storage or media CDN host (MinIO/S3),
-  /// such as storage.theaver.app, AppConfig.storageUrl, or local MinIO instances.
+  /// Returns whether a URL points to an internal object storage or protected API media route,
+  /// such as storage.theaver.app, AppConfig.storageUrl, `/api/files/...`, or local SeaweedFS/MinIO instances.
   /// Internal storage URLs must not generate chat link preview banners or cards.
   static bool isInternalStorageUrl(String? url) {
     if (url == null || url.trim().isEmpty) return false;
@@ -125,8 +125,22 @@ class EntityParser {
         return true;
       }
 
-      // Localhost / Docker MinIO storage
-      if ((host == 'localhost' || host == '127.0.0.1') && uri.port == 9000) {
+      // Protected /api/files/... proxy routes on API host
+      if (uri.path.contains('/api/files/')) {
+        final configApi = Uri.tryParse(AppConfig.baseUrl);
+        if (configApi != null &&
+            configApi.host.isNotEmpty &&
+            host == configApi.host.toLowerCase()) {
+          return true;
+        }
+      }
+
+      // Localhost / Docker SeaweedFS (:8333) or legacy MinIO (:9000) storage
+      if ((host == 'localhost' ||
+              host == '127.0.0.1' ||
+              host == 'seaweedfs' ||
+              host == 'minio') &&
+          (uri.port == 8333 || uri.port == 9000)) {
         return true;
       }
 

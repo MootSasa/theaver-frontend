@@ -293,7 +293,11 @@ class TheavWallpaper {
       final validUrl = AppConfig.resolveMediaUrl(imageUrl);
       if (validUrl != null && validUrl.isNotEmpty) {
         if (validUrl.startsWith('http://') || validUrl.startsWith('https://')) {
-          return CachedNetworkImageProvider(validUrl);
+          return CachedNetworkImageProvider(
+            validUrl,
+            cacheKey: AppConfig.cacheKeyForUrl(validUrl),
+            headers: AppConfig.authHeadersForUrl(validUrl),
+          );
         } else if (!kIsWeb && File(validUrl).existsSync()) {
           return FileImage(File(validUrl));
         }

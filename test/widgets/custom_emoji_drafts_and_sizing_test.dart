@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:theaver/config/app_config.dart';
 import 'package:theaver/models/chat_draft.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/sticker_service.dart';
@@ -182,8 +183,15 @@ void main() {
       expect(EntityParser.isInternalStorageUrl('https://storage.theaver.app/stickers/101.webp'), isTrue);
       expect(EntityParser.isInternalStorageUrl('https://storage.theaver.app/avatars/avatar_12.jpg'), isTrue);
       expect(EntityParser.isInternalStorageUrl('http://storage.theaver.app/test'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('http://127.0.0.1:8333/bucket/item'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('http://localhost:8333/media'), isTrue);
+      expect(EntityParser.isInternalStorageUrl('http://seaweedfs:8333/media/x.png'), isTrue);
       expect(EntityParser.isInternalStorageUrl('http://127.0.0.1:9000/bucket/item'), isTrue);
       expect(EntityParser.isInternalStorageUrl('http://localhost:9000/media'), isTrue);
+      expect(
+        EntityParser.isInternalStorageUrl('${AppConfig.baseUrl}/api/files/avatar/u1/a.png'),
+        isTrue,
+      );
 
       // External web links should NOT be internal storage URLs
       expect(EntityParser.isInternalStorageUrl('https://github.com/flutter/flutter'), isFalse);

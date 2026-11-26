@@ -430,22 +430,7 @@ String? getValidAvatarUrl(String? url) {
   String withCrop(String resolved) =>
       split.crop != null ? split.crop!.attachToUrl(resolved) : resolved;
 
-  // Rewrite internal/local MinIO URLs (localhost:9000 / 127.0.0.1:9000 / minio:9000) to public storageUrl
-  if (working.startsWith('http://localhost:9000') ||
-      working.startsWith('http://127.0.0.1:9000') ||
-      working.startsWith('http://minio:9000') ||
-      working.startsWith('https://localhost:9000') ||
-      working.startsWith('https://127.0.0.1:9000') ||
-      working.startsWith('https://minio:9000')) {
-    final base = AppConfig.storageUrl.replaceAll(RegExp(r'/+$'), '');
-    final parsed = Uri.tryParse(working);
-    if (parsed != null) {
-      working =
-          '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
-    }
-  }
-
-  // Local file path or file:// URI
+  // Local file path or file:// URI (keep filesystem resolution fast and explicit).
   if (!kIsWeb && working.startsWith('file://')) {
     try {
       if (_localFileExistsCached(Uri.parse(working).toFilePath())) {
@@ -458,30 +443,17 @@ String? getValidAvatarUrl(String? url) {
     if (!kIsWeb && _localFileExistsCached(working)) {
       return withCrop(working);
     }
-    // Relative URL on storage or backend (e.g. /avatars/xyz.jpg or /api/...)
-    final base = working.startsWith('/avatars/')
-        ? AppConfig.storageUrl
-        : AppConfig.baseUrl;
-    final cleanBase =
-        base.endsWith('/') ? base.substring(0, base.length - 1) : base;
-    return withCrop('$cleanBase$working');
   }
 
-  try {
-    final uri = Uri.parse(working);
-    if (uri.hasScheme && (uri.scheme == 'http' || uri.scheme == 'https')) {
-      return withCrop(working);
-    }
-    if (!kIsWeb && _localFileExistsCached(working)) {
-      return withCrop(working);
-    }
-    return null;
-  } catch (e) {
-    if (!kIsWeb && _localFileExistsCached(working)) {
-      return withCrop(working);
-    }
-    return null;
+  final resolved = AppConfig.resolveMediaUrl(working);
+  if (resolved == null || resolved.isEmpty) return null;
+  if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+    return withCrop(resolved);
   }
+  if (!kIsWeb && _localFileExistsCached(resolved)) {
+    return withCrop(resolved);
+  }
+  return null;
 }
 
 final Map<String, MemoryImage> _dataUrlMemoryImageCache = {};
@@ -595,6 +567,8 @@ ImageProvider? _buildRawAvatarImageProvider(
   return _maybeResizeAvatar(
     CachedNetworkImageProvider(
       validUrl,
+      cacheKey: AppConfig.cacheKeyForUrl(validUrl),
+      headers: AppConfig.authHeadersForUrl(validUrl),
       errorListener: (e) {
         debugPrint('[avatarImageProvider] Failed to load avatar ($validUrl): $e');
       },

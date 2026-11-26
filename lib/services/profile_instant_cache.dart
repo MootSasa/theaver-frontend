@@ -1087,7 +1087,14 @@ class ProfileInstantCache {
       final clean = stripAvatarCropFragment(resolved) ?? resolved;
       if (clean.startsWith('http://') || clean.startsWith('https://')) {
         try {
-          precacheImage(CachedNetworkImageProvider(clean), context);
+          precacheImage(
+            CachedNetworkImageProvider(
+              clean,
+              cacheKey: AppConfig.cacheKeyForUrl(clean),
+              headers: AppConfig.authHeadersForUrl(clean),
+            ),
+            context,
+          );
         } catch (_) {}
       }
     }

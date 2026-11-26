@@ -651,45 +651,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Future<void> _loginAsTestUser() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final result = await AuthService.loginAsTestUser();
-
-      if (!mounted) return;
-
-      if (result['success'] == true) {
-        // Update WebSocket with test user ID
-        final wsService = WebSocketService();
-        await wsService.updateUserId(result['userId'] as String?);
-
-        if (!mounted) return;
-        TilingLayoutController.instance.closeAllChats();
-        // Navigate to home screen and clear back stack
-        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
-          (route) => false,
-        );
-      } else {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = result['message'] as String?;
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Test login failed: $e';
-      });
-    }
-  }
-
   Future<void> _handleGoogleSignIn() async {
     // TODO: Implement Google Sign-In
     // For now, show a placeholder message
@@ -898,26 +859,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               l10n.translate('auth_login'),
                               style: const TextStyle(fontSize: 16),
                             ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  // Test Login Button (offline mode)
-                  SizedBox(
-                    width: double.infinity,
-                    height: 40,
-                    child: OutlinedButton(
-                      onPressed: _isLoading ? null : _loginAsTestUser,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.grey[600],
-                        side: BorderSide(color: Colors.grey[400]!),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Text(
-                        'Test Login (admin / admin)',
-                        style: TextStyle(fontSize: 14),
-                      ),
                     ),
                   ),
                   const SizedBox(height: 16),

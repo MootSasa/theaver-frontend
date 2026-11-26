@@ -43,15 +43,27 @@ class AccountManager extends ChangeNotifier {
 
   Future<void> _loadAccounts() async {
     final accountsJson = _prefs.getStringList(_accountsKey) ?? [];
-    _accounts = accountsJson.map((json) => Account.fromJson(jsonDecode(json))).toList();
+    final loaded =
+        accountsJson.map((json) => Account.fromJson(jsonDecode(json))).toList();
+    final filtered = loaded
+        .where((acc) =>
+            acc.userId != 'test_user_001' &&
+            acc.token != 'test_token_offline_mode')
+        .toList();
+    final removedLegacyTest = filtered.length != loaded.length;
+    _accounts = filtered;
 
     final currentAccountId = _prefs.getString(_currentAccountIdKey);
     if (currentAccountId != null) {
       try {
-        _currentAccount = _accounts.firstWhere((acc) => acc.userId == currentAccountId);
+        _currentAccount =
+            _accounts.firstWhere((acc) => acc.userId == currentAccountId);
       } catch (_) {
         _currentAccount = null;
       }
+    }
+    if (removedLegacyTest || currentAccountId == 'test_user_001') {
+      await _saveAccounts();
     }
   }
 

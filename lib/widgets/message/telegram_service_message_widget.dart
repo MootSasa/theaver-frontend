@@ -535,6 +535,8 @@ class TelegramServiceMessageWidget extends StatelessWidget {
     if (resolvedUrl.startsWith('http://') || resolvedUrl.startsWith('https://')) {
       return CachedNetworkImage(
         imageUrl: resolvedUrl,
+        cacheKey: AppConfig.cacheKeyForUrl(resolvedUrl),
+        httpHeaders: AppConfig.authHeadersForUrl(resolvedUrl),
         width: 64,
         height: 64,
         fit: BoxFit.cover,

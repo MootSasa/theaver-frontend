@@ -377,8 +377,14 @@ class _ViewOnceViewerDialogState extends State<_ViewOnceViewerDialog> {
         ),
       );
     } else {
+      final resolvedMediaUrl =
+          AppConfig.resolveMediaUrl(widget.mediaUrl) ?? widget.mediaUrl;
       body = PhotoView(
-        imageProvider: CachedNetworkImageProvider(widget.mediaUrl),
+        imageProvider: CachedNetworkImageProvider(
+          resolvedMediaUrl,
+          cacheKey: AppConfig.cacheKeyForUrl(resolvedMediaUrl),
+          headers: AppConfig.authHeadersForUrl(resolvedMediaUrl),
+        ),
         backgroundDecoration: const BoxDecoration(color: Colors.black),
         minScale: PhotoViewComputedScale.contained,
         maxScale: PhotoViewComputedScale.covered * 2.5,

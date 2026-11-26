@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:lottie/lottie.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+import '../../config/app_config.dart';
 import '../../services/emoji_effect_cache_service.dart';
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
@@ -124,13 +125,25 @@ class _ControlledAnimatedNetworkImageState
         if (file != null) {
           _resolveProvider(FileImage(file));
         } else {
-          _resolveProvider(NetworkImage(StickerService.resolveUrl(widget.url)));
+          final netUrl = StickerService.resolveUrl(widget.url);
+          _resolveProvider(
+            NetworkImage(
+              netUrl,
+              headers: AppConfig.authHeadersForUrl(netUrl),
+            ),
+          );
         }
       });
       return;
     }
 
-    _resolveProvider(NetworkImage(StickerService.resolveUrl(widget.url)));
+    final netUrl = StickerService.resolveUrl(widget.url);
+    _resolveProvider(
+      NetworkImage(
+        netUrl,
+        headers: AppConfig.authHeadersForUrl(netUrl),
+      ),
+    );
   }
 
   void _resolveProvider(ImageProvider baseProvider) {

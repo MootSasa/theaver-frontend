@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 
+import '../../config/app_config.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../utils/blur_utils.dart';
@@ -156,10 +157,12 @@ class _PinnedMessageBannerState extends State<PinnedMessageBanner>
       }
       final thumbUrl = msg.thumbUrl;
       if (thumbUrl != null && thumbUrl.isNotEmpty) {
+        final resolvedThumb = AppConfig.resolveMediaUrl(thumbUrl) ?? thumbUrl;
         return ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Image.network(
-            thumbUrl,
+            resolvedThumb,
+            headers: AppConfig.authHeadersForUrl(resolvedThumb),
             width: 18,
             height: 18,
             fit: BoxFit.cover,

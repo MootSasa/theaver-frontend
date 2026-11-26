@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../config/app_config.dart';
 import '../../models/profile_customization.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
@@ -793,6 +794,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
       return CachedNetworkImage(
         imageUrl: validUrl,
+        cacheKey: AppConfig.cacheKeyForUrl(validUrl),
+        httpHeaders: AppConfig.authHeadersForUrl(validUrl),
         fit: fit,
         alignment: alignment,
         width: width,

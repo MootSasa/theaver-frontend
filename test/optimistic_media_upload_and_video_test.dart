@@ -160,22 +160,22 @@ void main() {
     PathProviderPlatform.instance = _TestPathProviderPlatform(tempDir);
 
     await AccountManager().init();
-    if (AccountManager().hasAccount('test_user_001')) {
-      await AccountManager().removeAccount('test_user_001');
+    if (AccountManager().hasAccount('user_fixture_001')) {
+      await AccountManager().removeAccount('user_fixture_001');
     }
     await AccountManager().addAccount(Account(
-      userId: 'test_user_001',
-      token: 'test_token_offline_mode',
-      username: 'admin',
-      displayName: 'Test Admin',
+      userId: 'user_fixture_001',
+      token: 'jwt_fixture_token',
+      username: 'fixture_user',
+      displayName: 'Fixture User',
       lastLogin: DateTime.now(),
     ));
 
     await AppDatabase.closeAll();
-    AppDatabase.setActiveUser('test_user_001');
+    AppDatabase.setActiveUser('user_fixture_001');
     AppDatabase.setTestingInstance(
-      'test_user_001',
-      AppDatabase.forTesting(NativeDatabase.memory(), userId: 'test_user_001'),
+      'user_fixture_001',
+      AppDatabase.forTesting(NativeDatabase.memory(), userId: 'user_fixture_001'),
     );
 
     await AppDatabase().saveChat(ChatsCompanion.insert(
@@ -298,7 +298,7 @@ void main() {
       expect(await results[0]!.readAsBytes(), expectedBytes);
       expect(directHits, 0);
       expect(apiFallbackHits, 1);
-      expect(capturedAuthHeader, 'Bearer test_token_offline_mode');
+      expect(capturedAuthHeader, 'Bearer jwt_fixture_token');
 
       // 2) Expired presigned URL returns 403 -> falls back to /api/files/download.
       const expiredPresignedUrl =
@@ -347,12 +347,12 @@ void main() {
             'message': Message(
               id: 'srv_$localId',
               chatId: chatId,
-              senderId: 'test_user_001',
+              senderId: 'user_fixture_001',
               content: content,
               messageType: messageType,
               isEdited: false,
               createdAt: DateTime.now().toUtc().toIso8601String(),
-              senderName: 'Test Admin',
+              senderName: 'Fixture User',
               fileUrl: fileUrl,
               fileName: fileName,
               localId: localId,
@@ -466,12 +466,12 @@ void main() {
               return Message(
                 id: 'srv_$lid',
                 chatId: chatId,
-                senderId: 'test_user_001',
+                senderId: 'user_fixture_001',
                 content: it['content']?.toString() ?? '',
                 messageType: 'image',
                 isEdited: false,
                 createdAt: now,
-                senderName: 'Test Admin',
+                senderName: 'Fixture User',
                 fileUrl: it['file_url']?.toString(),
                 fileName: it['file_name']?.toString(),
                 localId: lid,
@@ -564,12 +564,12 @@ void main() {
             'message': Message(
               id: 'srv_$localId',
               chatId: chatId,
-              senderId: 'test_user_001',
+              senderId: 'user_fixture_001',
               content: content,
               messageType: messageType,
               isEdited: false,
               createdAt: DateTime.now().toUtc().toIso8601String(),
-              senderName: 'Test Admin',
+              senderName: 'Fixture User',
               fileUrl: fileUrl,
               fileName: fileName,
               localId: localId,
@@ -782,11 +782,11 @@ void main() {
       final apiHit = await MediaCacheManager.instance.downloadMedia(
         'https://api.theaver.app/api/files/download/videos/net.mp4',
       );
-      final localMinioHit = await MediaCacheManager.instance.getCachedFile(
-        'http://localhost:9000/media/videos/net.mp4',
+      final localStorageHit = await MediaCacheManager.instance.getCachedFile(
+        'http://localhost:8333/media/videos/net.mp4',
       );
       expect(apiHit!.path, results[0]!.path);
-      expect(localMinioHit!.path, results[0]!.path);
+      expect(localStorageHit!.path, results[0]!.path);
       expect(httpHits, 1);
     });
 
@@ -913,12 +913,12 @@ void main() {
               'message': Message(
                 id: 'srv_$localId',
                 chatId: chatId,
-                senderId: 'test_user_001',
+                senderId: 'user_fixture_001',
                 content: content,
                 messageType: messageType,
                 isEdited: false,
                 createdAt: DateTime.now().toUtc().toIso8601String(),
-                senderName: 'Test Admin',
+                senderName: 'Fixture User',
                 fileUrl: fileUrl,
                 fileName: fileName,
                 localId: localId,
@@ -940,12 +940,12 @@ void main() {
                 return Message(
                   id: 'srv_$lid',
                   chatId: chatId,
-                  senderId: 'test_user_001',
+                  senderId: 'user_fixture_001',
                   content: it['content']?.toString() ?? '',
                   messageType: 'image',
                   isEdited: false,
                   createdAt: now,
-                  senderName: 'Test Admin',
+                  senderName: 'Fixture User',
                   fileUrl: it['file_url']?.toString(),
                   fileName: it['file_name']?.toString(),
                   localId: lid,

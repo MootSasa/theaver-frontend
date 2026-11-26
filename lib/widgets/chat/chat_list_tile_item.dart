@@ -946,6 +946,8 @@ class ChatListTileItem extends StatelessWidget {
     if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
       imageWidget = CachedNetworkImage(
         imageUrl: resolved,
+        cacheKey: AppConfig.cacheKeyForUrl(resolved),
+        httpHeaders: AppConfig.authHeadersForUrl(resolved),
         width: 18,
         height: 18,
         fit: BoxFit.cover,

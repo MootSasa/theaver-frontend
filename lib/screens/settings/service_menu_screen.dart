@@ -11,11 +11,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
-import '../../services/deep_link_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/websocket_service.dart';
 import '../../theme/theav_theme.dart';
-import '../auth/login_screen.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../services/account_manager.dart';
 import '../../services/database/app_database.dart';
@@ -37,7 +35,6 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
   bool _isCheckingConnection = false;
   String? _connectionTestResult;
   bool? _connectionTestSuccess;
-  String? _currentUserToken;
   int? _lastHealthLatencyMs;
   bool _diagnosticsLoading = false;
   Map<String, dynamic> _diagnostics = {};
@@ -46,17 +43,7 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
   void initState() {
     super.initState();
     _isCutoutHighlighted = _cutoutOverlayEntry != null;
-    _loadCurrentUserInfo();
     unawaited(_loadDiagnostics());
-  }
-
-  Future<void> _loadCurrentUserInfo() async {
-    final token = await AuthService.getToken();
-    if (mounted) {
-      setState(() {
-        _currentUserToken = token;
-      });
-    }
   }
 
   String _maskSecret(String? value, {String emptyFallback = 'none'}) {
@@ -71,7 +58,7 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
     }
     final prefs = await SharedPreferences.getInstance();
     final account = AccountManager().currentAccount;
-    final token = _currentUserToken ?? await AuthService.getToken();
+    final token = await AuthService.getToken();
     final deviceId = prefs.getString('current_device_id') ??
         prefs.getString('device_id') ??
         'unknown';
@@ -219,45 +206,36 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
 
       if (response.statusCode == 200) {
         String msg = 'REST API: OK ($latency мс)';
-        if (_currentUserToken == 'test_token_offline_mode') {
-          msg += '\n⚠️ Токен тестовый (офлайн). Сервер отклонит WebSocket (401). Для работы выйдите и зарегистрируйтесь.';
-          setState(() {
-            _connectionTestResult = msg;
-            _connectionTestSuccess = false;
-            _isCheckingConnection = false;
-          });
-        } else {
-          final token = await AuthService.getToken();
-          bool isAuthValid = false;
-          if (token != null && token.isNotEmpty) {
-            try {
-              final authResp = await http.get(
-                Uri.parse('${AppConfig.baseUrl}/api/auth/sessions'),
-                headers: {'Authorization': 'Bearer $token'},
-              ).timeout(const Duration(seconds: 4));
-              if (authResp.statusCode == 200) {
-                isAuthValid = true;
-                msg += '\nАвторизация: Действительна (OK)';
-              } else if (authResp.statusCode == 401) {
-                msg += '\n⚠️ Авторизация: Ошибка 401 (Сессия истекла или отозвана)';
-              } else {
-                msg += '\n⚠️ Авторизация: HTTP ${authResp.statusCode}';
-              }
-            } catch (_) {}
-          }
-
-          await WebSocketService().reconnect();
-          await Future.delayed(const Duration(milliseconds: 600));
-          final isWs = WebSocketService().isConnected;
-          msg += isWs ? '\nWebSocket: Подключено (OK)' : '\nWebSocket: В процессе подключения...';
-          setState(() {
-            _connectionTestResult = msg;
-            _connectionTestSuccess = isAuthValid && isWs;
-            _isCheckingConnection = false;
-            _lastHealthLatencyMs = latency;
-          });
-          unawaited(_loadDiagnostics());
+        final token = await AuthService.getToken();
+        bool isAuthValid = false;
+        if (token != null && token.isNotEmpty) {
+          try {
+            final authResp = await http.get(
+              Uri.parse('${AppConfig.baseUrl}/api/auth/sessions'),
+              headers: {'Authorization': 'Bearer $token'},
+            ).timeout(const Duration(seconds: 4));
+            if (authResp.statusCode == 200) {
+              isAuthValid = true;
+              msg += '\nАвторизация: Действительна (OK)';
+            } else if (authResp.statusCode == 401) {
+              msg += '\n⚠️ Авторизация: Ошибка 401 (Сессия истекла или отозвана)';
+            } else {
+              msg += '\n⚠️ Авторизация: HTTP ${authResp.statusCode}';
+            }
+          } catch (_) {}
         }
+
+        await WebSocketService().reconnect();
+        await Future.delayed(const Duration(milliseconds: 600));
+        final isWs = WebSocketService().isConnected;
+        msg += isWs ? '\nWebSocket: Подключено (OK)' : '\nWebSocket: В процессе подключения...';
+        setState(() {
+          _connectionTestResult = msg;
+          _connectionTestSuccess = isAuthValid && isWs;
+          _isCheckingConnection = false;
+          _lastHealthLatencyMs = latency;
+        });
+        unawaited(_loadDiagnostics());
       } else {
         setState(() {
           _connectionTestResult = 'Ошибка HTTP ${response.statusCode}: ${response.body}';
@@ -272,16 +250,6 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
         _isCheckingConnection = false;
       });
     }
-  }
-
-  Future<void> _logoutFromCurrentAccount() async {
-    final nav = DeepLinkService().navigatorKey.currentState ??
-        Navigator.of(context, rootNavigator: true);
-    nav.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
-    await AuthService.logout();
   }
 
   void _showServerConfigDialog() {
@@ -507,42 +475,6 @@ class _ServiceMenuScreenState extends State<ServiceMenuScreen> {
           bottom: math.max(24.0, MediaQuery.paddingOf(context).bottom + 16.0),
         ),
         children: [
-          if (_currentUserToken == 'test_token_offline_mode')
-            Container(
-              margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.amber.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.amber),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 22),
-                      SizedBox(width: 8),
-                      Text(
-                        'Тестовый офлайн-аккаунт',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Вы авторизованы под локальным тестовым аккаунтом. Сервер вернёт ошибку 401 при подключении WebSocket и чатов. Для полноценной работы выйдите и зарегистрируйтесь на сервере.',
-                    style: TextStyle(fontSize: 13),
-                  ),
-                  const SizedBox(height: 10),
-                  FilledButton.tonalIcon(
-                    onPressed: _logoutFromCurrentAccount,
-                    icon: const Icon(Icons.logout, size: 18),
-                    label: const Text('Выйти и зарегистрироваться'),
-                  ),
-                ],
-              ),
-            ),
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Text(

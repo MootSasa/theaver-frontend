@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:theaver/config/app_config.dart';
 import 'package:theaver/services/media_cache_manager.dart';
 import 'package:theaver/services/settings_service.dart';
 
@@ -90,19 +91,29 @@ void main() {
   });
 
   group('MediaCacheManager Authorization Header Selectivity Tests', () {
-    test('Direct MinIO / storage URLs do not require Bearer token', () {
-      final s3Uri = Uri.parse('http://localhost:9000/theaver-files/video/note.mp4');
-      final isMinIOStorage = s3Uri.port == 9000 ||
-          s3Uri.host.contains('minio') ||
-          s3Uri.host.startsWith('storage.');
-      expect(isMinIOStorage, isTrue);
+    test('Direct SeaweedFS / S3 URLs do not require Bearer token while API proxy routes do', () {
+      for (final raw in [
+        'http://localhost:8333/releases/app.apk',
+        'http://localhost:9000/releases/app.apk',
+        'https://storage.theaver.app/stickers/101.webp',
+      ]) {
+        expect(AppConfig.authHeadersForUrl(raw, tokenOverride: 'jwt'), isNull);
+      }
 
-      final apiUri = Uri.parse('http://localhost:8080/api/files/download/note.mp4');
-      final isApiMinIO = apiUri.port == 9000 ||
-          apiUri.host.contains('minio') ||
-          apiUri.host.startsWith('storage.');
-      expect(isApiMinIO, isFalse);
-      expect(apiUri.path.contains('/api/'), isTrue);
+      expect(
+        AppConfig.authHeadersForUrl(
+          '${AppConfig.baseUrl}/api/files/download/note.mp4',
+          tokenOverride: 'jwt',
+        ),
+        equals({'Authorization': 'Bearer jwt'}),
+      );
+      expect(
+        AppConfig.authHeadersForUrl(
+          '${AppConfig.baseUrl}/api/files/avatar/u1/a.png?mt=123',
+          tokenOverride: 'jwt',
+        ),
+        equals({'Authorization': 'Bearer jwt'}),
+      );
     });
   });
 
@@ -114,6 +125,7 @@ void main() {
       const variants = [
         '/media/videos/demo.mp4',
         'https://storage.theaver.app/media/videos/demo.mp4',
+        'http://localhost:8333/media/videos/demo.mp4',
         'http://localhost:9000/media/videos/demo.mp4',
         'https://api.theaver.app/api/files/download/videos/demo.mp4',
         'https://storage.theaver.app/media/videos/demo.mp4?X-Amz-Signature=deadbeef&X-Amz-Expires=300',
@@ -125,6 +137,20 @@ void main() {
         expect(MediaCacheManager.instance.canonicalCacheKey(v), expectedKey);
         expect(MediaCacheManager.instance.getCacheFilename(v), expectedName);
       }
+
+      final avatarVariants = [
+        '/avatars/u1/pic.png',
+        'https://storage.theaver.app/avatars/u1/pic.png',
+        '${AppConfig.baseUrl}/api/files/avatar/u1/pic.png?mt=99999',
+      ];
+      final avatarExpected = MediaCacheManager.instance.canonicalCacheKey(avatarVariants.first);
+      for (final v in avatarVariants) {
+        expect(MediaCacheManager.instance.canonicalCacheKey(v), avatarExpected);
+      }
+      expect(
+        MediaCacheManager.instance.extractProtectedObjectName(avatarVariants.first),
+        isNull,
+      );
 
       final seeded = await MediaCacheManager.instance.seedCacheFromFile(
         variants.first,

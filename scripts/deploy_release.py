@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deploy compiled release artifacts to Theaver API and MinIO storage,
+Deploy compiled release artifacts to Theaver API and SeaweedFS storage,
 and register them in the PostgreSQL database.
 Can be executed in GitHub Actions or locally.
 """
@@ -192,7 +192,7 @@ def _stream_multipart_once(url, file_path, fields, headers, chunk_size=CHUNK_SIZ
     # 3. Send closing boundary suffix
     conn.send(suffix)
 
-    # 4. Wait for server response (MinIO finalize / web tar extraction)
+    # 4. Wait for server response (SeaweedFS finalize / web tar extraction)
     if conn.sock is not None:
         conn.sock.settimeout(RESPONSE_TIMEOUT_SEC)
 
@@ -368,7 +368,7 @@ def main():
             fsize = os.path.getsize(file_path)
             print(f"\n[Deploy] Processing {fname} ({fsize} bytes)...", flush=True)
 
-            # 1. Stream release binary to MinIO via API in 256 KB chunks
+            # 1. Stream release binary to SeaweedFS via API in 256 KB chunks
             upload_endpoint = f"{api_url}/api/admin/upload-release"
             fields = {"channel": args.channel}
 

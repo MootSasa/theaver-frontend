@@ -65,8 +65,9 @@ class MediaCacheManager {
   String? _cachedMediaDirPath;
   String? _aliasesLoadedForDir;
 
-  static const Set<String> _publicBuckets = {'avatars', 'releases'};
+  static const Set<String> _publicBuckets = {'releases', 'stickers'};
   static const Set<String> _volatilePresignQueryParams = {
+    'mt',
     'x-amz-algorithm',
     'x-amz-credential',
     'x-amz-date',
@@ -79,10 +80,21 @@ class MediaCacheManager {
     'expires',
   };
 
-  /// Extracts a MinIO object key when [rawOrResolvedUrl] points to the private
-  /// media bucket (or `/api/files/download/<objectName>`). Returns `null` for
-  /// public buckets (`avatars`, `releases`), already-presigned URLs, and
-  /// external hosts.
+  static bool _isStorageUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    final storageHost = Uri.tryParse(AppConfig.storageUrl)?.host.toLowerCase() ?? '';
+    return uri.port == 8333 ||
+        uri.port == 9000 ||
+        host.contains('seaweedfs') ||
+        host.contains('minio') ||
+        host.startsWith('storage.') ||
+        (storageHost.isNotEmpty && host == storageHost);
+  }
+
+  /// Extracts a storage object key when [rawOrResolvedUrl] points to the private
+  /// `media` bucket (or `/api/files/download/<objectName>`). Returns `null` for
+  /// public buckets (`releases`, `stickers`), `avatars` (served via
+  /// `/api/files/avatar/`), already-presigned URLs, and external hosts.
   String? extractProtectedObjectName(
     String rawOrResolvedUrl, {
     bool ignorePresignQuery = false,
@@ -93,7 +105,7 @@ class MediaCacheManager {
     final uri = Uri.tryParse(resolved);
     if (uri == null) return null;
 
-    // Already a presigned S3/MinIO URL — must not strip query signature unless
+    // Already a presigned S3 URL — must not strip query signature unless
     // explicitly falling back after an expired-signature 401/403 failure.
     if (!ignorePresignQuery &&
         (uri.queryParameters.containsKey('X-Amz-Signature') ||
@@ -108,19 +120,12 @@ class MediaCacheManager {
       return obj.isNotEmpty ? Uri.decodeFull(obj) : null;
     }
 
-    final storageUri = Uri.tryParse(AppConfig.storageUrl);
-    final bool isStorageHost = uri.port == 9000 ||
-        uri.host.contains('minio') ||
-        uri.host.startsWith('storage.') ||
-        (storageUri != null &&
-            storageUri.host.isNotEmpty &&
-            uri.host == storageUri.host);
-    if (!isStorageHost) return null;
+    if (!_isStorageUri(uri)) return null;
 
     final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
     if (segs.length < 2) return null;
     final bucket = segs.first.toLowerCase();
-    if (_publicBuckets.contains(bucket)) return null;
+    if (_publicBuckets.contains(bucket) || bucket == 'avatars') return null;
     return segs.sublist(1).map(Uri.decodeComponent).join('/');
   }
 
@@ -947,26 +952,31 @@ class MediaCacheManager {
       final parsedUri = Uri.tryParse(resolvedUrl);
       final protectedObj = extractProtectedObjectName(resolvedUrl);
 
-      // Prefer authenticated `/api/files/download/<objectName>` when the target is
-      // inside a protected MinIO bucket so we don't waste a guaranteed 403 round-trip.
+      // Prefer authenticated `/api/files/download/<objectName>` (or `/api/files/avatar/<objectName>`)
+      // when the target is inside a protected S3 bucket so we don't waste a guaranteed 403 round-trip.
       String requestUrl = resolvedUrl;
       bool shouldAttachAuth = false;
       if (parsedUri != null) {
         final pathLower = parsedUri.path.toLowerCase();
+        final isPresigned = parsedUri.queryParameters.containsKey('X-Amz-Signature') ||
+            parsedUri.queryParameters.containsKey('x-amz-signature');
         if (protectedObj != null && !pathLower.contains('/api/files/download/')) {
           final token = await AuthService.getToken();
           if (token != null && token.isNotEmpty) {
             requestUrl = '${AppConfig.baseUrl}/api/files/download/$protectedObj';
             shouldAttachAuth = true;
           }
+        } else if (!isPresigned &&
+            _isStorageUri(parsedUri) &&
+            parsedUri.path.startsWith('/avatars/') &&
+            parsedUri.path.length > '/avatars/'.length) {
+          final avatarObj = parsedUri.path.substring('/avatars/'.length);
+          final apiBase = AppConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
+          requestUrl = '$apiBase/api/files/avatar/$avatarObj';
+          shouldAttachAuth = true;
         } else {
-          final isMinIOStorage = parsedUri.port == 9000 ||
-              parsedUri.host.contains('minio') ||
-              parsedUri.host.startsWith('storage.') ||
-              (AppConfig.storageUrl.isNotEmpty &&
-                  parsedUri.host ==
-                      (Uri.tryParse(AppConfig.storageUrl)?.host ?? ''));
-          if (!isMinIOStorage && pathLower.contains('/api/')) {
+          final isStorage = _isStorageUri(parsedUri);
+          if (!isStorage && !isPresigned && pathLower.contains('/api/')) {
             shouldAttachAuth = true;
           }
         }

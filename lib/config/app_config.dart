@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/account_manager.dart';
 
 /// AppConfig provides centralized 4-tier dynamic configuration for the application:
 /// 1. SharedPreferences runtime override (custom_server_url / custom_api_url)
@@ -46,7 +47,7 @@ class AppConfig {
   static const String defaultProdWebBaseUrl = 'https://theaver.app';
 
   static const String defaultDevApiBaseUrl = 'http://localhost:8080';
-  static const String defaultDevStorageBaseUrl = 'http://localhost:9000';
+  static const String defaultDevStorageBaseUrl = 'http://localhost:8333';
   static const String defaultDevWsBaseUrl = 'ws://localhost:8080/api/ws';
   static const String defaultDevWebBaseUrl = 'http://localhost:3000';
 
@@ -200,7 +201,7 @@ class AppConfig {
     return isProduction ? defaultProdWsBaseUrl : defaultDevWsBaseUrl;
   }
 
-  /// Active Storage Base URL (e.g. `https://storage.theaver.app` or `http://192.168.1.50:9000`)
+  /// Active Storage Base URL (e.g. `https://storage.theaver.app` or `http://192.168.1.50:8333`)
   static String get storageUrl {
     if (_customStorageUrl != null && _customStorageUrl!.isNotEmpty) {
       return _customStorageUrl!;
@@ -279,7 +280,7 @@ class AppConfig {
     return '$wsScheme$hostAndPath/api/ws';
   }
 
-  /// Derives the Storage URL (MinIO/S3) from an API base URL.
+  /// Derives the Storage URL (SeaweedFS S3) from an API base URL.
   static String deriveStorageUrl(String apiBaseUrl) {
     final trimmed = apiBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     if (trimmed.isEmpty) return defaultDevStorageBaseUrl;
@@ -300,14 +301,14 @@ class AppConfig {
         return '${uri.scheme}://storage.$domain';
       }
 
-      // Check if port 8080 -> standard MinIO port 9000
+      // Check if port 8080 -> standard SeaweedFS S3 port 8333
       if (uri.hasPort && uri.port == 8080) {
-        return '${uri.scheme}://${uri.host}:9000';
+        return '${uri.scheme}://${uri.host}:8333';
       }
 
       // For standard localhost / LAN IPs without port or with standard ports
       if (uri.host == 'localhost' || uri.host == '127.0.0.1' || RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(uri.host)) {
-        return '${uri.scheme}://${uri.host}:9000';
+        return '${uri.scheme}://${uri.host}:8333';
       }
 
       return '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
@@ -363,8 +364,71 @@ class AppConfig {
     return false;
   }
 
+  static const List<String> _legacyInternalStorageHosts = [
+    'localhost',
+    '127.0.0.1',
+    'seaweedfs',
+    'minio',
+  ];
+
+  static const List<int> _legacyInternalStoragePorts = [8333, 9000];
+
+  static const Set<String> _volatileCacheQueryParams = {
+    'mt',
+    'x-amz-algorithm',
+    'x-amz-credential',
+    'x-amz-date',
+    'x-amz-expires',
+    'x-amz-signedheaders',
+    'x-amz-signature',
+    'x-amz-security-token',
+    'awsaccesskeyid',
+    'signature',
+    'expires',
+  };
+
+  /// Rewrites internal Docker/dev SeaweedFS (:8333) or legacy MinIO (:9000) URLs
+  /// to the active [storageUrl] when matching.
+  static String? rewriteInternalStorageUrl(String url) {
+    final parsed = Uri.tryParse(url);
+    if (parsed == null || (parsed.scheme != 'http' && parsed.scheme != 'https')) {
+      return null;
+    }
+    final host = parsed.host.toLowerCase();
+    if (!_legacyInternalStorageHosts.contains(host) ||
+        !_legacyInternalStoragePorts.contains(parsed.port)) {
+      return null;
+    }
+    final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
+    return '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
+  }
+
+  static bool _hasPresignQuery(Uri uri) {
+    for (final key in uri.queryParameters.keys) {
+      if (key.toLowerCase() == 'x-amz-signature') return true;
+    }
+    return false;
+  }
+
+  static bool _isKnownStorageUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    if (host.isEmpty) return false;
+    if (host == 'storage.theaver.app' ||
+        host.endsWith('.storage.theaver.app') ||
+        (_legacyInternalStorageHosts.contains(host) &&
+            _legacyInternalStoragePorts.contains(uri.port))) {
+      return true;
+    }
+    final configured = Uri.tryParse(storageUrl);
+    return configured != null &&
+        configured.host.isNotEmpty &&
+        host == configured.host.toLowerCase() &&
+        uri.port == configured.port;
+  }
+
   /// Resolves relative or absolute media / storage URLs.
-  /// Returns full URL with storageUrl prepended if relative path.
+  /// Rewrites legacy `/avatars/<obj>` URLs (non-presigned) to the authenticated
+  /// `/api/files/avatar/<obj>` backend proxy to respect private S3 bucket ACLs.
   static String? resolveMediaUrl(String? url) {
     if (url == null) return null;
     final trimmed = url.trim();
@@ -380,34 +444,100 @@ class AppConfig {
       return trimmed;
     }
 
-    // If it's a localhost / 127.0.0.1 / minio MinIO URL and storageUrl is configured to a remote/different host, rewrite it to storageUrl
-    if (trimmed.startsWith('http://localhost:9000') ||
-        trimmed.startsWith('http://127.0.0.1:9000') ||
-        trimmed.startsWith('http://minio:9000') ||
-        trimmed.startsWith('https://localhost:9000') ||
-        trimmed.startsWith('https://127.0.0.1:9000') ||
-        trimmed.startsWith('https://minio:9000')) {
-      final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
-      final parsed = Uri.tryParse(trimmed);
-      if (parsed != null) {
-        return '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
-      }
-    }
+    final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
 
-    if (trimmed.startsWith('http://') ||
-        trimmed.startsWith('https://')) {
-      return trimmed;
+    // Rewrite internal SeaweedFS/MinIO origin to active storageUrl before path checks.
+    final rewrittenInternal = rewriteInternalStorageUrl(trimmed);
+    final candidate = rewrittenInternal ?? trimmed;
+
+    if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+      final parsed = Uri.tryParse(candidate);
+      if (parsed != null &&
+          _isKnownStorageUri(parsed) &&
+          !_hasPresignQuery(parsed) &&
+          parsed.path.startsWith('/avatars/')) {
+        final rest = parsed.path.substring('/avatars/'.length);
+        if (rest.isNotEmpty) {
+          return '$apiBase/api/files/avatar/$rest${parsed.hasQuery ? '?${parsed.query}' : ''}';
+        }
+      }
+      return candidate;
     }
 
     if (trimmed.startsWith('/api/') || trimmed.startsWith('api/')) {
-      final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
       final path = trimmed.startsWith('/') ? trimmed : '/$trimmed';
       return '$apiBase$path';
+    }
+
+    if (trimmed.startsWith('/avatars/') || trimmed.startsWith('avatars/')) {
+      final rest = trimmed.startsWith('/avatars/')
+          ? trimmed.substring('/avatars/'.length)
+          : trimmed.substring('avatars/'.length);
+      if (rest.isNotEmpty) {
+        return '$apiBase/api/files/avatar/$rest';
+      }
     }
 
     final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
     final path = trimmed.startsWith('/') ? trimmed : '/$trimmed';
     return '$base$path';
+  }
+
+  /// Returns `Authorization: Bearer <token>` headers when [url] targets a
+  /// protected `/api/files/` route on [baseUrl] (or a relative `/api/files/`
+  /// path), and returns `null` for external origins or presigned S3 URLs.
+  static Map<String, String>? authHeadersForUrl(
+    String? url, {
+    String? tokenOverride,
+  }) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+
+    final token = (tokenOverride ?? AccountManager().currentAccount?.token)?.trim();
+    if (token == null || token.isEmpty) return null;
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || _hasPresignQuery(uri)) return null;
+    if (!uri.path.contains('/api/files/')) return null;
+
+    if (uri.hasAuthority) {
+      final apiUri = Uri.tryParse(baseUrl);
+      final apiHost = apiUri?.host.toLowerCase() ?? '';
+      if (apiHost.isEmpty || uri.host.toLowerCase() != apiHost) {
+        return null;
+      }
+    }
+
+    return {'Authorization': 'Bearer $token'};
+  }
+
+  /// Strips rotating `?mt=` avatar tickets and volatile S3 signature query
+  /// parameters so image widgets share a stable disk cache key.
+  static String? cacheKeyForUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+    final hashIdx = trimmed.indexOf('#');
+    final noFrag = hashIdx != -1 ? trimmed.substring(0, hashIdx) : trimmed;
+    final uri = Uri.tryParse(noFrag);
+    if (uri == null) return noFrag;
+    if (!uri.hasQuery) return noFrag;
+
+    final filtered = <String, List<String>>{};
+    uri.queryParametersAll.forEach((k, values) {
+      if (!_volatileCacheQueryParams.contains(k.toLowerCase())) {
+        filtered[k] = values;
+      }
+    });
+    return Uri(
+      scheme: uri.scheme,
+      userInfo: uri.userInfo,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: uri.path,
+      queryParameters: filtered.isEmpty ? null : filtered,
+    ).toString();
   }
 
   // ============================================
@@ -452,7 +582,7 @@ class AppConfig {
         // LAN IP or localhost
         _webDiscoveredApiUrl = '$scheme://$host:8080';
         _webDiscoveredWsUrl = '$wsScheme://$host:8080/api/ws';
-        _webDiscoveredStorageUrl = '$scheme://$host:9000';
+        _webDiscoveredStorageUrl = '$scheme://$host:8333';
       }
     } catch (e) {
       debugPrint('[AppConfig] Error discovering web URLs: $e');

@@ -595,52 +595,6 @@ class AuthService {
     return accountManager.currentAccount?.token;
   }
 
-  /// Logs in as a test user without network (offline/demo mode).
-  /// Creates a fake account in AccountManager and returns success.
-  static Future<Map<String, dynamic>> loginAsTestUser() async {
-    const testUserId = 'test_user_001';
-    const testToken = 'test_token_offline_mode';
-    const testUsername = 'admin';
-    const testDisplayName = 'Test Admin';
-
-    final accountManager = AccountManager();
-
-    // Remove existing test account to avoid duplicate exception
-    if (accountManager.hasAccount(testUserId)) {
-      await accountManager.removeAccount(testUserId);
-    }
-
-    final account = Account(
-      userId: testUserId,
-      token: testToken,
-      username: testUsername,
-      displayName: testDisplayName,
-      lastLogin: DateTime.now(),
-      email: 'admin@theaver.local',
-      phone: null,
-      name: 'Test',
-      surname: 'Admin',
-    );
-
-    await accountManager.addAccount(account);
-    await accountManager.setCurrentAccount(testUserId);
-    await accountManager.registerDeviceSession(testUserId);
-
-    // Ensure Saved Messages chat exists locally
-    try {
-      await AppDatabase().ensureSavedChatExists(testUserId);
-    } catch (e) {
-      debugPrint('AuthService: Error creating saved chat: $e');
-    }
-
-    return {
-      'success': true,
-      'authToken': testToken,
-      'userId': testUserId,
-      'message': 'Test login successful (offline mode)',
-    };
-  }
-
   /// Gets the stored user ID from AccountManager.
   static Future<String?> getUserId() async {
     final accountManager = AccountManager();
@@ -821,9 +775,6 @@ class AuthService {
   static Future<Map<String, dynamic>> verifyToken(String token) async {
     if (token.isEmpty) {
       return {'status': 'expired'};
-    }
-    if (token == 'test_token_offline_mode') {
-      return {'status': 'valid'};
     }
     try {
       final response = await http.get(

@@ -751,6 +751,8 @@ class ProfileSectionPageContent extends StatelessWidget {
           resolvedUrl.startsWith('https://')) {
         return CachedNetworkImage(
           imageUrl: resolvedUrl,
+          cacheKey: AppConfig.cacheKeyForUrl(resolvedUrl),
+          httpHeaders: AppConfig.authHeadersForUrl(resolvedUrl),
           fit: BoxFit.cover,
           memCacheWidth: 360,
           filterQuality: FilterQuality.low,
@@ -792,6 +794,8 @@ class ProfileSectionPageContent extends StatelessWidget {
     if (resolvedThumb != null && resolvedThumb.startsWith('http')) {
       return CachedNetworkImage(
         imageUrl: resolvedThumb,
+        cacheKey: AppConfig.cacheKeyForUrl(resolvedThumb),
+        httpHeaders: AppConfig.authHeadersForUrl(resolvedThumb),
         fit: BoxFit.cover,
         memCacheWidth: 360,
         filterQuality: FilterQuality.low,
@@ -928,6 +932,8 @@ class ProfileSectionPageContent extends StatelessWidget {
                         : (resolvedThumb != null && resolvedThumb.startsWith('http')
                             ? CachedNetworkImage(
                                 imageUrl: resolvedThumb,
+                                cacheKey: AppConfig.cacheKeyForUrl(resolvedThumb),
+                                httpHeaders: AppConfig.authHeadersForUrl(resolvedThumb),
                                 fit: BoxFit.cover,
                                 memCacheWidth: 320,
                                 filterQuality: FilterQuality.low,

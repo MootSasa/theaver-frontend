@@ -900,6 +900,7 @@ class _CalendarMediaCircle extends StatelessWidget {
     } else {
       imageWidget = Image.network(
         previewUrl,
+        headers: AppConfig.authHeadersForUrl(previewUrl),
         fit: BoxFit.cover,
         cacheWidth: 120,
         errorBuilder: (_, __, ___) => Container(color: Colors.black45),
