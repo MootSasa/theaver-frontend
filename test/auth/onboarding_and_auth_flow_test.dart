@@ -366,6 +366,7 @@ void main() {
               providers: [
                 AuthProviderInfo(id: 'yandex', displayName: 'Yandex ID', recommendedForRegion: true),
                 AuthProviderInfo(id: 'vk', displayName: 'VK ID', recommendedForRegion: true),
+                AuthProviderInfo(id: 'huawei', displayName: 'Huawei ID', recommendedForRegion: true),
                 AuthProviderInfo(id: 'google', displayName: 'Google'),
               ],
             ),
@@ -375,11 +376,12 @@ void main() {
       await tester.pumpAndSettle();
 
       final glyphs = find.byType(OAuthBrandGlyph);
-      expect(glyphs, findsNWidgets(3));
+      expect(glyphs, findsNWidgets(4));
       final yYandex = tester.getTopLeft(glyphs.at(0)).dy;
       final yVk = tester.getTopLeft(glyphs.at(1)).dy;
-      final yGoogle = tester.getTopLeft(glyphs.at(2)).dy;
-      expect(yYandex < yVk && yVk < yGoogle, isTrue);
+      final yHuawei = tester.getTopLeft(glyphs.at(2)).dy;
+      final yGoogle = tester.getTopLeft(glyphs.at(3)).dy;
+      expect(yYandex < yVk && yVk < yHuawei && yHuawei < yGoogle, isTrue);
 
       final emblem = find.byKey(const ValueKey<String>('login_brand_emblem'));
       await tester.ensureVisible(emblem);

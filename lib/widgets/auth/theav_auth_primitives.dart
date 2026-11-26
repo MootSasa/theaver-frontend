@@ -219,7 +219,7 @@ class TheavAuthWallpaperBackground extends StatelessWidget {
   }
 }
 
-/// Crisp vector brand mark for OAuth2/OIDC providers (`yandex`, `vk`, `google`, `apple`).
+/// Crisp vector brand mark for OAuth2/OIDC providers (`yandex`, `vk`, `huawei`, `google`, `apple`).
 class OAuthBrandGlyph extends StatelessWidget {
   final String providerId;
   final double size;
@@ -333,6 +333,49 @@ class _OAuthBrandPainter extends CustomPainter {
           Offset(s * 0.90, s * 0.50),
           pBlue..strokeCap = StrokeCap.round,
         );
+        break;
+      case 'huawei':
+        final bg = Paint()..color = const Color(0xFFCF0A2C);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Offset.zero & size,
+            Radius.circular(s * 0.28),
+          ),
+          bg,
+        );
+        final petalPaint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill;
+        final cx = s * 0.50;
+        final cy = s * 0.72;
+        const int petalCount = 7;
+        for (var i = 0; i < petalCount; i++) {
+          final t = i / (petalCount - 1);
+          final angle = -math.pi * 0.90 + t * (math.pi * 0.80);
+          final innerR = s * 0.11;
+          final outerR = s * 0.38;
+          final tipX = cx + outerR * math.cos(angle);
+          final tipY = cy + outerR * math.sin(angle);
+          final baseX = cx + innerR * math.cos(angle);
+          final baseY = cy + innerR * math.sin(angle);
+          final midR = (innerR + outerR) * 0.54;
+          final perp = angle + math.pi / 2;
+          final halfWidth = s * 0.042;
+          final ctrl1X =
+              cx + midR * math.cos(angle) + halfWidth * math.cos(perp);
+          final ctrl1Y =
+              cy + midR * math.sin(angle) + halfWidth * math.sin(perp);
+          final ctrl2X =
+              cx + midR * math.cos(angle) - halfWidth * math.cos(perp);
+          final ctrl2Y =
+              cy + midR * math.sin(angle) - halfWidth * math.sin(perp);
+          final petal = Path()
+            ..moveTo(baseX, baseY)
+            ..quadraticBezierTo(ctrl1X, ctrl1Y, tipX, tipY)
+            ..quadraticBezierTo(ctrl2X, ctrl2Y, baseX, baseY)
+            ..close();
+          canvas.drawPath(petal, petalPaint);
+        }
         break;
       case 'apple':
       default:

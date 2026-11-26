@@ -191,6 +191,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         return 'Yandex ID';
       case 'vk':
         return 'VK ID';
+      case 'huawei':
+        return 'Huawei ID';
       case 'google':
         return 'Google';
       case 'apple':
