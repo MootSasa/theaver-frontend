@@ -77,6 +77,39 @@ class SettingsService {
     await _loadSettings();
   }
 
+  /// Copies pre-login device onboarding glass & shader appearance settings into
+  /// the authenticated user's namespace if that user has no saved overrides yet.
+  Future<void> adoptDeviceOnboardingAppearanceIfUnset(String userId) async {
+    if (userId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    _prefs = prefs;
+    String userKey(String base) => 'u_${userId}_$base';
+
+    if (!prefs.containsKey(userKey(_glassModeKey)) &&
+        prefs.containsKey(_glassModeKey)) {
+      final modeIdx = prefs.getInt(_glassModeKey);
+      if (modeIdx != null) {
+        await prefs.setInt(userKey(_glassModeKey), modeIdx);
+      }
+    }
+    for (final boolKey in [_liquidGlassDesignKey, _glassShaderBlurKey]) {
+      if (!prefs.containsKey(userKey(boolKey)) && prefs.containsKey(boolKey)) {
+        final v = prefs.getBool(boolKey);
+        if (v != null) {
+          await prefs.setBool(userKey(boolKey), v);
+        }
+      }
+    }
+    for (final dblKey in [_glassBlurKey, _manualLightAngleKey]) {
+      if (!prefs.containsKey(userKey(dblKey)) && prefs.containsKey(dblKey)) {
+        final v = prefs.getDouble(dblKey);
+        if (v != null) {
+          await prefs.setDouble(userKey(dblKey), v);
+        }
+      }
+    }
+  }
+
   Future<void> _migrateLegacyKeysIfNeeded() async {
     final uid = _currentUserId;
     if (uid == null || uid.isEmpty) return;

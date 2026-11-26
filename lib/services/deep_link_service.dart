@@ -35,6 +35,20 @@ enum DeepLinkType {
   qrGrant,
   miniApp,
   invoice,
+  oauthCallback,
+}
+
+/// Event emitted when `theaver://oauth-callback` returns from an external browser.
+class OAuthCallbackEvent {
+  final String sessionId;
+  final String? provider;
+  final String? error;
+
+  const OAuthCallbackEvent({
+    required this.sessionId,
+    this.provider,
+    this.error,
+  });
 }
 
 /// Parsed deep link metadata
@@ -86,6 +100,30 @@ class DeepLinkService with WidgetsBindingObserver {
   /// Global navigator key to access current context
   final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
   bool _observerAdded = false;
+
+  final StreamController<OAuthCallbackEvent> _oauthCallbackController =
+      StreamController<OAuthCallbackEvent>.broadcast();
+
+  /// Broadcast stream of OAuth callback events (`theaver://oauth-callback`).
+  Stream<OAuthCallbackEvent> get oauthCallbacks =>
+      _oauthCallbackController.stream;
+
+  ParsedDeepLink? parseUriWithDetails(Uri uri) => parseUri(uri);
+
+  void _emitOAuthUri(Uri uri) {
+    final sessionId = (uri.queryParameters['session_id'] ?? '').trim();
+    final provider = (uri.queryParameters['provider'] ?? '').trim();
+    final err = (uri.queryParameters['error'] ?? '').trim();
+    if (sessionId.isNotEmpty || err.isNotEmpty) {
+      _oauthCallbackController.add(
+        OAuthCallbackEvent(
+          sessionId: sessionId,
+          provider: provider.isNotEmpty ? provider : null,
+          error: err.isNotEmpty ? err : null,
+        ),
+      );
+    }
+  }
 
   /// Initializes deep link handling and processes initial link on Web & native platforms.
   Future<void> init() async {
@@ -429,6 +467,14 @@ class DeepLinkService with WidgetsBindingObserver {
         final seg = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : null;
         final qr = _parseQrLink(uri.queryParameters, fallbackSegment: seg);
         if (qr != null) return qr;
+      } else if (host == 'oauth-callback') {
+        final sid = (uri.queryParameters['session_id'] ?? '').trim();
+        return ParsedDeepLink(
+          DeepLinkType.oauthCallback,
+          sid,
+          botUsername: uri.queryParameters['provider']?.trim(),
+          startParam: uri.queryParameters['error']?.trim(),
+        );
       }
     }
 
@@ -466,6 +512,15 @@ class DeepLinkService with WidgetsBindingObserver {
       final seg = cleanSegments.length >= 2 ? cleanSegments[1] : null;
       final qr = _parseQrLink(query, fallbackSegment: seg);
       if (qr != null) return qr;
+    }
+    if (first == 'oauth-callback') {
+      final sid = (query['session_id'] ?? '').trim();
+      return ParsedDeepLink(
+        DeepLinkType.oauthCallback,
+        sid,
+        botUsername: query['provider']?.trim(),
+        startParam: query['error']?.trim(),
+      );
     }
     if (first == 'invoice' || first == 'invoices') {
       final slug = cleanSegments.length >= 2
@@ -571,6 +626,9 @@ class DeepLinkService with WidgetsBindingObserver {
         break;
       case DeepLinkType.invoice:
         await _handleInvoice(parsed);
+        break;
+      case DeepLinkType.oauthCallback:
+        _emitOAuthUri(uri);
         break;
     }
   }
@@ -1163,6 +1221,7 @@ class DeepLinkService with WidgetsBindingObserver {
         authToken: authToken,
         userId: userId,
         user: userMap,
+        context: context,
       );
       await SettingsService().reloadForUser(userId);
       if (context.mounted) {

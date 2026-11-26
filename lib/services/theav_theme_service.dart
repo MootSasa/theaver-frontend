@@ -983,4 +983,28 @@ class TheavThemeService extends ChangeNotifier {
 
     return importedTheme;
   }
+
+  /// Copies pre-login device theme selections into [userId]'s namespace if
+  /// that account does not have saved theme preferences yet.
+  Future<void> adoptDeviceOnboardingAppearanceIfUnset(String userId) async {
+    if (userId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    const suffixes = [
+      'active_light_theme_id',
+      'active_dark_theme_id',
+      'active_light_theme_json',
+      'active_dark_theme_json',
+      'theme_overrides_json',
+    ];
+    for (final suffix in suffixes) {
+      final dstKey = 'user_${userId}_$suffix';
+      final srcKey = 'device_$suffix';
+      if (!prefs.containsKey(dstKey) && prefs.containsKey(srcKey)) {
+        final v = prefs.getString(srcKey);
+        if (v != null) {
+          await prefs.setString(dstKey, v);
+        }
+      }
+    }
+  }
 }

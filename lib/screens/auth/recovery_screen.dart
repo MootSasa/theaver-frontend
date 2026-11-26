@@ -1,11 +1,20 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
 import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
+import '../../services/glass_toast_service.dart';
+import '../../utils/haptic_utils.dart';
+import '../../widgets/auth/theav_auth_primitives.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 
-/// 3-step account password recovery screen using Email OTP and optional 2FA / recovery code.
+/// Password recovery screen rebuilt onto Theaver's native design system:
+/// - Step 1: Enter verified account email
+/// - Step 2: Enter 6-digit OTP via [TheavOtpPinRow] and new password
+/// - Step 3: Optional 2FA cloud password or recovery code confirmation
 class RecoveryScreen extends StatefulWidget {
   const RecoveryScreen({super.key, this.initialEmail});
 
@@ -17,15 +26,17 @@ class RecoveryScreen extends StatefulWidget {
 
 class _RecoveryScreenState extends State<RecoveryScreen> {
   final _emailCtrl = TextEditingController();
-  final _codeCtrl = TextEditingController();
   final _newPwdCtrl = TextEditingController();
   final _confirmPwdCtrl = TextEditingController();
   final _twoFactorCtrl = TextEditingController();
 
-  int _step = 1; // 1 = email, 2 = OTP + new password, 3 = 2FA verification
-  bool _useRecoveryCode = false;
-  bool _obscureNew = true;
+  int _step = 1;
+  bool _stepForward = true;
   bool _isLoading = false;
+  bool _obscureNew = true;
+  bool _useRecoveryCode = false;
+  String _otpCode = '';
+  int _otpShakeCounter = 0;
   String? _errorMessage;
   int _cooldown = 0;
   Timer? _cooldownTimer;
@@ -42,7 +53,6 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
   void dispose() {
     _cooldownTimer?.cancel();
     _emailCtrl.dispose();
-    _codeCtrl.dispose();
     _newPwdCtrl.dispose();
     _confirmPwdCtrl.dispose();
     _twoFactorCtrl.dispose();
@@ -51,14 +61,15 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
 
   void _startCooldown(int seconds) {
     _cooldownTimer?.cancel();
-    setState(() => _cooldown = seconds > 0 ? seconds : 60);
-    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+    if (seconds <= 0) return;
+    setState(() => _cooldown = seconds);
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
-        t.cancel();
+        timer.cancel();
         return;
       }
       if (_cooldown <= 1) {
-        t.cancel();
+        timer.cancel();
         setState(() => _cooldown = 0);
       } else {
         setState(() => _cooldown--);
@@ -66,42 +77,11 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
     });
   }
 
-  String _mapError(AppLocalizations l10n, Map<String, dynamic> res) {
-    final err = res['error']?.toString() ?? '';
-    switch (err) {
-      case 'email_not_configured':
-        return l10n.translate('email_error_not_configured');
-      case 'cooldown':
-      case 'rate_limited':
-        final s = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
-        return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$s');
-      case 'same_email':
-        return l10n.translate('email_error_same_email');
-      case 'invalid_email':
-        return l10n.translate('email_error_invalid_format');
-      case 'no_email':
-        return l10n.translate('email_add_hint');
-      case 'invalid_code':
-      case 'code_expired':
-        return l10n.translate('email_error_invalid_code');
-      case 'too_many_attempts':
-        return l10n.translate('email_error_too_many_attempts');
-      case 'invalid_2fa_password':
-        return l10n.translate('email_error_invalid_2fa');
-      case 'password_too_short':
-        return l10n.translate('validation_password_length');
-      default:
-        return res['message']?.toString().isNotEmpty == true
-            ? res['message'].toString()
-            : l10n.translate('common_error');
-    }
-  }
-
   Future<void> _sendCode() async {
     final l10n = context.l10n;
     final email = _emailCtrl.text.trim();
-    if (!email.contains('@')) {
-      setState(() => _errorMessage = l10n.translate('email_error_invalid_format'));
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _errorMessage = l10n.translate('recovery_invalid_email'));
       return;
     }
 
@@ -109,43 +89,69 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
       _isLoading = true;
       _errorMessage = null;
     });
-    final res = await AuthService.sendPasswordResetCode(email: email);
+
+    final res = await AuthService.sendPasswordResetCode(
+      email: email,
+      locale: l10n.locale.languageCode,
+    );
     if (!mounted) return;
     setState(() => _isLoading = false);
 
     if (res['success'] == true) {
-      _startCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
-      setState(() => _step = 2);
-    } else {
-      if (res['error'] == 'cooldown' || res['error'] == 'rate_limited') {
-        _startCooldown((res['cooldown_seconds'] as num?)?.toInt() ?? 60);
-        setState(() => _step = 2);
-      }
-      setState(() => _errorMessage = _mapError(l10n, res));
+      final cd = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
+      _startCooldown(cd > 0 ? cd : 60);
+      setState(() {
+        _stepForward = true;
+        _step = 2;
+      });
+      GlassToastService().show(
+        context,
+        l10n.translate('email_code_sent_short').replaceAll('{email}', email),
+        icon: Icons.mark_email_read_outlined,
+      );
+      return;
     }
+
+    final cd = (res['cooldown_seconds'] as num?)?.toInt() ?? 0;
+    if (cd > 0) _startCooldown(cd);
+    setState(() {
+      _errorMessage = _mapError(l10n, res['error'], res['message']);
+    });
   }
 
   Future<void> _submitReset() async {
     final l10n = context.l10n;
-    final email = _emailCtrl.text.trim();
-    final code = _codeCtrl.text.trim();
+    final code = _otpCode.trim();
     final newPwd = _newPwdCtrl.text;
     final confirmPwd = _confirmPwdCtrl.text;
 
-    if (code.length < 4) {
-      setState(() => _errorMessage = l10n.translate('email_enter_code_hint'));
+    if (code.length < 6) {
+      setState(() {
+        _otpShakeCounter++;
+        _errorMessage = l10n.translate('email_error_invalid_code');
+      });
       return;
     }
-    if (newPwd.length < 6) {
-      setState(() => _errorMessage = l10n.translate('validation_password_length'));
+    if (newPwd.length < 8) {
+      setState(() {
+        _errorMessage = l10n.trOr(
+          'register_password_min_length',
+          'Password must be at least 8 characters',
+        );
+      });
       return;
     }
     if (newPwd != confirmPwd) {
-      setState(() => _errorMessage = l10n.translate('security_2fa_passwords_mismatch'));
+      setState(() {
+        _errorMessage = l10n.translate('security_2fa_passwords_mismatch');
+      });
       return;
     }
+
     if (_step == 3 && _twoFactorCtrl.text.trim().isEmpty) {
-      setState(() => _errorMessage = l10n.translate('recovery_enter_2fa_hint'));
+      setState(() {
+        _errorMessage = l10n.translate('auth_2fa_enter_password_prompt');
+      });
       return;
     }
 
@@ -154,222 +160,354 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
       _errorMessage = null;
     });
 
-    final twoFactorInput = _twoFactorCtrl.text.trim();
     final res = await AuthService.resetPasswordWithCode(
-      email: email,
+      email: _emailCtrl.text.trim(),
       code: code,
       newPassword: newPwd,
-      twoFactorPassword: (_step == 3 && !_useRecoveryCode) ? twoFactorInput : null,
-      recoveryCode: (_step == 3 && _useRecoveryCode) ? twoFactorInput : null,
+      twoFactorPassword: _step == 3 && !_useRecoveryCode
+          ? _twoFactorCtrl.text
+          : null,
+      recoveryCode: _step == 3 && _useRecoveryCode
+          ? _twoFactorCtrl.text.trim()
+          : null,
     );
 
     if (!mounted) return;
     setState(() => _isLoading = false);
 
     if (res['success'] == true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.translate('recovery_password_updated'))),
+      GlassToastService().show(
+        context,
+        l10n.translate('recovery_password_updated'),
+        icon: Icons.check_circle_outline,
       );
-      Navigator.pop(context);
+      Navigator.of(context).pop();
       return;
     }
 
-    if (res['requires_2fa'] == true && _step < 3) {
+    if (res['requires_2fa'] == true && _step != 3) {
       setState(() {
+        _stepForward = true;
         _step = 3;
         _errorMessage = null;
       });
       return;
     }
 
-    setState(() => _errorMessage = _mapError(l10n, res));
+    if (res['error'] == 'invalid_code') {
+      _otpShakeCounter++;
+    }
+    setState(() {
+      _errorMessage = _mapError(l10n, res['error'], res['message']);
+    });
+  }
+
+  String _mapError(AppLocalizations l10n, Object? code, Object? fallback) {
+    switch (code?.toString()) {
+      case 'invalid_code':
+        return l10n.translate('email_error_invalid_code');
+      case 'code_expired':
+        return l10n.translate('email_error_code_expired');
+      case 'too_many_attempts':
+        return l10n.translate('email_error_too_many_attempts');
+      case 'cooldown_active':
+      case 'rate_limited':
+        return l10n.translate('email_error_rate_limited');
+      case 'invalid_2fa_password':
+        return l10n.translate('email_error_invalid_2fa');
+      case 'weak_password':
+        return l10n.trOr(
+          'register_password_min_length',
+          'Password must be at least 8 characters',
+        );
+      default:
+        return (fallback?.toString().isNotEmpty ?? false)
+            ? fallback.toString()
+            : l10n.translate('error_occurred');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    final theme = Theme.of(context);
+    final palette = context.theav;
+    final topClearance = SettingsFloatingHeader.topClearanceOf(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('recovery_title')),
-        centerTitle: true,
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.lock_reset, size: 72, color: Colors.blue),
-              const SizedBox(height: 16),
-              Text(
-                l10n.translate('recovery_subtitle'),
-                style: theme.textTheme.bodyMedium?.copyWith(color: Colors.grey[600]),
-                textAlign: TextAlign.center,
+    return PopScope(
+      canPop: _step == 1,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _step > 1) {
+          setState(() {
+            _stepForward = false;
+            _step = _step == 3 ? 2 : 1;
+            _errorMessage = null;
+          });
+        }
+      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const TheavAuthWallpaperBackground(),
+          SettingsFloatingScaffold(
+            backgroundColor: Colors.transparent,
+            title: l10n.translate('auth_recovery'),
+            onBack: () {
+              if (_step > 1) {
+                setState(() {
+                  _stepForward = false;
+                  _step = _step == 3 ? 2 : 1;
+                  _errorMessage = null;
+                });
+              } else {
+                Navigator.of(context).pop();
+              }
+            },
+            actions: [
+              SettingsHeaderAction(
+                tooltip: '$_step / 3',
+                child: Text(
+                  '$_step/3',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: palette.primary,
+                  ),
+                ),
+                onTap: null,
               ),
-              const SizedBox(height: 24),
-
-              TextField(
-                controller: _emailCtrl,
-                enabled: _step == 1 && !_isLoading,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  labelText: l10n.translate('auth_email'),
-                  prefixIcon: const Icon(Icons.email_outlined),
-                  border: const OutlineInputBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(14)),
-                  ),
-                ),
-              ),
-
-              if (_step >= 2) ...[
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _codeCtrl,
-                  enabled: _step == 2 && !_isLoading,
-                  keyboardType: TextInputType.number,
-                  maxLength: 6,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: InputDecoration(
-                    labelText: l10n.translate('email_otp_label'),
-                    counterText: '',
-                    prefixIcon: const Icon(Icons.pin_outlined),
-                    border: const OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(14)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _newPwdCtrl,
-                  enabled: _step == 2 && !_isLoading,
-                  obscureText: _obscureNew,
-                  decoration: InputDecoration(
-                    labelText: l10n.translate('recovery_new_password'),
-                    prefixIcon: const Icon(Icons.lock_outline),
-                    suffixIcon: IconButton(
-                      icon: Icon(_obscureNew ? Icons.visibility_off : Icons.visibility),
-                      onPressed: () => setState(() => _obscureNew = !_obscureNew),
-                    ),
-                    border: const OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(14)),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _confirmPwdCtrl,
-                  enabled: _step == 2 && !_isLoading,
-                  obscureText: _obscureNew,
-                  decoration: InputDecoration(
-                    labelText: l10n.translate('security_2fa_confirm_password_label'),
-                    prefixIcon: const Icon(Icons.lock_outline),
-                    border: const OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(14)),
-                    ),
-                  ),
-                ),
-              ],
-
-              if (_step == 3) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer.withOpacity(0.35),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    l10n.translate('recovery_2fa_step_hint'),
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _twoFactorCtrl,
-                  enabled: !_isLoading,
-                  obscureText: !_useRecoveryCode,
-                  decoration: InputDecoration(
-                    labelText: _useRecoveryCode
-                        ? l10n.translate('auth_2fa_backup_code_label')
-                        : l10n.translate('security_2fa_password_label'),
-                    prefixIcon: const Icon(Icons.shield_outlined),
-                    border: const OutlineInputBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(14)),
-                    ),
-                  ),
-                ),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: _isLoading
-                        ? null
-                        : () {
-                            setState(() {
-                              _useRecoveryCode = !_useRecoveryCode;
-                              _twoFactorCtrl.clear();
-                            });
-                          },
-                    child: Text(
-                      _useRecoveryCode
-                          ? l10n.translate('auth_2fa_use_password')
-                          : l10n.translate('auth_2fa_use_backup_code'),
-                    ),
-                  ),
-                ),
-              ],
-
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _errorMessage!,
-                  style: const TextStyle(color: Colors.red, fontSize: 13),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-
-              const SizedBox(height: 20),
-              SizedBox(
-                height: 48,
-                child: ElevatedButton(
-                  onPressed: _isLoading
-                      ? null
-                      : (_step == 1 ? _sendCode : _submitReset),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        )
-                      : Text(
-                          _step == 1
-                              ? l10n.translate('recovery_send_button')
-                              : l10n.translate('recovery_reset_button'),
-                        ),
-                ),
-              ),
-
-              if (_step == 2) ...[
-                const SizedBox(height: 10),
-                TextButton(
-                  onPressed: (_isLoading || _cooldown > 0) ? null : _sendCode,
-                  child: Text(
-                    _cooldown > 0
-                        ? l10n
-                            .translate('email_resend_in')
-                            .replaceAll('{seconds}', '$_cooldown')
-                        : l10n.translate('email_resend_code'),
-                  ),
-                ),
-              ],
             ],
+            body: SafeArea(
+              top: false,
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(0, topClearance + 14, 0, 28),
+                    child: TheavStepViewport(
+                      stepIndex: _step,
+                      forward: _stepForward,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            child: Column(
+                              children: [
+                                Container(
+                                  width: 60,
+                                  height: 60,
+                                  decoration: BoxDecoration(
+                                    color: palette.primary.withValues(alpha: 0.14),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: iconoir.Lock(
+                                    width: 28,
+                                    height: 28,
+                                    color: palette.primary,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _step == 1
+                                      ? l10n.translate('recovery_title')
+                                      : (_step == 2
+                                          ? l10n.translate('email_enter_code')
+                                          : l10n.translate(
+                                              'recovery_2fa_step_title',
+                                            )),
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w800,
+                                    color: palette.onSurface,
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  _step == 1
+                                      ? l10n.translate('recovery_description')
+                                      : (_step == 2
+                                          ? l10n.translate(
+                                              'recovery_step2_description',
+                                            )
+                                          : l10n.translate(
+                                              'recovery_2fa_step_hint',
+                                            )),
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    height: 1.35,
+                                    color: palette.subtext,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 18),
+                          TheavInsetGroup(
+                            children: [
+                              TheavInlineTextField(
+                                controller: _emailCtrl,
+                                enabled: _step == 1 && !_isLoading,
+                                placeholder: l10n.translate('auth_email'),
+                                keyboardType: TextInputType.emailAddress,
+                                textInputAction: _step == 1
+                                    ? TextInputAction.done
+                                    : TextInputAction.next,
+                                prefix: iconoir.Mail(
+                                  width: 19,
+                                  height: 19,
+                                  color: palette.subtext,
+                                ),
+                                onSubmitted: _step == 1 ? (_) => _sendCode() : null,
+                              ),
+                            ],
+                          ),
+                          if (_step >= 2) ...[
+                            const SizedBox(height: 10),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: TheavOtpPinRow(
+                                value: _otpCode,
+                                errorShakeCounter: _otpShakeCounter,
+                                enabled: _step == 2 && !_isLoading,
+                                onChanged: (val) => _otpCode = val,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TheavInsetGroup(
+                              children: [
+                                TheavInlineTextField(
+                                  controller: _newPwdCtrl,
+                                  enabled: _step == 2 && !_isLoading,
+                                  obscureText: _obscureNew,
+                                  placeholder: l10n.translate(
+                                    'recovery_new_password_label',
+                                  ),
+                                  textInputAction: TextInputAction.next,
+                                  prefix: iconoir.Lock(
+                                    width: 19,
+                                    height: 19,
+                                    color: palette.subtext,
+                                  ),
+                                  suffix: GestureDetector(
+                                    onTap: () => setState(
+                                      () => _obscureNew = !_obscureNew,
+                                    ),
+                                    child: _obscureNew
+                                        ? iconoir.Eye(
+                                            width: 19,
+                                            height: 19,
+                                            color: palette.subtext,
+                                          )
+                                        : iconoir.EyeClosed(
+                                            width: 19,
+                                            height: 19,
+                                            color: palette.subtext,
+                                          ),
+                                  ),
+                                ),
+                                TheavInlineTextField(
+                                  controller: _confirmPwdCtrl,
+                                  enabled: _step == 2 && !_isLoading,
+                                  obscureText: _obscureNew,
+                                  placeholder: l10n.translate(
+                                    'security_2fa_confirm_password_label',
+                                  ),
+                                  textInputAction: TextInputAction.done,
+                                  prefix: iconoir.Lock(
+                                    width: 19,
+                                    height: 19,
+                                    color: palette.subtext,
+                                  ),
+                                  onSubmitted: (_) => _submitReset(),
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_step == 3) ...[
+                            const SizedBox(height: 10),
+                            TheavInsetGroup(
+                              children: [
+                                TheavInlineTextField(
+                                  controller: _twoFactorCtrl,
+                                  enabled: !_isLoading,
+                                  obscureText: !_useRecoveryCode,
+                                  placeholder: _useRecoveryCode
+                                      ? l10n.translate(
+                                          'auth_2fa_backup_code_label',
+                                        )
+                                      : l10n.translate(
+                                          'security_2fa_password_label',
+                                        ),
+                                  prefix: iconoir.Shield(
+                                    width: 19,
+                                    height: 19,
+                                    color: palette.subtext,
+                                  ),
+                                  onSubmitted: (_) => _submitReset(),
+                                ),
+                                TheavListRow(
+                                  title: _useRecoveryCode
+                                      ? l10n.translate('auth_2fa_use_password')
+                                      : l10n.translate('auth_2fa_use_backup_code'),
+                                  showChevron: true,
+                                  onTap: _isLoading
+                                      ? null
+                                      : () {
+                                          HapticUtils.selection();
+                                          setState(() {
+                                            _useRecoveryCode = !_useRecoveryCode;
+                                            _twoFactorCtrl.clear();
+                                          });
+                                        },
+                                ),
+                              ],
+                            ),
+                          ],
+                          if (_errorMessage != null)
+                            TheavAuthErrorBanner(message: _errorMessage!),
+                          const SizedBox(height: 16),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: TheavSpringButton(
+                              label: _step == 1
+                                  ? l10n.translate('recovery_send_button')
+                                  : l10n.translate('recovery_reset_button'),
+                              isLoading: _isLoading,
+                              onPressed: _step == 1 ? _sendCode : _submitReset,
+                            ),
+                          ),
+                          if (_step == 2) ...[
+                            const SizedBox(height: 10),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: TheavSpringButton(
+                                variant: TheavSpringButtonVariant.glass,
+                                enabled: !_isLoading && _cooldown == 0,
+                                label: _cooldown > 0
+                                    ? l10n
+                                        .translate('email_resend_cooldown')
+                                        .replaceAll('{seconds}', '$_cooldown')
+                                    : l10n.translate('email_resend_button'),
+                                onPressed: (_isLoading || _cooldown > 0)
+                                    ? null
+                                    : _sendCode,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

@@ -234,6 +234,47 @@ class ThemeProvider extends ChangeNotifier {
   Future<void> setToLight() => setThemeMode(ThemeMode.light);
   Future<void> setToDark() => setThemeMode(ThemeMode.dark);
 
+  /// Copies pre-login device theme mode preferences into [userId]'s namespace
+  /// if that user does not already have saved theme preferences.
+  static Future<void> adoptDeviceOnboardingAppearanceIfUnset(
+    String userId,
+  ) async {
+    if (userId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final dstModeKey = 'user_${userId}_theme_mode';
+    if (!prefs.containsKey(dstModeKey) && prefs.containsKey('theme_mode')) {
+      final modeIndex = prefs.getInt('theme_mode');
+      if (modeIndex != null) {
+        await prefs.setInt(dstModeKey, modeIndex);
+      }
+    }
+    const boolKeys = ['theme_schedule_enabled'];
+    for (final k in boolKeys) {
+      final dst = 'user_${userId}_$k';
+      if (!prefs.containsKey(dst) && prefs.containsKey(k)) {
+        final v = prefs.getBool(k);
+        if (v != null) await prefs.setBool(dst, v);
+      }
+    }
+    const intKeys = ['theme_dark_start', 'theme_dark_end'];
+    for (final k in intKeys) {
+      final dst = 'user_${userId}_$k';
+      if (!prefs.containsKey(dst) && prefs.containsKey(k)) {
+        final v = prefs.getInt(k);
+        if (v != null) await prefs.setInt(dst, v);
+      }
+    }
+    final dstFontKey = 'user_${userId}_message_font_size';
+    if (!prefs.containsKey(dstFontKey) &&
+        prefs.containsKey('message_font_size')) {
+      final v = prefs.getDouble('message_font_size');
+      if (v != null) await prefs.setDouble(dstFontKey, v);
+    }
+  }
+
+  /// Reloads theme mode preferences for [userId].
+  Future<void> reloadForUser(String? userId) => _switchUserThemeMode(userId);
+
   @override
   void dispose() {
     _scheduleTimer?.cancel();

@@ -1,43 +1,70 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:provider/provider.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import '../../config/app_config.dart';
+import '../../l10n/app_localizations.dart';
 import '../../services/auth_service.dart';
-import '../../services/notification_settings_provider.dart';
-import '../../services/privacy_settings_provider.dart';
-import '../../services/settings_service.dart';
+import '../../services/deep_link_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/websocket_service.dart';
-import '../../services/geo_language_service.dart';
-import '../../widgets/tiling/tiling_workspace_scaffold.dart';
-import 'register_screen.dart';
-import 'recovery_screen.dart';
-import '../../l10n/app_localizations.dart';
+import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../config/app_config.dart';
+import '../../widgets/auth/theav_auth_primitives.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
+import '../../widgets/tiling/tiling_workspace_scaffold.dart';
 import '../settings/service_menu_screen.dart';
+import 'recovery_screen.dart';
+import 'register_screen.dart';
 
+/// Adaptive login screen built exclusively on Theaver's native design system:
+/// - `@username`, `email`, or phone login + QR login & grant-code claim
+/// - 5-tap secret trigger on brand emblem to open [ServiceMenuScreen]
+/// - Regional configured-only OAuth2/OIDC (Yandex ID, VK ID, Google, Apple)
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({Key? key, this.initialUsername}) : super(key: key);
-
   final String? initialUsername;
+  final String? initialCountryCode;
+  @visibleForTesting
+  final AuthProvidersConfig? debugProvidersOverride;
+
+  const LoginScreen({
+    super.key,
+    this.initialUsername,
+    this.initialCountryCode,
+    this.debugProvidersOverride,
+  });
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
+enum _MobileAuthTab { password, qr }
+
 class _LoginScreenState extends State<LoginScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
+  final _identifierCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _qrClaimCodeCtrl = TextEditingController();
+
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
-  String? _suggestedLanguageCode;
+  _MobileAuthTab _mobileTab = _MobileAuthTab.password;
+  bool _wasWideLayout = false;
+
+  // Providers & custom server state
+  AuthProvidersConfig? _providersConfig;
+  String? _customServerUrl;
+  final List<DateTime> _logoTapTimes = [];
 
   // QR Login state
-  bool _qrMode = false;
   bool _qrLoading = false;
   bool _qrExpired = false;
   bool _qrAwaiting2faHandled = false;
@@ -49,105 +76,131 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _qrError;
   String? _qrClaimError;
   Timer? _qrPollTimer;
-  final _qrClaimCodeController = TextEditingController();
 
-  bool get _supportsQrLogin => true;
+  // Active OAuth broker session state
+  Timer? _oauthPollTimer;
+  StreamSubscription<OAuthCallbackEvent>? _oauthSub;
+  String? _activeOAuthSessionId;
+  String? _activeOAuthPollSecret;
+  bool _handlingOAuthOutcome = false;
+  BuildContext? _oauthWaitingSheetContext;
 
   @override
   void initState() {
     super.initState();
     if (widget.initialUsername != null && widget.initialUsername!.isNotEmpty) {
-      _emailController.text = widget.initialUsername!;
+      _identifierCtrl.text = widget.initialUsername!;
     }
-    // Откладываем вызов до первого кадра, чтобы Provider был доступен
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _detectLanguage();
-    });
-  }
-
-  Future<void> _detectLanguage() async {
-    final detected = await GeoLanguageService.detectLanguage();
-    if (detected == null || !mounted) return;
-
-    // Ждём загрузки сохранённого языка из SharedPreferences
-    await context.read<LocaleProvider>().ready;
-    if (!mounted) return;
-
-    final currentLangCode = context.read<LocaleProvider>().locale.languageCode;
-
-    // Показываем кнопку только если язык отличается от текущего
-    if (detected != currentLangCode) {
-      setState(() {
-        _suggestedLanguageCode = detected;
-      });
-    }
-  }
-
-  void _switchLanguage() {
-    if (_suggestedLanguageCode == null) return;
-    context.read<LocaleProvider>().setLocaleByCode(_suggestedLanguageCode!);
-    setState(() {
-      _suggestedLanguageCode = null;
-    });
+    _identifierCtrl.addListener(_onIdentifierChanged);
+    _loadCustomServerState();
+    _loadProvidersConfig();
+    _oauthSub = DeepLinkService().oauthCallbacks.listen(_handleOAuthDeepLink);
   }
 
   @override
   void dispose() {
     _qrPollTimer?.cancel();
-    _qrClaimCodeController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
+    _oauthPollTimer?.cancel();
+    _oauthSub?.cancel();
+    _identifierCtrl.removeListener(_onIdentifierChanged);
+    _identifierCtrl.dispose();
+    _passwordCtrl.dispose();
+    _qrClaimCodeCtrl.dispose();
     super.dispose();
   }
 
-  String _map2FAResetError(
-    AppLocalizations l10n,
-    Map<String, dynamic> res, {
-    required String fallbackKey,
-  }) {
-    final err = res['error']?.toString() ?? '';
-    switch (err) {
-      case 'email_not_configured':
-        return l10n.translate('email_error_not_configured');
-      case 'cooldown':
-      case 'rate_limited':
-        final wait = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
-        return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$wait');
-      case 'no_email':
-        return l10n.translate('email_add_hint');
-      case 'invalid_password':
-        return l10n.translate('email_error_invalid_password');
-      case 'invalid_code':
-      case 'code_expired':
-        return l10n.translate('email_error_invalid_code');
-      case 'too_many_attempts':
-        return l10n.translate('email_error_too_many_attempts');
-      default:
-        final msg = res['message']?.toString() ?? '';
-        return msg.isNotEmpty ? msg : l10n.translate(fallbackKey);
+  void _onIdentifierChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadCustomServerState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(AppConfig.prefCustomApiUrlKey) ??
+          prefs.getString(AppConfig.prefCustomServerUrlKey);
+      if (mounted) {
+        setState(() {
+          _customServerUrl =
+              (raw != null && raw.trim().isNotEmpty) ? raw.trim() : null;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadProvidersConfig() async {
+    if (widget.debugProvidersOverride != null) {
+      setState(() => _providersConfig = widget.debugProvidersOverride);
+      return;
+    }
+    final cfg = await AuthService.fetchAuthProviders();
+    if (!mounted) return;
+    setState(() => _providersConfig = cfg);
+  }
+
+  void _handleBrandLogoTap() {
+    final now = DateTime.now();
+    _logoTapTimes.removeWhere(
+      (ts) => now.difference(ts) > const Duration(milliseconds: 2500),
+    );
+    _logoTapTimes.add(now);
+    if (_logoTapTimes.length >= 5) {
+      _logoTapTimes.clear();
+      HapticUtils.selection();
+      Navigator.of(context)
+          .push(SwipeBackPageRoute(builder: (_) => const ServiceMenuScreen()))
+          .then((_) {
+        if (mounted) {
+          _loadCustomServerState();
+          _loadProvidersConfig();
+        }
+      });
     }
   }
 
-  Future<void> _reloadUserScopedProviders(String? userId) async {
-    await SettingsService().reloadForUser(userId);
+  Future<void> _resetCustomServer() async {
+    HapticUtils.tap();
+    await AppConfig.resetToDefaults();
+    await _loadCustomServerState();
+    await _loadProvidersConfig();
     if (!mounted) return;
-    try {
-      await context.read<PrivacySettingsProvider>().reloadForUser();
-    } catch (_) {}
-    if (!mounted) return;
-    try {
-      await context.read<NotificationSettingsProvider>().reloadForUser();
-    } catch (_) {}
+    GlassToastService().show(
+      context,
+      context.l10n.trOr('auth_server_reset_done', 'Server reset to default'),
+      icon: Icons.dns_outlined,
+    );
   }
 
-  Future<void> _navigateToWorkspace(String? userId) async {
-    await _reloadUserScopedProviders(userId);
-    await WebSocketService().updateUserId(userId);
+  String _resolvedCountryCode() {
+    final w = widget.initialCountryCode?.trim().toUpperCase() ?? '';
+    if (w.length == 2) return w;
+    final p = _providersConfig?.countryCode.trim().toUpperCase() ?? '';
+    if (p.length == 2) return p;
+    return 'RU';
+  }
+
+  Widget _buildSmartIdentifierIcon(TheavPalette palette) {
+    final text = _identifierCtrl.text.trim();
+    if (text.startsWith('@')) {
+      return iconoir.AtSign(width: 19, height: 19, color: palette.primary);
+    }
+    if (text.contains('@')) {
+      return iconoir.Mail(width: 19, height: 19, color: palette.primary);
+    }
+    if (RegExp(r'^[+0-9]').hasMatch(text)) {
+      return iconoir.Phone(width: 19, height: 19, color: palette.primary);
+    }
+    return iconoir.User(width: 19, height: 19, color: palette.subtext);
+  }
+
+  Future<void> _enterWorkspace(String userId) async {
+    if (userId.isNotEmpty) {
+      await WebSocketService().updateUserId(userId);
+    }
     if (!mounted) return;
     TilingLayoutController.instance.closeAllChats();
-    final localNav = Navigator.of(context);
-    if (TilingLayoutController.instance.isWorkspaceMounted && localNav.canPop()) {
-      localNav.popUntil((route) => route.isFirst);
+    final nav = Navigator.of(context);
+    if (TilingLayoutController.instance.isWorkspaceMounted && nav.canPop()) {
+      nav.popUntil((route) => route.isFirst);
     } else {
       Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
         SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
@@ -156,210 +209,18 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<Map<String, dynamic>?> _promptTwoFactorDialog({
-    bool hasRecoveryEmail = false,
-    String? usernameOrEmail,
-    String? accountPassword,
-    bool allowEmailReset = true,
-  }) async {
+  Future<void> _submitPasswordLogin() async {
     final l10n = context.l10n;
-    final codeCtrl = TextEditingController();
-    final resetOtpCtrl = TextEditingController();
-    bool useRecoveryCode = false;
-    bool resetMode = false;
-    bool resetOtpSent = false;
-    bool busy = false;
-    String? dialogError;
-    String? maskedEmail;
+    final identifier = _identifierCtrl.text.trim();
+    final password = _passwordCtrl.text;
 
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) {
-          if (resetMode) {
-            return AlertDialog(
-              title: Text(l10n.translate('auth_2fa_reset_title')),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    maskedEmail != null && maskedEmail!.isNotEmpty
-                        ? l10n
-                            .translate('email_code_sent')
-                            .replaceAll('{email}', maskedEmail!)
-                        : l10n.translate('auth_2fa_reset_desc'),
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
-                  if (resetOtpSent) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: resetOtpCtrl,
-                      keyboardType: TextInputType.number,
-                      maxLength: 6,
-                      decoration: InputDecoration(
-                        labelText: l10n.translate('email_otp_label'),
-                        counterText: '',
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                  ],
-                  if (dialogError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      dialogError!,
-                      style: const TextStyle(color: Colors.red, fontSize: 13),
-                    ),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: busy
-                      ? null
-                      : () => setDialogState(() {
-                            resetMode = false;
-                            dialogError = null;
-                          }),
-                  child: Text(l10n.translate('common_back')),
-                ),
-                ElevatedButton(
-                  onPressed: busy
-                      ? null
-                      : () async {
-                          if (!resetOtpSent) {
-                            setDialogState(() {
-                              busy = true;
-                              dialogError = null;
-                            });
-                            final res = await AuthService.send2FAResetCode(
-                              usernameOrEmail: usernameOrEmail ?? '',
-                              password: accountPassword ?? '',
-                            );
-                            if (!ctx.mounted) return;
-                            if (res['success'] == true) {
-                              setDialogState(() {
-                                busy = false;
-                                resetOtpSent = true;
-                                maskedEmail = res['masked_email']?.toString();
-                              });
-                            } else {
-                              setDialogState(() {
-                                busy = false;
-                                dialogError = _map2FAResetError(
-                                  l10n,
-                                  res,
-                                  fallbackKey: 'common_error',
-                                );
-                              });
-                            }
-                          } else {
-                            setDialogState(() {
-                              busy = true;
-                              dialogError = null;
-                            });
-                            final res = await AuthService.confirm2FAReset(
-                              usernameOrEmail: usernameOrEmail ?? '',
-                              password: accountPassword ?? '',
-                              code: resetOtpCtrl.text.trim(),
-                            );
-                            if (!ctx.mounted) return;
-                            if (res['success'] == true) {
-                              Navigator.pop(ctx, {'resetDone': true});
-                            } else {
-                              setDialogState(() {
-                                busy = false;
-                                dialogError = _map2FAResetError(
-                                  l10n,
-                                  res,
-                                  fallbackKey: 'email_error_invalid_code',
-                                );
-                              });
-                            }
-                          }
-                        },
-                  child: Text(
-                    resetOtpSent
-                        ? l10n.translate('confirm')
-                        : l10n.translate('recovery_send_button'),
-                  ),
-                ),
-              ],
-            );
-          }
-
-          return AlertDialog(
-            title: Text(l10n.translate('security_2fa')),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: codeCtrl,
-                  obscureText: !useRecoveryCode,
-                  autofocus: true,
-                  decoration: InputDecoration(
-                    labelText: useRecoveryCode
-                        ? l10n.translate('auth_2fa_backup_code_label')
-                        : l10n.translate('security_2fa_password_label'),
-                    border: const OutlineInputBorder(),
-                  ),
-                  onSubmitted: (val) => Navigator.pop(ctx, {
-                    'value': val,
-                    'isRecoveryCode': useRecoveryCode,
-                  }),
-                ),
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () {
-                    setDialogState(() {
-                      useRecoveryCode = !useRecoveryCode;
-                      codeCtrl.clear();
-                    });
-                  },
-                  child: Text(
-                    useRecoveryCode
-                        ? l10n.translate('auth_2fa_use_password')
-                        : l10n.translate('auth_2fa_use_backup_code'),
-                  ),
-                ),
-                if (allowEmailReset && hasRecoveryEmail && usernameOrEmail != null)
-                  TextButton(
-                    onPressed: () {
-                      setDialogState(() {
-                        resetMode = true;
-                        dialogError = null;
-                      });
-                    },
-                    child: Text(l10n.translate('auth_2fa_forgot_password')),
-                  ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, null),
-                child: Text(l10n.translate('cancel')),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(ctx, {
-                  'value': codeCtrl.text,
-                  'isRecoveryCode': useRecoveryCode,
-                }),
-                child: Text(l10n.translate('confirm')),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-    codeCtrl.dispose();
-    resetOtpCtrl.dispose();
-    return result;
-  }
-
-  Future<void> _login({String? twoFactorPassword, String? recoveryCode}) async {
-    if (!_formKey.currentState!.validate()) {
+    if (identifier.isEmpty || password.isEmpty) {
+      setState(() {
+        _errorMessage = l10n.trOr(
+          'auth_enter_credentials',
+          'Enter username, email, or phone and password',
+        );
+      });
       return;
     }
 
@@ -368,62 +229,294 @@ class _LoginScreenState extends State<LoginScreen> {
       _errorMessage = null;
     });
 
-    try {
-      final result = await AuthService.login(
-        usernameOrEmail: _emailController.text.trim(),
-        password: _passwordController.text,
-        twoFactorPassword: twoFactorPassword,
-        recoveryCode: recoveryCode,
+    var res = await AuthService.login(
+      identifier: identifier,
+      password: password,
+      countryCode: _resolvedCountryCode(),
+      context: context,
+    );
+
+    if (!mounted) return;
+
+    if (res['requires_2fa'] == true) {
+      setState(() => _isLoading = false);
+      final choice = await _showTwoFactorSheet(
+        allowEmailReset: true,
+        hasRecoveryEmail: res['has_recovery_email'] == true,
+        usernameOrEmail: identifier,
+        passwordForReset: password,
       );
-
-      if (!mounted) return;
-
-      if (result['success'] == true) {
-        await _navigateToWorkspace(result['userId'] as String?);
-      } else if (result['requires_2fa'] == true &&
-          twoFactorPassword == null &&
-          recoveryCode == null) {
-        setState(() {
-          _isLoading = false;
-        });
-        final choice = await _promptTwoFactorDialog(
-          hasRecoveryEmail: result['has_recovery_email'] == true,
-          usernameOrEmail: _emailController.text.trim(),
-          accountPassword: _passwordController.text,
+      if (!mounted || choice == null) return;
+      if (choice['2fa_reset_done'] == true) {
+        GlassToastService().show(
+          context,
+          l10n.translate('auth_2fa_reset_success'),
+          icon: Icons.check_circle_outline,
         );
-        if (!mounted || choice == null) return;
-        if (choice['resetDone'] == true) {
-          await _login();
-          return;
-        }
-        final value = choice['value']?.toString().trim() ?? '';
-        if (value.isNotEmpty) {
-          if (choice['isRecoveryCode'] == true) {
-            await _login(recoveryCode: value);
-          } else {
-            await _login(twoFactorPassword: value);
-          }
-        }
-      } else {
-        setState(() {
-          _isLoading = false;
-          _errorMessage = result['message'] as String?;
-        });
+        return;
       }
-    } catch (e) {
-      if (!mounted) return;
+      final val = choice['value']?.toString() ?? '';
+      if (val.isEmpty) return;
 
-      setState(() {
-        _isLoading = false;
-        _errorMessage = context.l10n.translate('auth_unexpected_error');
-      });
+      setState(() => _isLoading = true);
+      res = await AuthService.login(
+        identifier: identifier,
+        password: password,
+        countryCode: _resolvedCountryCode(),
+        twoFactorPassword: choice['isRecoveryCode'] == true ? null : val,
+        recoveryCode: choice['isRecoveryCode'] == true ? val : null,
+        context: context,
+      );
+      if (!mounted) return;
     }
+
+    setState(() => _isLoading = false);
+
+    if (res['success'] == true) {
+      await _enterWorkspace(res['userId']?.toString() ?? '');
+      return;
+    }
+
+    setState(() {
+      _errorMessage = res['error'] == 'invalid_2fa_password'
+          ? l10n.translate('email_error_invalid_2fa')
+          : (res['message']?.toString() ?? l10n.translate('auth_login_failed'));
+    });
   }
 
+  Future<Map<String, dynamic>?> _showTwoFactorSheet({
+    bool allowEmailReset = false,
+    bool hasRecoveryEmail = false,
+    String? usernameOrEmail,
+    String? passwordForReset,
+  }) async {
+    final l10n = context.l10n;
+    final ctrl = TextEditingController();
+    bool useRecoveryCode = false;
+
+    final result = await showTheavModalSheet<Map<String, dynamic>>(
+      context: context,
+      title: l10n.translate('auth_2fa_title'),
+      showCloseButton: true,
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            final palette = ctx.theav;
+            final sheetL10n = ctx.l10n;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      useRecoveryCode
+                          ? sheetL10n.translate('auth_2fa_enter_backup_code')
+                          : sheetL10n.translate('auth_2fa_enter_password_prompt'),
+                      style: TextStyle(fontSize: 14, color: palette.subtext),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TheavInsetGroup(
+                    children: [
+                      TheavInlineTextField(
+                        controller: ctrl,
+                        autofocus: true,
+                        obscureText: !useRecoveryCode,
+                        placeholder: useRecoveryCode
+                            ? sheetL10n.translate('auth_2fa_backup_code_label')
+                            : sheetL10n.translate('security_2fa_password_label'),
+                        prefix: iconoir.Shield(
+                          width: 19,
+                          height: 19,
+                          color: palette.subtext,
+                        ),
+                        onSubmitted: (v) {
+                          if (v.trim().isNotEmpty) {
+                            Navigator.of(sheetCtx).pop({
+                              'value': v.trim(),
+                              'isRecoveryCode': useRecoveryCode,
+                            });
+                          }
+                        },
+                      ),
+                      TheavListRow(
+                        title: useRecoveryCode
+                            ? sheetL10n.translate('auth_2fa_use_password')
+                            : sheetL10n.translate('auth_2fa_use_backup_code'),
+                        showChevron: true,
+                        onTap: () {
+                          HapticUtils.selection();
+                          setSheetState(() {
+                            useRecoveryCode = !useRecoveryCode;
+                            ctrl.clear();
+                          });
+                        },
+                      ),
+                      if (allowEmailReset &&
+                          hasRecoveryEmail &&
+                          usernameOrEmail != null &&
+                          passwordForReset != null)
+                        TheavListRow(
+                          title: sheetL10n.translate('auth_2fa_forgot_button'),
+                          isDestructive: true,
+                          showChevron: true,
+                          onTap: () async {
+                            Navigator.of(sheetCtx).pop();
+                            final resetDone = await _show2FAEmailResetSheet(
+                              usernameOrEmail: usernameOrEmail,
+                              password: passwordForReset,
+                            );
+                            if (resetDone == true && mounted) {
+                              GlassToastService().show(
+                                context,
+                                l10n.translate('auth_2fa_reset_success'),
+                                icon: Icons.check_circle_outline,
+                              );
+                            }
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TheavSpringButton(
+                      label: sheetL10n.translate('confirm'),
+                      onPressed: () {
+                        final val = ctrl.text.trim();
+                        if (val.isEmpty) return;
+                        Navigator.of(sheetCtx).pop({
+                          'value': val,
+                          'isRecoveryCode': useRecoveryCode,
+                        });
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    ctrl.dispose();
+    return result;
+  }
+
+  Future<bool?> _show2FAEmailResetSheet({
+    required String usernameOrEmail,
+    required String password,
+  }) async {
+    final l10n = context.l10n;
+    bool sending = true;
+    bool confirming = false;
+    String otp = '';
+    int shakeCount = 0;
+    String? errorMsg;
+
+    final sendRes = await AuthService.send2FAResetCode(
+      usernameOrEmail: usernameOrEmail,
+      password: password,
+      locale: l10n.locale.languageCode,
+    );
+    sending = false;
+    if (sendRes['success'] != true) {
+      errorMsg =
+          sendRes['message']?.toString() ?? l10n.translate('error_occurred');
+    }
+
+    if (!mounted) return null;
+    return showTheavModalSheet<bool>(
+      context: context,
+      title: l10n.translate('auth_2fa_reset_title'),
+      showCloseButton: true,
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            final palette = ctx.theav;
+            final sheetL10n = ctx.l10n;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(0, 6, 0, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      sheetL10n.translate('auth_2fa_reset_description'),
+                      style: TextStyle(fontSize: 14, color: palette.subtext),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TheavOtpPinRow(
+                      value: otp,
+                      errorShakeCounter: shakeCount,
+                      enabled: !sending && !confirming,
+                      onChanged: (v) => otp = v,
+                    ),
+                  ),
+                  if (errorMsg != null) TheavAuthErrorBanner(message: errorMsg!),
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TheavSpringButton(
+                      isLoading: confirming,
+                      label: sheetL10n.translate('auth_2fa_reset_confirm_button'),
+                      onPressed: () async {
+                        if (otp.trim().length < 6) {
+                          setSheetState(() {
+                            shakeCount++;
+                            errorMsg = sheetL10n.translate(
+                              'email_error_invalid_code',
+                            );
+                          });
+                          return;
+                        }
+                        setSheetState(() {
+                          confirming = true;
+                          errorMsg = null;
+                        });
+                        final res = await AuthService.confirm2FAReset(
+                          usernameOrEmail: usernameOrEmail,
+                          password: password,
+                          code: otp.trim(),
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          Navigator.of(sheetCtx).pop(true);
+                        } else {
+                          setSheetState(() {
+                            confirming = false;
+                            shakeCount++;
+                            errorMsg = res['message']?.toString() ??
+                                sheetL10n.translate('error_occurred');
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // ============ QR Login ============
+
   Future<void> _startQrLogin() async {
+    if (_qrLoading) return;
     _qrPollTimer?.cancel();
     setState(() {
-      _qrMode = true;
       _qrLoading = true;
       _qrExpired = false;
       _qrAwaiting2faHandled = false;
@@ -434,696 +527,1082 @@ class _LoginScreenState extends State<LoginScreen> {
       _qrUrl = null;
     });
 
-    final created = await AuthService.createQrLoginSession();
-    if (!mounted || !_qrMode) return;
-    if (created['success'] != true) {
+    final created = await AuthService.createQrLoginSession(
+      locale: context.l10n.locale.languageCode,
+    );
+    if (!mounted) return;
+
+    if (created['success'] != true ||
+        created['token'] == null ||
+        created['qr_secret'] == null ||
+        created['qr_url'] == null) {
       setState(() {
         _qrLoading = false;
         _qrError = created['message']?.toString() ??
-            context.l10n.translate('common_error');
+            context.l10n.translate('qr_login_load_error');
       });
       return;
     }
 
-    final token = created['token']?.toString();
-    final rawUrl = created['qr_url']?.toString();
     setState(() {
       _qrLoading = false;
-      _qrToken = token;
-      _qrSecret = created['qr_secret']?.toString();
+      _qrToken = created['token'].toString();
+      _qrSecret = created['qr_secret'].toString();
       _qrShortCode = created['short_code']?.toString();
-      _qrUrl = (rawUrl != null && rawUrl.isNotEmpty)
-          ? rawUrl
-          : (token != null && token.isNotEmpty
-              ? 'theaver://qr-login?token=${Uri.encodeQueryComponent(token)}'
-              : null);
+      _qrUrl = created['qr_url'].toString();
     });
 
-    _qrPollTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      await _pollQrStatus();
-    });
+    _qrPollTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _pollQrStatus(),
+    );
   }
 
   Future<void> _pollQrStatus() async {
-    final token = _qrToken;
-    final secret = _qrSecret;
-    if (!mounted || !_qrMode || token == null || secret == null) {
-      _qrPollTimer?.cancel();
-      return;
-    }
-    final statusRes = await AuthService.pollQrLoginStatus(
-      token: token,
-      qrSecret: secret,
+    if (!mounted || _qrToken == null || _qrSecret == null) return;
+    final res = await AuthService.pollQrLoginStatus(
+      token: _qrToken!,
+      qrSecret: _qrSecret!,
     );
-    if (!mounted || !_qrMode) return;
+    if (!mounted) return;
 
-    final status = statusRes['status']?.toString() ?? '';
-    if (status == 'expired') {
+    final status = res['status']?.toString() ?? 'expired';
+    if (status == 'authorized' && res['auth_token'] != null) {
       _qrPollTimer?.cancel();
-      setState(() => _qrExpired = true);
-      return;
-    }
-
-    if (status == 'confirmed' && statusRes['auth_token'] != null) {
-      _qrPollTimer?.cancel();
-      final authToken = statusRes['auth_token'].toString();
-      final userId = statusRes['user_id']?.toString() ?? '';
-      final userMap = statusRes['user'] is Map
-          ? Map<String, dynamic>.from(statusRes['user'] as Map)
-          : null;
+      final uid = res['user_id']?.toString() ?? '';
       await AuthService.completeExternalLoginSession(
-        authToken: authToken,
-        userId: userId,
-        user: userMap,
+        authToken: res['auth_token'].toString(),
+        userId: uid,
+        user: res['user'] is Map
+            ? Map<String, dynamic>.from(res['user'] as Map)
+            : null,
+        context: context,
       );
-      if (mounted) {
-        await _navigateToWorkspace(userId);
-      }
+      if (!mounted) return;
+      await _enterWorkspace(uid);
       return;
     }
 
     if (status == 'awaiting_2fa' && !_qrAwaiting2faHandled) {
       _qrAwaiting2faHandled = true;
       _qrPollTimer?.cancel();
-      final choice = await _promptTwoFactorDialog(allowEmailReset: false);
+      final choice = await _showTwoFactorSheet();
       if (!mounted) return;
-      if (choice == null || (choice['value']?.toString().trim().isEmpty ?? true)) {
-        setState(() {
-          _qrAwaiting2faHandled = false;
-        });
-        _qrPollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollQrStatus());
+      if (choice == null || (choice['value']?.toString() ?? '').isEmpty) {
+        _qrAwaiting2faHandled = false;
+        _startQrLogin();
         return;
       }
-      final val = choice['value'].toString().trim();
+      final val = choice['value'].toString();
       final verifyRes = await AuthService.verifyQrLogin2FA(
-        token: token,
-        qrSecret: secret,
+        token: _qrToken!,
+        qrSecret: _qrSecret!,
         twoFactorPassword: choice['isRecoveryCode'] == true ? null : val,
         recoveryCode: choice['isRecoveryCode'] == true ? val : null,
       );
       if (!mounted) return;
       if (verifyRes['success'] == true && verifyRes['auth_token'] != null) {
-        final authToken = verifyRes['auth_token'].toString();
-        final userId = verifyRes['user_id']?.toString() ?? '';
-        final userMap = verifyRes['user'] is Map
-            ? Map<String, dynamic>.from(verifyRes['user'] as Map)
-            : null;
+        final uid = verifyRes['user_id']?.toString() ?? '';
         await AuthService.completeExternalLoginSession(
-          authToken: authToken,
-          userId: userId,
-          user: userMap,
+          authToken: verifyRes['auth_token'].toString(),
+          userId: uid,
+          user: verifyRes['user'] is Map
+              ? Map<String, dynamic>.from(verifyRes['user'] as Map)
+              : null,
+          context: context,
         );
-        if (mounted) {
-          await _navigateToWorkspace(userId);
-        }
+        if (!mounted) return;
+        await _enterWorkspace(uid);
       } else {
-        setState(() {
-          _qrAwaiting2faHandled = false;
-          _qrError = verifyRes['message']?.toString() ??
-              context.l10n.translate('email_error_invalid_2fa');
-        });
+        _qrAwaiting2faHandled = false;
+        GlassToastService().showError(
+          context,
+          verifyRes['error'] == 'invalid_2fa_password'
+              ? context.l10n.translate('email_error_invalid_2fa')
+              : context.l10n.translate('qr_login_load_error'),
+        );
+        _startQrLogin();
       }
+      return;
+    }
+
+    if (status == 'expired' || status == 'consumed') {
+      _qrPollTimer?.cancel();
+      setState(() => _qrExpired = true);
     }
   }
 
   void _stopQrLogin() {
     _qrPollTimer?.cancel();
-    setState(() {
-      _qrMode = false;
-      _qrError = null;
-      _qrClaimError = null;
-    });
+    _qrPollTimer = null;
   }
 
   Future<void> _claimQrCode() async {
     final l10n = context.l10n;
-    final raw = _qrClaimCodeController.text.trim();
-    if (raw.isEmpty || _qrClaiming) return;
+    final raw = _qrClaimCodeCtrl.text.trim();
+    if (raw.isEmpty) {
+      setState(() => _qrClaimError = l10n.translate('qr_login_code_required'));
+      return;
+    }
 
     setState(() {
       _qrClaiming = true;
       _qrClaimError = null;
     });
 
-    String? token;
-    String? shortCode;
-    if (raw.contains('token=')) {
-      final uri = Uri.tryParse(raw);
-      token = uri?.queryParameters['token'];
-    }
-    if (token == null || token.isEmpty) {
-      shortCode = raw.replaceAll('-', '').replaceAll(' ', '').toUpperCase();
-    }
-
+    final isUri = raw.contains('://') || raw.contains('token=');
     var res = await AuthService.claimQrGrantSession(
-      token: token,
-      shortCode: shortCode,
+      token: isUri ? raw : null,
+      shortCode: isUri ? null : raw,
+      locale: l10n.locale.languageCode,
     );
     if (!mounted) return;
 
     if (res['requires_2fa'] == true) {
-      final choice = await _promptTwoFactorDialog(allowEmailReset: false);
-      if (!mounted) return;
-      final val = choice?['value']?.toString().trim() ?? '';
-      if (val.isEmpty) {
-        setState(() => _qrClaiming = false);
-        return;
-      }
+      setState(() => _qrClaiming = false);
+      final choice = await _showTwoFactorSheet();
+      if (!mounted || choice == null) return;
+      final val = choice['value']?.toString() ?? '';
+      if (val.isEmpty) return;
+
+      setState(() => _qrClaiming = true);
       res = await AuthService.claimQrGrantSession(
-        token: token,
-        shortCode: shortCode,
-        twoFactorPassword: choice?['isRecoveryCode'] == true ? null : val,
-        recoveryCode: choice?['isRecoveryCode'] == true ? val : null,
+        token: isUri ? raw : null,
+        shortCode: isUri ? null : raw,
+        twoFactorPassword: choice['isRecoveryCode'] == true ? null : val,
+        recoveryCode: choice['isRecoveryCode'] == true ? val : null,
+        locale: l10n.locale.languageCode,
       );
       if (!mounted) return;
     }
 
     setState(() => _qrClaiming = false);
+
     if (res['success'] == true && res['auth_token'] != null) {
-      _qrPollTimer?.cancel();
-      final authToken = res['auth_token'].toString();
-      final userId = res['user_id']?.toString() ?? '';
-      final userMap = res['user'] is Map
-          ? Map<String, dynamic>.from(res['user'] as Map)
-          : null;
+      final uid = res['user_id']?.toString() ?? '';
       await AuthService.completeExternalLoginSession(
-        authToken: authToken,
-        userId: userId,
-        user: userMap,
+        authToken: res['auth_token'].toString(),
+        userId: uid,
+        user: res['user'] is Map
+            ? Map<String, dynamic>.from(res['user'] as Map)
+            : null,
+        context: context,
       );
+      if (!mounted) return;
+      await _enterWorkspace(uid);
+      return;
+    }
+
+    setState(() {
+      _qrClaimError = res['error'] == 'invalid_2fa_password'
+          ? l10n.translate('email_error_invalid_2fa')
+          : (res['message']?.toString() ??
+              l10n.translate('qr_login_claim_failed'));
+    });
+  }
+
+  // ============ Regional OAuth2 / OIDC ============
+
+  Future<void> _startOAuthFlow(AuthProviderInfo provider) async {
+    final l10n = context.l10n;
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    final startRes = await AuthService.startOAuthSession(
+      provider.id,
+      locale: l10n.locale.languageCode,
+    );
+    if (!mounted) return;
+
+    if (startRes['success'] != true ||
+        (startRes['authorize_url']?.toString().isEmpty ?? true) ||
+        (startRes['session_id']?.toString().isEmpty ?? true) ||
+        (startRes['poll_secret']?.toString().isEmpty ?? true)) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = startRes['message']?.toString() ??
+            l10n.trOr('oauth_start_failed', 'Unable to start sign-in');
+      });
+      return;
+    }
+
+    final sessionId = startRes['session_id'].toString();
+    final pollSecret = startRes['poll_secret'].toString();
+    final authorizeUrl = Uri.parse(startRes['authorize_url'].toString());
+
+    _oauthPollTimer?.cancel();
+    setState(() {
+      _activeOAuthSessionId = sessionId;
+      _activeOAuthPollSecret = pollSecret;
+      _handlingOAuthOutcome = false;
+      _isLoading = false;
+    });
+
+    try {
+      await launchUrl(authorizeUrl, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+
+    _oauthPollTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _pollOAuthSession(),
+    );
+
+    if (!mounted) return;
+    await showTheavModalSheet<void>(
+      context: context,
+      title: provider.displayName,
+      showCloseButton: true,
+      builder: (sheetCtx) {
+        _oauthWaitingSheetContext = sheetCtx;
+        final palette = sheetCtx.theav;
+        final sheetL10n = sheetCtx.l10n;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  OAuthBrandGlyph(providerId: provider.id, size: 28),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Text(
+                      sheetL10n.trOr(
+                        'oauth_waiting_browser',
+                        'Complete sign-in in your browser and return to Theaver.',
+                      ),
+                      style: TextStyle(fontSize: 14.5, color: palette.onSurface),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
+              TheavSpringButton(
+                variant: TheavSpringButtonVariant.glass,
+                label: sheetL10n.translate('cancel'),
+                onPressed: () {
+                  _cancelActiveOAuth();
+                  Navigator.of(sheetCtx).pop();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    ).whenComplete(() {
+      _oauthWaitingSheetContext = null;
+    });
+    _oauthPollTimer?.cancel();
+  }
+
+  void _dismissOAuthWaitingSheet() {
+    final sheetCtx = _oauthWaitingSheetContext;
+    _oauthWaitingSheetContext = null;
+    if (sheetCtx != null && sheetCtx.mounted) {
+      Navigator.of(sheetCtx).pop();
+    }
+  }
+
+  void _cancelActiveOAuth() {
+    _oauthPollTimer?.cancel();
+    _activeOAuthSessionId = null;
+    _activeOAuthPollSecret = null;
+    _handlingOAuthOutcome = false;
+  }
+
+  void _handleOAuthDeepLink(OAuthCallbackEvent event) {
+    if (!mounted ||
+        _activeOAuthSessionId == null ||
+        event.sessionId != _activeOAuthSessionId) {
+      return;
+    }
+    _pollOAuthSession();
+  }
+
+  Future<void> _pollOAuthSession() async {
+    final sid = _activeOAuthSessionId;
+    final secret = _activeOAuthPollSecret;
+    if (!mounted || sid == null || secret == null || _handlingOAuthOutcome) {
+      return;
+    }
+
+    final res = await AuthService.pollOAuthSessionStatus(
+      sessionId: sid,
+      pollSecret: secret,
+    );
+    if (!mounted || _handlingOAuthOutcome) return;
+
+    final status = res['status']?.toString() ?? 'pending';
+    if (status == 'pending') return;
+
+    _handlingOAuthOutcome = true;
+    _oauthPollTimer?.cancel();
+
+    // Dismiss ONLY the tracked OAuth waiting modal if still mounted.
+    _dismissOAuthWaitingSheet();
+    if (!mounted) return;
+
+    if (status == 'authenticated' && res['auth_token'] != null) {
+      final uid = res['user_id']?.toString() ?? '';
+      await AuthService.completeExternalLoginSession(
+        authToken: res['auth_token'].toString(),
+        userId: uid,
+        user: res['user'] is Map
+            ? Map<String, dynamic>.from(res['user'] as Map)
+            : null,
+        context: context,
+      );
+      _cancelActiveOAuth();
+      if (!mounted) return;
+      await _enterWorkspace(uid);
+      return;
+    }
+
+    if (status == 'needs_registration' &&
+        res['prefill'] is OAuthRegistrationPrefill) {
+      final prefill = res['prefill'] as OAuthRegistrationPrefill;
+      _cancelActiveOAuth();
+      await Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => RegisterScreen(
+            oauthPrefill: prefill,
+            initialCountryCode: _resolvedCountryCode(),
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (status == 'needs_password_link') {
+      final masked = res['masked_email']?.toString() ?? '';
+      final provName = res['provider_name']?.toString() ?? '';
+      await _handleOAuthPasswordLink(
+        sessionId: sid,
+        pollSecret: secret,
+        providerName: provName,
+        maskedEmail: masked,
+      );
+      _cancelActiveOAuth();
+      return;
+    }
+
+    if (status == 'awaiting_2fa') {
+      final choice = await _showTwoFactorSheet();
+      if (mounted && choice != null) {
+        final val = choice['value']?.toString() ?? '';
+        if (val.isNotEmpty) {
+          final vRes = await AuthService.verifyOAuth2FA(
+            sessionId: sid,
+            pollSecret: secret,
+            twoFactorPassword: choice['isRecoveryCode'] == true ? null : val,
+            recoveryCode: choice['isRecoveryCode'] == true ? val : null,
+            context: context,
+          );
+          if (mounted && vRes['success'] == true) {
+            _cancelActiveOAuth();
+            await _enterWorkspace(vRes['user_id']?.toString() ?? '');
+            return;
+          }
+        }
+      }
+      _cancelActiveOAuth();
       if (mounted) {
-        await _navigateToWorkspace(userId);
+        setState(() {
+          _errorMessage = context.l10n.translate('email_error_invalid_2fa');
+        });
       }
       return;
     }
 
-    final err = res['error']?.toString() ?? '';
-    String mapped;
-    switch (err) {
-      case 'qr_expired_or_invalid':
-        mapped = l10n.translate('devices_link_error');
-        break;
-      case 'invalid_2fa_password':
-        mapped = l10n.translate('email_error_invalid_2fa');
-        break;
-      case 'too_many_attempts':
-        mapped = l10n.translate('email_error_too_many_attempts');
-        break;
-      default:
-        mapped = res['message']?.toString().isNotEmpty == true
-            ? res['message'].toString()
-            : l10n.translate('devices_link_error');
-    }
-    setState(() => _qrClaimError = mapped);
+    _cancelActiveOAuth();
+    setState(() {
+      _errorMessage = res['message']?.toString() ??
+          context.l10n.trOr('oauth_failed', 'External sign-in failed');
+    });
   }
 
-  void _navigateToRecovery() {
-    Navigator.push(
-      context,
-      SwipeBackPageRoute(builder: (_) => const RecoveryScreen()),
+  Future<void> _handleOAuthPasswordLink({
+    required String sessionId,
+    required String pollSecret,
+    required String providerName,
+    required String maskedEmail,
+  }) async {
+    final l10n = context.l10n;
+    final pwdCtrl = TextEditingController();
+    bool submitting = false;
+    String? errText;
+
+    await showTheavModalSheet<void>(
+      context: context,
+      title: l10n.trOr('oauth_link_title', 'Link existing account'),
+      showCloseButton: true,
+      builder: (sheetCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            final palette = ctx.theav;
+            final sheetL10n = ctx.l10n;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      sheetL10n
+                          .trOr(
+                            'oauth_link_description',
+                            'Enter your current Theaver password once to link {provider} to {email}.',
+                          )
+                          .replaceAll('{provider}', providerName)
+                          .replaceAll('{email}', maskedEmail),
+                      style: TextStyle(fontSize: 14, color: palette.subtext),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TheavInsetGroup(
+                    children: [
+                      TheavInlineTextField(
+                        controller: pwdCtrl,
+                        autofocus: true,
+                        obscureText: true,
+                        placeholder: sheetL10n.translate('auth_password'),
+                        prefix: iconoir.Lock(
+                          width: 19,
+                          height: 19,
+                          color: palette.subtext,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (errText != null) TheavAuthErrorBanner(message: errText!),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TheavSpringButton(
+                      isLoading: submitting,
+                      label: sheetL10n.translate('confirm'),
+                      onPressed: () async {
+                        if (pwdCtrl.text.isEmpty) return;
+                        setSheetState(() {
+                          submitting = true;
+                          errText = null;
+                        });
+                        final res = await AuthService.confirmOAuthPasswordLink(
+                          sessionId: sessionId,
+                          pollSecret: pollSecret,
+                          password: pwdCtrl.text,
+                          context: context,
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          Navigator.of(sheetCtx).pop();
+                          if (mounted) {
+                            await _enterWorkspace(
+                              res['user_id']?.toString() ?? '',
+                            );
+                          }
+                        } else {
+                          setSheetState(() {
+                            submitting = false;
+                            errText = res['message']?.toString() ??
+                                sheetL10n.translate('error_occurred');
+                          });
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
-  }
 
-  void _navigateToRegister() {
-    Navigator.push(
-      context,
-      SwipeBackPageRoute(builder: (_) => const RegisterScreen()),
-    );
-  }
-
-  Future<void> _handleGoogleSignIn() async {
-    // TODO: Implement Google Sign-In
-    // For now, show a placeholder message
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.translate('auth_google_signin_not_implemented')),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  Future<void> _handleAppleSignIn() async {
-    // TODO: Implement Apple Sign-In
-    // For now, show a placeholder message
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.translate('auth_apple_signin_not_implemented')),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
+    pwdCtrl.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Form(
-              key: _formKey,
-              child: Column(
+    final palette = context.theav;
+    final langCode = context.watch<LocaleProvider>().locale.languageCode;
+    final topClearance = SettingsFloatingHeader.topClearanceOf(context);
+    final providers = _providersConfig?.providers ?? const <AuthProviderInfo>[];
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const TheavAuthWallpaperBackground(),
+        SettingsFloatingScaffold(
+          backgroundColor: Colors.transparent,
+          showBackButton: Navigator.of(context).canPop(),
+          title: l10n.translate('auth_login'),
+          actions: [
+            SettingsHeaderAction(
+              tooltip: l10n.trOr('onboarding_select_language', 'Language'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      if (_suggestedLanguageCode != null)
-                        TextButton.icon(
-                          onPressed: _switchLanguage,
-                          icon: const Icon(Icons.language, size: 18),
-                          label: Text(_suggestedLanguageCode!.toUpperCase()),
-                        )
-                      else
-                        const SizedBox.shrink(),
-                      IconButton(
-                        icon: const Icon(Icons.dns_outlined),
-                        tooltip: 'Настройка сервера (${AppConfig.baseUrl})',
-                        onPressed: () async {
-                          await Navigator.push(
-                            context,
-                            SwipeBackPageRoute(
-                              builder: (_) => const ServiceMenuScreen(),
-                            ),
-                          );
-                          if (mounted) setState(() {});
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  // Logo or App Name
                   Text(
-                    l10n.translate('app_title'),
-                    style: const TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue,
+                    langCode.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: palette.primary,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () async {
-                      await Navigator.push(
-                        context,
-                        SwipeBackPageRoute(
-                          builder: (_) => const ServiceMenuScreen(),
-                        ),
-                      );
-                      if (mounted) setState(() {});
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                ],
+              ),
+              onTap: () => showLanguagePickerSheet(
+                context,
+                recommendedCode: _providersConfig?.recommendedLanguage,
+              ),
+            ),
+          ],
+          body: SafeArea(
+            top: false,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final bool isWide = constraints.maxWidth >= 840;
+                if (isWide && !_wasWideLayout) {
+                  _wasWideLayout = true;
+                  if (_qrToken == null && !_qrLoading && _qrError == null) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _startQrLogin();
+                    });
+                  }
+                } else if (!isWide && _wasWideLayout) {
+                  _wasWideLayout = false;
+                }
+
+                return SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    topClearance + 14,
+                    16,
+                    28,
+                  ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: isWide ? 940 : 480,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Icon(Icons.link, size: 14, color: Colors.grey[600]),
-                          const SizedBox(width: 4),
-                          Flexible(
-                            child: Text(
-                              AppConfig.baseUrl,
-                              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                              overflow: TextOverflow.ellipsis,
+                          _buildBrandHeader(palette, l10n),
+                          if (_customServerUrl != null) ...[
+                            const SizedBox(height: 10),
+                            _buildCustomServerChip(palette, l10n),
+                          ],
+                          const SizedBox(height: 18),
+                          if (!isWide) ...[
+                            Center(
+                              child: SizedBox(
+                                width: 290,
+                                child: TheavSegmentedControl<_MobileAuthTab>(
+                                  selected: _mobileTab,
+                                  expand: true,
+                                  height: 38,
+                                  onChanged: (next) {
+                                    HapticUtils.selection();
+                                    setState(() => _mobileTab = next);
+                                    if (next == _MobileAuthTab.qr) {
+                                      _startQrLogin();
+                                    } else {
+                                      _stopQrLogin();
+                                    }
+                                  },
+                                  options: [
+                                    TheavSegmentOption(
+                                      value: _MobileAuthTab.password,
+                                      label: l10n.trOr(
+                                        'auth_tab_password',
+                                        'Password',
+                                      ),
+                                    ),
+                                    TheavSegmentOption(
+                                      value: _MobileAuthTab.qr,
+                                      label: l10n.trOr('auth_tab_qr', 'QR Code'),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 16),
+                            if (_mobileTab == _MobileAuthTab.password)
+                              _buildCredentialsColumn(palette, l10n, providers)
+                            else
+                              _buildQrColumn(palette, l10n),
+                          ] else
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  flex: 11,
+                                  child: _buildCredentialsColumn(
+                                    palette,
+                                    l10n,
+                                    providers,
+                                  ),
+                                ),
+                                const SizedBox(width: 24),
+                                Expanded(
+                                  flex: 9,
+                                  child: _buildQrColumn(palette, l10n),
+                                ),
+                              ],
+                            ),
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(height: 32),
-                  // Email/Username Field
-                  TextFormField(
-                    controller: _emailController,
-                    decoration: InputDecoration(
-                      labelText: l10n.translate('auth_email_or_username'),
-                      prefixIcon: const Icon(Icons.email_outlined),
-                      border: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(16)),
-                      ),
-                      enabledBorder: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(16)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(16)),
-                        borderSide: BorderSide(color: Color(0xFF0088CC), width: 2),
-                      ),
-                    ),
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return l10n.translate('validation_enter_email');
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  // Password Field
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: InputDecoration(
-                      labelText: l10n.translate('auth_password'),
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility_off
-                              : Icons.visibility,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _obscurePassword = !_obscurePassword;
-                          });
-                        },
-                      ),
-                      border: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(16)),
-                      ),
-                      enabledBorder: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(16)),
-                      ),
-                      focusedBorder: const OutlineInputBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(16)),
-                        borderSide: BorderSide(color: Color(0xFF0088CC), width: 2),
-                      ),
-                    ),
-                    obscureText: _obscurePassword,
-                    textInputAction: TextInputAction.done,
-                    onFieldSubmitted: (_) => _login(),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return l10n.translate('validation_enter_password');
-                      }
-                      if (value.length < 6) {
-                        return l10n.translate('validation_password_length');
-                      }
-                      return null;
-                    },
-                  ),
-                  if (_errorMessage != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 16.0),
-                      child: Text(
-                        _errorMessage!,
-                        style: const TextStyle(color: Colors.red, fontSize: 14),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  const SizedBox(height: 24),
-                  // Login Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _login,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blue,
-                      ),
-                      child: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            )
-                          : Text(
-                              l10n.translate('auth_login'),
-                              style: const TextStyle(fontSize: 16),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  // Forgot Password?
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: _isLoading ? null : _navigateToRecovery,
-                      child: Text(l10n.translate('auth_forgot_password')),
-                    ),
-                  ),
-                  if (_supportsQrLogin) ...[
-                    const SizedBox(height: 8),
-                    if (!_qrMode)
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: _isLoading ? null : _startQrLogin,
-                          icon: const Icon(Icons.qr_code_2),
-                          label: Text(l10n.translate('auth_qr_sign_in')),
-                        ),
-                      )
-                    else
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: Theme.of(context).dividerColor.withOpacity(0.25),
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              l10n.translate('auth_qr_title'),
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 12),
-                            if (_qrLoading)
-                              const Padding(
-                                padding: EdgeInsets.all(32),
-                                child: CircularProgressIndicator(),
-                              )
-                            else if (_qrError != null)
-                              Column(
-                                children: [
-                                  Text(
-                                    _qrError!,
-                                    style: const TextStyle(color: Colors.red),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                  const SizedBox(height: 8),
-                                  TextButton(
-                                    onPressed: _startQrLogin,
-                                    child: Text(l10n.translate('devices_retry')),
-                                  ),
-                                ],
-                              )
-                            else if (_qrExpired)
-                              Column(
-                                children: [
-                                  Text(l10n.translate('auth_qr_expired')),
-                                  const SizedBox(height: 8),
-                                  ElevatedButton(
-                                    onPressed: _startQrLogin,
-                                    child: Text(l10n.translate('auth_qr_refresh')),
-                                  ),
-                                ],
-                              )
-                            else if (_qrUrl != null) ...[
-                              Container(
-                                width: 184,
-                                height: 184,
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: QrImageView(
-                                  data: _qrUrl!,
-                                  version: QrVersions.auto,
-                                  size: 160,
-                                  backgroundColor: Colors.white,
-                                ),
-                              ),
-                              if (_qrShortCode != null && _qrShortCode!.isNotEmpty) ...[
-                                const SizedBox(height: 12),
-                                InkWell(
-                                  borderRadius: BorderRadius.circular(8),
-                                  onTap: () {
-                                    Clipboard.setData(
-                                      ClipboardData(text: _qrShortCode!),
-                                    );
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          l10n.translate('auth_qr_code_copied'),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          '${l10n.translate('auth_qr_code_label')}: $_qrShortCode',
-                                          style: const TextStyle(
-                                            fontFamily: 'monospace',
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                            letterSpacing: 1.5,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        const Icon(Icons.copy_rounded, size: 16),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 8),
-                              Text(
-                                l10n.translate('auth_qr_instructions'),
-                                style: Theme.of(context).textTheme.bodySmall,
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                            const Divider(height: 20),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _qrClaimCodeController,
-                                    textCapitalization: TextCapitalization.characters,
-                                    decoration: InputDecoration(
-                                      isDense: true,
-                                      hintText: l10n.translate('auth_qr_enter_code_hint'),
-                                      border: const OutlineInputBorder(),
-                                    ),
-                                    onSubmitted: (_) => _claimQrCode(),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                FilledButton(
-                                  onPressed: _qrClaiming ? null : _claimQrCode,
-                                  child: _qrClaiming
-                                      ? const SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : Text(l10n.translate('devices_link_confirm')),
-                                ),
-                              ],
-                            ),
-                            if (_qrClaimError != null) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                _qrClaimError!,
-                                style: const TextStyle(
-                                  color: Colors.red,
-                                  fontSize: 12,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                            const SizedBox(height: 8),
-                            TextButton(
-                              onPressed: _stopQrLogin,
-                              child: Text(l10n.translate('auth_qr_back_password')),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
-                  const SizedBox(height: 24),
-                  // Divider or Social Login (optional)
-                  Row(
-                    children: [
-                      const Expanded(child: Divider()),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                        child: Text(l10n.translate('auth_or_continue_with')),
-                      ),
-                      const Expanded(child: Divider()),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  // Social Login Buttons (optional)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Google
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.g_mobiledata, color: Colors.red),
-                        label: const Text('Google'),
-                        onPressed: _isLoading ? null : _handleGoogleSignIn,
-                      ),
-                      const SizedBox(width: 16),
-                      // Apple
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.phone_iphone, color: Colors.black),
-                        label: const Text('Apple'),
-                        onPressed: _isLoading ? null : _handleAppleSignIn,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  // Don't have an account? Sign up
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text("${l10n.translate('auth_no_account')} "),
-                      TextButton(
-                        onPressed: _isLoading ? null : _navigateToRegister,
-                        child: Text(l10n.translate('auth_sign_up')),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  // Language switch button based on IP geolocation
-                  if (_suggestedLanguageCode != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16.0),
-                      child: SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: OutlinedButton(
-                          onPressed: _switchLanguage,
-                          style: OutlinedButton.styleFrom(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            side: const BorderSide(color: Colors.blue),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.language, color: Colors.blue, size: 20),
-                              const SizedBox(width: 8),
-                              Text(
-                                GeoLanguageService.getSwitchButtonText(_suggestedLanguageCode!) ?? _suggestedLanguageCode!,
-                                style: const TextStyle(color: Colors.blue, fontSize: 15),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+                );
+              },
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildBrandHeader(TheavPalette palette, AppLocalizations l10n) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GestureDetector(
+          key: const ValueKey<String>('login_brand_emblem'),
+          onTap: _handleBrandLogoTap,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: palette.surface.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: palette.onSurface.withValues(alpha: 0.10),
+                    width: 0.75,
+                  ),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: Image.asset(
+                    'assets/icons/app_icon.png',
+                    width: 68,
+                    height: 68,
+                    filterQuality: FilterQuality.high,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Theaver',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.6,
+                  color: palette.onSurface,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          l10n.trOr('auth_login_subtitle', 'Sign in with username, email, or phone'),
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 14,
+            color: palette.subtext,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCustomServerChip(TheavPalette palette, AppLocalizations l10n) {
+    final host = Uri.tryParse(_customServerUrl!)?.host ?? _customServerUrl!;
+    return Center(
+      child: TheavFloatingSurface(
+        borderRadius: 18.0,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            iconoir.Server(width: 15, height: 15, color: palette.primary),
+            const SizedBox(width: 6),
+            Text(
+              host,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: palette.onSurface,
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _resetCustomServer,
+              child: Text(
+                l10n.trOr('auth_server_reset', 'Reset'),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: palette.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildCredentialsColumn(
+    TheavPalette palette,
+    AppLocalizations l10n,
+    List<AuthProviderInfo> providers,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TheavInsetGroup(
+          margin: EdgeInsets.zero,
+          children: [
+            TheavInlineTextField(
+              controller: _identifierCtrl,
+              enabled: !_isLoading,
+              placeholder: l10n.trOr(
+                'auth_identifier_hint',
+                '@username, email or phone',
+              ),
+              textInputAction: TextInputAction.next,
+              prefix: _buildSmartIdentifierIcon(palette),
+            ),
+            TheavInlineTextField(
+              controller: _passwordCtrl,
+              enabled: !_isLoading,
+              obscureText: _obscurePassword,
+              placeholder: l10n.translate('auth_password'),
+              textInputAction: TextInputAction.done,
+              prefix: iconoir.Lock(
+                width: 19,
+                height: 19,
+                color: palette.subtext,
+              ),
+              suffix: GestureDetector(
+                onTap: () => setState(
+                  () => _obscurePassword = !_obscurePassword,
+                ),
+                child: _obscurePassword
+                    ? iconoir.Eye(
+                        width: 19,
+                        height: 19,
+                        color: palette.subtext,
+                      )
+                    : iconoir.EyeClosed(
+                        width: 19,
+                        height: 19,
+                        color: palette.subtext,
+                      ),
+              ),
+              onSubmitted: (_) => _submitPasswordLogin(),
+            ),
+          ],
+        ),
+        if (_errorMessage != null) ...[
+          const SizedBox(height: 8),
+          TheavAuthErrorBanner(message: _errorMessage!),
+        ],
+        const SizedBox(height: 14),
+        TheavSpringButton(
+          label: l10n.translate('auth_login_button'),
+          isLoading: _isLoading,
+          onPressed: _submitPasswordLogin,
+        ),
+        if (providers.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: Divider(
+                  height: 1,
+                  color: palette.onSurface.withValues(alpha: 0.14),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  l10n.trOr('oauth_continue_with', 'or continue with'),
+                  style: TextStyle(fontSize: 12.5, color: palette.subtext),
+                ),
+              ),
+              Expanded(
+                child: Divider(
+                  height: 1,
+                  color: palette.onSurface.withValues(alpha: 0.14),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (var i = 0; i < providers.length; i++) ...[
+            if (i > 0) const SizedBox(height: 8),
+            TheavSpringButton(
+              variant: TheavSpringButtonVariant.glass,
+              enabled: !_isLoading,
+              leading: OAuthBrandGlyph(providerId: providers[i].id, size: 20),
+              label: l10n
+                  .trOr('oauth_sign_in_with_provider', 'Continue with {provider}')
+                  .replaceAll('{provider}', providers[i].displayName),
+              onPressed: () => _startOAuthFlow(providers[i]),
+            ),
+          ],
+        ],
+        const SizedBox(height: 16),
+        TheavInsetGroup(
+          margin: EdgeInsets.zero,
+          children: [
+            TheavListRow(
+              leading: iconoir.UserPlus(
+                width: 20,
+                height: 20,
+                color: palette.primary,
+              ),
+              title: l10n.translate('auth_create_account'),
+              showChevron: true,
+              onTap: _isLoading
+                  ? null
+                  : () {
+                      Navigator.of(context).push(
+                        SwipeBackPageRoute(
+                          builder: (_) => RegisterScreen(
+                            initialCountryCode: _resolvedCountryCode(),
+                          ),
+                        ),
+                      );
+                    },
+            ),
+            TheavListRow(
+              leading: iconoir.Key(
+                width: 20,
+                height: 20,
+                color: palette.subtext,
+              ),
+              title: l10n.translate('auth_forgot_password'),
+              showChevron: true,
+              onTap: _isLoading
+                  ? null
+                  : () {
+                      final cur = _identifierCtrl.text.trim();
+                      Navigator.of(context).push(
+                        SwipeBackPageRoute(
+                          builder: (_) => RecoveryScreen(
+                            initialEmail: cur.contains('@') && !cur.startsWith('@')
+                                ? cur
+                                : null,
+                          ),
+                        ),
+                      );
+                    },
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQrColumn(TheavPalette palette, AppLocalizations l10n) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TheavInsetGroup(
+          margin: EdgeInsets.zero,
+          header: l10n.translate('qr_login_title'),
+          footer: l10n.trOr(
+            'qr_login_scan_instruction',
+            'Open Theaver on another signed-in device: Settings -> Devices -> Link Device.',
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_qrLoading)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 64),
+                      child: SizedBox(
+                        width: 28,
+                        height: 28,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            palette.primary,
+                          ),
+                        ),
+                      ),
+                    )
+                  else if (_qrError != null)
+                    Column(
+                      children: [
+                        TheavAuthErrorBanner(message: _qrError!),
+                        const SizedBox(height: 10),
+                        TheavSpringButton(
+                          variant: TheavSpringButtonVariant.glass,
+                          label: l10n.translate('qr_login_retry'),
+                          onPressed: _startQrLogin,
+                        ),
+                      ],
+                    )
+                  else if (_qrUrl != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.08),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: SizedBox(
+                        width: 176,
+                        height: 176,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            PrettyQrView.data(
+                              data: _qrUrl!,
+                              errorCorrectLevel: QrErrorCorrectLevel.M,
+                              decoration: const PrettyQrDecoration(
+                                shape: PrettyQrSmoothSymbol(
+                                  color: Color(0xFF1C1C1E),
+                                ),
+                              ),
+                            ),
+                            if (_qrExpired)
+                              Container(
+                                color: Colors.white.withValues(alpha: 0.92),
+                                alignment: Alignment.center,
+                                child: GestureDetector(
+                                  onTap: _startQrLogin,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      iconoir.Refresh(
+                                        width: 28,
+                                        height: 28,
+                                        color: palette.primary,
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        l10n.translate('qr_login_refresh'),
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                          color: palette.primary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (_qrShortCode != null && _qrShortCode!.isNotEmpty) ...[
+                      const SizedBox(height: 14),
+                      GestureDetector(
+                        onTap: () {
+                          Clipboard.setData(ClipboardData(text: _qrShortCode!));
+                          HapticUtils.selection();
+                          GlassToastService().show(
+                            context,
+                            l10n.trOr('copied_to_clipboard', 'Copied'),
+                            icon: Icons.copy_outlined,
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: palette.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            _qrShortCode!,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 3,
+                              color: palette.primary,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        TheavInsetGroup(
+          margin: EdgeInsets.zero,
+          header: l10n.trOr('qr_login_enter_code_title', 'Or enter link code'),
+          children: [
+            TheavInlineTextField(
+              controller: _qrClaimCodeCtrl,
+              enabled: !_qrClaiming,
+              placeholder: l10n.translate('qr_login_code_hint'),
+              prefix: iconoir.QrCode(
+                width: 19,
+                height: 19,
+                color: palette.subtext,
+              ),
+              onSubmitted: (_) => _claimQrCode(),
+            ),
+          ],
+        ),
+        if (_qrClaimError != null) ...[
+          const SizedBox(height: 6),
+          TheavAuthErrorBanner(message: _qrClaimError!),
+        ],
+        const SizedBox(height: 10),
+        TheavSpringButton(
+          variant: TheavSpringButtonVariant.glass,
+          isLoading: _qrClaiming,
+          label: l10n.translate('qr_login_claim_button'),
+          onPressed: _claimQrCode,
+        ),
+      ],
     );
   }
 }

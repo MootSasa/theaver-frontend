@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/notification_service.dart';
-import '../../widgets/tiling/tiling_workspace_scaffold.dart';
-import 'login_screen.dart';
 import '../../utils/swipe_back_route.dart';
+import '../../widgets/auth/theav_auth_primitives.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/tiling/tiling_workspace_scaffold.dart';
+import 'first_start_wizard_screen.dart';
+import 'login_screen.dart';
 
-/// Splash screen that checks authentication status on app launch.
-/// Automatically navigates to TilingWorkspaceScaffold if user is logged in,
-/// or to LoginScreen if no saved account found.
+/// Splash screen that routes cleanly without a harsh white flash:
+/// - Saved active account -> [TilingWorkspaceScaffold]
+/// - Fresh device before onboarding -> [FirstStartWizardScreen]
+/// - Signed-out / post-wizard -> [LoginScreen]
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({Key? key}) : super(key: key);
+  const SplashScreen({super.key});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -22,7 +28,6 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    // Use addPostFrameCallback to ensure navigation happens after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAuthAndNavigate();
     });
@@ -30,16 +35,22 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _checkAuthAndNavigate() async {
     if (_hasNavigated || !mounted) return;
-
-    // Initialize AccountManager
     final accountManager = AccountManager();
-    
-    // Check if there's a saved account
     if (accountManager.hasSavedAccount) {
       _navigateToMain();
-      
-      // Update device activity in background
       _updateActivityInBackground();
+      return;
+    }
+
+    bool onboardingDone = false;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      onboardingDone = prefs.getBool(kOnboardingWizardCompletedPrefKey) ?? false;
+    } catch (_) {}
+
+    if (!mounted || _hasNavigated) return;
+    if (!onboardingDone && accountManager.accounts.isEmpty) {
+      _navigateToWizard();
     } else {
       _navigateToLogin();
     }
@@ -48,7 +59,7 @@ class _SplashScreenState extends State<SplashScreen> {
   void _navigateToMain() {
     if (_hasNavigated || !mounted) return;
     _hasNavigated = true;
-    
+
     Navigator.of(context).pushAndRemoveUntil(
       SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
       (route) => false,
@@ -59,10 +70,20 @@ class _SplashScreenState extends State<SplashScreen> {
     });
   }
 
+  void _navigateToWizard() {
+    if (_hasNavigated || !mounted) return;
+    _hasNavigated = true;
+
+    Navigator.of(context).pushAndRemoveUntil(
+      SwipeBackPageRoute(builder: (_) => const FirstStartWizardScreen()),
+      (route) => false,
+    );
+  }
+
   void _navigateToLogin() {
     if (_hasNavigated || !mounted) return;
     _hasNavigated = true;
-    
+
     Navigator.of(context).pushAndRemoveUntil(
       SwipeBackPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
@@ -73,52 +94,61 @@ class _SplashScreenState extends State<SplashScreen> {
     try {
       final accountManager = AccountManager();
       await accountManager.updateCurrentDeviceActivity();
-      
-      // Verify token in background
       final result = await AuthService.getCurrentUser();
-      if (result['success'] != true) {
-        debugPrint('Token verification failed: ${result['message']}');
-      } else {
-        // Register current push token on server for this active session
-        NotificationService().registerCurrentToken();
+      if (result['success'] == true) {
+        await NotificationService().registerCurrentToken();
       }
     } catch (e) {
-      debugPrint('Background update error: $e');
+      debugPrint('SplashScreen background update error: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    
-    // Show a simple loading indicator while checking auth
+    final palette = context.theav;
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // App logo/icon
-            ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: Image.asset(
-                'assets/icons/app_icon.png',
-                width: 84,
-                height: 84,
-                filterQuality: FilterQuality.high,
-              ),
+      backgroundColor: palette.background,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          const TheavAuthWallpaperBackground(),
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: palette.surface.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: palette.onSurface.withValues(alpha: 0.08),
+                      width: 0.75,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Image.asset(
+                      'assets/icons/app_icon.png',
+                      width: 80,
+                      height: 80,
+                      filterQuality: FilterQuality.high,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF0088CC)),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

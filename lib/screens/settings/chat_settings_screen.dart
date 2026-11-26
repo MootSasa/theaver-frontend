@@ -1,9 +1,7 @@
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
@@ -23,7 +21,7 @@ import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
-import '../../widgets/theme/four_corner_gradient.dart';
+import '../../widgets/theme/theme_carousel_strip.dart';
 import '../../widgets/theme/theme_preview_sheet.dart';
 import '../../l10n/app_localizations.dart';
 import 'advanced_theme_colors_screen.dart';
@@ -287,82 +285,74 @@ class ChatSettingsScreen extends StatelessWidget {
                 ],
               ),
             ),
-            SizedBox(
-              height: 104,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: allThemes.length + 1,
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, index) {
-                  if (index == allThemes.length) {
-                    // "+ Create Theme" Card
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          SwipeBackPageRoute(builder: (_) => const ThemeEditorScreen()),
-                        );
-                      },
-                      child: SizedBox(
-                        width: 80,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 78,
-                              height: 68,
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).cardColor,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: Colors.grey.withValues(alpha: 0.3),
-                                ),
-                              ),
-                              child: Center(
-                                child: iconoir.Plus(color: activePrimary, width: 28, height: 28),
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              l10n.translate('theme_create_button'),
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: activePrimary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }
-
-                  final t = allThemes[index];
-                  final isSelected = t.id == activeTheme.id;
-
-                  return _ThemeItemBubble(
-                    theme: isSelected ? activeTheme : t,
-                    isSelected: isSelected,
-                    activePrimary: activePrimary,
-                    onTap: () {
-                      themeProvider.setActiveTheme(t);
-                      if (t.wallpaper.type != 'image') {
-                        context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
-                      } else if (t.wallpaper.imagePath != null) {
-                        context.read<WallpaperProvider>().setWallpaper(t.wallpaper.imagePath!);
-                      }
-                    },
-                    onLongPress: () {
-                      if (!t.isBuiltIn) {
-                        _showThemeOptionsModal(context, t);
-                      }
-                    },
+            ThemeCarouselStrip(
+              themes: allThemes,
+              activeTheme: activeTheme,
+              activePrimary: activePrimary,
+              onThemeSelected: (t) {
+                themeProvider.setActiveTheme(t);
+                if (t.wallpaper.type != 'image') {
+                  context.read<WallpaperProvider>().removeWallpaper(
+                    syncToServer: false,
+                  );
+                } else if (t.wallpaper.imagePath != null) {
+                  context.read<WallpaperProvider>().setWallpaper(
+                    t.wallpaper.imagePath!,
+                  );
+                }
+              },
+              onThemeLongPress: (t) {
+                if (!t.isBuiltIn) {
+                  _showThemeOptionsModal(context, t);
+                }
+              },
+              trailingCard: GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    SwipeBackPageRoute(
+                      builder: (_) => const ThemeEditorScreen(),
+                    ),
                   );
                 },
+                child: SizedBox(
+                  width: 80,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 78,
+                        height: 68,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).cardColor,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: Colors.grey.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Center(
+                          child: iconoir.Plus(
+                            color: activePrimary,
+                            width: 28,
+                            height: 28,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        l10n.translate('theme_create_button'),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: activePrimary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 14),
@@ -1247,268 +1237,4 @@ class _GlassModeButton extends StatelessWidget {
 }
 
 /// Theme carousel item: wallpaper background with 2 empty message ovals.
-class _ThemeItemBubble extends StatelessWidget {
-  final TheavTheme theme;
-  final bool isSelected;
-  final Color activePrimary;
-  final VoidCallback onTap;
-  final VoidCallback onLongPress;
 
-  const _ThemeItemBubble({
-    required this.theme,
-    required this.isSelected,
-    required this.activePrimary,
-    required this.onTap,
-    required this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final wp = theme.wallpaper;
-
-    Widget wallpaperBg;
-    if (wp.type == 'image') {
-      final imgProvider = wp.getImageProvider();
-      if (imgProvider != null) {
-        Widget img = Image(
-          image: imgProvider,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-          errorBuilder: (context, error, stackTrace) => Container(color: wp.backgroundColor),
-        );
-        if (wp.blurRadius > 0) {
-          img = ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(
-              sigmaX: (wp.blurRadius / 4).clamp(0.5, 4.0),
-              sigmaY: (wp.blurRadius / 4).clamp(0.5, 4.0),
-            ),
-            child: img,
-          );
-        }
-        if (wp.dimming > 0) {
-          img = Stack(
-            fit: StackFit.expand,
-            children: [
-              img,
-              Container(
-                color: Colors.black.withValues(alpha: wp.dimming.clamp(0.0, 1.0)),
-              ),
-            ],
-          );
-        }
-        wallpaperBg = img;
-      } else {
-        wallpaperBg = Container(color: wp.backgroundColor);
-      }
-    } else if (wp.type == 'color') {
-      wallpaperBg = Container(color: wp.backgroundColor);
-    } else if (wp.fourCornerGradient != null) {
-      wallpaperBg = CustomPaint(
-        painter: FourCornerGradientPainter(
-          topLeft: wp.fourCornerGradient!.topLeft,
-          topRight: wp.fourCornerGradient!.topRight,
-          bottomLeft: wp.fourCornerGradient!.bottomLeft,
-          bottomRight: wp.fourCornerGradient!.bottomRight,
-        ),
-        child: const SizedBox.expand(),
-      );
-    } else {
-      wallpaperBg = Container(color: wp.backgroundColor);
-    }
-
-    Widget? patternOverlay;
-    if (wp.patternOpacity > 0) {
-      final double buttonPatternOpacity = (wp.patternOpacity * 1.6).clamp(0.24, 0.60);
-      Widget? svgWidget;
-      if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
-        svgWidget = SvgPicture.file(
-          File(wp.customSvgPath!) as dynamic,
-          width: 210.0,
-          height: 210.0,
-          fit: BoxFit.cover,
-          colorFilter: ColorFilter.mode(
-            wp.patternColor.withValues(alpha: buttonPatternOpacity),
-            BlendMode.srcIn,
-          ),
-        );
-      } else if (wp.assetSvgPath != null && wp.assetSvgPath!.isNotEmpty) {
-        svgWidget = SvgPicture.asset(
-          wp.assetSvgPath!,
-          width: 210.0,
-          height: 210.0,
-          fit: BoxFit.cover,
-          colorFilter: ColorFilter.mode(
-            wp.patternColor.withValues(alpha: buttonPatternOpacity),
-            BlendMode.srcIn,
-          ),
-        );
-      }
-      if (svgWidget != null) {
-        patternOverlay = OverflowBox(
-          minWidth: 0.0,
-          maxWidth: 210.0,
-          minHeight: 0.0,
-          maxHeight: 210.0,
-          child: svgWidget,
-        );
-      }
-    }
-
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: SizedBox(
-        width: 80,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Theme button bubble: wallpaper background + 2 empty message ovals
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 78,
-              height: 68,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isSelected ? activePrimary : (Theme.of(context).brightness == Brightness.dark ? Colors.white24 : Colors.black12),
-                  width: isSelected ? 2.5 : 1.0,
-                ),
-                boxShadow: isSelected
-                    ? [
-                        BoxShadow(
-                          color: activePrimary.withValues(alpha: 0.25),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ]
-                    : null,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(13.5),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // Wallpaper
-                    wallpaperBg,
-                    if (patternOverlay != null) patternOverlay,
-
-                    // Two empty message ovals showing bubble colors
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Top: Incoming empty oval
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              width: 38,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: theme.palette.chatBubbleIncoming,
-                                borderRadius: BorderRadius.circular(7),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.08),
-                                    blurRadius: 2,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          // Bottom: Outgoing empty oval
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Container(
-                              width: 38,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: (theme.palette.chatBubbleOutgoingGradient != null &&
-                                        theme.palette.chatBubbleOutgoingGradient!.length >= 2)
-                                    ? null
-                                    : theme.palette.chatBubbleOutgoing,
-                                gradient: (theme.palette.chatBubbleOutgoingGradient != null &&
-                                        theme.palette.chatBubbleOutgoingGradient!.length >= 2)
-                                    ? LinearGradient(
-                                        begin: Alignment.topCenter,
-                                        end: Alignment.bottomCenter,
-                                        colors: theme.palette.chatBubbleOutgoingGradient!,
-                                      )
-                                    : null,
-                                borderRadius: BorderRadius.circular(7),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.12),
-                                    blurRadius: 2,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // Selected checkmark badge
-                    if (isSelected)
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: activePrimary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: iconoir.Check(
-                            width: 11,
-                            height: 11,
-                            color: theme.palette.onPrimary,
-                          ),
-                        ),
-                      ),
-
-                    // Cloud synced indicator
-                    if (theme.isCloudSaved)
-                      Positioned(
-                        bottom: 4,
-                        left: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.5),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const iconoir.CloudCheck(
-                            width: 10,
-                            height: 10,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            // Theme Name
-            Text(
-              theme.name,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? activePrimary : null,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

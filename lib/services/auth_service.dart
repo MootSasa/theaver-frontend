@@ -1,12 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
+import '../models/avatar_editor_models.dart';
 import 'account_manager.dart';
+import 'avatar_sync_service.dart';
 import 'browser_cookie_jar_vault.dart';
 import 'browser_data_service.dart';
 import 'browser_site_settings_service.dart';
@@ -19,6 +23,7 @@ import 'deep_link_service.dart';
 import 'draft_service.dart';
 import 'websocket_service.dart';
 import 'notification_service.dart';
+import 'session_bootstrap_coordinator.dart';
 import 'settings_service.dart';
 import '../screens/auth/login_screen.dart';
 import '../widgets/bot/mini_app_webview_sheet.dart';
@@ -26,83 +31,276 @@ import '../utils/image_utils.dart';
 import '../utils/swipe_back_route.dart';
 import '../l10n/app_localizations.dart';
 
+String _solveProofOfWorkSync(String challenge) {
+  final trimmed = challenge.trim();
+  final parts = trimmed.split('.');
+  final diff = (parts.length >= 2 ? (int.tryParse(parts[1]) ?? 18) : 18).clamp(
+    1,
+    28,
+  );
+  final prefix = '$trimmed:';
+  var nonce = 0;
+  while (true) {
+    final digest = sha256.convert(utf8.encode('$prefix$nonce')).bytes;
+    var leadingZeros = 0;
+    for (final b in digest) {
+      if (b == 0) {
+        leadingZeros += 8;
+      } else {
+        var v = b;
+        var lz = 0;
+        if ((v & 0xF0) == 0) {
+          lz += 4;
+          v <<= 4;
+        }
+        if ((v & 0xC0) == 0) {
+          lz += 2;
+          v <<= 2;
+        }
+        if ((v & 0x80) == 0) {
+          lz += 1;
+        }
+        leadingZeros += lz;
+        break;
+      }
+    }
+    if (leadingZeros >= diff) {
+      return nonce.toString();
+    }
+    nonce++;
+  }
+}
+
+/// Solves a server-issued PoW challenge inside a worker isolate on native platforms.
+Future<String> computeRegistrationProofOfWork(String challenge) async {
+  if (kIsWeb) {
+    return _solveProofOfWorkSync(challenge);
+  }
+  return Isolate.run(() => _solveProofOfWorkSync(challenge));
+}
+
+/// Configured OAuth2/OIDC provider returned by `/api/auth/providers`.
+class AuthProviderInfo {
+  final String id;
+  final String displayName;
+  final bool recommendedForRegion;
+
+  const AuthProviderInfo({
+    required this.id,
+    required this.displayName,
+    this.recommendedForRegion = false,
+  });
+
+  factory AuthProviderInfo.fromJson(Map<String, dynamic> json) {
+    return AuthProviderInfo(
+      id: (json['id'] ?? '').toString().trim().toLowerCase(),
+      displayName: (json['display_name'] ?? '').toString().trim(),
+      recommendedForRegion: json['recommended_for_region'] == true,
+    );
+  }
+}
+
+/// Region, phone verification, PoW, and configured OAuth settings returned by `/api/auth/providers`.
+class AuthProvidersConfig {
+  final String countryCode;
+  final String phoneDialCode;
+  final String recommendedLanguage;
+  final String phoneVerificationMode;
+  final int powDifficultyBits;
+  final List<AuthProviderInfo> providers;
+
+  const AuthProvidersConfig({
+    this.countryCode = 'RU',
+    this.phoneDialCode = '7',
+    this.recommendedLanguage = 'ru',
+    this.phoneVerificationMode = 'disabled',
+    this.powDifficultyBits = 18,
+    this.providers = const [],
+  });
+
+  factory AuthProvidersConfig.fromJson(Map<String, dynamic> json) {
+    final rawList = json['providers'];
+    final parsedProviders = rawList is List
+        ? rawList
+              .whereType<Map>()
+              .map(
+                (item) =>
+                    AuthProviderInfo.fromJson(Map<String, dynamic>.from(item)),
+              )
+              .where((p) => p.id.isNotEmpty)
+              .toList()
+        : const <AuthProviderInfo>[];
+
+    return AuthProvidersConfig(
+      countryCode: (json['country_code'] ?? 'RU').toString().trim().toUpperCase(),
+      phoneDialCode: (json['phone_dial_code'] ?? '7').toString().trim(),
+      recommendedLanguage:
+          (json['recommended_language'] ?? 'ru').toString().trim().toLowerCase(),
+      phoneVerificationMode:
+          (json['phone_verification_mode'] ?? 'disabled').toString().trim(),
+      powDifficultyBits: (json['pow_difficulty_bits'] as num?)?.toInt() ?? 18,
+      providers: parsedProviders,
+    );
+  }
+}
+
+/// Prefill payload yielded when OAuth returns `needs_registration`.
+class OAuthRegistrationPrefill {
+  final String provider;
+  final String providerName;
+  final String oauthRegistrationToken;
+  final String email;
+  final bool emailVerified;
+  final String phone;
+  final bool phoneVerified;
+  final String firstName;
+  final String lastName;
+  final String suggestedUsername;
+  final String externalAvatarUrl;
+
+  const OAuthRegistrationPrefill({
+    required this.provider,
+    this.providerName = '',
+    required this.oauthRegistrationToken,
+    this.email = '',
+    this.emailVerified = false,
+    this.phone = '',
+    this.phoneVerified = false,
+    this.firstName = '',
+    this.lastName = '',
+    this.suggestedUsername = '',
+    this.externalAvatarUrl = '',
+  });
+
+  factory OAuthRegistrationPrefill.fromStatusPayload(Map<String, dynamic> json) {
+    final prefill = json['prefill'] is Map
+        ? Map<String, dynamic>.from(json['prefill'] as Map)
+        : const <String, dynamic>{};
+    return OAuthRegistrationPrefill(
+      provider: (json['provider'] ?? '').toString().trim().toLowerCase(),
+      providerName: (json['provider_name'] ?? '').toString().trim(),
+      oauthRegistrationToken:
+          (json['oauth_registration_token'] ?? '').toString().trim(),
+      email: (prefill['email'] ?? '').toString().trim(),
+      emailVerified: prefill['email_verified'] == true,
+      phone: (prefill['phone'] ?? '').toString().trim(),
+      phoneVerified: prefill['phone_verified'] == true,
+      firstName: (prefill['first_name'] ?? '').toString().trim(),
+      lastName: (prefill['last_name'] ?? '').toString().trim(),
+      suggestedUsername: (prefill['suggested_username'] ?? '').toString().trim(),
+      externalAvatarUrl:
+          (prefill['external_avatar_url'] ?? '').toString().trim(),
+    );
+  }
+}
+
 /// AuthService handles authentication operations including login, logout,
 /// and token management. Integrates with AccountManager for multi-account support.
 class AuthService {
   // Base URL is now managed by AppConfig
 
-  /// Registers a new user with username, email, password and display name.
-  /// Returns a map containing the auth token and user info on success.
-  /// Throws an exception on failure.
+  /// Registers a new user and activates their session via [SessionBootstrapCoordinator].
   static Future<Map<String, dynamic>> register({
     required String username,
     required String email,
     required String password,
-    required String displayName,
+    String displayName = '',
+    String? firstName,
+    String? lastName,
+    String? phone,
+    String? countryCode,
+    String? registrationTicket,
+    String? oauthRegistrationToken,
+    String? locale,
+    BuildContext? context,
   }) async {
     try {
       final accountManager = AccountManager();
       final deviceInfo = await accountManager.getCurrentDeviceInfo();
-      final deviceId = accountManager.currentDeviceId ??
+      final deviceId =
+          accountManager.currentDeviceId ??
           'device_${DateTime.now().millisecondsSinceEpoch}';
+
+      final trimmedFirst = (firstName ?? '').trim();
+      final trimmedLast = (lastName ?? '').trim();
+      final trimmedDisplay = displayName.trim();
+      final resolvedFirst = trimmedFirst.isNotEmpty
+          ? trimmedFirst
+          : trimmedDisplay;
+      final resolvedDisplay = trimmedDisplay.isNotEmpty
+          ? trimmedDisplay
+          : [resolvedFirst, trimmedLast]
+                .where((part) => part.isNotEmpty)
+                .join(' ')
+                .trim();
+
+      final bodyMap = <String, dynamic>{
+        'username': username.trim(),
+        'email': email.trim(),
+        'password': password,
+        'display_name': resolvedDisplay,
+        if (resolvedFirst.isNotEmpty) 'first_name': resolvedFirst,
+        if (trimmedLast.isNotEmpty) 'last_name': trimmedLast,
+        if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
+        if (countryCode != null && countryCode.trim().isNotEmpty)
+          'country_code': countryCode.trim().toUpperCase(),
+        if (registrationTicket != null && registrationTicket.trim().isNotEmpty)
+          'registration_ticket': registrationTicket.trim(),
+        if (oauthRegistrationToken != null &&
+            oauthRegistrationToken.trim().isNotEmpty)
+          'oauth_registration_token': oauthRegistrationToken.trim(),
+        'locale': await _currentLocaleCode(locale),
+        'device_id': deviceId,
+        'device_name': deviceInfo.deviceName,
+        'device_type': deviceInfo.deviceType.name,
+        'os_name': deviceInfo.os,
+        'os_version': deviceInfo.osVersion,
+        'app_version': AppConfig.currentVersion,
+      };
 
       final response = await http.post(
         Uri.parse('${AppConfig.baseUrl}/api/auth/register'),
         headers: await _buildDeviceHeaders(overrideDeviceId: deviceId),
-        body: jsonEncode({
-          'username': username,
-          'email': email,
-          'password': password,
-          'display_name': displayName,
-          'device_id': deviceId,
-          'device_name': deviceInfo.deviceName,
-          'device_type': deviceInfo.deviceType.name,
-          'os_name': deviceInfo.os,
-          'os_version': deviceInfo.osVersion,
-          'app_version': '1.0.0',
-        }),
+        body: jsonEncode(bodyMap),
       );
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data['success'] == true) {
-          // Save to AccountManager
-          await _saveToAccountManager(
-            data['auth_token'],
-            data['user_id'],
-            username: username,
-            displayName: displayName,
-            email: email.trim(),
-            emailVerified: false,
-          );
-          // Ensure Saved Messages chat exists locally
-          try {
-            await AppDatabase().ensureSavedChatExists(data['user_id']);
-          } catch (e) {
-            debugPrint('AuthService: Error creating saved chat: $e');
-          }
-          return {
-            'success': true,
-            'authToken': data['auth_token'],
-            'userId': data['user_id'],
-            'message': data['message'] ?? 'Registration successful',
-          };
-        } else {
-          return {
-            'success': false,
-            'message': data['message'] ?? 'Registration failed',
-          };
-        }
-      } else {
-        // Handle different error codes
-        final data = jsonDecode(response.body);
+      final data = _tryDecodeMap(response.body);
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          data['success'] == true) {
+        final authToken = data['auth_token']?.toString() ?? '';
+        final userId = data['user_id']?.toString() ?? '';
+        final userMap = data['user'] is Map
+            ? Map<String, dynamic>.from(data['user'] as Map)
+            : null;
+        await SessionBootstrapCoordinator.bootstrapAuthenticatedSession(
+          token: authToken,
+          userId: userId,
+          userMap: userMap,
+          fallbackUsername: username.trim(),
+          fallbackEmail: email.trim(),
+          fallbackPhone: phone?.trim(),
+          fallbackFirstName: resolvedFirst,
+          fallbackLastName: trimmedLast,
+          fallbackDisplayName: resolvedDisplay,
+          context: (context != null && context.mounted) ? context : null,
+        );
         return {
-          'success': false,
-          'message': _getErrorMessage(response.statusCode, data['message']),
+          'success': true,
+          'authToken': authToken,
+          'userId': userId,
+          'user': userMap,
+          'message': data['message'] ?? 'Registration successful',
         };
       }
+      return {
+        'success': false,
+        'error': data['error']?.toString(),
+        'message': _getErrorMessage(
+          response.statusCode,
+          data['message']?.toString(),
+        ),
+      };
     } catch (e) {
-      // Network error and other exception
       return {
         'success': false,
         'message': 'Network error: ${e.toString()}',
@@ -110,31 +308,36 @@ class AuthService {
     }
   }
 
-  /// Logs in a user with username/email and password.
-  /// Returns a map containing the auth token and user info on success.
-  /// Throws an exception on failure.
+  /// Logs in a user with `@username`, email, or E.164/local phone identifier and password.
   static Future<Map<String, dynamic>> login({
-    required String usernameOrEmail,
+    String? usernameOrEmail,
+    String? identifier,
     required String password,
+    String? countryCode,
     String? twoFactorPassword,
     String? recoveryCode,
+    BuildContext? context,
   }) async {
     try {
-      // Get device info for session tracking
+      final resolvedIdentifier = (identifier ?? usernameOrEmail ?? '').trim();
       final accountManager = AccountManager();
       final deviceInfo = await accountManager.getCurrentDeviceInfo();
-      final deviceId = accountManager.currentDeviceId ??
+      final deviceId =
+          accountManager.currentDeviceId ??
           'device_${DateTime.now().millisecondsSinceEpoch}';
 
       final bodyMap = <String, dynamic>{
-        'username_or_email': usernameOrEmail,
+        'identifier': resolvedIdentifier,
+        'username_or_email': resolvedIdentifier,
         'password': password,
+        if (countryCode != null && countryCode.trim().isNotEmpty)
+          'country_code': countryCode.trim().toUpperCase(),
         'device_id': deviceId,
         'device_name': deviceInfo.deviceName,
         'device_type': deviceInfo.deviceType.name,
         'os_name': deviceInfo.os,
         'os_version': deviceInfo.osVersion,
-        'app_version': '1.0.0',
+        'app_version': AppConfig.currentVersion,
       };
       if (twoFactorPassword != null && twoFactorPassword.isNotEmpty) {
         bodyMap['two_factor_password'] = twoFactorPassword;
@@ -152,30 +355,23 @@ class AuthService {
       final Map<String, dynamic> data = _tryDecodeMap(response.body);
       if (response.statusCode == 200) {
         if (data['success'] == true) {
-          await _saveToAccountManager(
-            data['auth_token'],
-            data['user_id'],
-            username: data['user']?['username'],
-            displayName: data['user']?['display_name'],
-            avatarUrl: data['user']?['avatar_url'],
-            name: data['user']?['name'],
-            surname: data['user']?['surname'],
-            email: data['user']?['email'],
-            emailVerified: data['user']?['email_verified'] == true,
-            phone: data['user']?['phone'],
+          final authToken = data['auth_token']?.toString() ?? '';
+          final userId = data['user_id']?.toString() ?? '';
+          final userMap = data['user'] is Map
+              ? Map<String, dynamic>.from(data['user'] as Map)
+              : null;
+          await SessionBootstrapCoordinator.bootstrapAuthenticatedSession(
+            token: authToken,
+            userId: userId,
+            userMap: userMap,
+            context: (context != null && context.mounted) ? context : null,
           );
-          try {
-            await AppDatabase().ensureSavedChatExists(data['user_id']);
-          } catch (e) {
-            debugPrint('AuthService: Error creating saved chat: $e');
-          }
-          await NotificationService().registerCurrentToken();
           return {
             'success': true,
-            'authToken': data['auth_token'],
-            'userId': data['user_id'],
+            'authToken': authToken,
+            'userId': userId,
             'message': data['message'] ?? 'Login successful',
-            'user': data['user'],
+            'user': userMap ?? data['user'],
           };
         } else {
           return {
@@ -196,7 +392,10 @@ class AuthService {
           'error': data['error'],
           'message': data['requires_2fa'] == true
               ? (data['message'] ?? 'Two-factor authentication password required')
-              : _getErrorMessage(response.statusCode, data['message']?.toString()),
+              : _getErrorMessage(
+                  response.statusCode,
+                  data['message']?.toString(),
+                ),
         };
       }
     } catch (e) {
@@ -800,60 +999,7 @@ class AuthService {
     }
   }
 
-  static Future<void> _saveToAccountManager(
-    String token,
-    String userId, {
-    String? username,
-    String? displayName,
-    String? avatarUrl,
-    String? name,
-    String? surname,
-    String? email,
-    bool? emailVerified,
-    String? phone,
-  }) async {
-    final accountManager = AccountManager();
-
-    // Check if account already exists
-    if (accountManager.hasAccount(userId)) {
-      // Update existing account
-      await accountManager.updateAccountToken(userId, token);
-      await accountManager.updateAccountProfile(
-        userId,
-        username: username,
-        displayName: displayName,
-        avatarUrl: avatarUrl,
-        name: name,
-        surname: surname,
-        email: email,
-        emailVerified: emailVerified,
-        phone: phone,
-      );
-      await accountManager.setCurrentAccount(userId);
-    } else {
-      // Add new account
-      final account = Account(
-        userId: userId,
-        token: token,
-        username: username,
-        displayName: displayName,
-        avatarUrl: avatarUrl,
-        lastLogin: DateTime.now(),
-        name: name,
-        surname: surname,
-        email: email,
-        emailVerified: emailVerified ?? false,
-        phone: phone,
-      );
-      await accountManager.addAccount(account);
-    }
-
-    // Register device session
-    await accountManager.registerDeviceSession(userId);
-    NotificationService().registerCurrentToken();
-  }
-  
-    /// Upload avatar image to server.
+  /// Upload avatar image to server.
     /// Returns a map containing the avatar URL on success.
     /// Uses MinIO storage for avatar upload.
     static Future<Map<String, dynamic>> uploadAvatar(
@@ -1469,7 +1615,10 @@ class AuthService {
       ),
       'X-OS-Name': _sanitizeHeaderValue(deviceInfo.os, fallback: 'Unknown'),
       'X-OS-Version': _sanitizeHeaderValue(deviceInfo.osVersion, fallback: '0'),
-      'X-App-Version': '1.0.0',
+      'X-App-Version': _sanitizeHeaderValue(
+        AppConfig.currentVersion,
+        fallback: '1.0.0',
+      ),
       'X-App-Locale': _sanitizeHeaderValue(locale, fallback: 'en'),
       if (extra != null) ...extra,
     };
@@ -1482,7 +1631,7 @@ class AuthService {
       'device_type': deviceInfo.deviceType.name,
       'os_name': deviceInfo.os,
       'os_version': deviceInfo.osVersion,
-      'app_version': '1.0.0',
+      'app_version': AppConfig.currentVersion,
       'locale': await _currentLocaleCode(locale),
     };
   }
@@ -1491,9 +1640,13 @@ class AuthService {
     if (explicit != null && explicit.isNotEmpty) return explicit;
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getString('selected_language') ?? 'en';
+      final saved = prefs.getString('selected_language');
+      if (saved != null && saved.trim().isNotEmpty) {
+        return saved.trim();
+      }
+      return LocaleProvider.resolveSystemLanguageCode();
     } catch (_) {
-      return 'en';
+      return LocaleProvider.resolveSystemLanguageCode();
     }
   }
 
@@ -1953,31 +2106,512 @@ class AuthService {
     }
   }
 
+  // ============ Onboarding, Anti-Abuse Verification & OAuth2/OIDC ============
+
+  static Future<AuthProvidersConfig> fetchAuthProviders({String? locale}) async {
+    try {
+      final loc = await _currentLocaleCode(locale);
+      final uri = Uri.parse('${AppConfig.baseUrl}/api/auth/providers').replace(
+        queryParameters: {'locale': loc},
+      );
+      final response = await http
+          .get(uri, headers: await _buildDeviceHeaders())
+          .timeout(const Duration(seconds: 8));
+      final data = _tryDecodeMap(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        return AuthProvidersConfig.fromJson(data);
+      }
+    } catch (e) {
+      debugPrint('AuthService.fetchAuthProviders error: $e');
+    }
+    return AuthProvidersConfig(
+      countryCode: 'RU',
+      phoneDialCode: '7',
+      recommendedLanguage: LocaleProvider.resolveSystemLanguageCode(),
+    );
+  }
+
+  static Future<Map<String, dynamic>> fetchAuthChallenge({
+    String purpose = 'register',
+  }) async {
+    try {
+      final uri = Uri.parse('${AppConfig.baseUrl}/api/auth/challenge').replace(
+        queryParameters: {'purpose': purpose},
+      );
+      final response = await http
+          .get(uri, headers: await _buildDeviceHeaders())
+          .timeout(const Duration(seconds: 10));
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'challenge': data['challenge']?.toString(),
+        'difficulty_bits': (data['difficulty_bits'] as num?)?.toInt() ?? 18,
+        'expires_in_seconds':
+            (data['expires_in_seconds'] as num?)?.toInt() ?? 300,
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> checkUsernameAvailability(
+    String username,
+  ) async {
+    try {
+      final clean = username.trim().replaceFirst(RegExp(r'^@+'), '');
+      final uri =
+          Uri.parse('${AppConfig.baseUrl}/api/auth/check-username').replace(
+        queryParameters: {'username': clean},
+      );
+      final response = await http
+          .get(uri, headers: await _buildDeviceHeaders())
+          .timeout(const Duration(seconds: 8));
+      final data = _tryDecodeMap(response.body);
+      final rawSuggestions = data['suggestions'];
+      final suggestions = rawSuggestions is List
+          ? rawSuggestions.map((e) => e.toString()).toList()
+          : const <String>[];
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'available': data['available'] == true,
+        'reason': data['reason']?.toString(),
+        'username': data['username']?.toString() ?? clean,
+        'suggestions': suggestions,
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'available': false,
+        'suggestions': const <String>[],
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> startRegistrationVerification({
+    required String email,
+    required String phone,
+    String? countryCode,
+    String? powChallenge,
+    String? powNonce,
+    String? oauthRegistrationToken,
+    String? locale,
+  }) async {
+    try {
+      var resolvedChallenge = powChallenge?.trim();
+      var resolvedNonce = powNonce?.trim();
+      final hasOAuth =
+          oauthRegistrationToken != null &&
+          oauthRegistrationToken.trim().isNotEmpty;
+
+      if (!hasOAuth &&
+          (resolvedChallenge == null ||
+              resolvedChallenge.isEmpty ||
+              resolvedNonce == null ||
+              resolvedNonce.isEmpty)) {
+        final challengeRes = await fetchAuthChallenge(purpose: 'register');
+        if (challengeRes['success'] != true ||
+            challengeRes['challenge'] == null) {
+          return {
+            'success': false,
+            'error': challengeRes['error'] ?? 'challenge_unavailable',
+            'message':
+                challengeRes['message'] ?? 'Security challenge unavailable',
+          };
+        }
+        resolvedChallenge = challengeRes['challenge'].toString();
+        resolvedNonce =
+            await computeRegistrationProofOfWork(resolvedChallenge);
+      }
+
+      final accountManager = AccountManager();
+      final deviceId =
+          accountManager.currentDeviceId ??
+          'device_${DateTime.now().millisecondsSinceEpoch}';
+
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.baseUrl}/api/auth/register/start'),
+            headers: await _buildDeviceHeaders(overrideDeviceId: deviceId),
+            body: jsonEncode({
+              'email': email.trim(),
+              'phone': phone.trim(),
+              if (countryCode != null && countryCode.trim().isNotEmpty)
+                'country_code': countryCode.trim().toUpperCase(),
+              if (resolvedChallenge != null && resolvedChallenge.isNotEmpty)
+                'pow_challenge': resolvedChallenge,
+              if (resolvedNonce != null && resolvedNonce.isNotEmpty)
+                'pow_nonce': resolvedNonce,
+              if (hasOAuth)
+                'oauth_registration_token': oauthRegistrationToken.trim(),
+              'locale': await _currentLocaleCode(locale),
+              'device_id': deviceId,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'email': data['email']?.toString() ?? email.trim(),
+        'phone': data['phone']?.toString() ?? phone.trim(),
+        'requires_email_code': data['requires_email_code'] == true,
+        'requires_reverse_sms': data['requires_reverse_sms'] == true,
+        'email_verified': data['email_verified'] == true,
+        'phone_verified': data['phone_verified'] == true,
+        'phone_verified_via': data['phone_verified_via']?.toString(),
+        'cooldown_seconds':
+            (data['cooldown_seconds'] ?? data['retry_after'] ?? 0) is num
+                ? ((data['cooldown_seconds'] ?? data['retry_after'] ?? 0)
+                        as num)
+                    .toInt()
+                : 0,
+        'phone_verification_id': data['phone_verification_id']?.toString(),
+        'sms_target_number': data['sms_target_number']?.toString(),
+        'sms_body': data['sms_body']?.toString(),
+        'sms_uri': data['sms_uri']?.toString(),
+        'registration_ticket': data['registration_ticket']?.toString(),
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> verifyRegistrationContacts({
+    required String email,
+    required String phone,
+    String? countryCode,
+    String? emailCode,
+    String? phoneVerificationId,
+    String? oauthRegistrationToken,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.baseUrl}/api/auth/register/verify'),
+            headers: await _buildDeviceHeaders(),
+            body: jsonEncode({
+              'email': email.trim(),
+              'phone': phone.trim(),
+              if (countryCode != null && countryCode.trim().isNotEmpty)
+                'country_code': countryCode.trim().toUpperCase(),
+              if (emailCode != null && emailCode.trim().isNotEmpty)
+                'email_code': emailCode.trim(),
+              if (phoneVerificationId != null &&
+                  phoneVerificationId.trim().isNotEmpty)
+                'phone_verification_id': phoneVerificationId.trim(),
+              if (oauthRegistrationToken != null &&
+                  oauthRegistrationToken.trim().isNotEmpty)
+                'oauth_registration_token': oauthRegistrationToken.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'registration_ticket': data['registration_ticket']?.toString(),
+        'email': data['email']?.toString(),
+        'email_verified': data['email_verified'] == true,
+        'phone': data['phone']?.toString(),
+        'phone_verified': data['phone_verified'] == true,
+        'phone_verified_via': data['phone_verified_via']?.toString(),
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> pollPhoneVerificationStatus(
+    String verificationId,
+  ) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(
+              '${AppConfig.baseUrl}/api/auth/phone-verify/${Uri.encodeComponent(verificationId)}/status',
+            ),
+            headers: await _buildDeviceHeaders(),
+          )
+          .timeout(const Duration(seconds: 8));
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200,
+        'status': data['status']?.toString() ?? 'pending',
+        'phone': data['phone']?.toString(),
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'status': 'pending',
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> startOAuthSession(
+    String provider, {
+    String? locale,
+  }) async {
+    try {
+      final body = await _buildDeviceBodyFields(locale: locale);
+      final response = await http
+          .post(
+            Uri.parse(
+              '${AppConfig.baseUrl}/api/auth/oauth/${Uri.encodeComponent(provider)}/start',
+            ),
+            headers: await _buildDeviceHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 12));
+      final data = _tryDecodeMap(response.body);
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'session_id': data['session_id']?.toString(),
+        'poll_secret': data['poll_secret']?.toString(),
+        'authorize_url': data['authorize_url']?.toString(),
+        'expires_in_seconds':
+            (data['expires_in_seconds'] as num?)?.toInt() ?? 600,
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> pollOAuthSessionStatus({
+    required String sessionId,
+    required String pollSecret,
+  }) async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse(
+              '${AppConfig.baseUrl}/api/auth/oauth/session/${Uri.encodeComponent(sessionId)}/status',
+            ),
+            headers: await _buildDeviceHeaders(
+              extra: {'X-OAuth-Poll-Secret': pollSecret},
+            ),
+          )
+          .timeout(const Duration(seconds: 10));
+      final data = _tryDecodeMap(response.body);
+      final status = data['status']?.toString() ?? 'pending';
+      OAuthRegistrationPrefill? prefill;
+      if (status == 'needs_registration') {
+        prefill = OAuthRegistrationPrefill.fromStatusPayload(data);
+      }
+      return {
+        'success': response.statusCode == 200 && data['success'] == true,
+        'status': status,
+        'auth_token': data['auth_token']?.toString(),
+        'device_id': data['device_id']?.toString(),
+        'user_id': data['user_id']?.toString(),
+        'user': data['user'] is Map
+            ? Map<String, dynamic>.from(data['user'] as Map)
+            : null,
+        'provider': data['provider']?.toString(),
+        'provider_name': data['provider_name']?.toString(),
+        'masked_email': data['masked_email']?.toString(),
+        'requires_2fa': data['requires_2fa'] == true,
+        'has_recovery_email': data['has_recovery_email'] == true,
+        'prefill': prefill,
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'status': 'error',
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> verifyOAuth2FA({
+    required String sessionId,
+    required String pollSecret,
+    String? twoFactorPassword,
+    String? recoveryCode,
+    BuildContext? context,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse(
+              '${AppConfig.baseUrl}/api/auth/oauth/session/${Uri.encodeComponent(sessionId)}/verify-2fa',
+            ),
+            headers: await _buildDeviceHeaders(
+              extra: {'X-OAuth-Poll-Secret': pollSecret},
+            ),
+            body: jsonEncode({
+              if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+                'two_factor_password': twoFactorPassword,
+              if (recoveryCode != null && recoveryCode.trim().isNotEmpty)
+                'recovery_code': recoveryCode.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      final data = _tryDecodeMap(response.body);
+      final ok = response.statusCode == 200 && data['success'] == true;
+      final authToken = data['auth_token']?.toString() ?? '';
+      final userId = data['user_id']?.toString() ?? '';
+      final userMap = data['user'] is Map
+          ? Map<String, dynamic>.from(data['user'] as Map)
+          : null;
+      if (ok && authToken.isNotEmpty && userId.isNotEmpty) {
+        await completeExternalLoginSession(
+          authToken: authToken,
+          userId: userId,
+          user: userMap,
+          context: (context != null && context.mounted) ? context : null,
+        );
+      }
+      return {
+        'success': ok,
+        'status': data['status']?.toString(),
+        'auth_token': authToken,
+        'user_id': userId,
+        'user': userMap,
+        'requires_2fa': data['requires_2fa'] == true,
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> confirmOAuthPasswordLink({
+    required String sessionId,
+    required String pollSecret,
+    required String password,
+    String? twoFactorPassword,
+    String? recoveryCode,
+    BuildContext? context,
+  }) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.baseUrl}/api/auth/oauth/confirm-link'),
+            headers: await _buildDeviceHeaders(
+              extra: {'X-OAuth-Poll-Secret': pollSecret},
+            ),
+            body: jsonEncode({
+              'session_id': sessionId,
+              'password': password,
+              if (twoFactorPassword != null && twoFactorPassword.isNotEmpty)
+                'two_factor_password': twoFactorPassword,
+              if (recoveryCode != null && recoveryCode.trim().isNotEmpty)
+                'recovery_code': recoveryCode.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+      final data = _tryDecodeMap(response.body);
+      final ok = response.statusCode == 200 && data['success'] == true;
+      final authToken = data['auth_token']?.toString() ?? '';
+      final userId = data['user_id']?.toString() ?? '';
+      final userMap = data['user'] is Map
+          ? Map<String, dynamic>.from(data['user'] as Map)
+          : null;
+      if (ok && authToken.isNotEmpty && userId.isNotEmpty) {
+        await completeExternalLoginSession(
+          authToken: authToken,
+          userId: userId,
+          user: userMap,
+          context: (context != null && context.mounted) ? context : null,
+        );
+      }
+      return {
+        'success': ok,
+        'status': data['status']?.toString(),
+        'auth_token': authToken,
+        'user_id': userId,
+        'user': userMap,
+        'requires_2fa': data['requires_2fa'] == true,
+        'error': data['error']?.toString(),
+        'message': data['message']?.toString(),
+      };
+    } catch (e) {
+      return {
+        'success': false,
+        'error': 'network_error',
+        'message': e.toString(),
+      };
+    }
+  }
+
+  /// Uploads an avatar chosen through [TheavAvatarPickerSheet] across Web & native.
+  static Future<Map<String, dynamic>> uploadAvatarFromPick(
+    AvatarPickResult pick, {
+    String? userId,
+  }) async {
+    final cropParam = pick.miniCrop?.toCompactParam();
+    final res = await uploadAvatar(
+      pick.file?.path ?? '',
+      bytes: kIsWeb ? pick.bytes : null,
+      fileName: pick.fileName,
+      avatarCrop: cropParam,
+    );
+    if (!kIsWeb &&
+        res['success'] == true &&
+        pick.file != null &&
+        userId != null &&
+        userId.isNotEmpty) {
+      try {
+        await AvatarSyncService().setLocalAvatar(
+          userId,
+          pick.file!.path,
+          avatarCrop: cropParam,
+        );
+      } catch (_) {}
+    }
+    return res;
+  }
+
   static Future<void> completeExternalLoginSession({
     required String authToken,
     required String userId,
     Map<String, dynamic>? user,
+    BuildContext? context,
   }) async {
-    await _saveToAccountManager(
-      authToken,
-      userId,
-      username: user?['username']?.toString(),
-      displayName: user?['display_name']?.toString(),
-      avatarUrl: user?['avatar_url']?.toString(),
-      name: user?['name']?.toString(),
-      surname: user?['surname']?.toString(),
-      email: user?['email']?.toString(),
-      emailVerified: user?['email_verified'] == true,
-      phone: user?['phone']?.toString(),
+    await SessionBootstrapCoordinator.bootstrapAuthenticatedSession(
+      token: authToken,
+      userId: userId,
+      userMap: user,
+      context: (context != null && context.mounted) ? context : null,
     );
-    try {
-      await AppDatabase().ensureSavedChatExists(userId);
-    } catch (e) {
-      debugPrint('AuthService: Error creating saved chat: $e');
-    }
-    try {
-      await NotificationService().registerCurrentToken();
-    } catch (_) {}
   }
 
   /// Sync current app locale to active backend device session (for localized server emails/pushes).

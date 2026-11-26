@@ -30,6 +30,12 @@ class AppLocalizations {
   bool hasKey(String key) =>
       _localizedStrings.containsKey(key) || _fallbackStrings.containsKey(key);
 
+  /// Translates [key] if present, otherwise interpolates [fallback].
+  String trOr(String key, String fallback, [Map<String, String>? params]) =>
+      hasKey(key)
+          ? translate(key, params)
+          : _interpolate(fallback, params);
+
   static String _interpolate(String raw, [Map<String, String>? params]) {
     if (params == null || params.isEmpty) return raw;
     String str = raw;
@@ -135,13 +141,39 @@ extension AppLocalizationsExtension on BuildContext {
 /// Провайдер для управления языком приложения
 class LocaleProvider extends ChangeNotifier {
   static const String _languageKey = 'selected_language';
-  Locale _locale = const Locale('en');
+  static const List<String> supportedLanguageCodes = [
+    'en',
+    'ru',
+    'es',
+    'fr',
+    'de',
+    'it',
+    'pt',
+    'zh',
+    'ja',
+    'ko',
+  ];
+
+  static String resolveSystemLanguageCode([Locale? systemLocale]) {
+    final code = (systemLocale ?? WidgetsBinding.instance.platformDispatcher.locale)
+        .languageCode
+        .toLowerCase()
+        .trim();
+    if (supportedLanguageCodes.contains(code)) {
+      return code;
+    }
+    return 'en';
+  }
+
+  Locale _locale = Locale(resolveSystemLanguageCode());
+  bool _hasExplicitSelection = false;
   final Completer<void> _readyCompleter = Completer<void>();
 
   /// Future, который завершается когда язык загружен из SharedPreferences
   Future<void> get ready => _readyCompleter.future;
 
   Locale get locale => _locale;
+  bool get hasExplicitSelection => _hasExplicitSelection;
 
   LocaleProvider() {
     _loadLocale();
@@ -149,8 +181,14 @@ class LocaleProvider extends ChangeNotifier {
 
   Future<void> _loadLocale() async {
     final prefs = await SharedPreferences.getInstance();
-    final languageCode = prefs.getString(_languageKey) ?? 'en';
-    _locale = Locale(languageCode);
+    final stored = prefs.getString(_languageKey);
+    if (stored != null && stored.trim().isNotEmpty) {
+      _hasExplicitSelection = true;
+      _locale = Locale(stored.trim());
+    } else {
+      _hasExplicitSelection = false;
+      _locale = Locale(resolveSystemLanguageCode());
+    }
     if (!_readyCompleter.isCompleted) {
       _readyCompleter.complete();
     }
@@ -159,15 +197,18 @@ class LocaleProvider extends ChangeNotifier {
 
   Future<void> setLocale(Locale locale) async {
     _locale = locale;
+    _hasExplicitSelection = true;
     await _persistAndSyncLocale(locale.languageCode);
   }
 
   Future<void> setLocaleByCode(String languageCode) async {
     _locale = Locale(languageCode);
+    _hasExplicitSelection = true;
     await _persistAndSyncLocale(languageCode);
   }
 
   Future<void> _persistAndSyncLocale(String languageCode) async {
+    _hasExplicitSelection = true;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_languageKey, languageCode);
     notifyListeners();
