@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_theme.dart';
 import '../../services/auth_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/session_bootstrap_coordinator.dart';
@@ -163,53 +164,213 @@ class _FirstStartWizardScreenState extends State<FirstStartWizardScreen> {
     AppLocalizations l10n,
     TheavPalette palette,
   ) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned.fill(
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(28, 36, 28, 152),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: _DissolvingGreetingHero(
-                    l10n: l10n,
-                    palette: palette,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double w = constraints.maxWidth;
+        final bool isWide = w >= 840;
+        final double greetingFontSize = (w * 0.056).clamp(38.0, 62.0);
+        final double heroMaxWidth =
+            isWide ? 940.0 : (w >= 600 ? 720.0 : 540.0);
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: SafeArea(
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    isWide ? 48 : 28,
+                    36,
+                    isWide ? 48 : 28,
+                    152,
+                  ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: heroMaxWidth),
+                      child: _DissolvingGreetingHero(
+                        l10n: l10n,
+                        palette: palette,
+                        fontSize: greetingFontSize,
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-        ),
-        TheavFloatingBottomBar(
-          maxWidth: 540,
-          showBottomEdgeBlur: false,
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: TheavLanguageMorphButton(
-                  recommendedCode: _recommendedLang,
-                ),
+            TheavFloatingBottomBar(
+              maxWidth: isWide ? 480 : 540,
+              showBottomEdgeBlur: false,
+              padding: EdgeInsets.fromLTRB(16, 8, 16, isWide ? 28 : 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: TheavLanguageMorphButton(
+                      recommendedCode: _recommendedLang,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TheavSpringButton(
+                    label: l10n.trOr('onboarding_continue', 'Continue'),
+                    trailing: iconoir.NavArrowRight(
+                      width: 18,
+                      height: 18,
+                      color: palette.onPrimary,
+                    ),
+                    onPressed: () => _goToStep(1),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              TheavSpringButton(
-                label: l10n.trOr('onboarding_continue', 'Continue'),
-                trailing: iconoir.NavArrowRight(
-                  width: 18,
-                  height: 18,
-                  color: palette.onPrimary,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  List<Widget> _buildAppearanceControlCards({
+    required AppLocalizations l10n,
+    required TheavPalette palette,
+    required ThemeProvider themeProvider,
+    required LiquidGlassProvider? glassProvider,
+    required GlassMode glassMode,
+    required bool glassSupported,
+    required List<TheavTheme> carouselThemes,
+    required TheavTheme activeTheme,
+    EdgeInsets cardMargin =
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+    EdgeInsets stripPadding = const EdgeInsets.symmetric(horizontal: 16),
+  }) {
+    final double headerHorizontalInset =
+        cardMargin.horizontal > 0 ? 16.0 + cardMargin.left : 20.0;
+    return [
+      TheavInsetGroup(
+        margin: cardMargin,
+        header: l10n.trOr('onboarding_theme_mode_header', 'Color scheme'),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(10),
+            child: TheavSegmentedControl<ThemeMode>(
+              selected: themeProvider.themeMode,
+              expand: true,
+              height: 40,
+              useGlass: false,
+              onChanged: (mode) {
+                HapticUtils.selection();
+                switch (mode) {
+                  case ThemeMode.system:
+                    themeProvider.setToSystem();
+                    break;
+                  case ThemeMode.light:
+                    themeProvider.setToLight();
+                    break;
+                  case ThemeMode.dark:
+                    themeProvider.setToDark();
+                    break;
+                }
+              },
+              options: [
+                TheavSegmentOption(
+                  value: ThemeMode.system,
+                  label: l10n.trOr('theme_system', 'System'),
+                  icon: iconoir.Laptop(
+                    width: 15,
+                    height: 15,
+                    color: palette.onSurface,
+                  ),
                 ),
-                onPressed: () => _goToStep(1),
-              ),
-            ],
+                TheavSegmentOption(
+                  value: ThemeMode.light,
+                  label: l10n.trOr('theme_light', 'Light'),
+                  icon: iconoir.SunLight(
+                    width: 15,
+                    height: 15,
+                    color: palette.onSurface,
+                  ),
+                ),
+                TheavSegmentOption(
+                  value: ThemeMode.dark,
+                  label: l10n.trOr('theme_dark', 'Dark'),
+                  icon: iconoir.HalfMoon(
+                    width: 15,
+                    height: 15,
+                    color: palette.onSurface,
+                  ),
+                ),
+              ],
+            ),
           ),
+        ],
+      ),
+      if (glassSupported) ...[
+        const SizedBox(height: 4),
+        TheavInsetGroup(
+          margin: cardMargin,
+          header: l10n.trOr('onboarding_surface_style_header', 'Interface style'),
+          footer: l10n.trOr(
+            'onboarding_surface_style_footer',
+            'Scroll the preview above to compare matte Material surfaces and live Liquid Glass refraction.',
+          ),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: TheavSegmentedControl<GlassMode>(
+                selected: glassMode,
+                expand: true,
+                height: 40,
+                useGlass: false,
+                onChanged: (next) {
+                  HapticUtils.selection();
+                  glassProvider?.setMode(next);
+                },
+                options: [
+                  TheavSegmentOption(
+                    value: GlassMode.disabled,
+                    label: l10n.trOr('glass_mode_material', 'Material'),
+                  ),
+                  TheavSegmentOption(
+                    value: GlassMode.lite,
+                    label: l10n.trOr('glass_mode_lite', 'Glass Lite'),
+                  ),
+                  TheavSegmentOption(
+                    value: GlassMode.full,
+                    label: l10n.trOr('glass_mode_full', 'Liquid Glass'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ],
-    );
+      const SizedBox(height: 6),
+      Padding(
+        padding: EdgeInsets.fromLTRB(
+          headerHorizontalInset,
+          6,
+          headerHorizontalInset,
+          6,
+        ),
+        child: Text(
+          l10n.trOr('onboarding_palette_header', 'Color palette'),
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: palette.subtext,
+          ),
+        ),
+      ),
+      ThemeCarouselStrip(
+        themes: carouselThemes,
+        activeTheme: activeTheme,
+        activePrimary: palette.primary,
+        padding: stripPadding,
+        onThemeSelected: (t) async {
+          HapticUtils.selection();
+          await themeProvider.setActiveTheme(t);
+        },
+      ),
+    ];
   }
 
   Widget _buildAppearanceStep(
@@ -234,215 +395,199 @@ class _FirstStartWizardScreenState extends State<FirstStartWizardScreen> {
     final topClearance = SettingsFloatingHeader.topClearanceOf(context);
     final safeBottom = MediaQuery.paddingOf(context).bottom;
     final screenHeight = MediaQuery.sizeOf(context).height;
-    final previewHeight = (screenHeight * 0.41).clamp(288.0, 384.0);
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned.fill(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
+    final Widget header = SettingsFloatingHeader(
+      title: l10n.trOr('onboarding_step_appearance_title', 'Appearance'),
+      showBackButton: true,
+      onBack: () => _goToStep(0),
+      actions: [
+        SettingsHeaderAction(
+          tooltip: '2 / 2',
+          child: Text(
+            '2/2',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: palette.primary,
             ),
-            padding: EdgeInsets.fromLTRB(
-              0,
-              topClearance + 8,
-              0,
-              108 + safeBottom,
-            ),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 640),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: RealAppAppearancePreview(height: previewHeight),
-                    ),
-                    const SizedBox(height: 14),
-                    TheavInsetGroup(
-                      header: l10n.trOr(
-                        'onboarding_theme_mode_header',
-                        'Color scheme',
-                      ),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(10),
-                          child: TheavSegmentedControl<ThemeMode>(
-                            selected: themeProvider.themeMode,
-                            expand: true,
-                            height: 40,
-                            useGlass: false,
-                            onChanged: (mode) {
-                              HapticUtils.selection();
-                              switch (mode) {
-                                case ThemeMode.system:
-                                  themeProvider.setToSystem();
-                                  break;
-                                case ThemeMode.light:
-                                  themeProvider.setToLight();
-                                  break;
-                                case ThemeMode.dark:
-                                  themeProvider.setToDark();
-                                  break;
-                              }
-                            },
-                            options: [
-                              TheavSegmentOption(
-                                value: ThemeMode.system,
-                                label: l10n.trOr('theme_system', 'System'),
-                                icon: iconoir.Laptop(
-                                  width: 15,
-                                  height: 15,
-                                  color: palette.onSurface,
-                                ),
-                              ),
-                              TheavSegmentOption(
-                                value: ThemeMode.light,
-                                label: l10n.trOr('theme_light', 'Light'),
-                                icon: iconoir.SunLight(
-                                  width: 15,
-                                  height: 15,
-                                  color: palette.onSurface,
-                                ),
-                              ),
-                              TheavSegmentOption(
-                                value: ThemeMode.dark,
-                                label: l10n.trOr('theme_dark', 'Dark'),
-                                icon: iconoir.HalfMoon(
-                                  width: 15,
-                                  height: 15,
-                                  color: palette.onSurface,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (glassSupported) ...[
-                      const SizedBox(height: 4),
-                      TheavInsetGroup(
-                        header: l10n.trOr(
-                          'onboarding_surface_style_header',
-                          'Interface style',
-                        ),
-                        footer: l10n.trOr(
-                          'onboarding_surface_style_footer',
-                          'Scroll the preview above to compare matte Material surfaces and live Liquid Glass refraction.',
-                        ),
+          ),
+          onTap: null,
+        ),
+      ],
+    );
+
+    final Widget continueButton = TheavSpringButton(
+      label: l10n.trOr('onboarding_continue_to_login', 'Continue to Sign In'),
+      trailing: iconoir.NavArrowRight(
+        width: 18,
+        height: 18,
+        color: palette.onPrimary,
+      ),
+      onPressed: _completeAndProceedToLogin,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool isWide = constraints.maxWidth >= 860;
+        if (isWide) {
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1220),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 28),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: TheavSegmentedControl<GlassMode>(
-                              selected: glassMode,
-                              expand: true,
-                              height: 40,
-                              useGlass: false,
-                              onChanged: (next) {
-                                HapticUtils.selection();
-                                glassProvider?.setMode(next);
-                              },
-                              options: [
-                                TheavSegmentOption(
-                                  value: GlassMode.disabled,
-                                  label: l10n.trOr(
-                                    'glass_mode_material',
-                                    'Material',
+                          Expanded(
+                            flex: 11,
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                0,
+                                topClearance + 14,
+                                0,
+                                math.max(20.0, safeBottom + 16.0),
+                              ),
+                              child: LayoutBuilder(
+                                builder: (ctx, leftBox) {
+                                  final double widePreviewHeight =
+                                      (leftBox.maxHeight - 54.0)
+                                          .clamp(280.0, 660.0);
+                                  return Center(
+                                    child: RealAppAppearancePreview(
+                                      height: widePreviewHeight,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 28),
+                          Expanded(
+                            flex: 10,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Positioned.fill(
+                                  child: SingleChildScrollView(
+                                    physics: const BouncingScrollPhysics(
+                                      parent: AlwaysScrollableScrollPhysics(),
+                                    ),
+                                    padding: EdgeInsets.fromLTRB(
+                                      0,
+                                      topClearance + 14,
+                                      0,
+                                      108 + safeBottom,
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: _buildAppearanceControlCards(
+                                        l10n: l10n,
+                                        palette: palette,
+                                        themeProvider: themeProvider,
+                                        glassProvider: glassProvider,
+                                        glassMode: glassMode,
+                                        glassSupported: glassSupported,
+                                        carouselThemes: carouselThemes,
+                                        activeTheme: activeTheme,
+                                        cardMargin: const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                          vertical: 6,
+                                        ),
+                                        stripPadding:
+                                            const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ),
-                                TheavSegmentOption(
-                                  value: GlassMode.lite,
-                                  label: l10n.trOr(
-                                    'glass_mode_lite',
-                                    'Glass Lite',
-                                  ),
-                                ),
-                                TheavSegmentOption(
-                                  value: GlassMode.full,
-                                  label: l10n.trOr(
-                                    'glass_mode_full',
-                                    'Liquid Glass',
-                                  ),
+                                TheavFloatingBottomBar(
+                                  maxWidth: double.infinity,
+                                  padding:
+                                      const EdgeInsets.fromLTRB(4, 18, 4, 20),
+                                  child: continueButton,
                                 ),
                               ],
                             ),
                           ),
                         ],
                       ),
-                    ],
-                    const SizedBox(height: 6),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 6,
-                      ),
-                      child: Text(
-                        l10n.trOr('onboarding_palette_header', 'Color palette'),
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: palette.subtext,
-                        ),
-                      ),
                     ),
-                    ThemeCarouselStrip(
-                      themes: carouselThemes,
-                      activeTheme: activeTheme,
-                      activePrimary: palette.primary,
-                      onThemeSelected: (t) async {
-                        HapticUtils.selection();
-                        await themeProvider.setActiveTheme(t);
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: SettingsFloatingHeader(
-            title: l10n.trOr('onboarding_step_appearance_title', 'Appearance'),
-            showBackButton: true,
-            onBack: () => _goToStep(0),
-            actions: [
-              SettingsHeaderAction(
-                tooltip: '2 / 2',
-                child: Text(
-                  '2/2',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: palette.primary,
                   ),
                 ),
-                onTap: null,
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: header,
               ),
             ],
-          ),
-        ),
-        TheavFloatingBottomBar(
-          maxWidth: 640,
-          child: TheavSpringButton(
-            label: l10n.trOr(
-              'onboarding_continue_to_login',
-              'Continue to Sign In',
+          );
+        }
+
+        final previewHeight = (screenHeight * 0.41).clamp(288.0, 384.0);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned.fill(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
+                padding: EdgeInsets.fromLTRB(
+                  0,
+                  topClearance + 8,
+                  0,
+                  108 + safeBottom,
+                ),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 640),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: RealAppAppearancePreview(height: previewHeight),
+                        ),
+                        const SizedBox(height: 14),
+                        ..._buildAppearanceControlCards(
+                          l10n: l10n,
+                          palette: palette,
+                          themeProvider: themeProvider,
+                          glassProvider: glassProvider,
+                          glassMode: glassMode,
+                          glassSupported: glassSupported,
+                          carouselThemes: carouselThemes,
+                          activeTheme: activeTheme,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
-            trailing: iconoir.NavArrowRight(
-              width: 18,
-              height: 18,
-              color: palette.onPrimary,
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: header,
             ),
-            onPressed: _completeAndProceedToLogin,
-          ),
-        ),
-      ],
+            TheavFloatingBottomBar(
+              maxWidth: 640,
+              child: continueButton,
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -450,10 +595,12 @@ class _FirstStartWizardScreenState extends State<FirstStartWizardScreen> {
 class _DissolvingGreetingHero extends StatefulWidget {
   final AppLocalizations l10n;
   final TheavPalette palette;
+  final double fontSize;
 
   const _DissolvingGreetingHero({
     required this.l10n,
     required this.palette,
+    this.fontSize = 38.0,
   });
 
   @override
@@ -539,10 +686,10 @@ class _DissolvingGreetingHeroState extends State<_DissolvingGreetingHero>
       key: key,
       textAlign: TextAlign.center,
       style: TextStyle(
-        fontSize: 34,
+        fontSize: widget.fontSize,
         fontWeight: FontWeight.w800,
-        letterSpacing: -0.8,
-        height: 1.15,
+        letterSpacing: widget.fontSize >= 48 ? -1.3 : -0.9,
+        height: 1.12,
         color: widget.palette.onSurface,
       ),
     );

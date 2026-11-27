@@ -988,44 +988,15 @@ class TheavLanguageMorphButton extends StatelessWidget {
             ? 'login_language_morph_btn'
             : 'onboarding_language_morph_btn',
       ),
+      width: compactCircle ? 44.0 : null,
+      height: compactCircle ? 44.0 : 42.0,
+      padding: compactCircle
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: 15),
+      renderSurface: true,
       menuWidth: 256.0,
       menuHeight: 296.0,
       cornerRadius: 22.0,
-      collapsedBuilder: (_) => compactCircle
-          ? Center(
-              child: Text(
-                currentCode.toUpperCase(),
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
-                  color: palette.primary,
-                ),
-              ),
-            )
-          : Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    iconoir.Language(
-                      width: 17,
-                      height: 17,
-                      color: palette.primary,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      currentOption.nativeName,
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                        color: palette.onSurface,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
       menuBuilder: (menuCtx, close) => _LanguageMorphMenuBody(
         recommendedCode: recommendedCode,
         onSelected: (code) {
@@ -1034,54 +1005,46 @@ class TheavLanguageMorphButton extends StatelessWidget {
         },
       ),
       child: compactCircle
-          ? SizedBox(
-              width: 44,
-              height: 44,
-              child: Center(
-                child: Text(
-                  currentCode.toUpperCase(),
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: palette.primary,
-                  ),
-                ),
+          ? Text(
+              currentCode.toUpperCase(),
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: palette.primary,
               ),
             )
           : Semantics(
               button: true,
               label: l10n.trOr('onboarding_change_language', 'Change language'),
-              child: SizedBox(
-                height: 40,
-                child: TheavFloatingSurface(
-                  borderRadius: 20.0,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      iconoir.Language(
-                        width: 17,
-                        height: 17,
-                        color: palette.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${l10n.trOr('onboarding_change_language', 'Change language')} · ${currentOption.nativeName}',
-                        style: TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w600,
-                          color: palette.onSurface,
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      iconoir.NavArrowDown(
-                        width: 15,
-                        height: 15,
-                        color: palette.subtext,
-                      ),
-                    ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  iconoir.Language(
+                    width: 17,
+                    height: 17,
+                    color: palette.primary,
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      '${l10n.trOr('onboarding_change_language', 'Change language')} · ${currentOption.nativeName}',
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: palette.onSurface,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  iconoir.NavArrowDown(
+                    width: 15,
+                    height: 15,
+                    color: palette.subtext,
+                  ),
+                ],
               ),
             ),
     );
@@ -1218,7 +1181,10 @@ class _LanguageMorphMenuBody extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              item.secondaryName,
+                              l10n.trOr(
+                                'lang_name_${item.code}',
+                                item.secondaryName,
+                              ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(

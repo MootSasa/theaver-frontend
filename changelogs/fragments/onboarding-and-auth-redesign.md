@@ -5,11 +5,11 @@ summary_en: Redesigned first launch with dissolving greetings, compact morph men
 ---
 
 ### ru
-- **Мастер первого запуска:** приветственный экран встречает живыми сменяющимися фразами и компактной кнопкой выбора языка внизу, а на втором шаге можно без задержек сравнить темы, палитры и стили Material, Glass Lite и Liquid Glass на точном превью настоящего чата и главного экрана.
-- **Лёгкие морф-меню и парящие кнопки:** выбор языка, кода страны и подсказок теперь раскрывается прямо из кнопки без тяжёлых нижних шторок, а нижние кнопки действий на экранах запуска, регистрации, восстановления и настройки плавно парят поверх прокручиваемых списков.
-- **Обновлённый вход и 3-шаговая регистрация:** единое поле для `@username`, почты или телефона, вход по QR-коду, поддержка регионального входа (включая Yandex ID, VK ID, Huawei ID, Google и Apple) и надёжное сохранение имени, фамилии и номера телефона при создании аккаунта.
+- **Мастер первого запуска и широкий экран:** приветственный экран встречает крупными сменяющимися фразами и кнопкой выбора языка внизу, а на широких экранах настройка оформления переходит в двухколоночный режим с точным превью чата и главного экрана слева и выбором темы, палитры и режима стекла справа.
+- **Единые парящие кнопки и морф-меню:** выбор языка, кода страны и подсказок по входу раскрывается плавно из единых капсульных и круглых кнопок дизайна приложения, а нижние кнопки действий парят поверх прокручиваемых списков.
+- **Обновлённый вход, регистрация и 10 языков:** добавлены единое поле входа, QR-авторизация, региональный порядок провайдеров входа, надёжное сохранение телефона и профиля при регистрации, а также полный перевод экранов приветствия, настройки и входа на все 10 поддерживаемых языков.
 
 ### en
-- **First-start onboarding wizard:** the welcome screen opens with a live dissolving sequence of friendly greetings and a bottom language picker, followed by instant comparisons of themes, palettes, and Material, Glass Lite, or Liquid Glass rendering on a faithful preview of the real chat and main screen.
-- **Compact morph menus and floating action bars:** language, country dial-code, and help pickers expand smoothly directly from their buttons instead of heavy bottom sheets, while bottom action buttons float cleanly over full-bleed scrollable content without clipped seams.
-- **Redesigned sign-in and 3-step registration:** added a unified `@username`, email, or phone field, live QR sign-in, regional OAuth options (including Yandex ID, VK ID, Huawei ID, Google, and Apple when configured), and reliable persistence of phone numbers and profile details.
+- **First-start onboarding and wide layout:** the welcome screen pairs large live dissolving greetings with a compact language button, and switches the appearance step on wide screens to a two-column layout with a faithful chat and workspace preview alongside theme, palette, and glass controls.
+- **Unified floating triggers and morph menus:** language, country dial-code, and sign-in help pickers expand smoothly from matching app-style capsule and circle buttons without heavy bottom sheets, while bottom action bars float cleanly over scrollable content.
+- **Redesigned sign-in, registration, and 10-language support:** added a unified sign-in field, live QR login, regional provider ordering, reliable phone and profile persistence during registration, and complete translations for all onboarding and auth flows across all 10 supported languages.

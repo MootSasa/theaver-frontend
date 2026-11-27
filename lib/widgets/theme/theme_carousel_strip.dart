@@ -312,26 +312,35 @@ class ThemeCarouselStrip extends StatelessWidget {
     final totalCount = themes.length + (trailingCard != null ? 1 : 0);
     return SizedBox(
       height: 104,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: padding,
-        itemCount: totalCount,
-        separatorBuilder: (_, __) => const SizedBox(width: 12),
-        itemBuilder: (context, index) {
-          if (trailingCard != null && index == themes.length) {
-            return trailingCard!;
-          }
-          final t = themes[index];
-          final isSelected = t.id == activeTheme.id;
-          return ThemeItemBubble(
-            theme: isSelected ? activeTheme : t,
-            isSelected: isSelected,
-            activePrimary: activePrimary,
-            onTap: () => onThemeSelected(t),
-            onLongPress:
-                onThemeLongPress != null ? () => onThemeLongPress!(t) : null,
-          );
-        },
+      child: ScrollConfiguration(
+        behavior: ScrollConfiguration.of(context).copyWith(
+          dragDevices: const {
+            ui.PointerDeviceKind.touch,
+            ui.PointerDeviceKind.mouse,
+            ui.PointerDeviceKind.trackpad,
+          },
+        ),
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: padding,
+          itemCount: totalCount,
+          separatorBuilder: (_, __) => const SizedBox(width: 12),
+          itemBuilder: (context, index) {
+            if (trailingCard != null && index == themes.length) {
+              return trailingCard!;
+            }
+            final t = themes[index];
+            final isSelected = t.id == activeTheme.id;
+            return ThemeItemBubble(
+              theme: isSelected ? activeTheme : t,
+              isSelected: isSelected,
+              activePrimary: activePrimary,
+              onTap: () => onThemeSelected(t),
+              onLongPress:
+                  onThemeLongPress != null ? () => onThemeLongPress!(t) : null,
+            );
+          },
+        ),
       ),
     );
   }

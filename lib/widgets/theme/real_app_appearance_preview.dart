@@ -460,7 +460,7 @@ class _WorkspacePreviewScene extends StatelessWidget {
       Chat(
         id: 'onb_ws_news',
         chatType: 'channel',
-        name: 'Theaver News',
+        name: l10n.trOr('onboarding_preview_news_name', 'Theaver News'),
         lastMessage: l10n.trOr(
           'onboarding_preview_news_subtitle',
           'Themes, glass refraction, and instant cross-device sync.',
@@ -473,7 +473,7 @@ class _WorkspacePreviewScene extends StatelessWidget {
       Chat(
         id: 'onb_ws_team',
         chatType: 'group',
-        name: 'Design Team',
+        name: l10n.trOr('onboarding_preview_team_name', 'Design Team'),
         lastMessage: l10n.trOr(
           'onboarding_preview_team_subtitle',
           'Updated palette contrast for light and OLED themes.',

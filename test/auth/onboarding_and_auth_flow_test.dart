@@ -30,6 +30,7 @@ import 'package:theaver/widgets/chat/chat_selection_header.dart';
 import 'package:theaver/widgets/chat/classic_bottom_bar.dart';
 import 'package:theaver/widgets/chat/floating_glass_app_bar.dart';
 import 'package:theaver/widgets/chat/liquid_glass_input_field.dart';
+import 'package:theaver/widgets/design_system/theav_design_system.dart';
 import 'package:theaver/widgets/settings/settings_floating_header.dart';
 import 'package:theaver/widgets/theme/real_app_appearance_preview.dart';
 
@@ -243,10 +244,30 @@ void main() {
       expect(selectedIso, 'RU');
       expect(find.text('RU +7'), findsOneWidget);
 
+      final countryBtn = find.byKey(
+        const ValueKey<String>('phone_country_morph_btn'),
+      );
+      expect(
+        find.descendant(
+          of: countryBtn,
+          matching: find.byType(TheavFloatingSurface),
+        ),
+        findsOneWidget,
+      );
+
       await tester.tap(find.text('RU +7'));
       await tester.pump();
       await tester.pump();
       await tester.pumpAndSettle();
+      final Visibility hiddenTrigger = tester.widget<Visibility>(
+        find
+            .descendant(
+              of: countryBtn,
+              matching: find.byType(Visibility),
+            )
+            .first,
+      );
+      expect(hiddenTrigger.visible, isFalse);
       expect(find.text('Belarus'), findsOneWidget);
       await tester.tap(find.text('Belarus'));
       await tester.pump();
@@ -254,6 +275,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(selectedIso, 'BY');
       expect(find.text('BY +375'), findsOneWidget);
+      final Visibility restoredTrigger = tester.widget<Visibility>(
+        find
+            .descendant(
+              of: countryBtn,
+              matching: find.byType(Visibility),
+            )
+            .first,
+      );
+      expect(restoredTrigger.visible, isTrue);
     });
   });
 
@@ -414,6 +444,78 @@ void main() {
       expect(find.byType(RealAppAppearancePreview), findsOneWidget);
       expect(find.text('Material'), findsOneWidget);
       expect(find.text('Liquid Glass'), findsOneWidget);
+    });
+
+    testWidgets('FirstStartWizardScreen uses larger greeting and 2-column appearance layout on wide screens', (tester) async {
+      tester.view.physicalSize = const Size(1280, 840);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final tp = ThemeProvider();
+      addTearDown(tp.dispose);
+      final gp = _TestLiquidGlassProvider(GlassMode.disabled);
+      final lp = LocaleProvider();
+      await lp.ready;
+      final l10n = await _loadTestL10n(tester);
+
+      await tester.pumpWidget(
+        _buildAuthTestHost(
+          themeProvider: tp,
+          glassProvider: gp,
+          localeProvider: lp,
+          l10n: l10n,
+          child: const FirstStartWizardScreen(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      final Text greetingText = tester.widget<Text>(
+        find.byKey(const ValueKey<String>('onboarding_greeting_text')),
+      );
+      expect(greetingText.style?.fontSize, isNotNull);
+      expect(greetingText.style!.fontSize!, greaterThanOrEqualTo(56.0));
+
+      await tester.ensureVisible(find.text('Continue'));
+      await tester.tap(find.text('Continue'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(RealAppAppearancePreview), findsOneWidget);
+      expect(find.text('Color scheme'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.byType(RealAppAppearancePreview)).dx,
+        lessThan(tester.getTopLeft(find.text('Color scheme')).dx),
+      );
+    });
+
+    testWidgets('auth, onboarding, country, and language keys resolve across sampled non-English locales', (tester) async {
+      final enL10n = await _loadTestL10n(tester, const Locale('en'));
+      const testedLocales = <String>['de', 'es', 'fr', 'ja', 'zh'];
+      const keys = <String>[
+        'onboarding_continue_to_login',
+        'register_step0_heading',
+        'auth_qr_help_title',
+        'country_name_de',
+        'lang_name_es',
+      ];
+
+      for (final code in testedLocales) {
+        final localized = await _loadTestL10n(tester, Locale(code));
+        for (final key in keys) {
+          final value = localized.trOr(key, '');
+          expect(value, isNotEmpty, reason: 'Empty $key in $code');
+          expect(
+            value,
+            isNot(equals(enL10n.trOr(key, ''))),
+            reason: 'Untranslated $key in $code',
+          );
+        }
+      }
     });
   });
 

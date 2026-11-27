@@ -1034,6 +1034,7 @@ class _LoginScreenState extends State<LoginScreen> {
           actions: [
             SettingsHeaderAction(
               tooltip: l10n.trOr('onboarding_select_language', 'Language'),
+              wrapInSurface: false,
               child: TheavLanguageMorphButton(
                 compactCircle: true,
                 recommendedCode: _providersConfig?.recommendedLanguage,
@@ -1403,16 +1404,12 @@ class _LoginScreenState extends State<LoginScreen> {
           margin: EdgeInsets.zero,
           header: l10n.translate('qr_login_title'),
           headerTrailing: TheavMorphMenuButton<void>(
-            menuWidth: 286,
-            menuHeight: 196,
+            height: 30.0,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            renderSurface: true,
+            menuWidth: 292,
+            menuHeight: 214,
             cornerRadius: 20,
-            collapsedBuilder: (_) => Center(
-              child: iconoir.HelpCircle(
-                width: 17,
-                height: 17,
-                color: palette.primary,
-              ),
-            ),
             menuBuilder: (_, __) => Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
               child: Column(
@@ -1444,16 +1441,24 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
               ),
             ),
-            child: SizedBox(
-              width: 28,
-              height: 28,
-              child: Center(
-                child: iconoir.HelpCircle(
-                  width: 17,
-                  height: 17,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                iconoir.HelpCircle(
+                  width: 15,
+                  height: 15,
                   color: palette.primary,
                 ),
-              ),
+                const SizedBox(width: 5),
+                Text(
+                  l10n.trOr('auth_qr_how_button', 'How it works'),
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: palette.onSurface,
+                  ),
+                ),
+              ],
             ),
           ),
           footer: l10n.trOr(

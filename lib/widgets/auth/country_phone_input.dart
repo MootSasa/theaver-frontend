@@ -163,7 +163,6 @@ class CountryPhoneInput extends StatefulWidget {
 }
 
 class _CountryPhoneInputState extends State<CountryPhoneInput> {
-  final GlobalKey _countryPillKey = GlobalKey();
   bool _internalUpdate = false;
 
   CountryDialEntry get _selectedCountry => countryByIso(widget.countryIso);
@@ -247,183 +246,9 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
     _emitE164(raw, _selectedCountry);
   }
 
-  Future<void> _openCountryPicker() async {
-    if (!widget.enabled) return;
-    HapticUtils.tap();
-    final l10n = context.l10n;
-    final lang = l10n.locale.languageCode;
-    final searchCtrl = TextEditingController();
-    final anchorCtx = _countryPillKey.currentContext ?? context;
-
-    final selected = await openTheavMorphPopover<CountryDialEntry>(
-      anchorContext: anchorCtx,
-      menuWidth: 276.0,
-      menuHeight: 304.0,
-      cornerRadius: 22.0,
-      collapsedBuilder: (_) {
-        final palette = context.theav;
-        return Center(
-          child: Text(
-            '${_selectedCountry.iso} +${_selectedCountry.dialCode}',
-            style: TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w700,
-              color: palette.primary,
-            ),
-          ),
-        );
-      },
-      menuBuilder: (menuCtx, close) {
-        return StatefulBuilder(
-          builder: (ctx, setMenuState) {
-            final palette = ctx.theav;
-            final style = TheavSurfaceStyle.of(ctx);
-            final query = searchCtrl.text.trim().toLowerCase();
-            final filtered = query.isEmpty
-                ? kTheavCountryDialCatalog
-                : kTheavCountryDialCatalog.where((c) {
-                    return c.iso.toLowerCase().contains(query) ||
-                        '+${c.dialCode}'.contains(query) ||
-                        c.dialCode.contains(query) ||
-                        c.nameEn.toLowerCase().contains(query) ||
-                        c.nameRu.toLowerCase().contains(query);
-                  }).toList();
-
-            return Column(
-              mainAxisSize: MainAxisSize.max,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                  child: Container(
-                    height: 36,
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: BoxDecoration(
-                      color: style.trackFill,
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Row(
-                      children: [
-                        iconoir.Search(
-                          width: 16,
-                          height: 16,
-                          color: palette.subtext,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            controller: searchCtrl,
-                            style: TextStyle(
-                              fontSize: 13.5,
-                              color: palette.onSurface,
-                            ),
-                            decoration: InputDecoration.collapsed(
-                              hintText: ctx.l10n.trOr('search', 'Search'),
-                              hintStyle: TextStyle(
-                                fontSize: 13.5,
-                                color: palette.subtext,
-                              ),
-                            ),
-                            onChanged: (_) => setMenuState(() {}),
-                          ),
-                        ),
-                        if (searchCtrl.text.isNotEmpty)
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () {
-                              searchCtrl.clear();
-                              setMenuState(() {});
-                            },
-                            child: iconoir.XmarkCircle(
-                              width: 16,
-                              height: 16,
-                              color: palette.subtext,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                Divider(height: 0.5, thickness: 0.5, color: palette.divider),
-                Expanded(
-                  child: ListView.separated(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    itemCount: filtered.length,
-                    separatorBuilder: (_, __) => Divider(
-                      height: 0.5,
-                      thickness: 0.5,
-                      indent: 52,
-                      endIndent: 12,
-                      color: palette.divider,
-                    ),
-                    itemBuilder: (_, idx) {
-                      final item = filtered[idx];
-                      final bool isSelected = item.iso == widget.countryIso;
-                      return GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          HapticUtils.selection();
-                          close(item);
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            children: [
-                              _IsoPillBadge(iso: item.iso),
-                              const SizedBox(width: 9),
-                              Expanded(
-                                child: Text(
-                                  item.localizedName(lang),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: isSelected
-                                        ? FontWeight.w700
-                                        : FontWeight.w500,
-                                    color: palette.onSurface,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                '+${item.dialCode}',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: palette.subtext,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              TheavCheckCircle(selected: isSelected, size: 18),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    searchCtrl.dispose();
-    if (selected != null && mounted) {
-      widget.onCountryChanged(selected);
-      _emitE164(widget.controller.text, selected);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final palette = context.theav;
-    final style = TheavSurfaceStyle.of(context);
     final entry = _selectedCountry;
 
     return Padding(
@@ -445,40 +270,47 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
           ],
           Row(
             children: [
-              GestureDetector(
-                key: _countryPillKey,
-                onTap: _openCountryPicker,
-                behavior: HitTestBehavior.opaque,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 7,
-                  ),
-                  decoration: BoxDecoration(
-                    color: palette.primary.withValues(
-                      alpha: style.isDark ? 0.16 : 0.10,
+              TheavMorphMenuButton<CountryDialEntry>(
+                key: const ValueKey<String>('phone_country_morph_btn'),
+                enabled: widget.enabled,
+                height: 36.0,
+                padding: const EdgeInsets.symmetric(horizontal: 11),
+                renderSurface: true,
+                menuWidth: 284.0,
+                menuHeight: 308.0,
+                cornerRadius: 22.0,
+                menuBuilder: (menuCtx, close) => _CountryMorphMenuBody(
+                  selectedIso: widget.countryIso,
+                  onSelected: (selected) {
+                    widget.onCountryChanged(selected);
+                    _emitE164(widget.controller.text, selected);
+                    close(selected);
+                  },
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    iconoir.Globe(
+                      width: 15,
+                      height: 15,
+                      color: palette.primary,
                     ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${entry.iso} +${entry.dialCode}',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: palette.primary,
-                        ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${entry.iso} +${entry.dialCode}',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: palette.onSurface,
                       ),
-                      const SizedBox(width: 4),
-                      iconoir.NavArrowDown(
-                        width: 14,
-                        height: 14,
-                        color: palette.primary,
-                      ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(width: 4),
+                    iconoir.NavArrowDown(
+                      width: 14,
+                      height: 14,
+                      color: palette.subtext,
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(width: 12),
@@ -547,6 +379,173 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CountryMorphMenuBody extends StatefulWidget {
+  final String selectedIso;
+  final ValueChanged<CountryDialEntry> onSelected;
+
+  const _CountryMorphMenuBody({
+    required this.selectedIso,
+    required this.onSelected,
+  });
+
+  @override
+  State<_CountryMorphMenuBody> createState() => _CountryMorphMenuBodyState();
+}
+
+class _CountryMorphMenuBodyState extends State<_CountryMorphMenuBody> {
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final palette = context.theav;
+    final style = TheavSurfaceStyle.of(context);
+    final lang = l10n.locale.languageCode;
+    final query = _searchCtrl.text.trim().toLowerCase();
+
+    String localizedNameOf(CountryDialEntry c) =>
+        l10n.trOr('country_name_${c.iso.toLowerCase()}', c.localizedName(lang));
+
+    final filtered = query.isEmpty
+        ? kTheavCountryDialCatalog
+        : kTheavCountryDialCatalog.where((c) {
+            final localName = localizedNameOf(c).toLowerCase();
+            return c.iso.toLowerCase().contains(query) ||
+                '+${c.dialCode}'.contains(query) ||
+                c.dialCode.contains(query) ||
+                c.nameEn.toLowerCase().contains(query) ||
+                c.nameRu.toLowerCase().contains(query) ||
+                localName.contains(query);
+          }).toList();
+
+    return Column(
+      mainAxisSize: MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: style.trackFill,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Row(
+              children: [
+                iconoir.Search(
+                  width: 16,
+                  height: 16,
+                  color: palette.subtext,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _searchCtrl,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: palette.onSurface,
+                    ),
+                    decoration: InputDecoration.collapsed(
+                      hintText: l10n.trOr('search', 'Search'),
+                      hintStyle: TextStyle(
+                        fontSize: 13.5,
+                        color: palette.subtext,
+                      ),
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                ),
+                if (_searchCtrl.text.isNotEmpty)
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      _searchCtrl.clear();
+                      setState(() {});
+                    },
+                    child: iconoir.XmarkCircle(
+                      width: 16,
+                      height: 16,
+                      color: palette.subtext,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        Divider(height: 0.5, thickness: 0.5, color: palette.divider),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: filtered.length,
+            separatorBuilder: (_, __) => Divider(
+              height: 0.5,
+              thickness: 0.5,
+              indent: 52,
+              endIndent: 12,
+              color: palette.divider,
+            ),
+            itemBuilder: (_, idx) {
+              final item = filtered[idx];
+              final bool isSelected = item.iso == widget.selectedIso;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticUtils.selection();
+                  widget.onSelected(item);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      _IsoPillBadge(iso: item.iso),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          localizedNameOf(item),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: isSelected
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: palette.onSurface,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '+${item.dialCode}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: palette.subtext,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      TheavCheckCircle(selected: isSelected, size: 18),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

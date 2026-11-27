@@ -36,6 +36,11 @@ class SettingsHeaderAction {
   /// Optional override for icon foreground color.
   final Color? foregroundColor;
 
+  /// Whether a custom [child] without [onTap] is automatically wrapped inside a
+  /// circular [SettingsFloatingSurface]. Pass `false` when [child] already
+  /// renders its own floating surface (such as [TheavMorphMenuButton]).
+  final bool wrapInSurface;
+
   /// Creates an action item for [SettingsFloatingHeader].
   const SettingsHeaderAction({
     this.icon,
@@ -44,6 +49,7 @@ class SettingsHeaderAction {
     this.tooltip,
     this.enabled = true,
     this.foregroundColor,
+    this.wrapInSurface = true,
   }) : assert(icon != null || child != null);
 }
 
@@ -320,6 +326,13 @@ class SettingsFloatingHeader extends StatelessWidget {
     if (actions.length == 1) {
       final action = actions.first;
       if (action.child != null && action.onTap == null) {
+        if (!action.wrapInSurface) {
+          return SizedBox(
+            width: buttonSize,
+            height: buttonSize,
+            child: Center(child: action.child),
+          );
+        }
         return SizedBox(
           width: buttonSize,
           height: buttonSize,

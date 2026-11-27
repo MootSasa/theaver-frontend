@@ -80,8 +80,8 @@ Future<T?> openTheavMorphPopover<T>({
   return completer.future;
 }
 
-/// Interactive wrapper that measures its child's [Rect] and morphs it directly
-/// into a compact floating popover menu when tapped.
+/// Interactive wrapper that renders a Layer 2 floating pill/circle button and
+/// morphs it directly into a compact floating popover menu when tapped.
 class TheavMorphMenuButton<T> extends StatefulWidget {
   final Widget child;
   final double menuWidth;
@@ -90,6 +90,10 @@ class TheavMorphMenuButton<T> extends StatefulWidget {
   final Widget Function(BuildContext context)? collapsedBuilder;
   final ValueChanged<T?>? onResult;
   final double cornerRadius;
+  final double height;
+  final double? width;
+  final EdgeInsetsGeometry padding;
+  final bool renderSurface;
   final bool enabled;
 
   const TheavMorphMenuButton({
@@ -101,6 +105,10 @@ class TheavMorphMenuButton<T> extends StatefulWidget {
     this.collapsedBuilder,
     this.onResult,
     this.cornerRadius = 22.0,
+    this.height = 40.0,
+    this.width,
+    this.padding = const EdgeInsets.symmetric(horizontal: 14),
+    this.renderSurface = true,
     this.enabled = true,
   });
 
@@ -111,11 +119,25 @@ class TheavMorphMenuButton<T> extends StatefulWidget {
 class _TheavMorphMenuButtonState<T> extends State<TheavMorphMenuButton<T>> {
   final GlobalKey _anchorKey = GlobalKey();
   bool _opening = false;
+  bool _isOpen = false;
+
+  Widget _buildInner(BuildContext ctx) {
+    return Padding(
+      padding: widget.padding,
+      child: Center(
+        widthFactor: widget.width == null ? 1.0 : null,
+        child: widget.child,
+      ),
+    );
+  }
 
   Future<void> _handleTap() async {
     if (!widget.enabled || _opening) return;
     _opening = true;
     HapticUtils.tap();
+    if (mounted) {
+      setState(() => _isOpen = true);
+    }
     try {
       final anchorCtx = _anchorKey.currentContext ?? context;
       final res = await openTheavMorphPopover<T>(
@@ -123,7 +145,7 @@ class _TheavMorphMenuButtonState<T> extends State<TheavMorphMenuButton<T>> {
         menuWidth: widget.menuWidth,
         menuHeight: widget.menuHeight,
         cornerRadius: widget.cornerRadius,
-        collapsedBuilder: widget.collapsedBuilder,
+        collapsedBuilder: widget.collapsedBuilder ?? _buildInner,
         menuBuilder: widget.menuBuilder,
       );
       if (mounted) {
@@ -131,16 +153,43 @@ class _TheavMorphMenuButtonState<T> extends State<TheavMorphMenuButton<T>> {
       }
     } finally {
       _opening = false;
+      if (mounted) {
+        setState(() => _isOpen = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    final double effectiveRadius = widget.height / 2;
+    final Widget inner = _buildInner(context);
+    final Widget buttonVisual = widget.renderSurface
+        ? SizedBox(
+            width: widget.width,
+            height: widget.height,
+            child: TheavFloatingSurface(
+              borderRadius: effectiveRadius,
+              enableFlex: false,
+              child: inner,
+            ),
+          )
+        : SizedBox(
+            width: widget.width,
+            height: widget.height,
+            child: inner,
+          );
+
+    return Visibility(
       key: _anchorKey,
-      behavior: HitTestBehavior.opaque,
-      onTap: widget.enabled ? _handleTap : null,
-      child: widget.child,
+      visible: !_isOpen,
+      maintainSize: true,
+      maintainAnimation: true,
+      maintainState: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.enabled ? _handleTap : null,
+        child: buttonVisual,
+      ),
     );
   }
 }
@@ -203,7 +252,7 @@ class _TheavMorphPopoverOverlayState<T>
     }
     setState(() => _expanded = false);
     _closeTimer?.cancel();
-    _closeTimer = Timer(const Duration(milliseconds: 185), () {
+    _closeTimer = Timer(const Duration(milliseconds: 195), () {
       widget.onDisposed(result);
     });
   }
@@ -265,6 +314,8 @@ class _TheavMorphPopoverOverlayState<T>
     final Alignment morphAlignment = Alignment(alignX, openUpward ? 1.0 : -1.0);
     final surfaceStyle = TheavSurfaceStyle.of(context);
     final palette = surfaceStyle.palette;
+    final double collapsedRadius =
+        math.min(widget.anchorRect.width, widget.anchorRect.height) / 2;
 
     final Widget collapsedChild = SizedBox(
       width: math.min(widget.anchorRect.width, boxW),
@@ -285,14 +336,21 @@ class _TheavMorphPopoverOverlayState<T>
 
     Widget morphBody;
     if (surfaceStyle.isGlass && surfaceStyle.glassProvider != null) {
+      final Color expandedTint = surfaceStyle.isDark
+          ? Color.alphaBlend(
+              const Color(0x8A18181C),
+              palette.surface.withValues(alpha: 0.68),
+            )
+          : Color.alphaBlend(
+              const Color(0xB2FFFFFF),
+              palette.surface.withValues(alpha: 0.82),
+            );
       final glassStyle = surfaceStyle.glassProvider!.createStyle(
         context: context,
-        cornerRadius: widget.cornerRadius,
+        cornerRadius: _expanded ? widget.cornerRadius : collapsedRadius,
         refractionIndex: 1.12,
         refractionWidth: 22.0,
-        color: surfaceStyle.isDark
-            ? palette.surface.withValues(alpha: 0.56)
-            : palette.surface.withValues(alpha: 0.76),
+        color: _expanded ? expandedTint : null,
       );
 
       morphBody = SizedBox(
