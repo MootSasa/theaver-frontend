@@ -2,18 +2,22 @@ import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/models/chat_folder.dart';
 import 'package:theaver/screens/settings/about_theaver_screen.dart';
+import 'package:theaver/screens/settings/settings_screen.dart';
 import 'package:theaver/screens/settings/settings_search_index.dart';
 import 'package:theaver/services/app_lock_service.dart';
 import 'package:theaver/services/chat_service.dart';
 import 'package:theaver/services/chat_swipe_service.dart';
 import 'package:theaver/services/deep_link_service.dart';
+import 'package:theaver/services/notification_settings_provider.dart';
 import 'package:theaver/services/power_saving_provider.dart';
 import 'package:theaver/services/settings_service.dart';
 import 'package:theaver/services/unread_count_provider.dart';
+import 'package:theaver/theme/app_theme.dart';
 import 'package:theaver/theme/theme_provider.dart';
 import 'package:theaver/widgets/settings/settings_group.dart';
 
@@ -459,6 +463,85 @@ void main() {
         isTrue,
       );
     });
+
+    testWidgets(
+      'SettingsScreen search input displays localized settings_search_hint instead of global search_hint',
+      (WidgetTester tester) async {
+        tester.view.physicalSize = const Size(1080, 2400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final l10n = AppLocalizations(const Locale('ru'));
+        await tester.runAsync(() => l10n.load());
+
+        final themeProvider = ThemeProvider();
+        final notifProvider = NotificationSettingsProvider();
+        final powerSaving = PowerSavingProvider();
+        final localeProvider = LocaleProvider();
+        addTearDown(themeProvider.dispose);
+        addTearDown(notifProvider.dispose);
+
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider<ThemeProvider>.value(value: themeProvider),
+              ChangeNotifierProvider<NotificationSettingsProvider>.value(
+                value: notifProvider,
+              ),
+              ChangeNotifierProvider<PowerSavingProvider>.value(
+                value: powerSaving,
+              ),
+              ChangeNotifierProvider<LocaleProvider>.value(
+                value: localeProvider,
+              ),
+            ],
+            child: MaterialApp(
+              theme: AppTheme.dark(),
+              locale: const Locale('ru'),
+              localizationsDelegates: [
+                _PreloadedLocalizationsDelegate(l10n),
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              supportedLocales: const [Locale('ru'), Locale('en')],
+              home: const SettingsScreen(),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final searchField = tester.widget<TextField>(
+          find.byKey(const ValueKey<String>('settings_search_input')),
+        );
+        expect(searchField.decoration?.hintText, 'Поиск в настройках...');
+        expect(
+          searchField.decoration?.hintText,
+          isNot(equals(l10n.translate('search_hint'))),
+        );
+
+        for (final code in LocaleProvider.supportedLanguageCodes) {
+          final loc = AppLocalizations(Locale(code));
+          await tester.runAsync(() => loc.load());
+          final hint = loc.translate('settings_search_hint');
+          expect(hint, isNotEmpty, reason: 'Empty settings_search_hint in $code');
+          expect(
+            hint,
+            isNot(equals('settings_search_hint')),
+            reason: 'Missing key settings_search_hint in $code',
+          );
+          expect(
+            hint,
+            isNot(equals(loc.translate('search_hint'))),
+            reason: 'Settings hint collided with global search_hint in $code',
+          );
+        }
+      },
+    );
   });
 
   group('DeepLinkService.parseUri QR links', () {

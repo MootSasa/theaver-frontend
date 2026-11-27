@@ -238,10 +238,11 @@ class _SettingsScreenState extends State<SettingsScreen>
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
         child: TextField(
+          key: const ValueKey<String>('settings_search_input'),
           controller: _searchController,
           decoration: InputDecoration(
             prefixIcon: const Icon(Icons.search, size: 20),
-            hintText: l10n.translate('search_hint'),
+            hintText: l10n.trOr('settings_search_hint', 'Search settings...'),
             filled: true,
             fillColor: theme.cardColor,
             isDense: true,
