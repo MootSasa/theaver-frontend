@@ -367,7 +367,11 @@ class _FirstStartWizardScreenState extends State<FirstStartWizardScreen> {
         padding: stripPadding,
         onThemeSelected: (t) async {
           HapticUtils.selection();
-          await themeProvider.setActiveTheme(t);
+          await themeProvider.setActiveTheme(
+            t,
+            syncCounterpart: true,
+            preserveSystemMode: true,
+          );
         },
       ),
     ];
@@ -383,12 +387,7 @@ class _FirstStartWizardScreenState extends State<FirstStartWizardScreen> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final activeTheme =
         isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
-    final matchingThemes = TheavThemeService.builtInThemes
-        .where((t) => t.isDark == isDark)
-        .toList();
-    final carouselThemes = matchingThemes.isNotEmpty
-        ? matchingThemes
-        : TheavThemeService.builtInThemes;
+    final carouselThemes = TheavThemeService.builtInThemesForBrightness(isDark);
 
     final glassMode = glassProvider?.mode ?? GlassMode.disabled;
     final glassSupported = glassProvider?.isSupported ?? false;

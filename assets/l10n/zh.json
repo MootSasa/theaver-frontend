@@ -627,6 +627,7 @@
   "chat_format_strikethrough": "删除线",
   "chat_format_underline": "下划线",
   "chat_forward_to": "转发至...",
+  "chat_forwarded_from": "转发自",
   "chat_gallery": "相册",
   "chat_location": "位置",
   "chat_media_speed": "倍速",

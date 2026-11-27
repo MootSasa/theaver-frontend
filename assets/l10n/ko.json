@@ -627,6 +627,7 @@
   "chat_format_strikethrough": "취소선",
   "chat_format_underline": "밑줄",
   "chat_forward_to": "전달할 대상...",
+  "chat_forwarded_from": "전달된 메시지",
   "chat_gallery": "갤러리",
   "chat_location": "위치",
   "chat_media_speed": "배속",

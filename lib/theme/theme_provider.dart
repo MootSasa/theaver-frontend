@@ -218,9 +218,24 @@ class ThemeProvider extends ChangeNotifier {
     await prefs.setDouble(_userKey(_currentUserId, 'message_font_size'), clamped);
   }
 
-  Future<void> setActiveTheme(TheavTheme theme) async {
+  Future<void> setActiveTheme(
+    TheavTheme theme, {
+    bool syncCounterpart = false,
+    bool preserveSystemMode = false,
+  }) async {
     await _service.setActiveTheme(theme);
-    if (theme.isDark && _themeMode != ThemeMode.dark) {
+    if (syncCounterpart && theme.isBuiltIn) {
+      final counterpart = _service.resolveCounterpartWithOverrides(theme.id);
+      final oppositeActive = theme.isDark ? activeLightTheme : activeDarkTheme;
+      if (counterpart != null && oppositeActive.isBuiltIn) {
+        await _service.setActiveTheme(counterpart);
+      }
+    }
+    final bool keepAutoMode =
+        preserveSystemMode && (_themeMode == ThemeMode.system || _scheduleEnabled);
+    if (keepAutoMode) {
+      notifyListeners();
+    } else if (theme.isDark && _themeMode != ThemeMode.dark) {
       await setThemeMode(ThemeMode.dark);
     } else if (!theme.isDark && _themeMode != ThemeMode.light) {
       await setThemeMode(ThemeMode.light);

@@ -145,8 +145,8 @@ class ChatSettingsScreen extends StatelessWidget {
   }
 
   Future<void> _exportActiveTheme(BuildContext context) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final themeProvider = context.read<ThemeProvider>();
-    final isDark = themeProvider.themeMode == ThemeMode.dark;
     final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
     await _exportTheme(context, activeTheme);
   }
@@ -225,10 +225,10 @@ class ChatSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.themeMode == ThemeMode.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
     final activePrimary = activeTheme.palette.primary;
-    final allThemes = TheavThemeService().getAllThemes();
+    final allThemes = TheavThemeService().getAllThemesForBrightness(isDark);
 
     final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
         final headerActions = [
@@ -290,7 +290,11 @@ class ChatSettingsScreen extends StatelessWidget {
               activeTheme: activeTheme,
               activePrimary: activePrimary,
               onThemeSelected: (t) {
-                themeProvider.setActiveTheme(t);
+                themeProvider.setActiveTheme(
+                  t,
+                  syncCounterpart: t.isBuiltIn,
+                  preserveSystemMode: t.isDark == isDark,
+                );
                 if (t.wallpaper.type != 'image') {
                   context.read<WallpaperProvider>().removeWallpaper(
                     syncToServer: false,

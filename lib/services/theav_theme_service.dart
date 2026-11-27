@@ -319,7 +319,305 @@ class TheavThemeService extends ChangeNotifier {
         motionEnabled: true,
       ),
     ),
+
+    // 7. Theaver Classic (Dark)
+    const TheavTheme(
+      id: 'theaver_classic_dark',
+      name: 'Theaver Classic',
+      author: 'Theaver Team',
+      isDark: true,
+      isBuiltIn: true,
+      bubbleRadius: 16.0,
+      palette: TheavPalette(
+        primary: Color(0xFF2EA6FF),
+        onPrimary: Colors.white,
+        background: Color(0xFF0E1621),
+        surface: Color(0xFF17212B),
+        onSurface: Color(0xFFE8EEF5),
+        appBarBackground: Color(0xFF17212B),
+        appBarForeground: Color(0xFFE8EEF5),
+        chatBubbleOutgoing: Color(0xFF2B5278),
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Color(0xB3D4EBF8),
+        chatBubbleIncoming: Color(0xFF182533),
+        chatBubbleIncomingText: Color(0xFFE8EEF5),
+        chatBubbleIncomingSubtext: Color(0xFF7F91A4),
+        chatDateBadge: Color(0x660A121B),
+        chatDateBadgeText: Colors.white,
+      ),
+      wallpaper: TheavWallpaper(
+        type: 'pattern',
+        patternName: 'science',
+        backgroundColor: Color(0xFF0E1621),
+        patternColor: Color(0xFF4FA8E8),
+        patternOpacity: 0.13,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFF0E1621),
+          topRight: Color(0xFF132030),
+          bottomLeft: Color(0xFF0B121B),
+          bottomRight: Color(0xFF16293D),
+        ),
+        motionEnabled: true,
+      ),
+    ),
+
+    // 8. Light Slate (Light)
+    const TheavTheme(
+      id: 'light_slate',
+      name: 'Light Slate',
+      author: 'Theaver Team',
+      isDark: false,
+      isBuiltIn: true,
+      bubbleRadius: 16.0,
+      palette: TheavPalette(
+        primary: Color(0xFF3B6E8C),
+        onPrimary: Colors.white,
+        background: Color(0xFFF6F7F9),
+        surface: Color(0xFFECEFF3),
+        onSurface: Color(0xFF1E242B),
+        appBarBackground: Color(0xFFECEFF3),
+        appBarForeground: Color(0xFF1E242B),
+        chatBubbleOutgoing: Color(0xFF3B6E8C),
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Color(0xB3FFFFFF),
+        chatBubbleIncoming: Colors.white,
+        chatBubbleIncomingText: Color(0xFF1E242B),
+        chatBubbleIncomingSubtext: Color(0xFF687382),
+        chatDateBadge: Color(0x38263238),
+        chatDateBadgeText: Colors.white,
+      ),
+      wallpaper: TheavWallpaper(
+        type: 'pattern',
+        patternName: 'space',
+        backgroundColor: Color(0xFFE9EEF3),
+        patternColor: Color(0xFF4A6572),
+        patternOpacity: 0.13,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFFE6ECF2),
+          topRight: Color(0xFFF0F3F7),
+          bottomLeft: Color(0xFFDCE4EC),
+          bottomRight: Color(0xFFE8EDF3),
+        ),
+        motionEnabled: true,
+      ),
+    ),
+
+    // 9. Arctic Frost (Dark)
+    const TheavTheme(
+      id: 'arctic_frost_dark',
+      name: 'Arctic Frost',
+      author: 'Theaver Team',
+      isDark: true,
+      isBuiltIn: true,
+      bubbleRadius: 18.0,
+      palette: TheavPalette(
+        primary: Color(0xFF039BE5),
+        onPrimary: Colors.white,
+        background: Color(0xFF0B1922),
+        surface: Color(0xFF122634),
+        onSurface: Color(0xFFE1F5FE),
+        appBarBackground: Color(0xFF122634),
+        appBarForeground: Color(0xFFE1F5FE),
+        chatBubbleOutgoing: Color(0xFF0277BD),
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Color(0xB3E1F5FE),
+        chatBubbleIncoming: Color(0xFF152D3D),
+        chatBubbleIncomingText: Color(0xFFE1F5FE),
+        chatBubbleIncomingSubtext: Color(0xFF81A9BE),
+        chatDateBadge: Color(0x6607131B),
+        chatDateBadgeText: Color(0xFFE1F5FE),
+      ),
+      wallpaper: TheavWallpaper(
+        type: 'pattern',
+        patternName: 'flowers',
+        backgroundColor: Color(0xFF0B1922),
+        patternColor: Color(0xFF4FC3F7),
+        patternOpacity: 0.14,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFF0B1922),
+          topRight: Color(0xFF0E2428),
+          bottomLeft: Color(0xFF0D2538),
+          bottomRight: Color(0xFF121E30),
+        ),
+        motionEnabled: true,
+      ),
+    ),
+
+    // 10. Emerald Nature (Dark)
+    const TheavTheme(
+      id: 'emerald_nature_dark',
+      name: 'Emerald Nature',
+      author: 'Theaver Team',
+      isDark: true,
+      isBuiltIn: true,
+      bubbleRadius: 16.0,
+      palette: TheavPalette(
+        primary: Color(0xFF2E9E5B),
+        onPrimary: Colors.white,
+        background: Color(0xFF0C1912),
+        surface: Color(0xFF14271D),
+        onSurface: Color(0xFFE6F4EA),
+        appBarBackground: Color(0xFF14271D),
+        appBarForeground: Color(0xFFE6F4EA),
+        chatBubbleOutgoing: Color(0xFF1F6E3F),
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Color(0xB3DCEDC8),
+        chatBubbleIncoming: Color(0xFF183024),
+        chatBubbleIncomingText: Color(0xFFE6F4EA),
+        chatBubbleIncomingSubtext: Color(0xFF86B396),
+        chatDateBadge: Color(0x6609140E),
+        chatDateBadgeText: Color(0xFFE6F4EA),
+      ),
+      wallpaper: TheavWallpaper(
+        type: 'pattern',
+        patternName: 'flowers',
+        backgroundColor: Color(0xFF0C1912),
+        patternColor: Color(0xFF66BB6A),
+        patternOpacity: 0.14,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFF0C1912),
+          topRight: Color(0xFF122316),
+          bottomLeft: Color(0xFF0F261A),
+          bottomRight: Color(0xFF162819),
+        ),
+        motionEnabled: true,
+      ),
+    ),
+
+    // 11. Daylight Neon (Light)
+    const TheavTheme(
+      id: 'daylight_neon',
+      name: 'Daylight Neon',
+      author: 'Theaver Team',
+      isDark: false,
+      isBuiltIn: true,
+      bubbleRadius: 20.0,
+      palette: TheavPalette(
+        primary: Color(0xFF651FFF),
+        onPrimary: Colors.white,
+        background: Color(0xFFF7F5FF),
+        surface: Color(0xFFEDE8FF),
+        onSurface: Color(0xFF1F1638),
+        appBarBackground: Color(0xFFEDE8FF),
+        appBarForeground: Color(0xFF1F1638),
+        chatBubbleOutgoing: Color(0xFF651FFF),
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Color(0xB3E8E0FF),
+        chatBubbleIncoming: Colors.white,
+        chatBubbleIncomingText: Color(0xFF1F1638),
+        chatBubbleIncomingSubtext: Color(0xFF6B5B95),
+        chatDateBadge: Color(0x33651FFF),
+        chatDateBadgeText: Colors.white,
+      ),
+      wallpaper: TheavWallpaper(
+        type: 'pattern',
+        patternName: 'science',
+        backgroundColor: Color(0xFFF2EEFF),
+        patternColor: Color(0xFF00ACC1),
+        patternOpacity: 0.15,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFFEDE7FF),
+          topRight: Color(0xFFE0F7FA),
+          bottomLeft: Color(0xFFFCE4EC),
+          bottomRight: Color(0xFFE4F8F5),
+        ),
+        motionEnabled: true,
+      ),
+    ),
+
+    // 12. Warm Romance (Dark)
+    const TheavTheme(
+      id: 'warm_romance_dark',
+      name: 'Warm Romance',
+      author: 'Theaver Team',
+      isDark: true,
+      isBuiltIn: true,
+      bubbleRadius: 16.0,
+      palette: TheavPalette(
+        primary: Color(0xFFE91E63),
+        onPrimary: Colors.white,
+        background: Color(0xFF1D0E16),
+        surface: Color(0xFF2B1521),
+        onSurface: Color(0xFFFCE4EC),
+        appBarBackground: Color(0xFF2B1521),
+        appBarForeground: Color(0xFFFCE4EC),
+        chatBubbleOutgoing: Color(0xFFC2185B),
+        chatBubbleOutgoingText: Colors.white,
+        chatBubbleOutgoingSubtext: Color(0xB3F8BBD0),
+        chatBubbleIncoming: Color(0xFF331928),
+        chatBubbleIncomingText: Color(0xFFFCE4EC),
+        chatBubbleIncomingSubtext: Color(0xFFC48B9F),
+        chatDateBadge: Color(0x66160A10),
+        chatDateBadgeText: Color(0xFFFCE4EC),
+      ),
+      wallpaper: TheavWallpaper(
+        type: 'pattern',
+        patternName: 'love',
+        backgroundColor: Color(0xFF1D0E16),
+        patternColor: Color(0xFFF06292),
+        patternOpacity: 0.14,
+        fourCornerGradient: FourCornerGradient(
+          topLeft: Color(0xFF24101B),
+          topRight: Color(0xFF261714),
+          bottomLeft: Color(0xFF2E1220),
+          bottomRight: Color(0xFF1F1017),
+        ),
+        motionEnabled: true,
+      ),
+    ),
   ];
+
+  /// Symmetric Light <-> Dark mapping across all built-in theme families.
+  static const Map<String, String> builtInCounterpartIds = {
+    'theaver_classic': 'theaver_classic_dark',
+    'theaver_classic_dark': 'theaver_classic',
+    'light_slate': 'dark_slate',
+    'dark_slate': 'light_slate',
+    'arctic_frost': 'arctic_frost_dark',
+    'arctic_frost_dark': 'arctic_frost',
+    'emerald_nature': 'emerald_nature_dark',
+    'emerald_nature_dark': 'emerald_nature',
+    'daylight_neon': 'midnight_neon',
+    'midnight_neon': 'daylight_neon',
+    'warm_romance': 'warm_romance_dark',
+    'warm_romance_dark': 'warm_romance',
+  };
+
+  static const List<String> _lightFamilyOrder = [
+    'theaver_classic',
+    'light_slate',
+    'arctic_frost',
+    'emerald_nature',
+    'daylight_neon',
+    'warm_romance',
+  ];
+
+  static const List<String> _darkFamilyOrder = [
+    'theaver_classic_dark',
+    'dark_slate',
+    'arctic_frost_dark',
+    'emerald_nature_dark',
+    'midnight_neon',
+    'warm_romance_dark',
+  ];
+
+  /// Returns the opposite-brightness counterpart for built-in [themeId], if any.
+  static TheavTheme? getBuiltInCounterpart(String themeId) {
+    final counterpartId = builtInCounterpartIds[themeId];
+    if (counterpartId == null) return null;
+    for (final t in builtInThemes) {
+      if (t.id == counterpartId) return t;
+    }
+    return null;
+  }
+
+  /// Returns the built-in themes matching [isDark] in canonical family order.
+  static List<TheavTheme> builtInThemesForBrightness(bool isDark) {
+    final order = isDark ? _darkFamilyOrder : _lightFamilyOrder;
+    return [
+      for (final id in order) builtInThemes.firstWhere((t) => t.id == id),
+    ];
+  }
 
   /// Initialize service, register account listener, load preferences, and sync with cloud
   Future<void> init() async {
@@ -433,6 +731,25 @@ class TheavThemeService extends ChangeNotifier {
     final builtInsWithOverrides = builtInThemes.map((b) => _themeOverrides[b.id] ?? b).toList();
     final customList = _customThemes.where((c) => !builtInThemes.any((b) => b.id == c.id)).toList();
     return [...builtInsWithOverrides, ...customList];
+  }
+
+  /// Returns built-in themes matching [isDark] (with user overrides applied)
+  /// followed by custom themes.
+  List<TheavTheme> getAllThemesForBrightness(bool isDark) {
+    final builtInsWithOverrides = builtInThemesForBrightness(isDark)
+        .map((b) => _themeOverrides[b.id] ?? b)
+        .toList();
+    final customList =
+        _customThemes.where((c) => !builtInThemes.any((b) => b.id == c.id)).toList();
+    return [...builtInsWithOverrides, ...customList];
+  }
+
+  /// Resolves the opposite-brightness counterpart for built-in [themeId],
+  /// including any local/cloud overrides.
+  TheavTheme? resolveCounterpartWithOverrides(String themeId) {
+    final counterpart = getBuiltInCounterpart(themeId);
+    if (counterpart == null) return null;
+    return _themeOverrides[counterpart.id] ?? counterpart;
   }
 
   /// Get active theme for light mode

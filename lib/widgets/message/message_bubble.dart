@@ -1435,26 +1435,33 @@ class MessageBubble extends StatelessWidget {
       } else {
         replyWidget = baseReply;
       }
-    } else if ((message.forwardFromName != null &&
-            message.forwardFromName!.isNotEmpty) ||
-        (chatType == 'saved' && message.senderName.isNotEmpty)) {
+    } else {
       final bool hasForwardName =
           message.forwardFromName != null &&
-          message.forwardFromName!.isNotEmpty;
-      replyWidget = MessageReplyInfo.forwarded(
-        authorName: hasForwardName
-            ? message.forwardFromName!
-            : message.senderName,
-        authorAvatarUrl: message.forwardFromAvatarUrl,
-        authorUserId: hasForwardName
-            ? message.forwardedFromUserId
-            : (chatType == 'saved' &&
-                    !message.isChannelOrPersonaAuthored &&
-                    !message.isMirroredChannelPost
-                ? message.senderId
-                : null),
-        isMe: isMe,
-      );
+          message.forwardFromName!.trim().isNotEmpty;
+      final bool isSavedForeignAuthor = chatType == 'saved' &&
+          message.senderName.trim().isNotEmpty &&
+          currentUserId.isNotEmpty &&
+          message.senderId.isNotEmpty &&
+          message.senderId != '0' &&
+          message.senderId != currentUserId;
+      if (hasForwardName || isSavedForeignAuthor) {
+        replyWidget = MessageReplyInfo.forwarded(
+          authorName: hasForwardName
+              ? message.forwardFromName!
+              : message.senderName,
+          authorAvatarUrl: hasForwardName
+              ? message.forwardFromAvatarUrl
+              : message.senderAvatarUrl,
+          authorUserId: hasForwardName
+              ? message.forwardedFromUserId
+              : (!message.isChannelOrPersonaAuthored &&
+                      !message.isMirroredChannelPost
+                  ? message.senderId
+                  : null),
+          isMe: isMe,
+        );
+      }
     }
 
     if (message.isViaBot &&
@@ -1946,9 +1953,7 @@ class MessageBubble extends StatelessWidget {
                   margin: const EdgeInsets.only(bottom: 6.0),
                   padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
                   decoration: BoxDecoration(
-                    color: isMe
-                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.9)
-                        : Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
+                    color: bubbleColor.withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(14.0),
                   ),
                   child: replyWidget,

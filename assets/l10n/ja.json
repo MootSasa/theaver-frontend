@@ -627,6 +627,7 @@
   "chat_format_strikethrough": "取り消し線",
   "chat_format_underline": "下線",
   "chat_forward_to": "転送先...",
+  "chat_forwarded_from": "転送元",
   "chat_gallery": "ギャラリー",
   "chat_location": "位置情報",
   "chat_media_speed": "速度",

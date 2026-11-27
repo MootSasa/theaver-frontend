@@ -71,6 +71,9 @@ class MessageReplyInfo extends StatelessWidget {
   /// Whether the replied-to sender is a bot
   final bool replyIsBot;
 
+  /// Whether this header represents a forwarded message rather than a reply
+  final bool isForwarded;
+
   const MessageReplyInfo({
     Key? key,
     this.replyInfo,
@@ -89,6 +92,7 @@ class MessageReplyInfo extends StatelessWidget {
     this.replySenderChatId,
     this.replyIsFromAnonymousAdmin = false,
     this.replyIsBot = false,
+    this.isForwarded = false,
   }) : super(key: key);
 
   /// Helper to create a forwarded message header
@@ -107,6 +111,7 @@ class MessageReplyInfo extends StatelessWidget {
       contentOverride: content,
       isMe: isMe,
       onTap: onTap,
+      isForwarded: true,
     );
   }
 
@@ -397,8 +402,13 @@ class MessageReplyInfo extends StatelessWidget {
     // Check if original message was deleted.
     final isDeleted = replyInfo == null ? false : replyInfo!.messageId.isEmpty;
 
-    // Retrieve profile theme for fallback
-    final profileTheme = context.watch<ProfileThemeProvider>();
+    // Retrieve profile theme safely (optional in isolated tests)
+    ProfileThemeProvider? profileTheme;
+    try {
+      profileTheme = context.watch<ProfileThemeProvider>();
+    } on ProviderNotFoundException {
+      profileTheme = null;
+    }
 
     final bool isReplyingToMe = (replyInfo != null &&
             currentUserId != null &&
@@ -413,8 +423,8 @@ class MessageReplyInfo extends StatelessWidget {
     final ReplyStripStyle stripStyle;
 
     if (isReplyingToMe) {
-      preset = profileTheme.currentNameColorPreset;
-      stripStyle = profileTheme.currentStripStyle;
+      preset = profileTheme?.currentNameColorPreset ?? NameColorPresets.blue;
+      stripStyle = profileTheme?.currentStripStyle ?? ReplyStripStyle.solid;
     } else if (replyInfo?.nameColorPresetId != null && replyInfo!.nameColorPresetId!.isNotEmpty) {
       preset = NameColorPresets.getById(replyInfo!.nameColorPresetId!);
       stripStyle = ReplyStripStyle.values.firstWhere(
@@ -426,8 +436,8 @@ class MessageReplyInfo extends StatelessWidget {
       preset = NameColorPresets.getById('name_red');
       stripStyle = ReplyStripStyle.solid;
     } else {
-      preset = profileTheme.currentNameColorPreset;
-      stripStyle = profileTheme.currentStripStyle;
+      preset = profileTheme?.currentNameColorPreset ?? NameColorPresets.blue;
+      stripStyle = profileTheme?.currentStripStyle ?? ReplyStripStyle.solid;
     }
 
     // Accent and vibrant opaque background color derived from preset and theme palette
@@ -479,8 +489,10 @@ class MessageReplyInfo extends StatelessWidget {
         isDark: isDark,
       );
     } else if (replyInfo != null && replyInfo!.isUnsupported) {
-      final unsupportedLabel =
-          context.l10n.translate('message_unsupported_preview');
+      final unsupportedLabel = context.trOr(
+        'message_unsupported_preview',
+        'Сообщение не поддерживается',
+      );
       previewSpan = EmojiUtils.buildEmojiTextSpan(
         unsupportedLabel,
         style: basePreviewStyle,
@@ -519,7 +531,7 @@ class MessageReplyInfo extends StatelessWidget {
           mediaLabel = '🎭 Стикер';
           break;
         case 'poll':
-          final pollLabel = context.l10n.translate('chat_poll');
+          final pollLabel = context.trOr('chat_poll', 'Опрос');
           mediaLabel = hasCaption ? '📊 ' : '📊 $pollLabel';
           break;
         default:
@@ -561,7 +573,7 @@ class MessageReplyInfo extends StatelessWidget {
     final bool hasPreview =
         previewSpan != null && previewSpan.toPlainText().trim().isNotEmpty;
 
-    final youTitle = context.l10n.translate('chat_reply_you');
+    final youTitle = context.trOr('chat_reply_you', 'Вы');
     final String? replySenderId =
         (!isReplyingToMe && replyInfo != null) ? replyInfo!.senderId.trim() : null;
     final String? effectiveReplySenderChatId =
@@ -623,10 +635,138 @@ class MessageReplyInfo extends StatelessWidget {
 
     final String title = resolveTitleText();
 
+    if (isForwarded && replyInfo == null) {
+      final Color authorColor;
+      final Color labelColor;
+      final Color fwdPreviewTextColor;
+      if (isMe) {
+        authorColor = p?.chatBubbleOutgoingText ?? theme.colorScheme.onPrimary;
+        labelColor =
+            p?.chatBubbleOutgoingSubtext ?? authorColor.withValues(alpha: 0.78);
+        fwdPreviewTextColor = authorColor.withValues(alpha: 0.9);
+      } else {
+        final Color incomingBg =
+            p?.chatBubbleIncoming ?? theme.colorScheme.surface;
+        final cachedPeer = (authorUserId != null &&
+                authorUserId!.isNotEmpty &&
+                authorUserId != '0')
+            ? PeerCustomizationCache.instance.getSync(authorUserId!)
+            : null;
+        final Color rawAuthorAccent = (cachedPeer?.nameColorPresetId != null &&
+                cachedPeer!.nameColorPresetId!.isNotEmpty)
+            ? NameColorPresets.getById(cachedPeer.nameColorPresetId!)
+                .primaryColor
+            : (p?.primary ?? theme.colorScheme.primary);
+        authorColor = NameColorPreset.resolveReadableAccentColor(
+          incomingBg,
+          rawAuthorAccent,
+        );
+        labelColor = authorColor.withValues(alpha: 0.82);
+        fwdPreviewTextColor = p?.chatBubbleIncomingSubtext ??
+            theme.colorScheme.onSurface.withValues(alpha: 0.7);
+      }
+
+      Widget buildForwardedAuthorRow(
+        String displayTitle,
+        String? displayAvatarUrl,
+      ) {
+        final avatarProvider =
+            (displayAvatarUrl != null && displayAvatarUrl.isNotEmpty)
+                ? avatarImageProvider(displayAvatarUrl)
+                : null;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (avatarProvider != null) ...[
+              CircleAvatar(
+                radius: 8,
+                backgroundColor: authorColor.withValues(alpha: 0.2),
+                backgroundImage: avatarProvider,
+              ),
+              const SizedBox(width: 5),
+            ],
+            Flexible(
+              child: Text(
+                displayTitle,
+                style: TextStyle(
+                  color: authorColor,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        );
+      }
+
+      final TextSpan? fwdPreviewSpan =
+          (contentOverride != null && contentOverride!.trim().isNotEmpty)
+              ? buildFormattedPreviewSpan(
+                  rawText: contentOverride!,
+                  entities: effectiveEntities,
+                  baseStyle: TextStyle(
+                    color: fwdPreviewTextColor,
+                    fontSize: 12,
+                  ),
+                  accentColor: authorColor,
+                  isDark: isDark,
+                )
+              : null;
+
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: isDeleted ? null : onTap,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                context.trOr('chat_forwarded_from', 'Переслано от'),
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (!isDeleted && title.isNotEmpty) ...[
+                const SizedBox(height: 1.5),
+                shouldListenContacts
+                    ? ValueListenableBuilder<int>(
+                        valueListenable: ContactsService.revisionNotifier,
+                        builder: (_, __, ___) => buildForwardedAuthorRow(
+                          resolveTitleText(),
+                          resolveForwardAvatarUrl(),
+                        ),
+                      )
+                    : buildForwardedAuthorRow(title, authorAvatarUrl),
+              ],
+              if (fwdPreviewSpan != null &&
+                  fwdPreviewSpan.toPlainText().trim().isNotEmpty) ...[
+                const SizedBox(height: 1.5),
+                RichText(
+                  text: fwdPreviewSpan,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
     final ReplyEmojiData? effectiveReplyEmoji;
     if (!isDeleted && replyInfo != null) {
       if (isReplyingToMe) {
-        effectiveReplyEmoji = profileTheme.currentReplyEmoji;
+        effectiveReplyEmoji = profileTheme?.currentReplyEmoji;
       } else {
         final bool hasReplySenderChat = effectiveReplySenderChatId != null &&
             effectiveReplySenderChatId.trim().isNotEmpty &&
