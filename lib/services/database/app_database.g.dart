@@ -173,6 +173,172 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_verified" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _isArchivedMeta =
+      const VerificationMeta('isArchived');
+  @override
+  late final GeneratedColumn<bool> isArchived = GeneratedColumn<bool>(
+      'is_archived', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_archived" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _peerCustomizationJsonMeta =
+      const VerificationMeta('peerCustomizationJson');
+  @override
+  late final GeneratedColumn<String> peerCustomizationJson =
+      GeneratedColumn<String>('peer_customization_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _showAuthorProfilesMeta =
+      const VerificationMeta('showAuthorProfiles');
+  @override
+  late final GeneratedColumn<bool> showAuthorProfiles = GeneratedColumn<bool>(
+      'show_author_profiles', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("show_author_profiles" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _signMessagesMeta =
+      const VerificationMeta('signMessages');
+  @override
+  late final GeneratedColumn<bool> signMessages = GeneratedColumn<bool>(
+      'sign_messages', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("sign_messages" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _linkedChatIdMeta =
+      const VerificationMeta('linkedChatId');
+  @override
+  late final GeneratedColumn<String> linkedChatId = GeneratedColumn<String>(
+      'linked_chat_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _myRoleMeta = const VerificationMeta('myRole');
+  @override
+  late final GeneratedColumn<String> myRole = GeneratedColumn<String>(
+      'my_role', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastMessageSenderIdMeta =
+      const VerificationMeta('lastMessageSenderId');
+  @override
+  late final GeneratedColumn<String> lastMessageSenderId =
+      GeneratedColumn<String>('last_message_sender_id', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _lastMessageSenderNameMeta =
+      const VerificationMeta('lastMessageSenderName');
+  @override
+  late final GeneratedColumn<String> lastMessageSenderName =
+      GeneratedColumn<String>('last_message_sender_name', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _hasActiveCallMeta =
+      const VerificationMeta('hasActiveCall');
+  @override
+  late final GeneratedColumn<bool> hasActiveCall = GeneratedColumn<bool>(
+      'has_active_call', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("has_active_call" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _chatPermissionsJsonMeta =
+      const VerificationMeta('chatPermissionsJson');
+  @override
+  late final GeneratedColumn<String> chatPermissionsJson =
+      GeneratedColumn<String>('chat_permissions_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _reactionSettingsJsonMeta =
+      const VerificationMeta('reactionSettingsJson');
+  @override
+  late final GeneratedColumn<String> reactionSettingsJson =
+      GeneratedColumn<String>('reaction_settings_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _hasProtectedContentMeta =
+      const VerificationMeta('hasProtectedContent');
+  @override
+  late final GeneratedColumn<bool> hasProtectedContent = GeneratedColumn<bool>(
+      'has_protected_content', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("has_protected_content" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _pinnedMessageIdsJsonMeta =
+      const VerificationMeta('pinnedMessageIdsJson');
+  @override
+  late final GeneratedColumn<String> pinnedMessageIdsJson =
+      GeneratedColumn<String>('pinned_message_ids_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _messageAutoDeleteTimeMeta =
+      const VerificationMeta('messageAutoDeleteTime');
+  @override
+  late final GeneratedColumn<int> messageAutoDeleteTime = GeneratedColumn<int>(
+      'message_auto_delete_time', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _appearanceJsonMeta =
+      const VerificationMeta('appearanceJson');
+  @override
+  late final GeneratedColumn<String> appearanceJson = GeneratedColumn<String>(
+      'appearance_json', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isForumMeta =
+      const VerificationMeta('isForum');
+  @override
+  late final GeneratedColumn<bool> isForum = GeneratedColumn<bool>(
+      'is_forum', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_forum" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _participantsHiddenMeta =
+      const VerificationMeta('participantsHidden');
+  @override
+  late final GeneratedColumn<bool> participantsHidden = GeneratedColumn<bool>(
+      'participants_hidden', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("participants_hidden" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _hasAggressiveAntiSpamEnabledMeta =
+      const VerificationMeta('hasAggressiveAntiSpamEnabled');
+  @override
+  late final GeneratedColumn<bool> hasAggressiveAntiSpamEnabled =
+      GeneratedColumn<bool>(
+          'has_aggressive_anti_spam_enabled', aliasedName, false,
+          type: DriftSqlType.bool,
+          requiredDuringInsert: false,
+          defaultConstraints: GeneratedColumn.constraintIsAlways(
+              'CHECK ("has_aggressive_anti_spam_enabled" IN (0, 1))'),
+          defaultValue: const Constant(false));
+  static const VerificationMeta _maxReactionsPerPostMeta =
+      const VerificationMeta('maxReactionsPerPost');
+  @override
+  late final GeneratedColumn<int> maxReactionsPerPost = GeneratedColumn<int>(
+      'max_reactions_per_post', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(11));
+  static const VerificationMeta _unreadMentionsCountMeta =
+      const VerificationMeta('unreadMentionsCount');
+  @override
+  late final GeneratedColumn<int> unreadMentionsCount = GeneratedColumn<int>(
+      'unread_mentions_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _unreadReactionsCountMeta =
+      const VerificationMeta('unreadReactionsCount');
+  @override
+  late final GeneratedColumn<int> unreadReactionsCount = GeneratedColumn<int>(
+      'unread_reactions_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
   @override
   List<GeneratedColumn> get $columns => [
         chatId,
@@ -198,6 +364,27 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
         isPublic,
         isBot,
         isVerified,
+        isArchived,
+        peerCustomizationJson,
+        showAuthorProfiles,
+        signMessages,
+        linkedChatId,
+        myRole,
+        lastMessageSenderId,
+        lastMessageSenderName,
+        hasActiveCall,
+        chatPermissionsJson,
+        reactionSettingsJson,
+        hasProtectedContent,
+        pinnedMessageIdsJson,
+        messageAutoDeleteTime,
+        appearanceJson,
+        isForum,
+        participantsHidden,
+        hasAggressiveAntiSpamEnabled,
+        maxReactionsPerPost,
+        unreadMentionsCount,
+        unreadReactionsCount
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -335,6 +522,129 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           isVerified.isAcceptableOrUnknown(
               data['is_verified']!, _isVerifiedMeta));
     }
+    if (data.containsKey('is_archived')) {
+      context.handle(
+          _isArchivedMeta,
+          isArchived.isAcceptableOrUnknown(
+              data['is_archived']!, _isArchivedMeta));
+    }
+    if (data.containsKey('peer_customization_json')) {
+      context.handle(
+          _peerCustomizationJsonMeta,
+          peerCustomizationJson.isAcceptableOrUnknown(
+              data['peer_customization_json']!, _peerCustomizationJsonMeta));
+    }
+    if (data.containsKey('show_author_profiles')) {
+      context.handle(
+          _showAuthorProfilesMeta,
+          showAuthorProfiles.isAcceptableOrUnknown(
+              data['show_author_profiles']!, _showAuthorProfilesMeta));
+    }
+    if (data.containsKey('sign_messages')) {
+      context.handle(
+          _signMessagesMeta,
+          signMessages.isAcceptableOrUnknown(
+              data['sign_messages']!, _signMessagesMeta));
+    }
+    if (data.containsKey('linked_chat_id')) {
+      context.handle(
+          _linkedChatIdMeta,
+          linkedChatId.isAcceptableOrUnknown(
+              data['linked_chat_id']!, _linkedChatIdMeta));
+    }
+    if (data.containsKey('my_role')) {
+      context.handle(_myRoleMeta,
+          myRole.isAcceptableOrUnknown(data['my_role']!, _myRoleMeta));
+    }
+    if (data.containsKey('last_message_sender_id')) {
+      context.handle(
+          _lastMessageSenderIdMeta,
+          lastMessageSenderId.isAcceptableOrUnknown(
+              data['last_message_sender_id']!, _lastMessageSenderIdMeta));
+    }
+    if (data.containsKey('last_message_sender_name')) {
+      context.handle(
+          _lastMessageSenderNameMeta,
+          lastMessageSenderName.isAcceptableOrUnknown(
+              data['last_message_sender_name']!, _lastMessageSenderNameMeta));
+    }
+    if (data.containsKey('has_active_call')) {
+      context.handle(
+          _hasActiveCallMeta,
+          hasActiveCall.isAcceptableOrUnknown(
+              data['has_active_call']!, _hasActiveCallMeta));
+    }
+    if (data.containsKey('chat_permissions_json')) {
+      context.handle(
+          _chatPermissionsJsonMeta,
+          chatPermissionsJson.isAcceptableOrUnknown(
+              data['chat_permissions_json']!, _chatPermissionsJsonMeta));
+    }
+    if (data.containsKey('reaction_settings_json')) {
+      context.handle(
+          _reactionSettingsJsonMeta,
+          reactionSettingsJson.isAcceptableOrUnknown(
+              data['reaction_settings_json']!, _reactionSettingsJsonMeta));
+    }
+    if (data.containsKey('has_protected_content')) {
+      context.handle(
+          _hasProtectedContentMeta,
+          hasProtectedContent.isAcceptableOrUnknown(
+              data['has_protected_content']!, _hasProtectedContentMeta));
+    }
+    if (data.containsKey('pinned_message_ids_json')) {
+      context.handle(
+          _pinnedMessageIdsJsonMeta,
+          pinnedMessageIdsJson.isAcceptableOrUnknown(
+              data['pinned_message_ids_json']!, _pinnedMessageIdsJsonMeta));
+    }
+    if (data.containsKey('message_auto_delete_time')) {
+      context.handle(
+          _messageAutoDeleteTimeMeta,
+          messageAutoDeleteTime.isAcceptableOrUnknown(
+              data['message_auto_delete_time']!, _messageAutoDeleteTimeMeta));
+    }
+    if (data.containsKey('appearance_json')) {
+      context.handle(
+          _appearanceJsonMeta,
+          appearanceJson.isAcceptableOrUnknown(
+              data['appearance_json']!, _appearanceJsonMeta));
+    }
+    if (data.containsKey('is_forum')) {
+      context.handle(_isForumMeta,
+          isForum.isAcceptableOrUnknown(data['is_forum']!, _isForumMeta));
+    }
+    if (data.containsKey('participants_hidden')) {
+      context.handle(
+          _participantsHiddenMeta,
+          participantsHidden.isAcceptableOrUnknown(
+              data['participants_hidden']!, _participantsHiddenMeta));
+    }
+    if (data.containsKey('has_aggressive_anti_spam_enabled')) {
+      context.handle(
+          _hasAggressiveAntiSpamEnabledMeta,
+          hasAggressiveAntiSpamEnabled.isAcceptableOrUnknown(
+              data['has_aggressive_anti_spam_enabled']!,
+              _hasAggressiveAntiSpamEnabledMeta));
+    }
+    if (data.containsKey('max_reactions_per_post')) {
+      context.handle(
+          _maxReactionsPerPostMeta,
+          maxReactionsPerPost.isAcceptableOrUnknown(
+              data['max_reactions_per_post']!, _maxReactionsPerPostMeta));
+    }
+    if (data.containsKey('unread_mentions_count')) {
+      context.handle(
+          _unreadMentionsCountMeta,
+          unreadMentionsCount.isAcceptableOrUnknown(
+              data['unread_mentions_count']!, _unreadMentionsCountMeta));
+    }
+    if (data.containsKey('unread_reactions_count')) {
+      context.handle(
+          _unreadReactionsCountMeta,
+          unreadReactionsCount.isAcceptableOrUnknown(
+              data['unread_reactions_count']!, _unreadReactionsCountMeta));
+    }
     return context;
   }
 
@@ -377,26 +687,70 @@ class $ChatsTable extends Chats with TableInfo<$ChatsTable, DbChat> {
           data['${effectivePrefix}last_message_grouped_id']),
       otherUserId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}other_user_id']),
-      lastReadInboxMessageId: attachedDatabase.typeMapping.read(DriftSqlType.int,
-              data['${effectivePrefix}last_read_inbox_message_id']) ??
-          0,
+      lastReadInboxMessageId: attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}last_read_inbox_message_id'])!,
       lastReadOutboxMessageId: attachedDatabase.typeMapping.read(
-              DriftSqlType.int,
-              data['${effectivePrefix}last_read_outbox_message_id']) ??
-          0,
+          DriftSqlType.int,
+          data['${effectivePrefix}last_read_outbox_message_id'])!,
       pinnedMessageId: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}pinned_message_id']),
       username: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}username']),
       isPublic: attachedDatabase.typeMapping
-              .read(DriftSqlType.bool, data['${effectivePrefix}is_public']) ??
-          false,
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_public'])!,
       isBot: attachedDatabase.typeMapping
-              .read(DriftSqlType.bool, data['${effectivePrefix}is_bot']) ??
-          false,
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_bot'])!,
       isVerified: attachedDatabase.typeMapping
-              .read(DriftSqlType.bool, data['${effectivePrefix}is_verified']) ??
-          false,
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_verified'])!,
+      isArchived: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_archived'])!,
+      peerCustomizationJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}peer_customization_json']),
+      showAuthorProfiles: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}show_author_profiles'])!,
+      signMessages: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}sign_messages'])!,
+      linkedChatId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}linked_chat_id']),
+      myRole: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}my_role']),
+      lastMessageSenderId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}last_message_sender_id']),
+      lastMessageSenderName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}last_message_sender_name']),
+      hasActiveCall: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}has_active_call'])!,
+      chatPermissionsJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}chat_permissions_json']),
+      reactionSettingsJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}reaction_settings_json']),
+      hasProtectedContent: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}has_protected_content'])!,
+      pinnedMessageIdsJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}pinned_message_ids_json']),
+      messageAutoDeleteTime: attachedDatabase.typeMapping.read(DriftSqlType.int,
+          data['${effectivePrefix}message_auto_delete_time'])!,
+      appearanceJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}appearance_json']),
+      isForum: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_forum'])!,
+      participantsHidden: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}participants_hidden'])!,
+      hasAggressiveAntiSpamEnabled: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool,
+          data['${effectivePrefix}has_aggressive_anti_spam_enabled'])!,
+      maxReactionsPerPost: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}max_reactions_per_post'])!,
+      unreadMentionsCount: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}unread_mentions_count'])!,
+      unreadReactionsCount: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}unread_reactions_count'])!,
     );
   }
 
@@ -430,6 +784,27 @@ class DbChat extends DataClass implements Insertable<DbChat> {
   final bool isPublic;
   final bool isBot;
   final bool isVerified;
+  final bool isArchived;
+  final String? peerCustomizationJson;
+  final bool showAuthorProfiles;
+  final bool signMessages;
+  final String? linkedChatId;
+  final String? myRole;
+  final String? lastMessageSenderId;
+  final String? lastMessageSenderName;
+  final bool hasActiveCall;
+  final String? chatPermissionsJson;
+  final String? reactionSettingsJson;
+  final bool hasProtectedContent;
+  final String? pinnedMessageIdsJson;
+  final int messageAutoDeleteTime;
+  final String? appearanceJson;
+  final bool isForum;
+  final bool participantsHidden;
+  final bool hasAggressiveAntiSpamEnabled;
+  final int maxReactionsPerPost;
+  final int unreadMentionsCount;
+  final int unreadReactionsCount;
   const DbChat(
       {required this.chatId,
       required this.chatType,
@@ -447,13 +822,34 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       this.lastMessageFileUrl,
       this.lastMessageGroupedId,
       this.otherUserId,
-      this.lastReadInboxMessageId = 0,
-      this.lastReadOutboxMessageId = 0,
+      required this.lastReadInboxMessageId,
+      required this.lastReadOutboxMessageId,
       this.pinnedMessageId,
       this.username,
-      this.isPublic = false,
-      this.isBot = false,
-      this.isVerified = false});
+      required this.isPublic,
+      required this.isBot,
+      required this.isVerified,
+      required this.isArchived,
+      this.peerCustomizationJson,
+      required this.showAuthorProfiles,
+      required this.signMessages,
+      this.linkedChatId,
+      this.myRole,
+      this.lastMessageSenderId,
+      this.lastMessageSenderName,
+      required this.hasActiveCall,
+      this.chatPermissionsJson,
+      this.reactionSettingsJson,
+      required this.hasProtectedContent,
+      this.pinnedMessageIdsJson,
+      required this.messageAutoDeleteTime,
+      this.appearanceJson,
+      required this.isForum,
+      required this.participantsHidden,
+      required this.hasAggressiveAntiSpamEnabled,
+      required this.maxReactionsPerPost,
+      required this.unreadMentionsCount,
+      required this.unreadReactionsCount});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -500,6 +896,46 @@ class DbChat extends DataClass implements Insertable<DbChat> {
     map['is_public'] = Variable<bool>(isPublic);
     map['is_bot'] = Variable<bool>(isBot);
     map['is_verified'] = Variable<bool>(isVerified);
+    map['is_archived'] = Variable<bool>(isArchived);
+    if (!nullToAbsent || peerCustomizationJson != null) {
+      map['peer_customization_json'] = Variable<String>(peerCustomizationJson);
+    }
+    map['show_author_profiles'] = Variable<bool>(showAuthorProfiles);
+    map['sign_messages'] = Variable<bool>(signMessages);
+    if (!nullToAbsent || linkedChatId != null) {
+      map['linked_chat_id'] = Variable<String>(linkedChatId);
+    }
+    if (!nullToAbsent || myRole != null) {
+      map['my_role'] = Variable<String>(myRole);
+    }
+    if (!nullToAbsent || lastMessageSenderId != null) {
+      map['last_message_sender_id'] = Variable<String>(lastMessageSenderId);
+    }
+    if (!nullToAbsent || lastMessageSenderName != null) {
+      map['last_message_sender_name'] = Variable<String>(lastMessageSenderName);
+    }
+    map['has_active_call'] = Variable<bool>(hasActiveCall);
+    if (!nullToAbsent || chatPermissionsJson != null) {
+      map['chat_permissions_json'] = Variable<String>(chatPermissionsJson);
+    }
+    if (!nullToAbsent || reactionSettingsJson != null) {
+      map['reaction_settings_json'] = Variable<String>(reactionSettingsJson);
+    }
+    map['has_protected_content'] = Variable<bool>(hasProtectedContent);
+    if (!nullToAbsent || pinnedMessageIdsJson != null) {
+      map['pinned_message_ids_json'] = Variable<String>(pinnedMessageIdsJson);
+    }
+    map['message_auto_delete_time'] = Variable<int>(messageAutoDeleteTime);
+    if (!nullToAbsent || appearanceJson != null) {
+      map['appearance_json'] = Variable<String>(appearanceJson);
+    }
+    map['is_forum'] = Variable<bool>(isForum);
+    map['participants_hidden'] = Variable<bool>(participantsHidden);
+    map['has_aggressive_anti_spam_enabled'] =
+        Variable<bool>(hasAggressiveAntiSpamEnabled);
+    map['max_reactions_per_post'] = Variable<int>(maxReactionsPerPost);
+    map['unread_mentions_count'] = Variable<int>(unreadMentionsCount);
+    map['unread_reactions_count'] = Variable<int>(unreadReactionsCount);
     return map;
   }
 
@@ -548,6 +984,44 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isPublic: Value(isPublic),
       isBot: Value(isBot),
       isVerified: Value(isVerified),
+      isArchived: Value(isArchived),
+      peerCustomizationJson: peerCustomizationJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(peerCustomizationJson),
+      showAuthorProfiles: Value(showAuthorProfiles),
+      signMessages: Value(signMessages),
+      linkedChatId: linkedChatId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(linkedChatId),
+      myRole:
+          myRole == null && nullToAbsent ? const Value.absent() : Value(myRole),
+      lastMessageSenderId: lastMessageSenderId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageSenderId),
+      lastMessageSenderName: lastMessageSenderName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastMessageSenderName),
+      hasActiveCall: Value(hasActiveCall),
+      chatPermissionsJson: chatPermissionsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(chatPermissionsJson),
+      reactionSettingsJson: reactionSettingsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reactionSettingsJson),
+      hasProtectedContent: Value(hasProtectedContent),
+      pinnedMessageIdsJson: pinnedMessageIdsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pinnedMessageIdsJson),
+      messageAutoDeleteTime: Value(messageAutoDeleteTime),
+      appearanceJson: appearanceJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(appearanceJson),
+      isForum: Value(isForum),
+      participantsHidden: Value(participantsHidden),
+      hasAggressiveAntiSpamEnabled: Value(hasAggressiveAntiSpamEnabled),
+      maxReactionsPerPost: Value(maxReactionsPerPost),
+      unreadMentionsCount: Value(unreadMentionsCount),
+      unreadReactionsCount: Value(unreadReactionsCount),
     );
   }
 
@@ -574,14 +1048,47 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           serializer.fromJson<String?>(json['lastMessageGroupedId']),
       otherUserId: serializer.fromJson<String?>(json['otherUserId']),
       lastReadInboxMessageId:
-          serializer.fromJson<int?>(json['lastReadInboxMessageId']) ?? 0,
+          serializer.fromJson<int>(json['lastReadInboxMessageId']),
       lastReadOutboxMessageId:
-          serializer.fromJson<int?>(json['lastReadOutboxMessageId']) ?? 0,
+          serializer.fromJson<int>(json['lastReadOutboxMessageId']),
       pinnedMessageId: serializer.fromJson<int?>(json['pinnedMessageId']),
       username: serializer.fromJson<String?>(json['username']),
-      isPublic: serializer.fromJson<bool?>(json['isPublic']) ?? false,
-      isBot: serializer.fromJson<bool?>(json['isBot']) ?? false,
-      isVerified: serializer.fromJson<bool?>(json['isVerified']) ?? false,
+      isPublic: serializer.fromJson<bool>(json['isPublic']),
+      isBot: serializer.fromJson<bool>(json['isBot']),
+      isVerified: serializer.fromJson<bool>(json['isVerified']),
+      isArchived: serializer.fromJson<bool>(json['isArchived']),
+      peerCustomizationJson:
+          serializer.fromJson<String?>(json['peerCustomizationJson']),
+      showAuthorProfiles: serializer.fromJson<bool>(json['showAuthorProfiles']),
+      signMessages: serializer.fromJson<bool>(json['signMessages']),
+      linkedChatId: serializer.fromJson<String?>(json['linkedChatId']),
+      myRole: serializer.fromJson<String?>(json['myRole']),
+      lastMessageSenderId:
+          serializer.fromJson<String?>(json['lastMessageSenderId']),
+      lastMessageSenderName:
+          serializer.fromJson<String?>(json['lastMessageSenderName']),
+      hasActiveCall: serializer.fromJson<bool>(json['hasActiveCall']),
+      chatPermissionsJson:
+          serializer.fromJson<String?>(json['chatPermissionsJson']),
+      reactionSettingsJson:
+          serializer.fromJson<String?>(json['reactionSettingsJson']),
+      hasProtectedContent:
+          serializer.fromJson<bool>(json['hasProtectedContent']),
+      pinnedMessageIdsJson:
+          serializer.fromJson<String?>(json['pinnedMessageIdsJson']),
+      messageAutoDeleteTime:
+          serializer.fromJson<int>(json['messageAutoDeleteTime']),
+      appearanceJson: serializer.fromJson<String?>(json['appearanceJson']),
+      isForum: serializer.fromJson<bool>(json['isForum']),
+      participantsHidden: serializer.fromJson<bool>(json['participantsHidden']),
+      hasAggressiveAntiSpamEnabled:
+          serializer.fromJson<bool>(json['hasAggressiveAntiSpamEnabled']),
+      maxReactionsPerPost:
+          serializer.fromJson<int>(json['maxReactionsPerPost']),
+      unreadMentionsCount:
+          serializer.fromJson<int>(json['unreadMentionsCount']),
+      unreadReactionsCount:
+          serializer.fromJson<int>(json['unreadReactionsCount']),
     );
   }
   @override
@@ -612,6 +1119,30 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       'isPublic': serializer.toJson<bool>(isPublic),
       'isBot': serializer.toJson<bool>(isBot),
       'isVerified': serializer.toJson<bool>(isVerified),
+      'isArchived': serializer.toJson<bool>(isArchived),
+      'peerCustomizationJson':
+          serializer.toJson<String?>(peerCustomizationJson),
+      'showAuthorProfiles': serializer.toJson<bool>(showAuthorProfiles),
+      'signMessages': serializer.toJson<bool>(signMessages),
+      'linkedChatId': serializer.toJson<String?>(linkedChatId),
+      'myRole': serializer.toJson<String?>(myRole),
+      'lastMessageSenderId': serializer.toJson<String?>(lastMessageSenderId),
+      'lastMessageSenderName':
+          serializer.toJson<String?>(lastMessageSenderName),
+      'hasActiveCall': serializer.toJson<bool>(hasActiveCall),
+      'chatPermissionsJson': serializer.toJson<String?>(chatPermissionsJson),
+      'reactionSettingsJson': serializer.toJson<String?>(reactionSettingsJson),
+      'hasProtectedContent': serializer.toJson<bool>(hasProtectedContent),
+      'pinnedMessageIdsJson': serializer.toJson<String?>(pinnedMessageIdsJson),
+      'messageAutoDeleteTime': serializer.toJson<int>(messageAutoDeleteTime),
+      'appearanceJson': serializer.toJson<String?>(appearanceJson),
+      'isForum': serializer.toJson<bool>(isForum),
+      'participantsHidden': serializer.toJson<bool>(participantsHidden),
+      'hasAggressiveAntiSpamEnabled':
+          serializer.toJson<bool>(hasAggressiveAntiSpamEnabled),
+      'maxReactionsPerPost': serializer.toJson<int>(maxReactionsPerPost),
+      'unreadMentionsCount': serializer.toJson<int>(unreadMentionsCount),
+      'unreadReactionsCount': serializer.toJson<int>(unreadReactionsCount),
     };
   }
 
@@ -638,7 +1169,28 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           Value<String?> username = const Value.absent(),
           bool? isPublic,
           bool? isBot,
-          bool? isVerified}) =>
+          bool? isVerified,
+          bool? isArchived,
+          Value<String?> peerCustomizationJson = const Value.absent(),
+          bool? showAuthorProfiles,
+          bool? signMessages,
+          Value<String?> linkedChatId = const Value.absent(),
+          Value<String?> myRole = const Value.absent(),
+          Value<String?> lastMessageSenderId = const Value.absent(),
+          Value<String?> lastMessageSenderName = const Value.absent(),
+          bool? hasActiveCall,
+          Value<String?> chatPermissionsJson = const Value.absent(),
+          Value<String?> reactionSettingsJson = const Value.absent(),
+          bool? hasProtectedContent,
+          Value<String?> pinnedMessageIdsJson = const Value.absent(),
+          int? messageAutoDeleteTime,
+          Value<String?> appearanceJson = const Value.absent(),
+          bool? isForum,
+          bool? participantsHidden,
+          bool? hasAggressiveAntiSpamEnabled,
+          int? maxReactionsPerPost,
+          int? unreadMentionsCount,
+          int? unreadReactionsCount}) =>
       DbChat(
         chatId: chatId ?? this.chatId,
         chatType: chatType ?? this.chatType,
@@ -668,12 +1220,50 @@ class DbChat extends DataClass implements Insertable<DbChat> {
             lastReadInboxMessageId ?? this.lastReadInboxMessageId,
         lastReadOutboxMessageId:
             lastReadOutboxMessageId ?? this.lastReadOutboxMessageId,
-        pinnedMessageId:
-            pinnedMessageId.present ? pinnedMessageId.value : this.pinnedMessageId,
+        pinnedMessageId: pinnedMessageId.present
+            ? pinnedMessageId.value
+            : this.pinnedMessageId,
         username: username.present ? username.value : this.username,
         isPublic: isPublic ?? this.isPublic,
         isBot: isBot ?? this.isBot,
         isVerified: isVerified ?? this.isVerified,
+        isArchived: isArchived ?? this.isArchived,
+        peerCustomizationJson: peerCustomizationJson.present
+            ? peerCustomizationJson.value
+            : this.peerCustomizationJson,
+        showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+        signMessages: signMessages ?? this.signMessages,
+        linkedChatId:
+            linkedChatId.present ? linkedChatId.value : this.linkedChatId,
+        myRole: myRole.present ? myRole.value : this.myRole,
+        lastMessageSenderId: lastMessageSenderId.present
+            ? lastMessageSenderId.value
+            : this.lastMessageSenderId,
+        lastMessageSenderName: lastMessageSenderName.present
+            ? lastMessageSenderName.value
+            : this.lastMessageSenderName,
+        hasActiveCall: hasActiveCall ?? this.hasActiveCall,
+        chatPermissionsJson: chatPermissionsJson.present
+            ? chatPermissionsJson.value
+            : this.chatPermissionsJson,
+        reactionSettingsJson: reactionSettingsJson.present
+            ? reactionSettingsJson.value
+            : this.reactionSettingsJson,
+        hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
+        pinnedMessageIdsJson: pinnedMessageIdsJson.present
+            ? pinnedMessageIdsJson.value
+            : this.pinnedMessageIdsJson,
+        messageAutoDeleteTime:
+            messageAutoDeleteTime ?? this.messageAutoDeleteTime,
+        appearanceJson:
+            appearanceJson.present ? appearanceJson.value : this.appearanceJson,
+        isForum: isForum ?? this.isForum,
+        participantsHidden: participantsHidden ?? this.participantsHidden,
+        hasAggressiveAntiSpamEnabled:
+            hasAggressiveAntiSpamEnabled ?? this.hasAggressiveAntiSpamEnabled,
+        maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
+        unreadMentionsCount: unreadMentionsCount ?? this.unreadMentionsCount,
+        unreadReactionsCount: unreadReactionsCount ?? this.unreadReactionsCount,
       );
   DbChat copyWithCompanion(ChatsCompanion data) {
     return DbChat(
@@ -720,6 +1310,64 @@ class DbChat extends DataClass implements Insertable<DbChat> {
       isBot: data.isBot.present ? data.isBot.value : this.isBot,
       isVerified:
           data.isVerified.present ? data.isVerified.value : this.isVerified,
+      isArchived:
+          data.isArchived.present ? data.isArchived.value : this.isArchived,
+      peerCustomizationJson: data.peerCustomizationJson.present
+          ? data.peerCustomizationJson.value
+          : this.peerCustomizationJson,
+      showAuthorProfiles: data.showAuthorProfiles.present
+          ? data.showAuthorProfiles.value
+          : this.showAuthorProfiles,
+      signMessages: data.signMessages.present
+          ? data.signMessages.value
+          : this.signMessages,
+      linkedChatId: data.linkedChatId.present
+          ? data.linkedChatId.value
+          : this.linkedChatId,
+      myRole: data.myRole.present ? data.myRole.value : this.myRole,
+      lastMessageSenderId: data.lastMessageSenderId.present
+          ? data.lastMessageSenderId.value
+          : this.lastMessageSenderId,
+      lastMessageSenderName: data.lastMessageSenderName.present
+          ? data.lastMessageSenderName.value
+          : this.lastMessageSenderName,
+      hasActiveCall: data.hasActiveCall.present
+          ? data.hasActiveCall.value
+          : this.hasActiveCall,
+      chatPermissionsJson: data.chatPermissionsJson.present
+          ? data.chatPermissionsJson.value
+          : this.chatPermissionsJson,
+      reactionSettingsJson: data.reactionSettingsJson.present
+          ? data.reactionSettingsJson.value
+          : this.reactionSettingsJson,
+      hasProtectedContent: data.hasProtectedContent.present
+          ? data.hasProtectedContent.value
+          : this.hasProtectedContent,
+      pinnedMessageIdsJson: data.pinnedMessageIdsJson.present
+          ? data.pinnedMessageIdsJson.value
+          : this.pinnedMessageIdsJson,
+      messageAutoDeleteTime: data.messageAutoDeleteTime.present
+          ? data.messageAutoDeleteTime.value
+          : this.messageAutoDeleteTime,
+      appearanceJson: data.appearanceJson.present
+          ? data.appearanceJson.value
+          : this.appearanceJson,
+      isForum: data.isForum.present ? data.isForum.value : this.isForum,
+      participantsHidden: data.participantsHidden.present
+          ? data.participantsHidden.value
+          : this.participantsHidden,
+      hasAggressiveAntiSpamEnabled: data.hasAggressiveAntiSpamEnabled.present
+          ? data.hasAggressiveAntiSpamEnabled.value
+          : this.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: data.maxReactionsPerPost.present
+          ? data.maxReactionsPerPost.value
+          : this.maxReactionsPerPost,
+      unreadMentionsCount: data.unreadMentionsCount.present
+          ? data.unreadMentionsCount.value
+          : this.unreadMentionsCount,
+      unreadReactionsCount: data.unreadReactionsCount.present
+          ? data.unreadReactionsCount.value
+          : this.unreadReactionsCount,
     );
   }
 
@@ -748,7 +1396,29 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           ..write('username: $username, ')
           ..write('isPublic: $isPublic, ')
           ..write('isBot: $isBot, ')
-          ..write('isVerified: $isVerified')
+          ..write('isVerified: $isVerified, ')
+          ..write('isArchived: $isArchived, ')
+          ..write('peerCustomizationJson: $peerCustomizationJson, ')
+          ..write('showAuthorProfiles: $showAuthorProfiles, ')
+          ..write('signMessages: $signMessages, ')
+          ..write('linkedChatId: $linkedChatId, ')
+          ..write('myRole: $myRole, ')
+          ..write('lastMessageSenderId: $lastMessageSenderId, ')
+          ..write('lastMessageSenderName: $lastMessageSenderName, ')
+          ..write('hasActiveCall: $hasActiveCall, ')
+          ..write('chatPermissionsJson: $chatPermissionsJson, ')
+          ..write('reactionSettingsJson: $reactionSettingsJson, ')
+          ..write('hasProtectedContent: $hasProtectedContent, ')
+          ..write('pinnedMessageIdsJson: $pinnedMessageIdsJson, ')
+          ..write('messageAutoDeleteTime: $messageAutoDeleteTime, ')
+          ..write('appearanceJson: $appearanceJson, ')
+          ..write('isForum: $isForum, ')
+          ..write('participantsHidden: $participantsHidden, ')
+          ..write(
+              'hasAggressiveAntiSpamEnabled: $hasAggressiveAntiSpamEnabled, ')
+          ..write('maxReactionsPerPost: $maxReactionsPerPost, ')
+          ..write('unreadMentionsCount: $unreadMentionsCount, ')
+          ..write('unreadReactionsCount: $unreadReactionsCount')
           ..write(')'))
         .toString();
   }
@@ -778,6 +1448,27 @@ class DbChat extends DataClass implements Insertable<DbChat> {
         isPublic,
         isBot,
         isVerified,
+        isArchived,
+        peerCustomizationJson,
+        showAuthorProfiles,
+        signMessages,
+        linkedChatId,
+        myRole,
+        lastMessageSenderId,
+        lastMessageSenderName,
+        hasActiveCall,
+        chatPermissionsJson,
+        reactionSettingsJson,
+        hasProtectedContent,
+        pinnedMessageIdsJson,
+        messageAutoDeleteTime,
+        appearanceJson,
+        isForum,
+        participantsHidden,
+        hasAggressiveAntiSpamEnabled,
+        maxReactionsPerPost,
+        unreadMentionsCount,
+        unreadReactionsCount
       ]);
   @override
   bool operator ==(Object other) =>
@@ -805,7 +1496,29 @@ class DbChat extends DataClass implements Insertable<DbChat> {
           other.username == this.username &&
           other.isPublic == this.isPublic &&
           other.isBot == this.isBot &&
-          other.isVerified == this.isVerified);
+          other.isVerified == this.isVerified &&
+          other.isArchived == this.isArchived &&
+          other.peerCustomizationJson == this.peerCustomizationJson &&
+          other.showAuthorProfiles == this.showAuthorProfiles &&
+          other.signMessages == this.signMessages &&
+          other.linkedChatId == this.linkedChatId &&
+          other.myRole == this.myRole &&
+          other.lastMessageSenderId == this.lastMessageSenderId &&
+          other.lastMessageSenderName == this.lastMessageSenderName &&
+          other.hasActiveCall == this.hasActiveCall &&
+          other.chatPermissionsJson == this.chatPermissionsJson &&
+          other.reactionSettingsJson == this.reactionSettingsJson &&
+          other.hasProtectedContent == this.hasProtectedContent &&
+          other.pinnedMessageIdsJson == this.pinnedMessageIdsJson &&
+          other.messageAutoDeleteTime == this.messageAutoDeleteTime &&
+          other.appearanceJson == this.appearanceJson &&
+          other.isForum == this.isForum &&
+          other.participantsHidden == this.participantsHidden &&
+          other.hasAggressiveAntiSpamEnabled ==
+              this.hasAggressiveAntiSpamEnabled &&
+          other.maxReactionsPerPost == this.maxReactionsPerPost &&
+          other.unreadMentionsCount == this.unreadMentionsCount &&
+          other.unreadReactionsCount == this.unreadReactionsCount);
 }
 
 class ChatsCompanion extends UpdateCompanion<DbChat> {
@@ -832,6 +1545,27 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
   final Value<bool> isPublic;
   final Value<bool> isBot;
   final Value<bool> isVerified;
+  final Value<bool> isArchived;
+  final Value<String?> peerCustomizationJson;
+  final Value<bool> showAuthorProfiles;
+  final Value<bool> signMessages;
+  final Value<String?> linkedChatId;
+  final Value<String?> myRole;
+  final Value<String?> lastMessageSenderId;
+  final Value<String?> lastMessageSenderName;
+  final Value<bool> hasActiveCall;
+  final Value<String?> chatPermissionsJson;
+  final Value<String?> reactionSettingsJson;
+  final Value<bool> hasProtectedContent;
+  final Value<String?> pinnedMessageIdsJson;
+  final Value<int> messageAutoDeleteTime;
+  final Value<String?> appearanceJson;
+  final Value<bool> isForum;
+  final Value<bool> participantsHidden;
+  final Value<bool> hasAggressiveAntiSpamEnabled;
+  final Value<int> maxReactionsPerPost;
+  final Value<int> unreadMentionsCount;
+  final Value<int> unreadReactionsCount;
   final Value<int> rowid;
   const ChatsCompanion({
     this.chatId = const Value.absent(),
@@ -857,6 +1591,27 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isPublic = const Value.absent(),
     this.isBot = const Value.absent(),
     this.isVerified = const Value.absent(),
+    this.isArchived = const Value.absent(),
+    this.peerCustomizationJson = const Value.absent(),
+    this.showAuthorProfiles = const Value.absent(),
+    this.signMessages = const Value.absent(),
+    this.linkedChatId = const Value.absent(),
+    this.myRole = const Value.absent(),
+    this.lastMessageSenderId = const Value.absent(),
+    this.lastMessageSenderName = const Value.absent(),
+    this.hasActiveCall = const Value.absent(),
+    this.chatPermissionsJson = const Value.absent(),
+    this.reactionSettingsJson = const Value.absent(),
+    this.hasProtectedContent = const Value.absent(),
+    this.pinnedMessageIdsJson = const Value.absent(),
+    this.messageAutoDeleteTime = const Value.absent(),
+    this.appearanceJson = const Value.absent(),
+    this.isForum = const Value.absent(),
+    this.participantsHidden = const Value.absent(),
+    this.hasAggressiveAntiSpamEnabled = const Value.absent(),
+    this.maxReactionsPerPost = const Value.absent(),
+    this.unreadMentionsCount = const Value.absent(),
+    this.unreadReactionsCount = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ChatsCompanion.insert({
@@ -883,6 +1638,27 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     this.isPublic = const Value.absent(),
     this.isBot = const Value.absent(),
     this.isVerified = const Value.absent(),
+    this.isArchived = const Value.absent(),
+    this.peerCustomizationJson = const Value.absent(),
+    this.showAuthorProfiles = const Value.absent(),
+    this.signMessages = const Value.absent(),
+    this.linkedChatId = const Value.absent(),
+    this.myRole = const Value.absent(),
+    this.lastMessageSenderId = const Value.absent(),
+    this.lastMessageSenderName = const Value.absent(),
+    this.hasActiveCall = const Value.absent(),
+    this.chatPermissionsJson = const Value.absent(),
+    this.reactionSettingsJson = const Value.absent(),
+    this.hasProtectedContent = const Value.absent(),
+    this.pinnedMessageIdsJson = const Value.absent(),
+    this.messageAutoDeleteTime = const Value.absent(),
+    this.appearanceJson = const Value.absent(),
+    this.isForum = const Value.absent(),
+    this.participantsHidden = const Value.absent(),
+    this.hasAggressiveAntiSpamEnabled = const Value.absent(),
+    this.maxReactionsPerPost = const Value.absent(),
+    this.unreadMentionsCount = const Value.absent(),
+    this.unreadReactionsCount = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : chatId = Value(chatId),
         chatType = Value(chatType),
@@ -912,6 +1688,27 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     Expression<bool>? isPublic,
     Expression<bool>? isBot,
     Expression<bool>? isVerified,
+    Expression<bool>? isArchived,
+    Expression<String>? peerCustomizationJson,
+    Expression<bool>? showAuthorProfiles,
+    Expression<bool>? signMessages,
+    Expression<String>? linkedChatId,
+    Expression<String>? myRole,
+    Expression<String>? lastMessageSenderId,
+    Expression<String>? lastMessageSenderName,
+    Expression<bool>? hasActiveCall,
+    Expression<String>? chatPermissionsJson,
+    Expression<String>? reactionSettingsJson,
+    Expression<bool>? hasProtectedContent,
+    Expression<String>? pinnedMessageIdsJson,
+    Expression<int>? messageAutoDeleteTime,
+    Expression<String>? appearanceJson,
+    Expression<bool>? isForum,
+    Expression<bool>? participantsHidden,
+    Expression<bool>? hasAggressiveAntiSpamEnabled,
+    Expression<int>? maxReactionsPerPost,
+    Expression<int>? unreadMentionsCount,
+    Expression<int>? unreadReactionsCount,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -943,6 +1740,40 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       if (isPublic != null) 'is_public': isPublic,
       if (isBot != null) 'is_bot': isBot,
       if (isVerified != null) 'is_verified': isVerified,
+      if (isArchived != null) 'is_archived': isArchived,
+      if (peerCustomizationJson != null)
+        'peer_customization_json': peerCustomizationJson,
+      if (showAuthorProfiles != null)
+        'show_author_profiles': showAuthorProfiles,
+      if (signMessages != null) 'sign_messages': signMessages,
+      if (linkedChatId != null) 'linked_chat_id': linkedChatId,
+      if (myRole != null) 'my_role': myRole,
+      if (lastMessageSenderId != null)
+        'last_message_sender_id': lastMessageSenderId,
+      if (lastMessageSenderName != null)
+        'last_message_sender_name': lastMessageSenderName,
+      if (hasActiveCall != null) 'has_active_call': hasActiveCall,
+      if (chatPermissionsJson != null)
+        'chat_permissions_json': chatPermissionsJson,
+      if (reactionSettingsJson != null)
+        'reaction_settings_json': reactionSettingsJson,
+      if (hasProtectedContent != null)
+        'has_protected_content': hasProtectedContent,
+      if (pinnedMessageIdsJson != null)
+        'pinned_message_ids_json': pinnedMessageIdsJson,
+      if (messageAutoDeleteTime != null)
+        'message_auto_delete_time': messageAutoDeleteTime,
+      if (appearanceJson != null) 'appearance_json': appearanceJson,
+      if (isForum != null) 'is_forum': isForum,
+      if (participantsHidden != null) 'participants_hidden': participantsHidden,
+      if (hasAggressiveAntiSpamEnabled != null)
+        'has_aggressive_anti_spam_enabled': hasAggressiveAntiSpamEnabled,
+      if (maxReactionsPerPost != null)
+        'max_reactions_per_post': maxReactionsPerPost,
+      if (unreadMentionsCount != null)
+        'unread_mentions_count': unreadMentionsCount,
+      if (unreadReactionsCount != null)
+        'unread_reactions_count': unreadReactionsCount,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -971,6 +1802,27 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       Value<bool>? isPublic,
       Value<bool>? isBot,
       Value<bool>? isVerified,
+      Value<bool>? isArchived,
+      Value<String?>? peerCustomizationJson,
+      Value<bool>? showAuthorProfiles,
+      Value<bool>? signMessages,
+      Value<String?>? linkedChatId,
+      Value<String?>? myRole,
+      Value<String?>? lastMessageSenderId,
+      Value<String?>? lastMessageSenderName,
+      Value<bool>? hasActiveCall,
+      Value<String?>? chatPermissionsJson,
+      Value<String?>? reactionSettingsJson,
+      Value<bool>? hasProtectedContent,
+      Value<String?>? pinnedMessageIdsJson,
+      Value<int>? messageAutoDeleteTime,
+      Value<String?>? appearanceJson,
+      Value<bool>? isForum,
+      Value<bool>? participantsHidden,
+      Value<bool>? hasAggressiveAntiSpamEnabled,
+      Value<int>? maxReactionsPerPost,
+      Value<int>? unreadMentionsCount,
+      Value<int>? unreadReactionsCount,
       Value<int>? rowid}) {
     return ChatsCompanion(
       chatId: chatId ?? this.chatId,
@@ -998,6 +1850,31 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
       isPublic: isPublic ?? this.isPublic,
       isBot: isBot ?? this.isBot,
       isVerified: isVerified ?? this.isVerified,
+      isArchived: isArchived ?? this.isArchived,
+      peerCustomizationJson:
+          peerCustomizationJson ?? this.peerCustomizationJson,
+      showAuthorProfiles: showAuthorProfiles ?? this.showAuthorProfiles,
+      signMessages: signMessages ?? this.signMessages,
+      linkedChatId: linkedChatId ?? this.linkedChatId,
+      myRole: myRole ?? this.myRole,
+      lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
+      lastMessageSenderName:
+          lastMessageSenderName ?? this.lastMessageSenderName,
+      hasActiveCall: hasActiveCall ?? this.hasActiveCall,
+      chatPermissionsJson: chatPermissionsJson ?? this.chatPermissionsJson,
+      reactionSettingsJson: reactionSettingsJson ?? this.reactionSettingsJson,
+      hasProtectedContent: hasProtectedContent ?? this.hasProtectedContent,
+      pinnedMessageIdsJson: pinnedMessageIdsJson ?? this.pinnedMessageIdsJson,
+      messageAutoDeleteTime:
+          messageAutoDeleteTime ?? this.messageAutoDeleteTime,
+      appearanceJson: appearanceJson ?? this.appearanceJson,
+      isForum: isForum ?? this.isForum,
+      participantsHidden: participantsHidden ?? this.participantsHidden,
+      hasAggressiveAntiSpamEnabled:
+          hasAggressiveAntiSpamEnabled ?? this.hasAggressiveAntiSpamEnabled,
+      maxReactionsPerPost: maxReactionsPerPost ?? this.maxReactionsPerPost,
+      unreadMentionsCount: unreadMentionsCount ?? this.unreadMentionsCount,
+      unreadReactionsCount: unreadReactionsCount ?? this.unreadReactionsCount,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1077,6 +1954,77 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
     if (isVerified.present) {
       map['is_verified'] = Variable<bool>(isVerified.value);
     }
+    if (isArchived.present) {
+      map['is_archived'] = Variable<bool>(isArchived.value);
+    }
+    if (peerCustomizationJson.present) {
+      map['peer_customization_json'] =
+          Variable<String>(peerCustomizationJson.value);
+    }
+    if (showAuthorProfiles.present) {
+      map['show_author_profiles'] = Variable<bool>(showAuthorProfiles.value);
+    }
+    if (signMessages.present) {
+      map['sign_messages'] = Variable<bool>(signMessages.value);
+    }
+    if (linkedChatId.present) {
+      map['linked_chat_id'] = Variable<String>(linkedChatId.value);
+    }
+    if (myRole.present) {
+      map['my_role'] = Variable<String>(myRole.value);
+    }
+    if (lastMessageSenderId.present) {
+      map['last_message_sender_id'] =
+          Variable<String>(lastMessageSenderId.value);
+    }
+    if (lastMessageSenderName.present) {
+      map['last_message_sender_name'] =
+          Variable<String>(lastMessageSenderName.value);
+    }
+    if (hasActiveCall.present) {
+      map['has_active_call'] = Variable<bool>(hasActiveCall.value);
+    }
+    if (chatPermissionsJson.present) {
+      map['chat_permissions_json'] =
+          Variable<String>(chatPermissionsJson.value);
+    }
+    if (reactionSettingsJson.present) {
+      map['reaction_settings_json'] =
+          Variable<String>(reactionSettingsJson.value);
+    }
+    if (hasProtectedContent.present) {
+      map['has_protected_content'] = Variable<bool>(hasProtectedContent.value);
+    }
+    if (pinnedMessageIdsJson.present) {
+      map['pinned_message_ids_json'] =
+          Variable<String>(pinnedMessageIdsJson.value);
+    }
+    if (messageAutoDeleteTime.present) {
+      map['message_auto_delete_time'] =
+          Variable<int>(messageAutoDeleteTime.value);
+    }
+    if (appearanceJson.present) {
+      map['appearance_json'] = Variable<String>(appearanceJson.value);
+    }
+    if (isForum.present) {
+      map['is_forum'] = Variable<bool>(isForum.value);
+    }
+    if (participantsHidden.present) {
+      map['participants_hidden'] = Variable<bool>(participantsHidden.value);
+    }
+    if (hasAggressiveAntiSpamEnabled.present) {
+      map['has_aggressive_anti_spam_enabled'] =
+          Variable<bool>(hasAggressiveAntiSpamEnabled.value);
+    }
+    if (maxReactionsPerPost.present) {
+      map['max_reactions_per_post'] = Variable<int>(maxReactionsPerPost.value);
+    }
+    if (unreadMentionsCount.present) {
+      map['unread_mentions_count'] = Variable<int>(unreadMentionsCount.value);
+    }
+    if (unreadReactionsCount.present) {
+      map['unread_reactions_count'] = Variable<int>(unreadReactionsCount.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1109,6 +2057,28 @@ class ChatsCompanion extends UpdateCompanion<DbChat> {
           ..write('isPublic: $isPublic, ')
           ..write('isBot: $isBot, ')
           ..write('isVerified: $isVerified, ')
+          ..write('isArchived: $isArchived, ')
+          ..write('peerCustomizationJson: $peerCustomizationJson, ')
+          ..write('showAuthorProfiles: $showAuthorProfiles, ')
+          ..write('signMessages: $signMessages, ')
+          ..write('linkedChatId: $linkedChatId, ')
+          ..write('myRole: $myRole, ')
+          ..write('lastMessageSenderId: $lastMessageSenderId, ')
+          ..write('lastMessageSenderName: $lastMessageSenderName, ')
+          ..write('hasActiveCall: $hasActiveCall, ')
+          ..write('chatPermissionsJson: $chatPermissionsJson, ')
+          ..write('reactionSettingsJson: $reactionSettingsJson, ')
+          ..write('hasProtectedContent: $hasProtectedContent, ')
+          ..write('pinnedMessageIdsJson: $pinnedMessageIdsJson, ')
+          ..write('messageAutoDeleteTime: $messageAutoDeleteTime, ')
+          ..write('appearanceJson: $appearanceJson, ')
+          ..write('isForum: $isForum, ')
+          ..write('participantsHidden: $participantsHidden, ')
+          ..write(
+              'hasAggressiveAntiSpamEnabled: $hasAggressiveAntiSpamEnabled, ')
+          ..write('maxReactionsPerPost: $maxReactionsPerPost, ')
+          ..write('unreadMentionsCount: $unreadMentionsCount, ')
+          ..write('unreadReactionsCount: $unreadReactionsCount, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1301,6 +2271,18 @@ class $MessagesTable extends Messages
   late final GeneratedColumn<String> forwardFromName = GeneratedColumn<String>(
       'forward_from_name', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _forwardFromAvatarUrlMeta =
+      const VerificationMeta('forwardFromAvatarUrl');
+  @override
+  late final GeneratedColumn<String> forwardFromAvatarUrl =
+      GeneratedColumn<String>('forward_from_avatar_url', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderCustomizationJsonMeta =
+      const VerificationMeta('senderCustomizationJson');
+  @override
+  late final GeneratedColumn<String> senderCustomizationJson =
+      GeneratedColumn<String>('sender_customization_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _groupedIdMeta =
       const VerificationMeta('groupedId');
   @override
@@ -1351,6 +2333,190 @@ class $MessagesTable extends Messages
   late final GeneratedColumn<String> mediaPayload = GeneratedColumn<String>(
       'media_payload', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _viewsCountMeta =
+      const VerificationMeta('viewsCount');
+  @override
+  late final GeneratedColumn<int> viewsCount = GeneratedColumn<int>(
+      'views_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _authorSignatureMeta =
+      const VerificationMeta('authorSignature');
+  @override
+  late final GeneratedColumn<String> authorSignature = GeneratedColumn<String>(
+      'author_signature', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _postAuthorIdMeta =
+      const VerificationMeta('postAuthorId');
+  @override
+  late final GeneratedColumn<String> postAuthorId = GeneratedColumn<String>(
+      'post_author_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderRoleMeta =
+      const VerificationMeta('senderRole');
+  @override
+  late final GeneratedColumn<String> senderRole = GeneratedColumn<String>(
+      'sender_role', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderAdminTitleMeta =
+      const VerificationMeta('senderAdminTitle');
+  @override
+  late final GeneratedColumn<String> senderAdminTitle = GeneratedColumn<String>(
+      'sender_admin_title', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isFromAnonymousAdminMeta =
+      const VerificationMeta('isFromAnonymousAdmin');
+  @override
+  late final GeneratedColumn<bool> isFromAnonymousAdmin = GeneratedColumn<bool>(
+      'is_from_anonymous_admin', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("is_from_anonymous_admin" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _isSilentMeta =
+      const VerificationMeta('isSilent');
+  @override
+  late final GeneratedColumn<bool> isSilent = GeneratedColumn<bool>(
+      'is_silent', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_silent" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _commentsCountMeta =
+      const VerificationMeta('commentsCount');
+  @override
+  late final GeneratedColumn<int> commentsCount = GeneratedColumn<int>(
+      'comments_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _recentRepliersJsonMeta =
+      const VerificationMeta('recentRepliersJson');
+  @override
+  late final GeneratedColumn<String> recentRepliersJson =
+      GeneratedColumn<String>('recent_repliers_json', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _threadRootMessageIdMeta =
+      const VerificationMeta('threadRootMessageId');
+  @override
+  late final GeneratedColumn<String> threadRootMessageId =
+      GeneratedColumn<String>('thread_root_message_id', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _hasMediaSpoilerMeta =
+      const VerificationMeta('hasMediaSpoiler');
+  @override
+  late final GeneratedColumn<bool> hasMediaSpoiler = GeneratedColumn<bool>(
+      'has_media_spoiler', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("has_media_spoiler" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _expiresAtMeta =
+      const VerificationMeta('expiresAt');
+  @override
+  late final GeneratedColumn<String> expiresAt = GeneratedColumn<String>(
+      'expires_at', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _ttlSecondsMeta =
+      const VerificationMeta('ttlSeconds');
+  @override
+  late final GeneratedColumn<int> ttlSeconds = GeneratedColumn<int>(
+      'ttl_seconds', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _isViewOnceMeta =
+      const VerificationMeta('isViewOnce');
+  @override
+  late final GeneratedColumn<bool> isViewOnce = GeneratedColumn<bool>(
+      'is_view_once', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("is_view_once" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _viewedAtMeta =
+      const VerificationMeta('viewedAt');
+  @override
+  late final GeneratedColumn<String> viewedAt = GeneratedColumn<String>(
+      'viewed_at', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isBurnedMeta =
+      const VerificationMeta('isBurned');
+  @override
+  late final GeneratedColumn<bool> isBurned = GeneratedColumn<bool>(
+      'is_burned', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_burned" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _replyToChatIdMeta =
+      const VerificationMeta('replyToChatId');
+  @override
+  late final GeneratedColumn<String> replyToChatId = GeneratedColumn<String>(
+      'reply_to_chat_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _replyToChatNameMeta =
+      const VerificationMeta('replyToChatName');
+  @override
+  late final GeneratedColumn<String> replyToChatName = GeneratedColumn<String>(
+      'reply_to_chat_name', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _replyToChatTypeMeta =
+      const VerificationMeta('replyToChatType');
+  @override
+  late final GeneratedColumn<String> replyToChatType = GeneratedColumn<String>(
+      'reply_to_chat_type', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _effectIdMeta =
+      const VerificationMeta('effectId');
+  @override
+  late final GeneratedColumn<String> effectId = GeneratedColumn<String>(
+      'effect_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _savedTagsJsonMeta =
+      const VerificationMeta('savedTagsJson');
+  @override
+  late final GeneratedColumn<String> savedTagsJson = GeneratedColumn<String>(
+      'saved_tags_json', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _topicIdMeta =
+      const VerificationMeta('topicId');
+  @override
+  late final GeneratedColumn<int> topicId = GeneratedColumn<int>(
+      'topic_id', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _forwardsCountMeta =
+      const VerificationMeta('forwardsCount');
+  @override
+  late final GeneratedColumn<int> forwardsCount = GeneratedColumn<int>(
+      'forwards_count', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _senderChatIdMeta =
+      const VerificationMeta('senderChatId');
+  @override
+  late final GeneratedColumn<String> senderChatId = GeneratedColumn<String>(
+      'sender_chat_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderChatNameMeta =
+      const VerificationMeta('senderChatName');
+  @override
+  late final GeneratedColumn<String> senderChatName = GeneratedColumn<String>(
+      'sender_chat_name', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _senderChatAvatarUrlMeta =
+      const VerificationMeta('senderChatAvatarUrl');
+  @override
+  late final GeneratedColumn<String> senderChatAvatarUrl =
+      GeneratedColumn<String>('sender_chat_avatar_url', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         localId,
@@ -1379,13 +2545,41 @@ class $MessagesTable extends Messages
         isForward,
         forwardFromId,
         forwardFromName,
+        forwardFromAvatarUrl,
+        senderCustomizationJson,
         groupedId,
         entities,
         reactions,
         linkPreviewOptions,
         invertMedia,
         isRound,
-        mediaPayload
+        mediaPayload,
+        viewsCount,
+        authorSignature,
+        postAuthorId,
+        senderRole,
+        senderAdminTitle,
+        isFromAnonymousAdmin,
+        isSilent,
+        commentsCount,
+        recentRepliersJson,
+        threadRootMessageId,
+        hasMediaSpoiler,
+        expiresAt,
+        ttlSeconds,
+        isViewOnce,
+        viewedAt,
+        isBurned,
+        replyToChatId,
+        replyToChatName,
+        replyToChatType,
+        effectId,
+        savedTagsJson,
+        topicId,
+        forwardsCount,
+        senderChatId,
+        senderChatName,
+        senderChatAvatarUrl
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1537,6 +2731,19 @@ class $MessagesTable extends Messages
           forwardFromName.isAcceptableOrUnknown(
               data['forward_from_name']!, _forwardFromNameMeta));
     }
+    if (data.containsKey('forward_from_avatar_url')) {
+      context.handle(
+          _forwardFromAvatarUrlMeta,
+          forwardFromAvatarUrl.isAcceptableOrUnknown(
+              data['forward_from_avatar_url']!, _forwardFromAvatarUrlMeta));
+    }
+    if (data.containsKey('sender_customization_json')) {
+      context.handle(
+          _senderCustomizationJsonMeta,
+          senderCustomizationJson.isAcceptableOrUnknown(
+              data['sender_customization_json']!,
+              _senderCustomizationJsonMeta));
+    }
     if (data.containsKey('grouped_id')) {
       context.handle(_groupedIdMeta,
           groupedId.isAcceptableOrUnknown(data['grouped_id']!, _groupedIdMeta));
@@ -1570,6 +2777,150 @@ class $MessagesTable extends Messages
           _mediaPayloadMeta,
           mediaPayload.isAcceptableOrUnknown(
               data['media_payload']!, _mediaPayloadMeta));
+    }
+    if (data.containsKey('views_count')) {
+      context.handle(
+          _viewsCountMeta,
+          viewsCount.isAcceptableOrUnknown(
+              data['views_count']!, _viewsCountMeta));
+    }
+    if (data.containsKey('author_signature')) {
+      context.handle(
+          _authorSignatureMeta,
+          authorSignature.isAcceptableOrUnknown(
+              data['author_signature']!, _authorSignatureMeta));
+    }
+    if (data.containsKey('post_author_id')) {
+      context.handle(
+          _postAuthorIdMeta,
+          postAuthorId.isAcceptableOrUnknown(
+              data['post_author_id']!, _postAuthorIdMeta));
+    }
+    if (data.containsKey('sender_role')) {
+      context.handle(
+          _senderRoleMeta,
+          senderRole.isAcceptableOrUnknown(
+              data['sender_role']!, _senderRoleMeta));
+    }
+    if (data.containsKey('sender_admin_title')) {
+      context.handle(
+          _senderAdminTitleMeta,
+          senderAdminTitle.isAcceptableOrUnknown(
+              data['sender_admin_title']!, _senderAdminTitleMeta));
+    }
+    if (data.containsKey('is_from_anonymous_admin')) {
+      context.handle(
+          _isFromAnonymousAdminMeta,
+          isFromAnonymousAdmin.isAcceptableOrUnknown(
+              data['is_from_anonymous_admin']!, _isFromAnonymousAdminMeta));
+    }
+    if (data.containsKey('is_silent')) {
+      context.handle(_isSilentMeta,
+          isSilent.isAcceptableOrUnknown(data['is_silent']!, _isSilentMeta));
+    }
+    if (data.containsKey('comments_count')) {
+      context.handle(
+          _commentsCountMeta,
+          commentsCount.isAcceptableOrUnknown(
+              data['comments_count']!, _commentsCountMeta));
+    }
+    if (data.containsKey('recent_repliers_json')) {
+      context.handle(
+          _recentRepliersJsonMeta,
+          recentRepliersJson.isAcceptableOrUnknown(
+              data['recent_repliers_json']!, _recentRepliersJsonMeta));
+    }
+    if (data.containsKey('thread_root_message_id')) {
+      context.handle(
+          _threadRootMessageIdMeta,
+          threadRootMessageId.isAcceptableOrUnknown(
+              data['thread_root_message_id']!, _threadRootMessageIdMeta));
+    }
+    if (data.containsKey('has_media_spoiler')) {
+      context.handle(
+          _hasMediaSpoilerMeta,
+          hasMediaSpoiler.isAcceptableOrUnknown(
+              data['has_media_spoiler']!, _hasMediaSpoilerMeta));
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(_expiresAtMeta,
+          expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta));
+    }
+    if (data.containsKey('ttl_seconds')) {
+      context.handle(
+          _ttlSecondsMeta,
+          ttlSeconds.isAcceptableOrUnknown(
+              data['ttl_seconds']!, _ttlSecondsMeta));
+    }
+    if (data.containsKey('is_view_once')) {
+      context.handle(
+          _isViewOnceMeta,
+          isViewOnce.isAcceptableOrUnknown(
+              data['is_view_once']!, _isViewOnceMeta));
+    }
+    if (data.containsKey('viewed_at')) {
+      context.handle(_viewedAtMeta,
+          viewedAt.isAcceptableOrUnknown(data['viewed_at']!, _viewedAtMeta));
+    }
+    if (data.containsKey('is_burned')) {
+      context.handle(_isBurnedMeta,
+          isBurned.isAcceptableOrUnknown(data['is_burned']!, _isBurnedMeta));
+    }
+    if (data.containsKey('reply_to_chat_id')) {
+      context.handle(
+          _replyToChatIdMeta,
+          replyToChatId.isAcceptableOrUnknown(
+              data['reply_to_chat_id']!, _replyToChatIdMeta));
+    }
+    if (data.containsKey('reply_to_chat_name')) {
+      context.handle(
+          _replyToChatNameMeta,
+          replyToChatName.isAcceptableOrUnknown(
+              data['reply_to_chat_name']!, _replyToChatNameMeta));
+    }
+    if (data.containsKey('reply_to_chat_type')) {
+      context.handle(
+          _replyToChatTypeMeta,
+          replyToChatType.isAcceptableOrUnknown(
+              data['reply_to_chat_type']!, _replyToChatTypeMeta));
+    }
+    if (data.containsKey('effect_id')) {
+      context.handle(_effectIdMeta,
+          effectId.isAcceptableOrUnknown(data['effect_id']!, _effectIdMeta));
+    }
+    if (data.containsKey('saved_tags_json')) {
+      context.handle(
+          _savedTagsJsonMeta,
+          savedTagsJson.isAcceptableOrUnknown(
+              data['saved_tags_json']!, _savedTagsJsonMeta));
+    }
+    if (data.containsKey('topic_id')) {
+      context.handle(_topicIdMeta,
+          topicId.isAcceptableOrUnknown(data['topic_id']!, _topicIdMeta));
+    }
+    if (data.containsKey('forwards_count')) {
+      context.handle(
+          _forwardsCountMeta,
+          forwardsCount.isAcceptableOrUnknown(
+              data['forwards_count']!, _forwardsCountMeta));
+    }
+    if (data.containsKey('sender_chat_id')) {
+      context.handle(
+          _senderChatIdMeta,
+          senderChatId.isAcceptableOrUnknown(
+              data['sender_chat_id']!, _senderChatIdMeta));
+    }
+    if (data.containsKey('sender_chat_name')) {
+      context.handle(
+          _senderChatNameMeta,
+          senderChatName.isAcceptableOrUnknown(
+              data['sender_chat_name']!, _senderChatNameMeta));
+    }
+    if (data.containsKey('sender_chat_avatar_url')) {
+      context.handle(
+          _senderChatAvatarUrlMeta,
+          senderChatAvatarUrl.isAcceptableOrUnknown(
+              data['sender_chat_avatar_url']!, _senderChatAvatarUrlMeta));
     }
     return context;
   }
@@ -1632,6 +2983,12 @@ class $MessagesTable extends Messages
           .read(DriftSqlType.string, data['${effectivePrefix}forward_from_id']),
       forwardFromName: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}forward_from_name']),
+      forwardFromAvatarUrl: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}forward_from_avatar_url']),
+      senderCustomizationJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}sender_customization_json']),
       groupedId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}grouped_id']),
       entities: attachedDatabase.typeMapping
@@ -1646,6 +3003,60 @@ class $MessagesTable extends Messages
           .read(DriftSqlType.bool, data['${effectivePrefix}is_round'])!,
       mediaPayload: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}media_payload']),
+      viewsCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}views_count'])!,
+      authorSignature: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}author_signature']),
+      postAuthorId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}post_author_id']),
+      senderRole: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sender_role']),
+      senderAdminTitle: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}sender_admin_title']),
+      isFromAnonymousAdmin: attachedDatabase.typeMapping.read(DriftSqlType.bool,
+          data['${effectivePrefix}is_from_anonymous_admin'])!,
+      isSilent: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_silent'])!,
+      commentsCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}comments_count'])!,
+      recentRepliersJson: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}recent_repliers_json']),
+      threadRootMessageId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}thread_root_message_id']),
+      hasMediaSpoiler: attachedDatabase.typeMapping.read(
+          DriftSqlType.bool, data['${effectivePrefix}has_media_spoiler'])!,
+      expiresAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}expires_at']),
+      ttlSeconds: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}ttl_seconds'])!,
+      isViewOnce: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_view_once'])!,
+      viewedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}viewed_at']),
+      isBurned: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_burned'])!,
+      replyToChatId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}reply_to_chat_id']),
+      replyToChatName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}reply_to_chat_name']),
+      replyToChatType: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}reply_to_chat_type']),
+      effectId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}effect_id']),
+      savedTagsJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}saved_tags_json']),
+      topicId: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}topic_id']),
+      forwardsCount: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}forwards_count'])!,
+      senderChatId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sender_chat_id']),
+      senderChatName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}sender_chat_name']),
+      senderChatAvatarUrl: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}sender_chat_avatar_url']),
     );
   }
 
@@ -1682,6 +3093,8 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
   final bool isForward;
   final String? forwardFromId;
   final String? forwardFromName;
+  final String? forwardFromAvatarUrl;
+  final String? senderCustomizationJson;
   final String? groupedId;
   final String? entities;
   final String? reactions;
@@ -1689,6 +3102,32 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
   final bool invertMedia;
   final bool isRound;
   final String? mediaPayload;
+  final int viewsCount;
+  final String? authorSignature;
+  final String? postAuthorId;
+  final String? senderRole;
+  final String? senderAdminTitle;
+  final bool isFromAnonymousAdmin;
+  final bool isSilent;
+  final int commentsCount;
+  final String? recentRepliersJson;
+  final String? threadRootMessageId;
+  final bool hasMediaSpoiler;
+  final String? expiresAt;
+  final int ttlSeconds;
+  final bool isViewOnce;
+  final String? viewedAt;
+  final bool isBurned;
+  final String? replyToChatId;
+  final String? replyToChatName;
+  final String? replyToChatType;
+  final String? effectId;
+  final String? savedTagsJson;
+  final int? topicId;
+  final int forwardsCount;
+  final String? senderChatId;
+  final String? senderChatName;
+  final String? senderChatAvatarUrl;
   const DbMessage(
       {required this.localId,
       this.serverId,
@@ -1716,13 +3155,41 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       required this.isForward,
       this.forwardFromId,
       this.forwardFromName,
+      this.forwardFromAvatarUrl,
+      this.senderCustomizationJson,
       this.groupedId,
       this.entities,
       this.reactions,
       this.linkPreviewOptions,
       required this.invertMedia,
       required this.isRound,
-      this.mediaPayload});
+      this.mediaPayload,
+      required this.viewsCount,
+      this.authorSignature,
+      this.postAuthorId,
+      this.senderRole,
+      this.senderAdminTitle,
+      required this.isFromAnonymousAdmin,
+      required this.isSilent,
+      required this.commentsCount,
+      this.recentRepliersJson,
+      this.threadRootMessageId,
+      required this.hasMediaSpoiler,
+      this.expiresAt,
+      required this.ttlSeconds,
+      required this.isViewOnce,
+      this.viewedAt,
+      required this.isBurned,
+      this.replyToChatId,
+      this.replyToChatName,
+      this.replyToChatType,
+      this.effectId,
+      this.savedTagsJson,
+      this.topicId,
+      required this.forwardsCount,
+      this.senderChatId,
+      this.senderChatName,
+      this.senderChatAvatarUrl});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -1776,6 +3243,13 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
     if (!nullToAbsent || forwardFromName != null) {
       map['forward_from_name'] = Variable<String>(forwardFromName);
     }
+    if (!nullToAbsent || forwardFromAvatarUrl != null) {
+      map['forward_from_avatar_url'] = Variable<String>(forwardFromAvatarUrl);
+    }
+    if (!nullToAbsent || senderCustomizationJson != null) {
+      map['sender_customization_json'] =
+          Variable<String>(senderCustomizationJson);
+    }
     if (!nullToAbsent || groupedId != null) {
       map['grouped_id'] = Variable<String>(groupedId);
     }
@@ -1792,6 +3266,66 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
     map['is_round'] = Variable<bool>(isRound);
     if (!nullToAbsent || mediaPayload != null) {
       map['media_payload'] = Variable<String>(mediaPayload);
+    }
+    map['views_count'] = Variable<int>(viewsCount);
+    if (!nullToAbsent || authorSignature != null) {
+      map['author_signature'] = Variable<String>(authorSignature);
+    }
+    if (!nullToAbsent || postAuthorId != null) {
+      map['post_author_id'] = Variable<String>(postAuthorId);
+    }
+    if (!nullToAbsent || senderRole != null) {
+      map['sender_role'] = Variable<String>(senderRole);
+    }
+    if (!nullToAbsent || senderAdminTitle != null) {
+      map['sender_admin_title'] = Variable<String>(senderAdminTitle);
+    }
+    map['is_from_anonymous_admin'] = Variable<bool>(isFromAnonymousAdmin);
+    map['is_silent'] = Variable<bool>(isSilent);
+    map['comments_count'] = Variable<int>(commentsCount);
+    if (!nullToAbsent || recentRepliersJson != null) {
+      map['recent_repliers_json'] = Variable<String>(recentRepliersJson);
+    }
+    if (!nullToAbsent || threadRootMessageId != null) {
+      map['thread_root_message_id'] = Variable<String>(threadRootMessageId);
+    }
+    map['has_media_spoiler'] = Variable<bool>(hasMediaSpoiler);
+    if (!nullToAbsent || expiresAt != null) {
+      map['expires_at'] = Variable<String>(expiresAt);
+    }
+    map['ttl_seconds'] = Variable<int>(ttlSeconds);
+    map['is_view_once'] = Variable<bool>(isViewOnce);
+    if (!nullToAbsent || viewedAt != null) {
+      map['viewed_at'] = Variable<String>(viewedAt);
+    }
+    map['is_burned'] = Variable<bool>(isBurned);
+    if (!nullToAbsent || replyToChatId != null) {
+      map['reply_to_chat_id'] = Variable<String>(replyToChatId);
+    }
+    if (!nullToAbsent || replyToChatName != null) {
+      map['reply_to_chat_name'] = Variable<String>(replyToChatName);
+    }
+    if (!nullToAbsent || replyToChatType != null) {
+      map['reply_to_chat_type'] = Variable<String>(replyToChatType);
+    }
+    if (!nullToAbsent || effectId != null) {
+      map['effect_id'] = Variable<String>(effectId);
+    }
+    if (!nullToAbsent || savedTagsJson != null) {
+      map['saved_tags_json'] = Variable<String>(savedTagsJson);
+    }
+    if (!nullToAbsent || topicId != null) {
+      map['topic_id'] = Variable<int>(topicId);
+    }
+    map['forwards_count'] = Variable<int>(forwardsCount);
+    if (!nullToAbsent || senderChatId != null) {
+      map['sender_chat_id'] = Variable<String>(senderChatId);
+    }
+    if (!nullToAbsent || senderChatName != null) {
+      map['sender_chat_name'] = Variable<String>(senderChatName);
+    }
+    if (!nullToAbsent || senderChatAvatarUrl != null) {
+      map['sender_chat_avatar_url'] = Variable<String>(senderChatAvatarUrl);
     }
     return map;
   }
@@ -1848,6 +3382,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       forwardFromName: forwardFromName == null && nullToAbsent
           ? const Value.absent()
           : Value(forwardFromName),
+      forwardFromAvatarUrl: forwardFromAvatarUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(forwardFromAvatarUrl),
+      senderCustomizationJson: senderCustomizationJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderCustomizationJson),
       groupedId: groupedId == null && nullToAbsent
           ? const Value.absent()
           : Value(groupedId),
@@ -1865,6 +3405,66 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       mediaPayload: mediaPayload == null && nullToAbsent
           ? const Value.absent()
           : Value(mediaPayload),
+      viewsCount: Value(viewsCount),
+      authorSignature: authorSignature == null && nullToAbsent
+          ? const Value.absent()
+          : Value(authorSignature),
+      postAuthorId: postAuthorId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(postAuthorId),
+      senderRole: senderRole == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderRole),
+      senderAdminTitle: senderAdminTitle == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderAdminTitle),
+      isFromAnonymousAdmin: Value(isFromAnonymousAdmin),
+      isSilent: Value(isSilent),
+      commentsCount: Value(commentsCount),
+      recentRepliersJson: recentRepliersJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recentRepliersJson),
+      threadRootMessageId: threadRootMessageId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(threadRootMessageId),
+      hasMediaSpoiler: Value(hasMediaSpoiler),
+      expiresAt: expiresAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(expiresAt),
+      ttlSeconds: Value(ttlSeconds),
+      isViewOnce: Value(isViewOnce),
+      viewedAt: viewedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(viewedAt),
+      isBurned: Value(isBurned),
+      replyToChatId: replyToChatId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyToChatId),
+      replyToChatName: replyToChatName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyToChatName),
+      replyToChatType: replyToChatType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(replyToChatType),
+      effectId: effectId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(effectId),
+      savedTagsJson: savedTagsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(savedTagsJson),
+      topicId: topicId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(topicId),
+      forwardsCount: Value(forwardsCount),
+      senderChatId: senderChatId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderChatId),
+      senderChatName: senderChatName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderChatName),
+      senderChatAvatarUrl: senderChatAvatarUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(senderChatAvatarUrl),
     );
   }
 
@@ -1900,6 +3500,10 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       isForward: serializer.fromJson<bool>(json['isForward']),
       forwardFromId: serializer.fromJson<String?>(json['forwardFromId']),
       forwardFromName: serializer.fromJson<String?>(json['forwardFromName']),
+      forwardFromAvatarUrl:
+          serializer.fromJson<String?>(json['forwardFromAvatarUrl']),
+      senderCustomizationJson:
+          serializer.fromJson<String?>(json['senderCustomizationJson']),
       groupedId: serializer.fromJson<String?>(json['groupedId']),
       entities: serializer.fromJson<String?>(json['entities']),
       reactions: serializer.fromJson<String?>(json['reactions']),
@@ -1908,6 +3512,36 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       invertMedia: serializer.fromJson<bool>(json['invertMedia']),
       isRound: serializer.fromJson<bool>(json['isRound']),
       mediaPayload: serializer.fromJson<String?>(json['mediaPayload']),
+      viewsCount: serializer.fromJson<int>(json['viewsCount']),
+      authorSignature: serializer.fromJson<String?>(json['authorSignature']),
+      postAuthorId: serializer.fromJson<String?>(json['postAuthorId']),
+      senderRole: serializer.fromJson<String?>(json['senderRole']),
+      senderAdminTitle: serializer.fromJson<String?>(json['senderAdminTitle']),
+      isFromAnonymousAdmin:
+          serializer.fromJson<bool>(json['isFromAnonymousAdmin']),
+      isSilent: serializer.fromJson<bool>(json['isSilent']),
+      commentsCount: serializer.fromJson<int>(json['commentsCount']),
+      recentRepliersJson:
+          serializer.fromJson<String?>(json['recentRepliersJson']),
+      threadRootMessageId:
+          serializer.fromJson<String?>(json['threadRootMessageId']),
+      hasMediaSpoiler: serializer.fromJson<bool>(json['hasMediaSpoiler']),
+      expiresAt: serializer.fromJson<String?>(json['expiresAt']),
+      ttlSeconds: serializer.fromJson<int>(json['ttlSeconds']),
+      isViewOnce: serializer.fromJson<bool>(json['isViewOnce']),
+      viewedAt: serializer.fromJson<String?>(json['viewedAt']),
+      isBurned: serializer.fromJson<bool>(json['isBurned']),
+      replyToChatId: serializer.fromJson<String?>(json['replyToChatId']),
+      replyToChatName: serializer.fromJson<String?>(json['replyToChatName']),
+      replyToChatType: serializer.fromJson<String?>(json['replyToChatType']),
+      effectId: serializer.fromJson<String?>(json['effectId']),
+      savedTagsJson: serializer.fromJson<String?>(json['savedTagsJson']),
+      topicId: serializer.fromJson<int?>(json['topicId']),
+      forwardsCount: serializer.fromJson<int>(json['forwardsCount']),
+      senderChatId: serializer.fromJson<String?>(json['senderChatId']),
+      senderChatName: serializer.fromJson<String?>(json['senderChatName']),
+      senderChatAvatarUrl:
+          serializer.fromJson<String?>(json['senderChatAvatarUrl']),
     );
   }
   @override
@@ -1940,6 +3574,9 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       'isForward': serializer.toJson<bool>(isForward),
       'forwardFromId': serializer.toJson<String?>(forwardFromId),
       'forwardFromName': serializer.toJson<String?>(forwardFromName),
+      'forwardFromAvatarUrl': serializer.toJson<String?>(forwardFromAvatarUrl),
+      'senderCustomizationJson':
+          serializer.toJson<String?>(senderCustomizationJson),
       'groupedId': serializer.toJson<String?>(groupedId),
       'entities': serializer.toJson<String?>(entities),
       'reactions': serializer.toJson<String?>(reactions),
@@ -1947,6 +3584,32 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       'invertMedia': serializer.toJson<bool>(invertMedia),
       'isRound': serializer.toJson<bool>(isRound),
       'mediaPayload': serializer.toJson<String?>(mediaPayload),
+      'viewsCount': serializer.toJson<int>(viewsCount),
+      'authorSignature': serializer.toJson<String?>(authorSignature),
+      'postAuthorId': serializer.toJson<String?>(postAuthorId),
+      'senderRole': serializer.toJson<String?>(senderRole),
+      'senderAdminTitle': serializer.toJson<String?>(senderAdminTitle),
+      'isFromAnonymousAdmin': serializer.toJson<bool>(isFromAnonymousAdmin),
+      'isSilent': serializer.toJson<bool>(isSilent),
+      'commentsCount': serializer.toJson<int>(commentsCount),
+      'recentRepliersJson': serializer.toJson<String?>(recentRepliersJson),
+      'threadRootMessageId': serializer.toJson<String?>(threadRootMessageId),
+      'hasMediaSpoiler': serializer.toJson<bool>(hasMediaSpoiler),
+      'expiresAt': serializer.toJson<String?>(expiresAt),
+      'ttlSeconds': serializer.toJson<int>(ttlSeconds),
+      'isViewOnce': serializer.toJson<bool>(isViewOnce),
+      'viewedAt': serializer.toJson<String?>(viewedAt),
+      'isBurned': serializer.toJson<bool>(isBurned),
+      'replyToChatId': serializer.toJson<String?>(replyToChatId),
+      'replyToChatName': serializer.toJson<String?>(replyToChatName),
+      'replyToChatType': serializer.toJson<String?>(replyToChatType),
+      'effectId': serializer.toJson<String?>(effectId),
+      'savedTagsJson': serializer.toJson<String?>(savedTagsJson),
+      'topicId': serializer.toJson<int?>(topicId),
+      'forwardsCount': serializer.toJson<int>(forwardsCount),
+      'senderChatId': serializer.toJson<String?>(senderChatId),
+      'senderChatName': serializer.toJson<String?>(senderChatName),
+      'senderChatAvatarUrl': serializer.toJson<String?>(senderChatAvatarUrl),
     };
   }
 
@@ -1977,13 +3640,41 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           bool? isForward,
           Value<String?> forwardFromId = const Value.absent(),
           Value<String?> forwardFromName = const Value.absent(),
+          Value<String?> forwardFromAvatarUrl = const Value.absent(),
+          Value<String?> senderCustomizationJson = const Value.absent(),
           Value<String?> groupedId = const Value.absent(),
           Value<String?> entities = const Value.absent(),
           Value<String?> reactions = const Value.absent(),
           Value<String?> linkPreviewOptions = const Value.absent(),
           bool? invertMedia,
           bool? isRound,
-          Value<String?> mediaPayload = const Value.absent()}) =>
+          Value<String?> mediaPayload = const Value.absent(),
+          int? viewsCount,
+          Value<String?> authorSignature = const Value.absent(),
+          Value<String?> postAuthorId = const Value.absent(),
+          Value<String?> senderRole = const Value.absent(),
+          Value<String?> senderAdminTitle = const Value.absent(),
+          bool? isFromAnonymousAdmin,
+          bool? isSilent,
+          int? commentsCount,
+          Value<String?> recentRepliersJson = const Value.absent(),
+          Value<String?> threadRootMessageId = const Value.absent(),
+          bool? hasMediaSpoiler,
+          Value<String?> expiresAt = const Value.absent(),
+          int? ttlSeconds,
+          bool? isViewOnce,
+          Value<String?> viewedAt = const Value.absent(),
+          bool? isBurned,
+          Value<String?> replyToChatId = const Value.absent(),
+          Value<String?> replyToChatName = const Value.absent(),
+          Value<String?> replyToChatType = const Value.absent(),
+          Value<String?> effectId = const Value.absent(),
+          Value<String?> savedTagsJson = const Value.absent(),
+          Value<int?> topicId = const Value.absent(),
+          int? forwardsCount,
+          Value<String?> senderChatId = const Value.absent(),
+          Value<String?> senderChatName = const Value.absent(),
+          Value<String?> senderChatAvatarUrl = const Value.absent()}) =>
       DbMessage(
         localId: localId ?? this.localId,
         serverId: serverId.present ? serverId.value : this.serverId,
@@ -2023,6 +3714,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         forwardFromName: forwardFromName.present
             ? forwardFromName.value
             : this.forwardFromName,
+        forwardFromAvatarUrl: forwardFromAvatarUrl.present
+            ? forwardFromAvatarUrl.value
+            : this.forwardFromAvatarUrl,
+        senderCustomizationJson: senderCustomizationJson.present
+            ? senderCustomizationJson.value
+            : this.senderCustomizationJson,
         groupedId: groupedId.present ? groupedId.value : this.groupedId,
         entities: entities.present ? entities.value : this.entities,
         reactions: reactions.present ? reactions.value : this.reactions,
@@ -2033,6 +3730,51 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         isRound: isRound ?? this.isRound,
         mediaPayload:
             mediaPayload.present ? mediaPayload.value : this.mediaPayload,
+        viewsCount: viewsCount ?? this.viewsCount,
+        authorSignature: authorSignature.present
+            ? authorSignature.value
+            : this.authorSignature,
+        postAuthorId:
+            postAuthorId.present ? postAuthorId.value : this.postAuthorId,
+        senderRole: senderRole.present ? senderRole.value : this.senderRole,
+        senderAdminTitle: senderAdminTitle.present
+            ? senderAdminTitle.value
+            : this.senderAdminTitle,
+        isFromAnonymousAdmin: isFromAnonymousAdmin ?? this.isFromAnonymousAdmin,
+        isSilent: isSilent ?? this.isSilent,
+        commentsCount: commentsCount ?? this.commentsCount,
+        recentRepliersJson: recentRepliersJson.present
+            ? recentRepliersJson.value
+            : this.recentRepliersJson,
+        threadRootMessageId: threadRootMessageId.present
+            ? threadRootMessageId.value
+            : this.threadRootMessageId,
+        hasMediaSpoiler: hasMediaSpoiler ?? this.hasMediaSpoiler,
+        expiresAt: expiresAt.present ? expiresAt.value : this.expiresAt,
+        ttlSeconds: ttlSeconds ?? this.ttlSeconds,
+        isViewOnce: isViewOnce ?? this.isViewOnce,
+        viewedAt: viewedAt.present ? viewedAt.value : this.viewedAt,
+        isBurned: isBurned ?? this.isBurned,
+        replyToChatId:
+            replyToChatId.present ? replyToChatId.value : this.replyToChatId,
+        replyToChatName: replyToChatName.present
+            ? replyToChatName.value
+            : this.replyToChatName,
+        replyToChatType: replyToChatType.present
+            ? replyToChatType.value
+            : this.replyToChatType,
+        effectId: effectId.present ? effectId.value : this.effectId,
+        savedTagsJson:
+            savedTagsJson.present ? savedTagsJson.value : this.savedTagsJson,
+        topicId: topicId.present ? topicId.value : this.topicId,
+        forwardsCount: forwardsCount ?? this.forwardsCount,
+        senderChatId:
+            senderChatId.present ? senderChatId.value : this.senderChatId,
+        senderChatName:
+            senderChatName.present ? senderChatName.value : this.senderChatName,
+        senderChatAvatarUrl: senderChatAvatarUrl.present
+            ? senderChatAvatarUrl.value
+            : this.senderChatAvatarUrl,
       );
   DbMessage copyWithCompanion(MessagesCompanion data) {
     return DbMessage(
@@ -2083,6 +3825,12 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       forwardFromName: data.forwardFromName.present
           ? data.forwardFromName.value
           : this.forwardFromName,
+      forwardFromAvatarUrl: data.forwardFromAvatarUrl.present
+          ? data.forwardFromAvatarUrl.value
+          : this.forwardFromAvatarUrl,
+      senderCustomizationJson: data.senderCustomizationJson.present
+          ? data.senderCustomizationJson.value
+          : this.senderCustomizationJson,
       groupedId: data.groupedId.present ? data.groupedId.value : this.groupedId,
       entities: data.entities.present ? data.entities.value : this.entities,
       reactions: data.reactions.present ? data.reactions.value : this.reactions,
@@ -2095,6 +3843,68 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
       mediaPayload: data.mediaPayload.present
           ? data.mediaPayload.value
           : this.mediaPayload,
+      viewsCount:
+          data.viewsCount.present ? data.viewsCount.value : this.viewsCount,
+      authorSignature: data.authorSignature.present
+          ? data.authorSignature.value
+          : this.authorSignature,
+      postAuthorId: data.postAuthorId.present
+          ? data.postAuthorId.value
+          : this.postAuthorId,
+      senderRole:
+          data.senderRole.present ? data.senderRole.value : this.senderRole,
+      senderAdminTitle: data.senderAdminTitle.present
+          ? data.senderAdminTitle.value
+          : this.senderAdminTitle,
+      isFromAnonymousAdmin: data.isFromAnonymousAdmin.present
+          ? data.isFromAnonymousAdmin.value
+          : this.isFromAnonymousAdmin,
+      isSilent: data.isSilent.present ? data.isSilent.value : this.isSilent,
+      commentsCount: data.commentsCount.present
+          ? data.commentsCount.value
+          : this.commentsCount,
+      recentRepliersJson: data.recentRepliersJson.present
+          ? data.recentRepliersJson.value
+          : this.recentRepliersJson,
+      threadRootMessageId: data.threadRootMessageId.present
+          ? data.threadRootMessageId.value
+          : this.threadRootMessageId,
+      hasMediaSpoiler: data.hasMediaSpoiler.present
+          ? data.hasMediaSpoiler.value
+          : this.hasMediaSpoiler,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+      ttlSeconds:
+          data.ttlSeconds.present ? data.ttlSeconds.value : this.ttlSeconds,
+      isViewOnce:
+          data.isViewOnce.present ? data.isViewOnce.value : this.isViewOnce,
+      viewedAt: data.viewedAt.present ? data.viewedAt.value : this.viewedAt,
+      isBurned: data.isBurned.present ? data.isBurned.value : this.isBurned,
+      replyToChatId: data.replyToChatId.present
+          ? data.replyToChatId.value
+          : this.replyToChatId,
+      replyToChatName: data.replyToChatName.present
+          ? data.replyToChatName.value
+          : this.replyToChatName,
+      replyToChatType: data.replyToChatType.present
+          ? data.replyToChatType.value
+          : this.replyToChatType,
+      effectId: data.effectId.present ? data.effectId.value : this.effectId,
+      savedTagsJson: data.savedTagsJson.present
+          ? data.savedTagsJson.value
+          : this.savedTagsJson,
+      topicId: data.topicId.present ? data.topicId.value : this.topicId,
+      forwardsCount: data.forwardsCount.present
+          ? data.forwardsCount.value
+          : this.forwardsCount,
+      senderChatId: data.senderChatId.present
+          ? data.senderChatId.value
+          : this.senderChatId,
+      senderChatName: data.senderChatName.present
+          ? data.senderChatName.value
+          : this.senderChatName,
+      senderChatAvatarUrl: data.senderChatAvatarUrl.present
+          ? data.senderChatAvatarUrl.value
+          : this.senderChatAvatarUrl,
     );
   }
 
@@ -2127,13 +3937,41 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           ..write('isForward: $isForward, ')
           ..write('forwardFromId: $forwardFromId, ')
           ..write('forwardFromName: $forwardFromName, ')
+          ..write('forwardFromAvatarUrl: $forwardFromAvatarUrl, ')
+          ..write('senderCustomizationJson: $senderCustomizationJson, ')
           ..write('groupedId: $groupedId, ')
           ..write('entities: $entities, ')
           ..write('reactions: $reactions, ')
           ..write('linkPreviewOptions: $linkPreviewOptions, ')
           ..write('invertMedia: $invertMedia, ')
           ..write('isRound: $isRound, ')
-          ..write('mediaPayload: $mediaPayload')
+          ..write('mediaPayload: $mediaPayload, ')
+          ..write('viewsCount: $viewsCount, ')
+          ..write('authorSignature: $authorSignature, ')
+          ..write('postAuthorId: $postAuthorId, ')
+          ..write('senderRole: $senderRole, ')
+          ..write('senderAdminTitle: $senderAdminTitle, ')
+          ..write('isFromAnonymousAdmin: $isFromAnonymousAdmin, ')
+          ..write('isSilent: $isSilent, ')
+          ..write('commentsCount: $commentsCount, ')
+          ..write('recentRepliersJson: $recentRepliersJson, ')
+          ..write('threadRootMessageId: $threadRootMessageId, ')
+          ..write('hasMediaSpoiler: $hasMediaSpoiler, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('ttlSeconds: $ttlSeconds, ')
+          ..write('isViewOnce: $isViewOnce, ')
+          ..write('viewedAt: $viewedAt, ')
+          ..write('isBurned: $isBurned, ')
+          ..write('replyToChatId: $replyToChatId, ')
+          ..write('replyToChatName: $replyToChatName, ')
+          ..write('replyToChatType: $replyToChatType, ')
+          ..write('effectId: $effectId, ')
+          ..write('savedTagsJson: $savedTagsJson, ')
+          ..write('topicId: $topicId, ')
+          ..write('forwardsCount: $forwardsCount, ')
+          ..write('senderChatId: $senderChatId, ')
+          ..write('senderChatName: $senderChatName, ')
+          ..write('senderChatAvatarUrl: $senderChatAvatarUrl')
           ..write(')'))
         .toString();
   }
@@ -2166,13 +4004,41 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
         isForward,
         forwardFromId,
         forwardFromName,
+        forwardFromAvatarUrl,
+        senderCustomizationJson,
         groupedId,
         entities,
         reactions,
         linkPreviewOptions,
         invertMedia,
         isRound,
-        mediaPayload
+        mediaPayload,
+        viewsCount,
+        authorSignature,
+        postAuthorId,
+        senderRole,
+        senderAdminTitle,
+        isFromAnonymousAdmin,
+        isSilent,
+        commentsCount,
+        recentRepliersJson,
+        threadRootMessageId,
+        hasMediaSpoiler,
+        expiresAt,
+        ttlSeconds,
+        isViewOnce,
+        viewedAt,
+        isBurned,
+        replyToChatId,
+        replyToChatName,
+        replyToChatType,
+        effectId,
+        savedTagsJson,
+        topicId,
+        forwardsCount,
+        senderChatId,
+        senderChatName,
+        senderChatAvatarUrl
       ]);
   @override
   bool operator ==(Object other) =>
@@ -2204,13 +4070,41 @@ class DbMessage extends DataClass implements Insertable<DbMessage> {
           other.isForward == this.isForward &&
           other.forwardFromId == this.forwardFromId &&
           other.forwardFromName == this.forwardFromName &&
+          other.forwardFromAvatarUrl == this.forwardFromAvatarUrl &&
+          other.senderCustomizationJson == this.senderCustomizationJson &&
           other.groupedId == this.groupedId &&
           other.entities == this.entities &&
           other.reactions == this.reactions &&
           other.linkPreviewOptions == this.linkPreviewOptions &&
           other.invertMedia == this.invertMedia &&
           other.isRound == this.isRound &&
-          other.mediaPayload == this.mediaPayload);
+          other.mediaPayload == this.mediaPayload &&
+          other.viewsCount == this.viewsCount &&
+          other.authorSignature == this.authorSignature &&
+          other.postAuthorId == this.postAuthorId &&
+          other.senderRole == this.senderRole &&
+          other.senderAdminTitle == this.senderAdminTitle &&
+          other.isFromAnonymousAdmin == this.isFromAnonymousAdmin &&
+          other.isSilent == this.isSilent &&
+          other.commentsCount == this.commentsCount &&
+          other.recentRepliersJson == this.recentRepliersJson &&
+          other.threadRootMessageId == this.threadRootMessageId &&
+          other.hasMediaSpoiler == this.hasMediaSpoiler &&
+          other.expiresAt == this.expiresAt &&
+          other.ttlSeconds == this.ttlSeconds &&
+          other.isViewOnce == this.isViewOnce &&
+          other.viewedAt == this.viewedAt &&
+          other.isBurned == this.isBurned &&
+          other.replyToChatId == this.replyToChatId &&
+          other.replyToChatName == this.replyToChatName &&
+          other.replyToChatType == this.replyToChatType &&
+          other.effectId == this.effectId &&
+          other.savedTagsJson == this.savedTagsJson &&
+          other.topicId == this.topicId &&
+          other.forwardsCount == this.forwardsCount &&
+          other.senderChatId == this.senderChatId &&
+          other.senderChatName == this.senderChatName &&
+          other.senderChatAvatarUrl == this.senderChatAvatarUrl);
 }
 
 class MessagesCompanion extends UpdateCompanion<DbMessage> {
@@ -2240,6 +4134,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
   final Value<bool> isForward;
   final Value<String?> forwardFromId;
   final Value<String?> forwardFromName;
+  final Value<String?> forwardFromAvatarUrl;
+  final Value<String?> senderCustomizationJson;
   final Value<String?> groupedId;
   final Value<String?> entities;
   final Value<String?> reactions;
@@ -2247,6 +4143,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
   final Value<bool> invertMedia;
   final Value<bool> isRound;
   final Value<String?> mediaPayload;
+  final Value<int> viewsCount;
+  final Value<String?> authorSignature;
+  final Value<String?> postAuthorId;
+  final Value<String?> senderRole;
+  final Value<String?> senderAdminTitle;
+  final Value<bool> isFromAnonymousAdmin;
+  final Value<bool> isSilent;
+  final Value<int> commentsCount;
+  final Value<String?> recentRepliersJson;
+  final Value<String?> threadRootMessageId;
+  final Value<bool> hasMediaSpoiler;
+  final Value<String?> expiresAt;
+  final Value<int> ttlSeconds;
+  final Value<bool> isViewOnce;
+  final Value<String?> viewedAt;
+  final Value<bool> isBurned;
+  final Value<String?> replyToChatId;
+  final Value<String?> replyToChatName;
+  final Value<String?> replyToChatType;
+  final Value<String?> effectId;
+  final Value<String?> savedTagsJson;
+  final Value<int?> topicId;
+  final Value<int> forwardsCount;
+  final Value<String?> senderChatId;
+  final Value<String?> senderChatName;
+  final Value<String?> senderChatAvatarUrl;
   final Value<int> rowid;
   const MessagesCompanion({
     this.localId = const Value.absent(),
@@ -2275,6 +4197,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.isForward = const Value.absent(),
     this.forwardFromId = const Value.absent(),
     this.forwardFromName = const Value.absent(),
+    this.forwardFromAvatarUrl = const Value.absent(),
+    this.senderCustomizationJson = const Value.absent(),
     this.groupedId = const Value.absent(),
     this.entities = const Value.absent(),
     this.reactions = const Value.absent(),
@@ -2282,6 +4206,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.invertMedia = const Value.absent(),
     this.isRound = const Value.absent(),
     this.mediaPayload = const Value.absent(),
+    this.viewsCount = const Value.absent(),
+    this.authorSignature = const Value.absent(),
+    this.postAuthorId = const Value.absent(),
+    this.senderRole = const Value.absent(),
+    this.senderAdminTitle = const Value.absent(),
+    this.isFromAnonymousAdmin = const Value.absent(),
+    this.isSilent = const Value.absent(),
+    this.commentsCount = const Value.absent(),
+    this.recentRepliersJson = const Value.absent(),
+    this.threadRootMessageId = const Value.absent(),
+    this.hasMediaSpoiler = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.ttlSeconds = const Value.absent(),
+    this.isViewOnce = const Value.absent(),
+    this.viewedAt = const Value.absent(),
+    this.isBurned = const Value.absent(),
+    this.replyToChatId = const Value.absent(),
+    this.replyToChatName = const Value.absent(),
+    this.replyToChatType = const Value.absent(),
+    this.effectId = const Value.absent(),
+    this.savedTagsJson = const Value.absent(),
+    this.topicId = const Value.absent(),
+    this.forwardsCount = const Value.absent(),
+    this.senderChatId = const Value.absent(),
+    this.senderChatName = const Value.absent(),
+    this.senderChatAvatarUrl = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -2311,6 +4261,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.isForward = const Value.absent(),
     this.forwardFromId = const Value.absent(),
     this.forwardFromName = const Value.absent(),
+    this.forwardFromAvatarUrl = const Value.absent(),
+    this.senderCustomizationJson = const Value.absent(),
     this.groupedId = const Value.absent(),
     this.entities = const Value.absent(),
     this.reactions = const Value.absent(),
@@ -2318,6 +4270,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     this.invertMedia = const Value.absent(),
     this.isRound = const Value.absent(),
     this.mediaPayload = const Value.absent(),
+    this.viewsCount = const Value.absent(),
+    this.authorSignature = const Value.absent(),
+    this.postAuthorId = const Value.absent(),
+    this.senderRole = const Value.absent(),
+    this.senderAdminTitle = const Value.absent(),
+    this.isFromAnonymousAdmin = const Value.absent(),
+    this.isSilent = const Value.absent(),
+    this.commentsCount = const Value.absent(),
+    this.recentRepliersJson = const Value.absent(),
+    this.threadRootMessageId = const Value.absent(),
+    this.hasMediaSpoiler = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.ttlSeconds = const Value.absent(),
+    this.isViewOnce = const Value.absent(),
+    this.viewedAt = const Value.absent(),
+    this.isBurned = const Value.absent(),
+    this.replyToChatId = const Value.absent(),
+    this.replyToChatName = const Value.absent(),
+    this.replyToChatType = const Value.absent(),
+    this.effectId = const Value.absent(),
+    this.savedTagsJson = const Value.absent(),
+    this.topicId = const Value.absent(),
+    this.forwardsCount = const Value.absent(),
+    this.senderChatId = const Value.absent(),
+    this.senderChatName = const Value.absent(),
+    this.senderChatAvatarUrl = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : localId = Value(localId),
         chatId = Value(chatId),
@@ -2351,6 +4329,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     Expression<bool>? isForward,
     Expression<String>? forwardFromId,
     Expression<String>? forwardFromName,
+    Expression<String>? forwardFromAvatarUrl,
+    Expression<String>? senderCustomizationJson,
     Expression<String>? groupedId,
     Expression<String>? entities,
     Expression<String>? reactions,
@@ -2358,6 +4338,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     Expression<bool>? invertMedia,
     Expression<bool>? isRound,
     Expression<String>? mediaPayload,
+    Expression<int>? viewsCount,
+    Expression<String>? authorSignature,
+    Expression<String>? postAuthorId,
+    Expression<String>? senderRole,
+    Expression<String>? senderAdminTitle,
+    Expression<bool>? isFromAnonymousAdmin,
+    Expression<bool>? isSilent,
+    Expression<int>? commentsCount,
+    Expression<String>? recentRepliersJson,
+    Expression<String>? threadRootMessageId,
+    Expression<bool>? hasMediaSpoiler,
+    Expression<String>? expiresAt,
+    Expression<int>? ttlSeconds,
+    Expression<bool>? isViewOnce,
+    Expression<String>? viewedAt,
+    Expression<bool>? isBurned,
+    Expression<String>? replyToChatId,
+    Expression<String>? replyToChatName,
+    Expression<String>? replyToChatType,
+    Expression<String>? effectId,
+    Expression<String>? savedTagsJson,
+    Expression<int>? topicId,
+    Expression<int>? forwardsCount,
+    Expression<String>? senderChatId,
+    Expression<String>? senderChatName,
+    Expression<String>? senderChatAvatarUrl,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2388,6 +4394,10 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       if (isForward != null) 'is_forward': isForward,
       if (forwardFromId != null) 'forward_from_id': forwardFromId,
       if (forwardFromName != null) 'forward_from_name': forwardFromName,
+      if (forwardFromAvatarUrl != null)
+        'forward_from_avatar_url': forwardFromAvatarUrl,
+      if (senderCustomizationJson != null)
+        'sender_customization_json': senderCustomizationJson,
       if (groupedId != null) 'grouped_id': groupedId,
       if (entities != null) 'entities': entities,
       if (reactions != null) 'reactions': reactions,
@@ -2396,6 +4406,36 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       if (invertMedia != null) 'invert_media': invertMedia,
       if (isRound != null) 'is_round': isRound,
       if (mediaPayload != null) 'media_payload': mediaPayload,
+      if (viewsCount != null) 'views_count': viewsCount,
+      if (authorSignature != null) 'author_signature': authorSignature,
+      if (postAuthorId != null) 'post_author_id': postAuthorId,
+      if (senderRole != null) 'sender_role': senderRole,
+      if (senderAdminTitle != null) 'sender_admin_title': senderAdminTitle,
+      if (isFromAnonymousAdmin != null)
+        'is_from_anonymous_admin': isFromAnonymousAdmin,
+      if (isSilent != null) 'is_silent': isSilent,
+      if (commentsCount != null) 'comments_count': commentsCount,
+      if (recentRepliersJson != null)
+        'recent_repliers_json': recentRepliersJson,
+      if (threadRootMessageId != null)
+        'thread_root_message_id': threadRootMessageId,
+      if (hasMediaSpoiler != null) 'has_media_spoiler': hasMediaSpoiler,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (ttlSeconds != null) 'ttl_seconds': ttlSeconds,
+      if (isViewOnce != null) 'is_view_once': isViewOnce,
+      if (viewedAt != null) 'viewed_at': viewedAt,
+      if (isBurned != null) 'is_burned': isBurned,
+      if (replyToChatId != null) 'reply_to_chat_id': replyToChatId,
+      if (replyToChatName != null) 'reply_to_chat_name': replyToChatName,
+      if (replyToChatType != null) 'reply_to_chat_type': replyToChatType,
+      if (effectId != null) 'effect_id': effectId,
+      if (savedTagsJson != null) 'saved_tags_json': savedTagsJson,
+      if (topicId != null) 'topic_id': topicId,
+      if (forwardsCount != null) 'forwards_count': forwardsCount,
+      if (senderChatId != null) 'sender_chat_id': senderChatId,
+      if (senderChatName != null) 'sender_chat_name': senderChatName,
+      if (senderChatAvatarUrl != null)
+        'sender_chat_avatar_url': senderChatAvatarUrl,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2427,6 +4467,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       Value<bool>? isForward,
       Value<String?>? forwardFromId,
       Value<String?>? forwardFromName,
+      Value<String?>? forwardFromAvatarUrl,
+      Value<String?>? senderCustomizationJson,
       Value<String?>? groupedId,
       Value<String?>? entities,
       Value<String?>? reactions,
@@ -2434,6 +4476,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       Value<bool>? invertMedia,
       Value<bool>? isRound,
       Value<String?>? mediaPayload,
+      Value<int>? viewsCount,
+      Value<String?>? authorSignature,
+      Value<String?>? postAuthorId,
+      Value<String?>? senderRole,
+      Value<String?>? senderAdminTitle,
+      Value<bool>? isFromAnonymousAdmin,
+      Value<bool>? isSilent,
+      Value<int>? commentsCount,
+      Value<String?>? recentRepliersJson,
+      Value<String?>? threadRootMessageId,
+      Value<bool>? hasMediaSpoiler,
+      Value<String?>? expiresAt,
+      Value<int>? ttlSeconds,
+      Value<bool>? isViewOnce,
+      Value<String?>? viewedAt,
+      Value<bool>? isBurned,
+      Value<String?>? replyToChatId,
+      Value<String?>? replyToChatName,
+      Value<String?>? replyToChatType,
+      Value<String?>? effectId,
+      Value<String?>? savedTagsJson,
+      Value<int?>? topicId,
+      Value<int>? forwardsCount,
+      Value<String?>? senderChatId,
+      Value<String?>? senderChatName,
+      Value<String?>? senderChatAvatarUrl,
       Value<int>? rowid}) {
     return MessagesCompanion(
       localId: localId ?? this.localId,
@@ -2462,6 +4530,9 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       isForward: isForward ?? this.isForward,
       forwardFromId: forwardFromId ?? this.forwardFromId,
       forwardFromName: forwardFromName ?? this.forwardFromName,
+      forwardFromAvatarUrl: forwardFromAvatarUrl ?? this.forwardFromAvatarUrl,
+      senderCustomizationJson:
+          senderCustomizationJson ?? this.senderCustomizationJson,
       groupedId: groupedId ?? this.groupedId,
       entities: entities ?? this.entities,
       reactions: reactions ?? this.reactions,
@@ -2469,6 +4540,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
       invertMedia: invertMedia ?? this.invertMedia,
       isRound: isRound ?? this.isRound,
       mediaPayload: mediaPayload ?? this.mediaPayload,
+      viewsCount: viewsCount ?? this.viewsCount,
+      authorSignature: authorSignature ?? this.authorSignature,
+      postAuthorId: postAuthorId ?? this.postAuthorId,
+      senderRole: senderRole ?? this.senderRole,
+      senderAdminTitle: senderAdminTitle ?? this.senderAdminTitle,
+      isFromAnonymousAdmin: isFromAnonymousAdmin ?? this.isFromAnonymousAdmin,
+      isSilent: isSilent ?? this.isSilent,
+      commentsCount: commentsCount ?? this.commentsCount,
+      recentRepliersJson: recentRepliersJson ?? this.recentRepliersJson,
+      threadRootMessageId: threadRootMessageId ?? this.threadRootMessageId,
+      hasMediaSpoiler: hasMediaSpoiler ?? this.hasMediaSpoiler,
+      expiresAt: expiresAt ?? this.expiresAt,
+      ttlSeconds: ttlSeconds ?? this.ttlSeconds,
+      isViewOnce: isViewOnce ?? this.isViewOnce,
+      viewedAt: viewedAt ?? this.viewedAt,
+      isBurned: isBurned ?? this.isBurned,
+      replyToChatId: replyToChatId ?? this.replyToChatId,
+      replyToChatName: replyToChatName ?? this.replyToChatName,
+      replyToChatType: replyToChatType ?? this.replyToChatType,
+      effectId: effectId ?? this.effectId,
+      savedTagsJson: savedTagsJson ?? this.savedTagsJson,
+      topicId: topicId ?? this.topicId,
+      forwardsCount: forwardsCount ?? this.forwardsCount,
+      senderChatId: senderChatId ?? this.senderChatId,
+      senderChatName: senderChatName ?? this.senderChatName,
+      senderChatAvatarUrl: senderChatAvatarUrl ?? this.senderChatAvatarUrl,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2554,6 +4651,14 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     if (forwardFromName.present) {
       map['forward_from_name'] = Variable<String>(forwardFromName.value);
     }
+    if (forwardFromAvatarUrl.present) {
+      map['forward_from_avatar_url'] =
+          Variable<String>(forwardFromAvatarUrl.value);
+    }
+    if (senderCustomizationJson.present) {
+      map['sender_customization_json'] =
+          Variable<String>(senderCustomizationJson.value);
+    }
     if (groupedId.present) {
       map['grouped_id'] = Variable<String>(groupedId.value);
     }
@@ -2574,6 +4679,87 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
     }
     if (mediaPayload.present) {
       map['media_payload'] = Variable<String>(mediaPayload.value);
+    }
+    if (viewsCount.present) {
+      map['views_count'] = Variable<int>(viewsCount.value);
+    }
+    if (authorSignature.present) {
+      map['author_signature'] = Variable<String>(authorSignature.value);
+    }
+    if (postAuthorId.present) {
+      map['post_author_id'] = Variable<String>(postAuthorId.value);
+    }
+    if (senderRole.present) {
+      map['sender_role'] = Variable<String>(senderRole.value);
+    }
+    if (senderAdminTitle.present) {
+      map['sender_admin_title'] = Variable<String>(senderAdminTitle.value);
+    }
+    if (isFromAnonymousAdmin.present) {
+      map['is_from_anonymous_admin'] =
+          Variable<bool>(isFromAnonymousAdmin.value);
+    }
+    if (isSilent.present) {
+      map['is_silent'] = Variable<bool>(isSilent.value);
+    }
+    if (commentsCount.present) {
+      map['comments_count'] = Variable<int>(commentsCount.value);
+    }
+    if (recentRepliersJson.present) {
+      map['recent_repliers_json'] = Variable<String>(recentRepliersJson.value);
+    }
+    if (threadRootMessageId.present) {
+      map['thread_root_message_id'] =
+          Variable<String>(threadRootMessageId.value);
+    }
+    if (hasMediaSpoiler.present) {
+      map['has_media_spoiler'] = Variable<bool>(hasMediaSpoiler.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<String>(expiresAt.value);
+    }
+    if (ttlSeconds.present) {
+      map['ttl_seconds'] = Variable<int>(ttlSeconds.value);
+    }
+    if (isViewOnce.present) {
+      map['is_view_once'] = Variable<bool>(isViewOnce.value);
+    }
+    if (viewedAt.present) {
+      map['viewed_at'] = Variable<String>(viewedAt.value);
+    }
+    if (isBurned.present) {
+      map['is_burned'] = Variable<bool>(isBurned.value);
+    }
+    if (replyToChatId.present) {
+      map['reply_to_chat_id'] = Variable<String>(replyToChatId.value);
+    }
+    if (replyToChatName.present) {
+      map['reply_to_chat_name'] = Variable<String>(replyToChatName.value);
+    }
+    if (replyToChatType.present) {
+      map['reply_to_chat_type'] = Variable<String>(replyToChatType.value);
+    }
+    if (effectId.present) {
+      map['effect_id'] = Variable<String>(effectId.value);
+    }
+    if (savedTagsJson.present) {
+      map['saved_tags_json'] = Variable<String>(savedTagsJson.value);
+    }
+    if (topicId.present) {
+      map['topic_id'] = Variable<int>(topicId.value);
+    }
+    if (forwardsCount.present) {
+      map['forwards_count'] = Variable<int>(forwardsCount.value);
+    }
+    if (senderChatId.present) {
+      map['sender_chat_id'] = Variable<String>(senderChatId.value);
+    }
+    if (senderChatName.present) {
+      map['sender_chat_name'] = Variable<String>(senderChatName.value);
+    }
+    if (senderChatAvatarUrl.present) {
+      map['sender_chat_avatar_url'] =
+          Variable<String>(senderChatAvatarUrl.value);
     }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
@@ -2610,6 +4796,8 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
           ..write('isForward: $isForward, ')
           ..write('forwardFromId: $forwardFromId, ')
           ..write('forwardFromName: $forwardFromName, ')
+          ..write('forwardFromAvatarUrl: $forwardFromAvatarUrl, ')
+          ..write('senderCustomizationJson: $senderCustomizationJson, ')
           ..write('groupedId: $groupedId, ')
           ..write('entities: $entities, ')
           ..write('reactions: $reactions, ')
@@ -2617,6 +4805,32 @@ class MessagesCompanion extends UpdateCompanion<DbMessage> {
           ..write('invertMedia: $invertMedia, ')
           ..write('isRound: $isRound, ')
           ..write('mediaPayload: $mediaPayload, ')
+          ..write('viewsCount: $viewsCount, ')
+          ..write('authorSignature: $authorSignature, ')
+          ..write('postAuthorId: $postAuthorId, ')
+          ..write('senderRole: $senderRole, ')
+          ..write('senderAdminTitle: $senderAdminTitle, ')
+          ..write('isFromAnonymousAdmin: $isFromAnonymousAdmin, ')
+          ..write('isSilent: $isSilent, ')
+          ..write('commentsCount: $commentsCount, ')
+          ..write('recentRepliersJson: $recentRepliersJson, ')
+          ..write('threadRootMessageId: $threadRootMessageId, ')
+          ..write('hasMediaSpoiler: $hasMediaSpoiler, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('ttlSeconds: $ttlSeconds, ')
+          ..write('isViewOnce: $isViewOnce, ')
+          ..write('viewedAt: $viewedAt, ')
+          ..write('isBurned: $isBurned, ')
+          ..write('replyToChatId: $replyToChatId, ')
+          ..write('replyToChatName: $replyToChatName, ')
+          ..write('replyToChatType: $replyToChatType, ')
+          ..write('effectId: $effectId, ')
+          ..write('savedTagsJson: $savedTagsJson, ')
+          ..write('topicId: $topicId, ')
+          ..write('forwardsCount: $forwardsCount, ')
+          ..write('senderChatId: $senderChatId, ')
+          ..write('senderChatName: $senderChatName, ')
+          ..write('senderChatAvatarUrl: $senderChatAvatarUrl, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3330,6 +5544,27 @@ typedef $$ChatsTableCreateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isPublic,
   Value<bool> isBot,
   Value<bool> isVerified,
+  Value<bool> isArchived,
+  Value<String?> peerCustomizationJson,
+  Value<bool> showAuthorProfiles,
+  Value<bool> signMessages,
+  Value<String?> linkedChatId,
+  Value<String?> myRole,
+  Value<String?> lastMessageSenderId,
+  Value<String?> lastMessageSenderName,
+  Value<bool> hasActiveCall,
+  Value<String?> chatPermissionsJson,
+  Value<String?> reactionSettingsJson,
+  Value<bool> hasProtectedContent,
+  Value<String?> pinnedMessageIdsJson,
+  Value<int> messageAutoDeleteTime,
+  Value<String?> appearanceJson,
+  Value<bool> isForum,
+  Value<bool> participantsHidden,
+  Value<bool> hasAggressiveAntiSpamEnabled,
+  Value<int> maxReactionsPerPost,
+  Value<int> unreadMentionsCount,
+  Value<int> unreadReactionsCount,
   Value<int> rowid,
 });
 typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
@@ -3356,6 +5591,27 @@ typedef $$ChatsTableUpdateCompanionBuilder = ChatsCompanion Function({
   Value<bool> isPublic,
   Value<bool> isBot,
   Value<bool> isVerified,
+  Value<bool> isArchived,
+  Value<String?> peerCustomizationJson,
+  Value<bool> showAuthorProfiles,
+  Value<bool> signMessages,
+  Value<String?> linkedChatId,
+  Value<String?> myRole,
+  Value<String?> lastMessageSenderId,
+  Value<String?> lastMessageSenderName,
+  Value<bool> hasActiveCall,
+  Value<String?> chatPermissionsJson,
+  Value<String?> reactionSettingsJson,
+  Value<bool> hasProtectedContent,
+  Value<String?> pinnedMessageIdsJson,
+  Value<int> messageAutoDeleteTime,
+  Value<String?> appearanceJson,
+  Value<bool> isForum,
+  Value<bool> participantsHidden,
+  Value<bool> hasAggressiveAntiSpamEnabled,
+  Value<int> maxReactionsPerPost,
+  Value<int> unreadMentionsCount,
+  Value<int> unreadReactionsCount,
   Value<int> rowid,
 });
 
@@ -3443,6 +5699,84 @@ class $$ChatsTableFilterComposer extends Composer<_$AppDatabase, $ChatsTable> {
 
   ColumnFilters<bool> get isVerified => $composableBuilder(
       column: $table.isVerified, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isArchived => $composableBuilder(
+      column: $table.isArchived, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get peerCustomizationJson => $composableBuilder(
+      column: $table.peerCustomizationJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get showAuthorProfiles => $composableBuilder(
+      column: $table.showAuthorProfiles,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get signMessages => $composableBuilder(
+      column: $table.signMessages, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get linkedChatId => $composableBuilder(
+      column: $table.linkedChatId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get myRole => $composableBuilder(
+      column: $table.myRole, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageSenderId => $composableBuilder(
+      column: $table.lastMessageSenderId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get lastMessageSenderName => $composableBuilder(
+      column: $table.lastMessageSenderName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasActiveCall => $composableBuilder(
+      column: $table.hasActiveCall, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get chatPermissionsJson => $composableBuilder(
+      column: $table.chatPermissionsJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get reactionSettingsJson => $composableBuilder(
+      column: $table.reactionSettingsJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasProtectedContent => $composableBuilder(
+      column: $table.hasProtectedContent,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get pinnedMessageIdsJson => $composableBuilder(
+      column: $table.pinnedMessageIdsJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get messageAutoDeleteTime => $composableBuilder(
+      column: $table.messageAutoDeleteTime,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get appearanceJson => $composableBuilder(
+      column: $table.appearanceJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isForum => $composableBuilder(
+      column: $table.isForum, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get participantsHidden => $composableBuilder(
+      column: $table.participantsHidden,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasAggressiveAntiSpamEnabled => $composableBuilder(
+      column: $table.hasAggressiveAntiSpamEnabled,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get maxReactionsPerPost => $composableBuilder(
+      column: $table.maxReactionsPerPost,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get unreadMentionsCount => $composableBuilder(
+      column: $table.unreadMentionsCount,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get unreadReactionsCount => $composableBuilder(
+      column: $table.unreadReactionsCount,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$ChatsTableOrderingComposer
@@ -3530,6 +5864,87 @@ class $$ChatsTableOrderingComposer
 
   ColumnOrderings<bool> get isVerified => $composableBuilder(
       column: $table.isVerified, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isArchived => $composableBuilder(
+      column: $table.isArchived, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get peerCustomizationJson => $composableBuilder(
+      column: $table.peerCustomizationJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get showAuthorProfiles => $composableBuilder(
+      column: $table.showAuthorProfiles,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get signMessages => $composableBuilder(
+      column: $table.signMessages,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get linkedChatId => $composableBuilder(
+      column: $table.linkedChatId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get myRole => $composableBuilder(
+      column: $table.myRole, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageSenderId => $composableBuilder(
+      column: $table.lastMessageSenderId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get lastMessageSenderName => $composableBuilder(
+      column: $table.lastMessageSenderName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasActiveCall => $composableBuilder(
+      column: $table.hasActiveCall,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get chatPermissionsJson => $composableBuilder(
+      column: $table.chatPermissionsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get reactionSettingsJson => $composableBuilder(
+      column: $table.reactionSettingsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasProtectedContent => $composableBuilder(
+      column: $table.hasProtectedContent,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get pinnedMessageIdsJson => $composableBuilder(
+      column: $table.pinnedMessageIdsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get messageAutoDeleteTime => $composableBuilder(
+      column: $table.messageAutoDeleteTime,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get appearanceJson => $composableBuilder(
+      column: $table.appearanceJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isForum => $composableBuilder(
+      column: $table.isForum, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get participantsHidden => $composableBuilder(
+      column: $table.participantsHidden,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasAggressiveAntiSpamEnabled => $composableBuilder(
+      column: $table.hasAggressiveAntiSpamEnabled,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get maxReactionsPerPost => $composableBuilder(
+      column: $table.maxReactionsPerPost,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get unreadMentionsCount => $composableBuilder(
+      column: $table.unreadMentionsCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get unreadReactionsCount => $composableBuilder(
+      column: $table.unreadReactionsCount,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$ChatsTableAnnotationComposer
@@ -3609,6 +6024,69 @@ class $$ChatsTableAnnotationComposer
 
   GeneratedColumn<bool> get isVerified => $composableBuilder(
       column: $table.isVerified, builder: (column) => column);
+
+  GeneratedColumn<bool> get isArchived => $composableBuilder(
+      column: $table.isArchived, builder: (column) => column);
+
+  GeneratedColumn<String> get peerCustomizationJson => $composableBuilder(
+      column: $table.peerCustomizationJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get showAuthorProfiles => $composableBuilder(
+      column: $table.showAuthorProfiles, builder: (column) => column);
+
+  GeneratedColumn<bool> get signMessages => $composableBuilder(
+      column: $table.signMessages, builder: (column) => column);
+
+  GeneratedColumn<String> get linkedChatId => $composableBuilder(
+      column: $table.linkedChatId, builder: (column) => column);
+
+  GeneratedColumn<String> get myRole =>
+      $composableBuilder(column: $table.myRole, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageSenderId => $composableBuilder(
+      column: $table.lastMessageSenderId, builder: (column) => column);
+
+  GeneratedColumn<String> get lastMessageSenderName => $composableBuilder(
+      column: $table.lastMessageSenderName, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasActiveCall => $composableBuilder(
+      column: $table.hasActiveCall, builder: (column) => column);
+
+  GeneratedColumn<String> get chatPermissionsJson => $composableBuilder(
+      column: $table.chatPermissionsJson, builder: (column) => column);
+
+  GeneratedColumn<String> get reactionSettingsJson => $composableBuilder(
+      column: $table.reactionSettingsJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasProtectedContent => $composableBuilder(
+      column: $table.hasProtectedContent, builder: (column) => column);
+
+  GeneratedColumn<String> get pinnedMessageIdsJson => $composableBuilder(
+      column: $table.pinnedMessageIdsJson, builder: (column) => column);
+
+  GeneratedColumn<int> get messageAutoDeleteTime => $composableBuilder(
+      column: $table.messageAutoDeleteTime, builder: (column) => column);
+
+  GeneratedColumn<String> get appearanceJson => $composableBuilder(
+      column: $table.appearanceJson, builder: (column) => column);
+
+  GeneratedColumn<bool> get isForum =>
+      $composableBuilder(column: $table.isForum, builder: (column) => column);
+
+  GeneratedColumn<bool> get participantsHidden => $composableBuilder(
+      column: $table.participantsHidden, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasAggressiveAntiSpamEnabled => $composableBuilder(
+      column: $table.hasAggressiveAntiSpamEnabled, builder: (column) => column);
+
+  GeneratedColumn<int> get maxReactionsPerPost => $composableBuilder(
+      column: $table.maxReactionsPerPost, builder: (column) => column);
+
+  GeneratedColumn<int> get unreadMentionsCount => $composableBuilder(
+      column: $table.unreadMentionsCount, builder: (column) => column);
+
+  GeneratedColumn<int> get unreadReactionsCount => $composableBuilder(
+      column: $table.unreadReactionsCount, builder: (column) => column);
 }
 
 class $$ChatsTableTableManager extends RootTableManager<
@@ -3657,6 +6135,27 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isPublic = const Value.absent(),
             Value<bool> isBot = const Value.absent(),
             Value<bool> isVerified = const Value.absent(),
+            Value<bool> isArchived = const Value.absent(),
+            Value<String?> peerCustomizationJson = const Value.absent(),
+            Value<bool> showAuthorProfiles = const Value.absent(),
+            Value<bool> signMessages = const Value.absent(),
+            Value<String?> linkedChatId = const Value.absent(),
+            Value<String?> myRole = const Value.absent(),
+            Value<String?> lastMessageSenderId = const Value.absent(),
+            Value<String?> lastMessageSenderName = const Value.absent(),
+            Value<bool> hasActiveCall = const Value.absent(),
+            Value<String?> chatPermissionsJson = const Value.absent(),
+            Value<String?> reactionSettingsJson = const Value.absent(),
+            Value<bool> hasProtectedContent = const Value.absent(),
+            Value<String?> pinnedMessageIdsJson = const Value.absent(),
+            Value<int> messageAutoDeleteTime = const Value.absent(),
+            Value<String?> appearanceJson = const Value.absent(),
+            Value<bool> isForum = const Value.absent(),
+            Value<bool> participantsHidden = const Value.absent(),
+            Value<bool> hasAggressiveAntiSpamEnabled = const Value.absent(),
+            Value<int> maxReactionsPerPost = const Value.absent(),
+            Value<int> unreadMentionsCount = const Value.absent(),
+            Value<int> unreadReactionsCount = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion(
@@ -3683,6 +6182,27 @@ class $$ChatsTableTableManager extends RootTableManager<
             isPublic: isPublic,
             isBot: isBot,
             isVerified: isVerified,
+            isArchived: isArchived,
+            peerCustomizationJson: peerCustomizationJson,
+            showAuthorProfiles: showAuthorProfiles,
+            signMessages: signMessages,
+            linkedChatId: linkedChatId,
+            myRole: myRole,
+            lastMessageSenderId: lastMessageSenderId,
+            lastMessageSenderName: lastMessageSenderName,
+            hasActiveCall: hasActiveCall,
+            chatPermissionsJson: chatPermissionsJson,
+            reactionSettingsJson: reactionSettingsJson,
+            hasProtectedContent: hasProtectedContent,
+            pinnedMessageIdsJson: pinnedMessageIdsJson,
+            messageAutoDeleteTime: messageAutoDeleteTime,
+            appearanceJson: appearanceJson,
+            isForum: isForum,
+            participantsHidden: participantsHidden,
+            hasAggressiveAntiSpamEnabled: hasAggressiveAntiSpamEnabled,
+            maxReactionsPerPost: maxReactionsPerPost,
+            unreadMentionsCount: unreadMentionsCount,
+            unreadReactionsCount: unreadReactionsCount,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -3709,6 +6229,27 @@ class $$ChatsTableTableManager extends RootTableManager<
             Value<bool> isPublic = const Value.absent(),
             Value<bool> isBot = const Value.absent(),
             Value<bool> isVerified = const Value.absent(),
+            Value<bool> isArchived = const Value.absent(),
+            Value<String?> peerCustomizationJson = const Value.absent(),
+            Value<bool> showAuthorProfiles = const Value.absent(),
+            Value<bool> signMessages = const Value.absent(),
+            Value<String?> linkedChatId = const Value.absent(),
+            Value<String?> myRole = const Value.absent(),
+            Value<String?> lastMessageSenderId = const Value.absent(),
+            Value<String?> lastMessageSenderName = const Value.absent(),
+            Value<bool> hasActiveCall = const Value.absent(),
+            Value<String?> chatPermissionsJson = const Value.absent(),
+            Value<String?> reactionSettingsJson = const Value.absent(),
+            Value<bool> hasProtectedContent = const Value.absent(),
+            Value<String?> pinnedMessageIdsJson = const Value.absent(),
+            Value<int> messageAutoDeleteTime = const Value.absent(),
+            Value<String?> appearanceJson = const Value.absent(),
+            Value<bool> isForum = const Value.absent(),
+            Value<bool> participantsHidden = const Value.absent(),
+            Value<bool> hasAggressiveAntiSpamEnabled = const Value.absent(),
+            Value<int> maxReactionsPerPost = const Value.absent(),
+            Value<int> unreadMentionsCount = const Value.absent(),
+            Value<int> unreadReactionsCount = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ChatsCompanion.insert(
@@ -3735,6 +6276,27 @@ class $$ChatsTableTableManager extends RootTableManager<
             isPublic: isPublic,
             isBot: isBot,
             isVerified: isVerified,
+            isArchived: isArchived,
+            peerCustomizationJson: peerCustomizationJson,
+            showAuthorProfiles: showAuthorProfiles,
+            signMessages: signMessages,
+            linkedChatId: linkedChatId,
+            myRole: myRole,
+            lastMessageSenderId: lastMessageSenderId,
+            lastMessageSenderName: lastMessageSenderName,
+            hasActiveCall: hasActiveCall,
+            chatPermissionsJson: chatPermissionsJson,
+            reactionSettingsJson: reactionSettingsJson,
+            hasProtectedContent: hasProtectedContent,
+            pinnedMessageIdsJson: pinnedMessageIdsJson,
+            messageAutoDeleteTime: messageAutoDeleteTime,
+            appearanceJson: appearanceJson,
+            isForum: isForum,
+            participantsHidden: participantsHidden,
+            hasAggressiveAntiSpamEnabled: hasAggressiveAntiSpamEnabled,
+            maxReactionsPerPost: maxReactionsPerPost,
+            unreadMentionsCount: unreadMentionsCount,
+            unreadReactionsCount: unreadReactionsCount,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -3783,6 +6345,8 @@ typedef $$MessagesTableCreateCompanionBuilder = MessagesCompanion Function({
   Value<bool> isForward,
   Value<String?> forwardFromId,
   Value<String?> forwardFromName,
+  Value<String?> forwardFromAvatarUrl,
+  Value<String?> senderCustomizationJson,
   Value<String?> groupedId,
   Value<String?> entities,
   Value<String?> reactions,
@@ -3790,6 +6354,32 @@ typedef $$MessagesTableCreateCompanionBuilder = MessagesCompanion Function({
   Value<bool> invertMedia,
   Value<bool> isRound,
   Value<String?> mediaPayload,
+  Value<int> viewsCount,
+  Value<String?> authorSignature,
+  Value<String?> postAuthorId,
+  Value<String?> senderRole,
+  Value<String?> senderAdminTitle,
+  Value<bool> isFromAnonymousAdmin,
+  Value<bool> isSilent,
+  Value<int> commentsCount,
+  Value<String?> recentRepliersJson,
+  Value<String?> threadRootMessageId,
+  Value<bool> hasMediaSpoiler,
+  Value<String?> expiresAt,
+  Value<int> ttlSeconds,
+  Value<bool> isViewOnce,
+  Value<String?> viewedAt,
+  Value<bool> isBurned,
+  Value<String?> replyToChatId,
+  Value<String?> replyToChatName,
+  Value<String?> replyToChatType,
+  Value<String?> effectId,
+  Value<String?> savedTagsJson,
+  Value<int?> topicId,
+  Value<int> forwardsCount,
+  Value<String?> senderChatId,
+  Value<String?> senderChatName,
+  Value<String?> senderChatAvatarUrl,
   Value<int> rowid,
 });
 typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
@@ -3819,6 +6409,8 @@ typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
   Value<bool> isForward,
   Value<String?> forwardFromId,
   Value<String?> forwardFromName,
+  Value<String?> forwardFromAvatarUrl,
+  Value<String?> senderCustomizationJson,
   Value<String?> groupedId,
   Value<String?> entities,
   Value<String?> reactions,
@@ -3826,6 +6418,32 @@ typedef $$MessagesTableUpdateCompanionBuilder = MessagesCompanion Function({
   Value<bool> invertMedia,
   Value<bool> isRound,
   Value<String?> mediaPayload,
+  Value<int> viewsCount,
+  Value<String?> authorSignature,
+  Value<String?> postAuthorId,
+  Value<String?> senderRole,
+  Value<String?> senderAdminTitle,
+  Value<bool> isFromAnonymousAdmin,
+  Value<bool> isSilent,
+  Value<int> commentsCount,
+  Value<String?> recentRepliersJson,
+  Value<String?> threadRootMessageId,
+  Value<bool> hasMediaSpoiler,
+  Value<String?> expiresAt,
+  Value<int> ttlSeconds,
+  Value<bool> isViewOnce,
+  Value<String?> viewedAt,
+  Value<bool> isBurned,
+  Value<String?> replyToChatId,
+  Value<String?> replyToChatName,
+  Value<String?> replyToChatType,
+  Value<String?> effectId,
+  Value<String?> savedTagsJson,
+  Value<int?> topicId,
+  Value<int> forwardsCount,
+  Value<String?> senderChatId,
+  Value<String?> senderChatName,
+  Value<String?> senderChatAvatarUrl,
   Value<int> rowid,
 });
 
@@ -3923,6 +6541,14 @@ class $$MessagesTableFilterComposer
       column: $table.forwardFromName,
       builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<String> get forwardFromAvatarUrl => $composableBuilder(
+      column: $table.forwardFromAvatarUrl,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderCustomizationJson => $composableBuilder(
+      column: $table.senderCustomizationJson,
+      builder: (column) => ColumnFilters(column));
+
   ColumnFilters<String> get groupedId => $composableBuilder(
       column: $table.groupedId, builder: (column) => ColumnFilters(column));
 
@@ -3944,6 +6570,94 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get mediaPayload => $composableBuilder(
       column: $table.mediaPayload, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get viewsCount => $composableBuilder(
+      column: $table.viewsCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get authorSignature => $composableBuilder(
+      column: $table.authorSignature,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get postAuthorId => $composableBuilder(
+      column: $table.postAuthorId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderRole => $composableBuilder(
+      column: $table.senderRole, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderAdminTitle => $composableBuilder(
+      column: $table.senderAdminTitle,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isFromAnonymousAdmin => $composableBuilder(
+      column: $table.isFromAnonymousAdmin,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isSilent => $composableBuilder(
+      column: $table.isSilent, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get commentsCount => $composableBuilder(
+      column: $table.commentsCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recentRepliersJson => $composableBuilder(
+      column: $table.recentRepliersJson,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get threadRootMessageId => $composableBuilder(
+      column: $table.threadRootMessageId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get hasMediaSpoiler => $composableBuilder(
+      column: $table.hasMediaSpoiler,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get expiresAt => $composableBuilder(
+      column: $table.expiresAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get ttlSeconds => $composableBuilder(
+      column: $table.ttlSeconds, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isViewOnce => $composableBuilder(
+      column: $table.isViewOnce, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get viewedAt => $composableBuilder(
+      column: $table.viewedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isBurned => $composableBuilder(
+      column: $table.isBurned, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get replyToChatId => $composableBuilder(
+      column: $table.replyToChatId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get replyToChatName => $composableBuilder(
+      column: $table.replyToChatName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get replyToChatType => $composableBuilder(
+      column: $table.replyToChatType,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get effectId => $composableBuilder(
+      column: $table.effectId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get savedTagsJson => $composableBuilder(
+      column: $table.savedTagsJson, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get topicId => $composableBuilder(
+      column: $table.topicId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get forwardsCount => $composableBuilder(
+      column: $table.forwardsCount, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderChatId => $composableBuilder(
+      column: $table.senderChatId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderChatName => $composableBuilder(
+      column: $table.senderChatName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get senderChatAvatarUrl => $composableBuilder(
+      column: $table.senderChatAvatarUrl,
+      builder: (column) => ColumnFilters(column));
 }
 
 class $$MessagesTableOrderingComposer
@@ -4041,6 +6755,14 @@ class $$MessagesTableOrderingComposer
       column: $table.forwardFromName,
       builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get forwardFromAvatarUrl => $composableBuilder(
+      column: $table.forwardFromAvatarUrl,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderCustomizationJson => $composableBuilder(
+      column: $table.senderCustomizationJson,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get groupedId => $composableBuilder(
       column: $table.groupedId, builder: (column) => ColumnOrderings(column));
 
@@ -4062,6 +6784,100 @@ class $$MessagesTableOrderingComposer
 
   ColumnOrderings<String> get mediaPayload => $composableBuilder(
       column: $table.mediaPayload,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get viewsCount => $composableBuilder(
+      column: $table.viewsCount, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get authorSignature => $composableBuilder(
+      column: $table.authorSignature,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get postAuthorId => $composableBuilder(
+      column: $table.postAuthorId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderRole => $composableBuilder(
+      column: $table.senderRole, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderAdminTitle => $composableBuilder(
+      column: $table.senderAdminTitle,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isFromAnonymousAdmin => $composableBuilder(
+      column: $table.isFromAnonymousAdmin,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isSilent => $composableBuilder(
+      column: $table.isSilent, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get commentsCount => $composableBuilder(
+      column: $table.commentsCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get recentRepliersJson => $composableBuilder(
+      column: $table.recentRepliersJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get threadRootMessageId => $composableBuilder(
+      column: $table.threadRootMessageId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get hasMediaSpoiler => $composableBuilder(
+      column: $table.hasMediaSpoiler,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get expiresAt => $composableBuilder(
+      column: $table.expiresAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get ttlSeconds => $composableBuilder(
+      column: $table.ttlSeconds, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isViewOnce => $composableBuilder(
+      column: $table.isViewOnce, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get viewedAt => $composableBuilder(
+      column: $table.viewedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isBurned => $composableBuilder(
+      column: $table.isBurned, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get replyToChatId => $composableBuilder(
+      column: $table.replyToChatId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get replyToChatName => $composableBuilder(
+      column: $table.replyToChatName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get replyToChatType => $composableBuilder(
+      column: $table.replyToChatType,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get effectId => $composableBuilder(
+      column: $table.effectId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get savedTagsJson => $composableBuilder(
+      column: $table.savedTagsJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get topicId => $composableBuilder(
+      column: $table.topicId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get forwardsCount => $composableBuilder(
+      column: $table.forwardsCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderChatId => $composableBuilder(
+      column: $table.senderChatId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderChatName => $composableBuilder(
+      column: $table.senderChatName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get senderChatAvatarUrl => $composableBuilder(
+      column: $table.senderChatAvatarUrl,
       builder: (column) => ColumnOrderings(column));
 }
 
@@ -4152,6 +6968,12 @@ class $$MessagesTableAnnotationComposer
   GeneratedColumn<String> get forwardFromName => $composableBuilder(
       column: $table.forwardFromName, builder: (column) => column);
 
+  GeneratedColumn<String> get forwardFromAvatarUrl => $composableBuilder(
+      column: $table.forwardFromAvatarUrl, builder: (column) => column);
+
+  GeneratedColumn<String> get senderCustomizationJson => $composableBuilder(
+      column: $table.senderCustomizationJson, builder: (column) => column);
+
   GeneratedColumn<String> get groupedId =>
       $composableBuilder(column: $table.groupedId, builder: (column) => column);
 
@@ -4172,6 +6994,84 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get mediaPayload => $composableBuilder(
       column: $table.mediaPayload, builder: (column) => column);
+
+  GeneratedColumn<int> get viewsCount => $composableBuilder(
+      column: $table.viewsCount, builder: (column) => column);
+
+  GeneratedColumn<String> get authorSignature => $composableBuilder(
+      column: $table.authorSignature, builder: (column) => column);
+
+  GeneratedColumn<String> get postAuthorId => $composableBuilder(
+      column: $table.postAuthorId, builder: (column) => column);
+
+  GeneratedColumn<String> get senderRole => $composableBuilder(
+      column: $table.senderRole, builder: (column) => column);
+
+  GeneratedColumn<String> get senderAdminTitle => $composableBuilder(
+      column: $table.senderAdminTitle, builder: (column) => column);
+
+  GeneratedColumn<bool> get isFromAnonymousAdmin => $composableBuilder(
+      column: $table.isFromAnonymousAdmin, builder: (column) => column);
+
+  GeneratedColumn<bool> get isSilent =>
+      $composableBuilder(column: $table.isSilent, builder: (column) => column);
+
+  GeneratedColumn<int> get commentsCount => $composableBuilder(
+      column: $table.commentsCount, builder: (column) => column);
+
+  GeneratedColumn<String> get recentRepliersJson => $composableBuilder(
+      column: $table.recentRepliersJson, builder: (column) => column);
+
+  GeneratedColumn<String> get threadRootMessageId => $composableBuilder(
+      column: $table.threadRootMessageId, builder: (column) => column);
+
+  GeneratedColumn<bool> get hasMediaSpoiler => $composableBuilder(
+      column: $table.hasMediaSpoiler, builder: (column) => column);
+
+  GeneratedColumn<String> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+
+  GeneratedColumn<int> get ttlSeconds => $composableBuilder(
+      column: $table.ttlSeconds, builder: (column) => column);
+
+  GeneratedColumn<bool> get isViewOnce => $composableBuilder(
+      column: $table.isViewOnce, builder: (column) => column);
+
+  GeneratedColumn<String> get viewedAt =>
+      $composableBuilder(column: $table.viewedAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get isBurned =>
+      $composableBuilder(column: $table.isBurned, builder: (column) => column);
+
+  GeneratedColumn<String> get replyToChatId => $composableBuilder(
+      column: $table.replyToChatId, builder: (column) => column);
+
+  GeneratedColumn<String> get replyToChatName => $composableBuilder(
+      column: $table.replyToChatName, builder: (column) => column);
+
+  GeneratedColumn<String> get replyToChatType => $composableBuilder(
+      column: $table.replyToChatType, builder: (column) => column);
+
+  GeneratedColumn<String> get effectId =>
+      $composableBuilder(column: $table.effectId, builder: (column) => column);
+
+  GeneratedColumn<String> get savedTagsJson => $composableBuilder(
+      column: $table.savedTagsJson, builder: (column) => column);
+
+  GeneratedColumn<int> get topicId =>
+      $composableBuilder(column: $table.topicId, builder: (column) => column);
+
+  GeneratedColumn<int> get forwardsCount => $composableBuilder(
+      column: $table.forwardsCount, builder: (column) => column);
+
+  GeneratedColumn<String> get senderChatId => $composableBuilder(
+      column: $table.senderChatId, builder: (column) => column);
+
+  GeneratedColumn<String> get senderChatName => $composableBuilder(
+      column: $table.senderChatName, builder: (column) => column);
+
+  GeneratedColumn<String> get senderChatAvatarUrl => $composableBuilder(
+      column: $table.senderChatAvatarUrl, builder: (column) => column);
 }
 
 class $$MessagesTableTableManager extends RootTableManager<
@@ -4223,6 +7123,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> isForward = const Value.absent(),
             Value<String?> forwardFromId = const Value.absent(),
             Value<String?> forwardFromName = const Value.absent(),
+            Value<String?> forwardFromAvatarUrl = const Value.absent(),
+            Value<String?> senderCustomizationJson = const Value.absent(),
             Value<String?> groupedId = const Value.absent(),
             Value<String?> entities = const Value.absent(),
             Value<String?> reactions = const Value.absent(),
@@ -4230,6 +7132,32 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> invertMedia = const Value.absent(),
             Value<bool> isRound = const Value.absent(),
             Value<String?> mediaPayload = const Value.absent(),
+            Value<int> viewsCount = const Value.absent(),
+            Value<String?> authorSignature = const Value.absent(),
+            Value<String?> postAuthorId = const Value.absent(),
+            Value<String?> senderRole = const Value.absent(),
+            Value<String?> senderAdminTitle = const Value.absent(),
+            Value<bool> isFromAnonymousAdmin = const Value.absent(),
+            Value<bool> isSilent = const Value.absent(),
+            Value<int> commentsCount = const Value.absent(),
+            Value<String?> recentRepliersJson = const Value.absent(),
+            Value<String?> threadRootMessageId = const Value.absent(),
+            Value<bool> hasMediaSpoiler = const Value.absent(),
+            Value<String?> expiresAt = const Value.absent(),
+            Value<int> ttlSeconds = const Value.absent(),
+            Value<bool> isViewOnce = const Value.absent(),
+            Value<String?> viewedAt = const Value.absent(),
+            Value<bool> isBurned = const Value.absent(),
+            Value<String?> replyToChatId = const Value.absent(),
+            Value<String?> replyToChatName = const Value.absent(),
+            Value<String?> replyToChatType = const Value.absent(),
+            Value<String?> effectId = const Value.absent(),
+            Value<String?> savedTagsJson = const Value.absent(),
+            Value<int?> topicId = const Value.absent(),
+            Value<int> forwardsCount = const Value.absent(),
+            Value<String?> senderChatId = const Value.absent(),
+            Value<String?> senderChatName = const Value.absent(),
+            Value<String?> senderChatAvatarUrl = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion(
@@ -4259,6 +7187,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             isForward: isForward,
             forwardFromId: forwardFromId,
             forwardFromName: forwardFromName,
+            forwardFromAvatarUrl: forwardFromAvatarUrl,
+            senderCustomizationJson: senderCustomizationJson,
             groupedId: groupedId,
             entities: entities,
             reactions: reactions,
@@ -4266,6 +7196,32 @@ class $$MessagesTableTableManager extends RootTableManager<
             invertMedia: invertMedia,
             isRound: isRound,
             mediaPayload: mediaPayload,
+            viewsCount: viewsCount,
+            authorSignature: authorSignature,
+            postAuthorId: postAuthorId,
+            senderRole: senderRole,
+            senderAdminTitle: senderAdminTitle,
+            isFromAnonymousAdmin: isFromAnonymousAdmin,
+            isSilent: isSilent,
+            commentsCount: commentsCount,
+            recentRepliersJson: recentRepliersJson,
+            threadRootMessageId: threadRootMessageId,
+            hasMediaSpoiler: hasMediaSpoiler,
+            expiresAt: expiresAt,
+            ttlSeconds: ttlSeconds,
+            isViewOnce: isViewOnce,
+            viewedAt: viewedAt,
+            isBurned: isBurned,
+            replyToChatId: replyToChatId,
+            replyToChatName: replyToChatName,
+            replyToChatType: replyToChatType,
+            effectId: effectId,
+            savedTagsJson: savedTagsJson,
+            topicId: topicId,
+            forwardsCount: forwardsCount,
+            senderChatId: senderChatId,
+            senderChatName: senderChatName,
+            senderChatAvatarUrl: senderChatAvatarUrl,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4295,6 +7251,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> isForward = const Value.absent(),
             Value<String?> forwardFromId = const Value.absent(),
             Value<String?> forwardFromName = const Value.absent(),
+            Value<String?> forwardFromAvatarUrl = const Value.absent(),
+            Value<String?> senderCustomizationJson = const Value.absent(),
             Value<String?> groupedId = const Value.absent(),
             Value<String?> entities = const Value.absent(),
             Value<String?> reactions = const Value.absent(),
@@ -4302,6 +7260,32 @@ class $$MessagesTableTableManager extends RootTableManager<
             Value<bool> invertMedia = const Value.absent(),
             Value<bool> isRound = const Value.absent(),
             Value<String?> mediaPayload = const Value.absent(),
+            Value<int> viewsCount = const Value.absent(),
+            Value<String?> authorSignature = const Value.absent(),
+            Value<String?> postAuthorId = const Value.absent(),
+            Value<String?> senderRole = const Value.absent(),
+            Value<String?> senderAdminTitle = const Value.absent(),
+            Value<bool> isFromAnonymousAdmin = const Value.absent(),
+            Value<bool> isSilent = const Value.absent(),
+            Value<int> commentsCount = const Value.absent(),
+            Value<String?> recentRepliersJson = const Value.absent(),
+            Value<String?> threadRootMessageId = const Value.absent(),
+            Value<bool> hasMediaSpoiler = const Value.absent(),
+            Value<String?> expiresAt = const Value.absent(),
+            Value<int> ttlSeconds = const Value.absent(),
+            Value<bool> isViewOnce = const Value.absent(),
+            Value<String?> viewedAt = const Value.absent(),
+            Value<bool> isBurned = const Value.absent(),
+            Value<String?> replyToChatId = const Value.absent(),
+            Value<String?> replyToChatName = const Value.absent(),
+            Value<String?> replyToChatType = const Value.absent(),
+            Value<String?> effectId = const Value.absent(),
+            Value<String?> savedTagsJson = const Value.absent(),
+            Value<int?> topicId = const Value.absent(),
+            Value<int> forwardsCount = const Value.absent(),
+            Value<String?> senderChatId = const Value.absent(),
+            Value<String?> senderChatName = const Value.absent(),
+            Value<String?> senderChatAvatarUrl = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesCompanion.insert(
@@ -4331,6 +7315,8 @@ class $$MessagesTableTableManager extends RootTableManager<
             isForward: isForward,
             forwardFromId: forwardFromId,
             forwardFromName: forwardFromName,
+            forwardFromAvatarUrl: forwardFromAvatarUrl,
+            senderCustomizationJson: senderCustomizationJson,
             groupedId: groupedId,
             entities: entities,
             reactions: reactions,
@@ -4338,6 +7324,32 @@ class $$MessagesTableTableManager extends RootTableManager<
             invertMedia: invertMedia,
             isRound: isRound,
             mediaPayload: mediaPayload,
+            viewsCount: viewsCount,
+            authorSignature: authorSignature,
+            postAuthorId: postAuthorId,
+            senderRole: senderRole,
+            senderAdminTitle: senderAdminTitle,
+            isFromAnonymousAdmin: isFromAnonymousAdmin,
+            isSilent: isSilent,
+            commentsCount: commentsCount,
+            recentRepliersJson: recentRepliersJson,
+            threadRootMessageId: threadRootMessageId,
+            hasMediaSpoiler: hasMediaSpoiler,
+            expiresAt: expiresAt,
+            ttlSeconds: ttlSeconds,
+            isViewOnce: isViewOnce,
+            viewedAt: viewedAt,
+            isBurned: isBurned,
+            replyToChatId: replyToChatId,
+            replyToChatName: replyToChatName,
+            replyToChatType: replyToChatType,
+            effectId: effectId,
+            savedTagsJson: savedTagsJson,
+            topicId: topicId,
+            forwardsCount: forwardsCount,
+            senderChatId: senderChatId,
+            senderChatName: senderChatName,
+            senderChatAvatarUrl: senderChatAvatarUrl,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

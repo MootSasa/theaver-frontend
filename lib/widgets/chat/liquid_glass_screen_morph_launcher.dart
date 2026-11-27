@@ -21,24 +21,6 @@ class HandOffSwipeBackPageRoute<T> extends SwipeBackPageRoute<T> {
 
   @override
   Duration get reverseTransitionDuration => const Duration(milliseconds: 250);
-
-  @override
-  Widget buildTransitions(
-    BuildContext context,
-    Animation<double> animation,
-    Animation<double> secondaryAnimation,
-    Widget child,
-  ) {
-    if (animation.status == AnimationStatus.reverse || popGestureInProgress) {
-      return super.buildTransitions(
-        context,
-        animation,
-        secondaryAnimation,
-        child,
-      );
-    }
-    return child;
-  }
 }
 
 /// Виджет-лаунчер для плавного перетекания стеклянного элемента интерфейса

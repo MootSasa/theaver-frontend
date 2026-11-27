@@ -10,7 +10,7 @@ import 'liquid_glass_nav_bar_layout.dart';
 ///
 /// This is the **non-animated**, release-ready bottom nav shell.
 /// The selected tab is highlighted instantly (no moving glass pill,
-/// no iOS-26 "icon fills through the pill" reveal). Compose it with
+/// no "icon fills through the pill" reveal). Compose it with
 /// [buildLiquidGlassBottomNavCapsule] and, optionally,
 /// [LiquidGlassBottomNavPillStatic] for the soft selection highlight.
 ///
@@ -65,6 +65,7 @@ class LiquidGlassTabBarShell extends StatelessWidget {
                 itemCount: items.length,
                 onChanged: onChanged,
                 cellHeight: layout.cellHeight,
+                pillWidth: layout.restPillWidth,
               ),
             ),
           ),
@@ -72,12 +73,19 @@ class LiquidGlassTabBarShell extends StatelessWidget {
       ),
     );
 
+    final double effBottom = layout.bottomMargin;
+    final double padBottom = effBottom > 0 ? effBottom : 0.0;
+    final double dy = effBottom < 0 ? -effBottom : 0.0;
+    Widget placed = Padding(
+      padding: EdgeInsets.only(bottom: padBottom),
+      child: innerStack,
+    );
+    if (dy != 0.0) {
+      placed = Transform.translate(offset: Offset(0.0, dy), child: placed);
+    }
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: layout.bottomMargin),
-        child: innerStack,
-      ),
+      child: placed,
     );
   }
 }

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,15 +9,24 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/theav_media_item.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
+import '../../services/dm_parity_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
+import '../../services/media_cache_manager.dart';
 import '../../services/media_playback_coordinator.dart';
 import '../../services/voice_playback_service.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
-import '../../utils/image_utils.dart';
-import 'avatar_gallery_viewer.dart';
+import '../../utils/link_opener.dart';
+import '../chat/sticker_item_widget.dart';
+import '../design_system/theav_design_system.dart';
+import '../media_viewer/theav_media_viewer.dart';
+import '../message/blurred_media_placeholder.dart';
+import '../user/avatar_with_status.dart';
+import 'profile_material_surface.dart';
 import 'profile_section_pill.dart';
 
 /// Модель участника группы/канала для вкладки «Участники».
@@ -30,7 +38,9 @@ class ProfileMemberItem {
   final String? avatarUrl;
   final String role; // 'owner', 'admin', 'member'
   final bool isOnline;
+  final bool isBot;
   final String? lastSeen;
+  final String? lastSeenStatus;
 
   const ProfileMemberItem({
     required this.userId,
@@ -40,7 +50,9 @@ class ProfileMemberItem {
     this.avatarUrl,
     this.role = 'member',
     this.isOnline = false,
+    this.isBot = false,
     this.lastSeen,
+    this.lastSeenStatus,
   });
 
   String get displayName {
@@ -59,7 +71,9 @@ class ProfileMemberItem {
       avatarUrl: json['avatar_url']?.toString(),
       role: (json['role'] ?? 'member').toString(),
       isOnline: json['is_online'] == true,
+      isBot: json['is_bot'] == true,
       lastSeen: json['last_seen']?.toString(),
+      lastSeenStatus: json['last_seen_status']?.toString(),
     );
   }
 }
@@ -69,6 +83,7 @@ class ProfileSectionPageContent extends StatelessWidget {
   final ProfileSectionType sectionType;
   final bool glassEnabled;
   final bool isLite;
+  final bool hasColoredTheme;
   final String chatId;
   final String chatType;
   final String chatTitle;
@@ -76,7 +91,9 @@ class ProfileSectionPageContent extends StatelessWidget {
 
   // Данные вкладок
   final List<ProfileMemberItem> members;
+  final List<CommonGroupItem> commonGroups;
   final List<DbMessage> mediaMessages;
+  final List<DbMessage> gifMessages;
   final List<DbMessage> fileMessages;
   final List<DbMessage> linkMessages;
   final List<DbMessage> voiceMessages;
@@ -86,6 +103,7 @@ class ProfileSectionPageContent extends StatelessWidget {
   final bool canManageMembers;
   final VoidCallback? onAddMemberTap;
   final ValueChanged<ProfileMemberItem>? onMemberTap;
+  final ValueChanged<CommonGroupItem>? onCommonGroupTap;
   final ValueChanged<ProfileMemberItem>? onToggleAdminRole;
   final ValueChanged<ProfileMemberItem>? onRemoveMember;
 
@@ -97,12 +115,15 @@ class ProfileSectionPageContent extends StatelessWidget {
     required this.sectionType,
     required this.glassEnabled,
     this.isLite = false,
+    this.hasColoredTheme = false,
     required this.chatId,
     this.chatType = 'private',
     this.chatTitle = '',
     this.currentUserId,
     this.members = const [],
+    this.commonGroups = const [],
     this.mediaMessages = const [],
+    this.gifMessages = const [],
     this.fileMessages = const [],
     this.linkMessages = const [],
     this.voiceMessages = const [],
@@ -110,6 +131,7 @@ class ProfileSectionPageContent extends StatelessWidget {
     this.canManageMembers = false,
     this.onAddMemberTap,
     this.onMemberTap,
+    this.onCommonGroupTap,
     this.onToggleAdminRole,
     this.onRemoveMember,
     this.onJumpToMessage,
@@ -117,32 +139,41 @@ class ProfileSectionPageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    switch (sectionType) {
-      case ProfileSectionType.members:
-        return _buildMembersTab(context);
-      case ProfileSectionType.wall:
-        return _buildEmptyState(
-          context,
-          iconBuilder: (color, size) => iconoir.ViewGrid(color: color, width: size, height: size),
-          title: _tr(context, 'profile_wall_empty_title', 'Публикаций пока нет'),
-          subtitle: _tr(context, 'profile_wall_empty_subtitle', 'Записи на стене профиля появятся здесь'),
-        );
-      case ProfileSectionType.gifts:
-        return _buildEmptyState(
-          context,
-          iconBuilder: (color, size) => iconoir.Gift(color: color, width: size, height: size),
-          title: _tr(context, 'profile_gifts_empty_title', 'Подарков пока нет'),
-          subtitle: _tr(context, 'profile_gifts_empty_subtitle', 'Полученные подарки будут отображаться в этом разделе'),
-        );
-      case ProfileSectionType.media:
-        return _buildMediaTab(context);
-      case ProfileSectionType.files:
-        return _buildFilesTab(context);
-      case ProfileSectionType.links:
-        return _buildLinksTab(context);
-      case ProfileSectionType.voice:
-        return _buildVoiceTab(context);
-    }
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) {
+        switch (sectionType) {
+          case ProfileSectionType.members:
+            return _buildMembersTab(context);
+          case ProfileSectionType.commonGroups:
+            return _buildCommonGroupsTab(context);
+          case ProfileSectionType.wall:
+            return _buildEmptyState(
+              context,
+              iconBuilder: (color, size) => iconoir.ViewGrid(color: color, width: size, height: size),
+              title: _tr(context, 'profile_wall_empty_title', 'Публикаций пока нет'),
+              subtitle: _tr(context, 'profile_wall_empty_subtitle', 'Записи на стене профиля появятся здесь'),
+            );
+          case ProfileSectionType.gifts:
+            return _buildEmptyState(
+              context,
+              iconBuilder: (color, size) => iconoir.Gift(color: color, width: size, height: size),
+              title: _tr(context, 'profile_gifts_empty_title', 'Подарков пока нет'),
+              subtitle: _tr(context, 'profile_gifts_empty_subtitle', 'Полученные подарки будут отображаться в этом разделе'),
+            );
+          case ProfileSectionType.media:
+            return _buildMediaTab(context);
+          case ProfileSectionType.gifs:
+            return _buildGifsTab(context);
+          case ProfileSectionType.files:
+            return _buildFilesTab(context);
+          case ProfileSectionType.links:
+            return _buildLinksTab(context);
+          case ProfileSectionType.voice:
+            return _buildVoiceTab(context);
+        }
+      },
+    );
   }
 
   String _tr(BuildContext context, String key, String fallback) {
@@ -153,13 +184,139 @@ class ProfileSectionPageContent extends StatelessWidget {
     return fallback;
   }
 
+  ({
+    TheavPalette palette,
+    Color textColor,
+    Color subColor,
+    Color accentColor,
+    Color onAccentColor,
+    Color dividerColor,
+    Color thumbPlaceholder,
+    bool isDark,
+  }) _resolveTabColors(BuildContext context) {
+    final palette = context.theav;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (hasColoredTheme) {
+      return (
+        palette: palette,
+        textColor: Colors.white,
+        subColor: Colors.white.withValues(alpha: 0.70),
+        accentColor: Colors.white,
+        onAccentColor: palette.onPrimary,
+        dividerColor: Colors.white.withValues(alpha: 0.14),
+        thumbPlaceholder:
+            isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+        isDark: isDark,
+      );
+    }
+    return (
+      palette: palette,
+      textColor: palette.onSurface,
+      subColor: palette.subtext,
+      accentColor: palette.primary,
+      onAccentColor: palette.onPrimary,
+      dividerColor: palette.divider,
+      thumbPlaceholder: palette.surface,
+      isDark: isDark,
+    );
+  }
+
+  // ============================================================
+  // 1b. Вкладка «Общие группы»
+  // ============================================================
+
+  Widget _buildCommonGroupsTab(BuildContext context) {
+    final colors = _resolveTabColors(context);
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
+    final accentColor = colors.accentColor;
+
+    if (commonGroups.isEmpty) {
+      return _buildEmptyState(
+        context,
+        iconBuilder: (color, size) => iconoir.Group(color: color, width: size, height: size),
+        title: 'Нет общих групп',
+        subtitle: 'Общие группы с этим пользователем появятся здесь',
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (int i = 0; i < commonGroups.length; i++) ...[
+          InkWell(
+            onTap: () {
+              HapticUtils.tap();
+              onCommonGroupTap?.call(commonGroups[i]);
+            },
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  AvatarWithStatus(
+                    avatarUrl: commonGroups[i].avatarUrl,
+                    name: commonGroups[i].name,
+                    radius: 21,
+                    isOnline: false,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          commonGroups[i].name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w500,
+                            color: textColor,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${commonGroups[i].participantsCount} участников',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: commonGroups[i].participantsCount > 0
+                                ? subColor
+                                : accentColor.withValues(alpha: 0.8),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: subColor,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (i < commonGroups.length - 1)
+            Divider(
+              height: 1,
+              indent: 70,
+              color: colors.dividerColor,
+            ),
+        ],
+      ],
+    );
+  }
+
   // ============================================================
   // 1. Вкладка «Участники»
   // ============================================================
 
   Widget _buildMembersTab(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
 
     if (members.isEmpty && !canAddMembers) {
       return _buildEmptyState(
@@ -217,20 +374,16 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 70,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
         for (int i = 0; i < members.length; i++) ...[
-          _buildMemberRow(context, members[i], isDark, accentColor),
+          _buildMemberRow(context, members[i], colors.isDark, accentColor),
           if (i < members.length - 1)
             Divider(
               height: 1,
               indent: 70,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -245,18 +398,26 @@ class ProfileSectionPageContent extends StatelessWidget {
     bool isDark,
     Color accentColor,
   ) {
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
-    final validAvatar = getValidAvatarUrl(member.avatarUrl);
     final canEditThisMember = canManageMembers &&
         member.userId != currentUserId &&
         member.role != 'owner';
-    final memberName = member.displayName == 'Пользователь'
+    final rawMemberName = member.displayName == 'Пользователь'
         ? _tr(context, 'profile_default_user', 'Пользователь')
         : member.displayName;
+    final memberName = ContactsService.resolvePeerName(
+      member.userId,
+      rawMemberName,
+      isBot: member.isBot,
+    );
+    final memberAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+      member.userId,
+      member.avatarUrl,
+      isBot: member.isBot,
+    );
 
     String? roleBadge;
     if (member.role == 'owner') {
@@ -290,45 +451,14 @@ class ProfileSectionPageContent extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            Stack(
-              children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: accentColor.withValues(alpha: 0.2),
-                  backgroundImage: (validAvatar != null && validAvatar.isNotEmpty)
-                      ? CachedNetworkImageProvider(validAvatar)
-                      : null,
-                  child: (validAvatar == null || validAvatar.isEmpty)
-                      ? Text(
-                          memberName.isNotEmpty
-                              ? memberName[0].toUpperCase()
-                              : '?',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                            color: accentColor,
-                          ),
-                        )
-                      : null,
-                ),
-                if (member.isOnline)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF4CAF50),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: isDark ? const Color(0xFF1C1C1E) : Colors.white,
-                          width: 2,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+            AvatarWithStatus(
+              userId: member.userId,
+              avatarUrl: memberAvatarUrl,
+              name: memberName,
+              radius: 22,
+              isOnline: member.isOnline,
+              resolveContactOverride: !member.isBot,
+              backgroundColor: accentColor.withValues(alpha: 0.2),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -347,9 +477,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    member.isOnline
-                        ? _tr(context, 'profile_online', 'в сети')
-                        : _tr(context, 'status_offline', 'был(а) недавно'),
+                    _formatMemberPresence(context, member),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -400,110 +528,106 @@ class ProfileSectionPageContent extends StatelessWidget {
     );
   }
 
-  void _showMemberActionsSheet(BuildContext context, ProfileMemberItem member) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isAdmin = member.role == 'admin';
+  String _formatMemberPresence(BuildContext context, ProfileMemberItem member) {
+    if (member.isOnline) {
+      return _tr(context, 'profile_online', 'в сети');
+    }
+    switch (member.lastSeenStatus) {
+      case 'recently':
+        return 'был(а) недавно';
+      case 'within_week':
+        return 'на этой неделе';
+      case 'within_month':
+        return 'в этом месяце';
+      case 'long_time_ago':
+        return 'давно';
+      default:
+        return _tr(context, 'status_offline', 'был(а) недавно');
+    }
+  }
 
-    showModalBottomSheet(
+  void _showMemberActionsSheet(BuildContext context, ProfileMemberItem member) {
+    final isAdmin = member.role == 'admin';
+    final resolvedTitle = ContactsService.resolvePeerName(
+      member.userId,
+      member.displayName,
+      isBot: member.isBot,
+    );
+
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: resolvedTitle,
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xB82C2C2E)
-                    : const Color(0xCCFFFFFF),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.14)
-                        : Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
+        final palette = ctx.theav;
+        return TheavInsetGroup(
+          children: [
+            TheavListRow(
+              leading: iconoir.User(
+                width: 20,
+                height: 20,
+                color: palette.primary,
               ),
-              child: SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : Colors.black12,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    ListTile(
-                      leading: iconoir.User(
-                        width: 22,
-                        height: 22,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                      title: Text(_tr(context, 'open_profile', 'Открыть профиль')),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        onMemberTap?.call(member);
-                      },
-                    ),
-                    if (onToggleAdminRole != null)
-                      ListTile(
-                        leading: iconoir.Shield(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(
-                          isAdmin
-                              ? _tr(context, 'group_demote_admin', 'Снять права администратора')
-                              : _tr(context, 'group_promote_admin', 'Назначить администратором'),
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          onToggleAdminRole!(member);
-                        },
-                      ),
-                    if (onRemoveMember != null)
-                      ListTile(
-                        leading: const iconoir.UserXmark(
-                          width: 22,
-                          height: 22,
-                          color: Colors.redAccent,
-                        ),
-                        title: Text(
-                          _tr(context, 'group_remove_member', 'Удалить из чата'),
-                          style: const TextStyle(color: Colors.redAccent),
-                        ),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          onRemoveMember!(member);
-                        },
-                      ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
+              title: _tr(context, 'open_profile', 'Открыть профиль'),
+              onTap: () {
+                Navigator.pop(ctx);
+                onMemberTap?.call(member);
+              },
             ),
-          ),
+            if (onToggleAdminRole != null)
+              TheavListRow(
+                leading: iconoir.Shield(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: isAdmin
+                    ? _tr(context, 'group_demote_admin', 'Снять права администратора')
+                    : _tr(context, 'group_promote_admin', 'Назначить администратором'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onToggleAdminRole!(member);
+                },
+              ),
+            if (onRemoveMember != null)
+              TheavListRow(
+                leading: iconoir.UserXmark(
+                  width: 20,
+                  height: 20,
+                  color: palette.error,
+                ),
+                title: _tr(context, 'group_remove_member', 'Удалить из чата'),
+                isDestructive: true,
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onRemoveMember!(member);
+                },
+              ),
+          ],
         );
       },
     );
   }
 
   // ============================================================
-  // 2. Вкладка «Медиа» (сетка 3xN)
+  // 2. Вкладка «Медиа» (сетка 3xN, фото + видео без BackdropFilter)
   // ============================================================
+
+  DbMessage? _findDbMessageForViewerItem(
+    List<DbMessage> source,
+    TheavMediaItem item,
+  ) {
+    final targetId = item.messageId ?? item.id;
+    for (final m in source) {
+      if ((m.serverId ?? m.localId) == targetId ||
+          m.localId == targetId ||
+          m.serverId == targetId) {
+        return m;
+      }
+    }
+    return null;
+  }
 
   Widget _buildMediaTab(BuildContext context) {
     if (mediaMessages.isEmpty) {
@@ -515,11 +639,15 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final imageUrls = mediaMessages
-        .where((m) => m.messageType == 'image' && m.fileUrl != null)
-        .map((m) => AppConfig.resolveMediaUrl(m.fileUrl!) ?? m.fileUrl!)
-        .toList();
+    final colors = _resolveTabColors(context);
+    final viewerItems = mediaMessages
+        .map(
+          (m) => TheavMediaItem.fromDbMessage(
+            m,
+            chatTitle: chatTitle,
+          ),
+        )
+        .toList(growable: false);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
@@ -536,24 +664,30 @@ class ProfileSectionPageContent extends StatelessWidget {
         ),
         itemBuilder: (context, index) {
           final msg = mediaMessages[index];
-          final rawUrl = msg.fileUrl ?? '';
-          final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-          final isVideo = msg.messageType == 'video';
+          final item = viewerItems[index];
+          final resolvedUrl = item.resolvedUrl;
+          final isVideo = item.kind == TheavMediaKind.video;
 
           return GestureDetector(
             onTap: () {
               HapticUtils.tap();
-              if (!isVideo && imageUrls.isNotEmpty) {
-                final imgIdx = imageUrls.indexOf(resolvedUrl);
-                AvatarGalleryViewer.open(
-                  context,
-                  avatarUrls: imageUrls,
-                  initialIndex: imgIdx >= 0 ? imgIdx : 0,
-                  displayName: chatTitle,
-                );
-              } else {
-                _showMessageItemSheet(context, msg, resolvedUrl: resolvedUrl);
-              }
+              TheavMediaViewer.open<void>(
+                context,
+                items: viewerItems,
+                initialIndex: index,
+                config: TheavMediaViewerConfig(
+                  onJumpToMessage: onJumpToMessage != null
+                      ? (viewerCtx, jumped) {
+                          Navigator.of(viewerCtx).pop();
+                          final match = _findDbMessageForViewerItem(
+                            mediaMessages,
+                            jumped,
+                          );
+                          if (match != null) onJumpToMessage!(match);
+                        }
+                      : null,
+                ),
+              );
             },
             onSecondaryTapUp: (details) {
               HapticUtils.selection();
@@ -571,68 +705,295 @@ class ProfileSectionPageContent extends StatelessWidget {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Container(
-                  color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
-                  child: resolvedUrl.isNotEmpty && !isVideo
-                      ? CachedNetworkImage(
-                          imageUrl: resolvedUrl,
-                          fit: BoxFit.cover,
-                          fadeInDuration: Duration.zero,
-                          fadeOutDuration: Duration.zero,
-                          errorWidget: (_, __, ___) => Center(
-                            child: iconoir.MediaImage(
-                              width: 24,
-                              height: 24,
-                              color: isDark ? Colors.white38 : Colors.black38,
-                            ),
-                          ),
-                        )
-                      : Center(
-                          child: iconoir.VideoCamera(
-                            width: 28,
-                            height: 28,
-                            color: isDark ? Colors.white70 : Colors.black54,
-                          ),
-                        ),
+                Hero(
+                  tag: item.heroTag,
+                  child: Container(
+                    color: colors.thumbPlaceholder,
+                    child: _buildSharedGridThumb(
+                      item: item,
+                      isDark: colors.isDark,
+                    ),
+                  ),
                 ),
                 if (isVideo)
                   Positioned(
                     left: 6,
                     bottom: 6,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: BackdropFilter(
-                        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.48),
-                            borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xA6000000),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const iconoir.Play(
+                            width: 11,
+                            height: 11,
+                            color: Colors.white,
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const iconoir.Play(
-                                width: 12,
-                                height: 12,
-                                color: Colors.white,
-                              ),
-                              const SizedBox(width: 3),
-                              Text(
-                                _extractDurationText(msg) ??
-                                    _tr(context, 'chat_video', 'Видео'),
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
+                          const SizedBox(width: 3),
+                          Text(
+                            _extractDurationText(msg) ??
+                                _tr(context, 'chat_video', 'Видео'),
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              color: Colors.white,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSharedGridThumb({
+    required TheavMediaItem item,
+    required bool isDark,
+  }) {
+    final resolvedUrl = item.resolvedUrl;
+    final cachedFile = resolvedUrl.isNotEmpty
+        ? MediaCacheManager.instance.getCachedFileSync(resolvedUrl)
+        : null;
+
+    if (item.kind == TheavMediaKind.photo) {
+      if (cachedFile != null) {
+        return Image.file(
+          cachedFile,
+          fit: BoxFit.cover,
+          cacheWidth: 360,
+          filterQuality: FilterQuality.low,
+          gaplessPlayback: true,
+        );
+      }
+      if (resolvedUrl.startsWith('http://') ||
+          resolvedUrl.startsWith('https://')) {
+        return CachedNetworkImage(
+          imageUrl: resolvedUrl,
+          cacheKey: AppConfig.cacheKeyForUrl(resolvedUrl),
+          httpHeaders: AppConfig.authHeadersForUrl(resolvedUrl),
+          fit: BoxFit.cover,
+          memCacheWidth: 360,
+          filterQuality: FilterQuality.low,
+          fadeInDuration: Duration.zero,
+          fadeOutDuration: Duration.zero,
+          errorWidget: (_, __, ___) => Center(
+            child: iconoir.MediaImage(
+              width: 24,
+              height: 24,
+              color: isDark ? Colors.white38 : Colors.black38,
+            ),
+          ),
+        );
+      }
+      return Center(
+        child: iconoir.MediaImage(
+          width: 24,
+          height: 24,
+          color: isDark ? Colors.white38 : Colors.black38,
+        ),
+      );
+    }
+
+    // Video thumbnail chain: extracted first frame -> thumbUrl -> thumbBase64 -> icon
+    if (cachedFile != null) {
+      final firstFrame = MediaCacheManager.instance
+          .getCachedVideoThumbnailSync(cachedFile.path);
+      if (firstFrame != null) {
+        return Image.memory(
+          firstFrame,
+          fit: BoxFit.cover,
+          cacheWidth: 360,
+          filterQuality: FilterQuality.low,
+          gaplessPlayback: true,
+        );
+      }
+    }
+    final resolvedThumb = item.resolvedThumbUrl;
+    if (resolvedThumb != null && resolvedThumb.startsWith('http')) {
+      return CachedNetworkImage(
+        imageUrl: resolvedThumb,
+        cacheKey: AppConfig.cacheKeyForUrl(resolvedThumb),
+        httpHeaders: AppConfig.authHeadersForUrl(resolvedThumb),
+        fit: BoxFit.cover,
+        memCacheWidth: 360,
+        filterQuality: FilterQuality.low,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        errorWidget: (_, __, ___) => Center(
+          child: iconoir.VideoCamera(
+            width: 26,
+            height: 26,
+            color: isDark ? Colors.white60 : Colors.black54,
+          ),
+        ),
+      );
+    }
+    if (item.thumbBase64 != null && item.thumbBase64!.isNotEmpty) {
+      return BlurredMediaPlaceholder(
+        thumbBase64: item.thumbBase64,
+        fit: BoxFit.cover,
+      );
+    }
+    return Center(
+      child: iconoir.VideoCamera(
+        width: 28,
+        height: 28,
+        color: isDark ? Colors.white70 : Colors.black54,
+      ),
+    );
+  }
+
+  // ============================================================
+  // 2b. Вкладка «GIF» (сетка 3xN)
+  // ============================================================
+
+  Widget _buildGifsTab(BuildContext context) {
+    if (gifMessages.isEmpty) {
+      return _buildEmptyState(
+        context,
+        iconBuilder: (color, size) => Icon(
+          Icons.gif_box_outlined,
+          color: color,
+          size: size,
+        ),
+        title: _tr(context, 'profile_gifs_empty_title', 'GIF пока нет'),
+        subtitle: _tr(
+          context,
+          'profile_gifs_empty_subtitle',
+          'Отправленные в чате GIF-анимации появятся здесь',
+        ),
+      );
+    }
+
+    final colors = _resolveTabColors(context);
+    final viewerItems = gifMessages
+        .map(
+          (m) => TheavMediaItem.fromDbMessage(
+            m,
+            heroTagOverride: 'profile_gif_${m.serverId ?? m.localId}',
+            chatTitle: chatTitle,
+          ),
+        )
+        .toList(growable: false);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        padding: EdgeInsets.zero,
+        itemCount: gifMessages.length,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 2,
+          mainAxisSpacing: 2,
+          childAspectRatio: 1.0,
+        ),
+        itemBuilder: (context, index) {
+          final msg = gifMessages[index];
+          final item = viewerItems[index];
+          final resolvedUrl = item.resolvedUrl;
+          final resolvedThumb = item.resolvedThumbUrl;
+
+          return GestureDetector(
+            onTap: () {
+              HapticUtils.tap();
+              TheavMediaViewer.open<void>(
+                context,
+                items: viewerItems,
+                initialIndex: index,
+                config: TheavMediaViewerConfig(
+                  onJumpToMessage: onJumpToMessage != null
+                      ? (viewerCtx, jumped) {
+                          Navigator.of(viewerCtx).pop();
+                          final match = _findDbMessageForViewerItem(
+                            gifMessages,
+                            jumped,
+                          );
+                          if (match != null) onJumpToMessage!(match);
+                        }
+                      : null,
+                ),
+              );
+            },
+            onSecondaryTapUp: (details) {
+              HapticUtils.selection();
+              _showMessageContextMenuAtPosition(
+                context,
+                details.globalPosition,
+                msg,
+                resolvedUrl: resolvedUrl,
+              );
+            },
+            onLongPress: () {
+              HapticUtils.selection();
+              _showMessageItemSheet(context, msg, resolvedUrl: resolvedUrl);
+            },
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Hero(
+                  tag: item.heroTag,
+                  child: Container(
+                    color: colors.thumbPlaceholder,
+                    child: !item.isVideoBackedGif && resolvedUrl.isNotEmpty
+                        ? ControlledAnimatedNetworkImage(
+                            url: resolvedUrl,
+                            fit: BoxFit.cover,
+                            cacheWidth: 320,
+                            filterQuality: FilterQuality.low,
+                            isAnimatedWebpOrGif: true,
+                            animate: true,
+                          )
+                        : (resolvedThumb != null && resolvedThumb.startsWith('http')
+                            ? CachedNetworkImage(
+                                imageUrl: resolvedThumb,
+                                cacheKey: AppConfig.cacheKeyForUrl(resolvedThumb),
+                                httpHeaders: AppConfig.authHeadersForUrl(resolvedThumb),
+                                fit: BoxFit.cover,
+                                memCacheWidth: 320,
+                                filterQuality: FilterQuality.low,
+                              )
+                            : BlurredMediaPlaceholder(
+                                thumbBase64: item.thumbBase64,
+                                fit: BoxFit.cover,
+                              )),
+                  ),
+                ),
+                Positioned(
+                  left: 6,
+                  top: 6,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xA6000000),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: const Text(
+                      'GIF',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
           );
@@ -655,10 +1016,10 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark ? Colors.white54 : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final content = Column(
       mainAxisSize: MainAxisSize.min,
@@ -750,9 +1111,7 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 72,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -766,7 +1125,25 @@ class ProfileSectionPageContent extends StatelessWidget {
     final rawUrl = msg.fileUrl ?? '';
     if (rawUrl.isEmpty) return;
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (kIsWeb) {
+      final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+      final uri = Uri.tryParse(resolved);
+      if (uri != null) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+      return;
+    }
+
+    final fileService = FileService();
+    try {
+      final cached = await MediaCacheManager.instance.getCachedFile(rawUrl);
+      if (cached != null && await cached.exists() && await cached.length() > 0) {
+        await fileService.openFile(cached.path);
+        return;
+      }
+    } catch (_) {}
+
+    if (!context.mounted) return;
     GlassToastService().show(
       context,
       _tr(context, 'profile_downloading_file', 'Загрузка {file}...')
@@ -774,30 +1151,36 @@ class ProfileSectionPageContent extends StatelessWidget {
       iconWidget: iconoir.Download(
         width: 18,
         height: 18,
-        color: isDark ? Colors.white : Colors.black87,
+        color: context.theav.onSurface,
       ),
     );
 
-    try {
-      if (kIsWeb) {
-        final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-        final uri = Uri.tryParse(resolved);
-        if (uri != null) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
+    int? expectedSize;
+    final rawPayload = msg.mediaPayload;
+    if (rawPayload != null && rawPayload.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawPayload);
+        if (decoded is Map) {
+          expectedSize = (decoded['file_size'] as num?)?.toInt();
         }
+      } catch (_) {}
+    }
+
+    try {
+      final downloaded = await MediaCacheManager.instance.downloadMedia(
+        rawUrl,
+        expectedTotalSize: expectedSize,
+      );
+      if (downloaded != null && await downloaded.exists()) {
+        await fileService.openFile(downloaded.path);
         return;
       }
-      final fileService = FileService();
-      final savedPath = await fileService.downloadToDownloads(rawUrl, fileName);
-      if (!savedPath.startsWith('content://')) {
-        await fileService.openFile(savedPath);
-      }
-    } catch (_) {
-      final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
-      final uri = Uri.tryParse(resolved);
-      if (uri != null) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
+    } catch (_) {}
+
+    final resolved = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
+    final uri = Uri.tryParse(resolved);
+    if (uri != null) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
@@ -815,10 +1198,10 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark ? Colors.white54 : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final content = Column(
       mainAxisSize: MainAxisSize.min,
@@ -837,10 +1220,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                 behavior: HitTestBehavior.opaque,
                 onTap: () async {
                   HapticUtils.tap();
-                  final uri = Uri.tryParse(primaryUrl);
-                  if (uri != null) {
-                    await launchUrl(uri, mode: LaunchMode.externalApplication);
-                  }
+                  await LinkOpener.openUrl(context, primaryUrl);
                 },
                 onSecondaryTapUp: (details) {
                   HapticUtils.selection();
@@ -925,9 +1305,7 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 72,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -950,10 +1328,10 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark ? Colors.white54 : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final content = AnimatedBuilder(
       animation: Listenable.merge([
@@ -974,8 +1352,28 @@ class ProfileSectionPageContent extends StatelessWidget {
                   final msgId = msg.serverId ?? msg.localId;
                   final isRound = msg.isRound || msg.messageType == 'round';
                   final isActive = activeId == msgId && isPlayingVoice;
-                  final sender = (msg.senderName != null && msg.senderName!.isNotEmpty)
-                      ? msg.senderName!
+                  final isChannelChat = chatType == 'channel';
+                  final voiceSenderId = isChannelChat
+                      ? (msg.postAuthorId?.trim() ?? '')
+                      : msg.senderId.trim();
+                  final canResolveSender =
+                      (!isChannelChat || voiceSenderId.isNotEmpty) &&
+                          ContactsService.shouldResolveUserIdentity(
+                            voiceSenderId,
+                            senderChatId: msg.senderChatId,
+                            isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                          );
+                  final rawSender = msg.senderName ?? '';
+                  final resolvedSender = canResolveSender
+                      ? ContactsService.resolvePeerName(
+                          voiceSenderId,
+                          rawSender,
+                          senderChatId: msg.senderChatId,
+                          isAnonymousAdmin: msg.isFromAnonymousAdmin,
+                        )
+                      : rawSender;
+                  final sender = resolvedSender.isNotEmpty
+                      ? resolvedSender
                       : (isRound
                           ? _tr(context, 'chat_video_note', 'Видеосообщение')
                           : _tr(context, 'chat_voice_message', 'Голосовое сообщение'));
@@ -1009,26 +1407,34 @@ class ProfileSectionPageContent extends StatelessWidget {
                             width: 44,
                             height: 44,
                             decoration: BoxDecoration(
-                              color: accentColor,
+                              color: hasColoredTheme
+                                  ? Colors.white.withValues(alpha: 0.22)
+                                  : accentColor,
                               shape: BoxShape.circle,
                             ),
                             alignment: Alignment.center,
                             child: isActive
-                                ? const iconoir.Pause(
+                                ? iconoir.Pause(
                                     width: 20,
                                     height: 20,
-                                    color: Colors.white,
+                                    color: hasColoredTheme
+                                        ? Colors.white
+                                        : colors.onAccentColor,
                                   )
                                 : (isRound
-                                    ? const iconoir.VideoCamera(
+                                    ? iconoir.VideoCamera(
                                         width: 20,
                                         height: 20,
-                                        color: Colors.white,
+                                        color: hasColoredTheme
+                                            ? Colors.white
+                                            : colors.onAccentColor,
                                       )
-                                    : const iconoir.Play(
+                                    : iconoir.Play(
                                         width: 20,
                                         height: 20,
-                                        color: Colors.white,
+                                        color: hasColoredTheme
+                                            ? Colors.white
+                                            : colors.onAccentColor,
                                       )),
                           ),
                           const SizedBox(width: 12),
@@ -1067,9 +1473,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                 Divider(
                   height: 1,
                   indent: 72,
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.black.withValues(alpha: 0.06),
+                  color: colors.dividerColor,
                 ),
             ],
           ],
@@ -1093,6 +1497,24 @@ class ProfileSectionPageContent extends StatelessWidget {
     }
 
     final isRound = msg.isRound || msg.messageType == 'round';
+    final isChannelChat = chatType == 'channel';
+    final voiceSenderId = isChannelChat
+        ? (msg.postAuthorId?.trim() ?? '')
+        : msg.senderId.trim();
+    final canResolveSender = (!isChannelChat || voiceSenderId.isNotEmpty) &&
+        ContactsService.shouldResolveUserIdentity(
+          voiceSenderId,
+          senderChatId: msg.senderChatId,
+          isAnonymousAdmin: msg.isFromAnonymousAdmin,
+        );
+    final resolvedSenderName = canResolveSender
+        ? ContactsService.resolvePeerName(
+            voiceSenderId,
+            msg.senderName ?? '',
+            senderChatId: msg.senderChatId,
+            isAnonymousAdmin: msg.isFromAnonymousAdmin,
+          )
+        : msg.senderName;
     coordinator.startPlayback(
       track: PlaybackTrack(
         messageId: msgId,
@@ -1100,7 +1522,10 @@ class ProfileSectionPageContent extends StatelessWidget {
         chatType: chatType,
         mediaType: isRound ? 'video_note' : 'voice',
         mediaUrl: rawUrl,
-        senderName: msg.senderName,
+        senderId: canResolveSender ? voiceSenderId : null,
+        senderName: (resolvedSenderName != null && resolvedSenderName.isNotEmpty)
+            ? resolvedSenderName
+            : msg.senderName,
         chatTitle: chatTitle,
       ),
     );
@@ -1163,7 +1588,6 @@ class ProfileSectionPageContent extends StatelessWidget {
     String? fileName,
     String? linkUrl,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final actions = <_ProfileContextMenuAction>[
       if (onJumpToMessage != null)
         _ProfileContextMenuAction(
@@ -1191,7 +1615,7 @@ class ProfileSectionPageContent extends StatelessWidget {
               iconWidget: iconoir.Copy(
                 width: 18,
                 height: 18,
-                color: isDark ? Colors.white : Colors.black87,
+                color: context.theav.onSurface,
               ),
             );
           },
@@ -1224,7 +1648,6 @@ class ProfileSectionPageContent extends StatelessWidget {
     List<_ProfileContextMenuAction> actions,
   ) {
     if (actions.isEmpty) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     const double menuWidth = 248.0;
     const double itemHeight = 42.0;
     final double menuHeight = actions.length * itemHeight + 12.0;
@@ -1236,6 +1659,7 @@ class ProfileSectionPageContent extends StatelessWidget {
       barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (dialogCtx, animation, secondaryAnimation) {
+        final mat = ProfileMaterialStyle.of(dialogCtx);
         final screenSize = MediaQuery.of(dialogCtx).size;
         final double left = globalPosition.dx.clamp(
           12.0,
@@ -1287,7 +1711,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withValues(
-                              alpha: isDark ? 0.34 : 0.14,
+                              alpha: mat.isDark ? 0.34 : 0.14,
                             ),
                             blurRadius: 20,
                             offset: const Offset(0, 6),
@@ -1296,19 +1720,15 @@ class ProfileSectionPageContent extends StatelessWidget {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: BackdropFilter(
-                          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                        child: mat.wrapBlur(
+                          sigma: 16.0,
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 6),
                             decoration: BoxDecoration(
-                              color: isDark
-                                  ? const Color(0xCC2C2C2E)
-                                  : const Color(0xE6FFFFFF),
+                              color: mat.panelFill,
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: isDark
-                                    ? Colors.white.withValues(alpha: 0.14)
-                                    : Colors.black.withValues(alpha: 0.08),
+                                color: mat.borderColor,
                                 width: 0.5,
                               ),
                             ),
@@ -1318,7 +1738,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                                 for (final action in actions)
                                   _CompactContextMenuRow(
                                     action: action,
-                                    isDark: isDark,
+                                    materialStyle: mat,
                                     onSelect: () {
                                       Navigator.of(dialogCtx).pop();
                                       action.onTap();
@@ -1347,107 +1767,68 @@ class ProfileSectionPageContent extends StatelessWidget {
     String? fileName,
     String? linkUrl,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: fileName ?? 'Действия',
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xB82C2C2E)
-                    : const Color(0xCCFFFFFF),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
-                border: Border(
-                  top: BorderSide(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.14)
-                        : Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
+        final palette = ctx.theav;
+        return TheavInsetGroup(
+          children: [
+            if (onJumpToMessage != null)
+              TheavListRow(
+                leading: iconoir.ChatBubble(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
                 ),
+                title: _tr(context, 'jump_to_message', 'Перейти к сообщению в чате'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  onJumpToMessage!(msg);
+                },
               ),
-              child: SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(height: 8),
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white24 : Colors.black12,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
+            if (linkUrl != null)
+              TheavListRow(
+                leading: iconoir.Copy(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: _tr(context, 'copy_link', 'Скопировать ссылку'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Clipboard.setData(ClipboardData(text: linkUrl));
+                  GlassToastService().show(
+                    context,
+                    _tr(context, 'copied_to_clipboard', 'Скопировано в буфер обмена'),
+                    iconWidget: iconoir.Copy(
+                      width: 18,
+                      height: 18,
+                      color: palette.onSurface,
                     ),
-                    const SizedBox(height: 12),
-                    if (onJumpToMessage != null)
-                      ListTile(
-                        leading: iconoir.ChatBubble(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(_tr(context, 'jump_to_message', 'Перейти к сообщению в чате')),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          onJumpToMessage!(msg);
-                        },
-                      ),
-                    if (linkUrl != null)
-                      ListTile(
-                        leading: iconoir.Copy(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(_tr(context, 'copy_link', 'Скопировать ссылку')),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          Clipboard.setData(ClipboardData(text: linkUrl));
-                          GlassToastService().show(
-                            context,
-                            _tr(context, 'copied_to_clipboard', 'Скопировано в буфер обмена'),
-                            iconWidget: iconoir.Copy(
-                              width: 18,
-                              height: 18,
-                              color: isDark ? Colors.white : Colors.black87,
-                            ),
-                          );
-                        },
-                      ),
-                    if (fileName != null || resolvedUrl != null)
-                      ListTile(
-                        leading: iconoir.Download(
-                          width: 22,
-                          height: 22,
-                          color: isDark ? Colors.white : Colors.black87,
-                        ),
-                        title: Text(_tr(context, 'download_file', 'Скачать / Открыть')),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _downloadAndOpenFile(
-                            context,
-                            msg,
-                            fileName ?? 'media_${msg.localId}',
-                          );
-                        },
-                      ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
+                  );
+                },
               ),
-            ),
-          ),
+            if (fileName != null || resolvedUrl != null)
+              TheavListRow(
+                leading: iconoir.Download(
+                  width: 20,
+                  height: 20,
+                  color: palette.primary,
+                ),
+                title: _tr(context, 'download_file', 'Скачать / Открыть'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _downloadAndOpenFile(
+                    context,
+                    msg,
+                    fileName ?? 'media_${msg.localId}',
+                  );
+                },
+              ),
+          ],
         );
       },
     );
@@ -1463,12 +1844,10 @@ class ProfileSectionPageContent extends StatelessWidget {
     required String title,
     required String subtitle,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color(0xFF6C6C70);
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final colors = _resolveTabColors(context);
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
+    final accentColor = colors.accentColor;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
@@ -1556,12 +1935,12 @@ class _ProfileContextMenuAction {
 
 class _CompactContextMenuRow extends StatefulWidget {
   final _ProfileContextMenuAction action;
-  final bool isDark;
+  final ProfileMaterialStyle materialStyle;
   final VoidCallback onSelect;
 
   const _CompactContextMenuRow({
     required this.action,
-    required this.isDark,
+    required this.materialStyle,
     required this.onSelect,
   });
 
@@ -1574,14 +1953,11 @@ class _CompactContextMenuRowState extends State<_CompactContextMenuRow> {
 
   @override
   Widget build(BuildContext context) {
-    final defaultColor = widget.isDark
-        ? Colors.white.withValues(alpha: 0.92)
-        : const Color(0xFF1C1C1E);
+    final mat = widget.materialStyle;
     final itemColor =
-        widget.action.isDestructive ? Colors.redAccent : defaultColor;
-    final hoverBg = widget.isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
+        widget.action.isDestructive ? mat.destructive : mat.foreground;
+    final hoverBg =
+        mat.primary.withValues(alpha: mat.isDark ? 0.14 : 0.08);
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
+import '../../services/contacts_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../utils/image_utils.dart';
+import 'avatar_decoration_frame.dart';
 
 /// A widget that displays a user avatar with an online status indicator.
 /// Shows an online status circle in the bottom-right corner when the user is online.
@@ -11,6 +16,11 @@ class AvatarWithStatus extends StatefulWidget {
   final bool isOnline;
   final Color? backgroundColor;
   final VoidCallback? onTap;
+  final String? userId;
+  final AvatarDecorationPreset? decorationOverride;
+  final bool showDecoration;
+  final bool animateDecoration;
+  final bool resolveContactOverride;
 
   const AvatarWithStatus({
     Key? key,
@@ -20,6 +30,11 @@ class AvatarWithStatus extends StatefulWidget {
     this.isOnline = false,
     this.backgroundColor,
     this.onTap,
+    this.userId,
+    this.decorationOverride,
+    this.showDecoration = true,
+    this.animateDecoration = true,
+    this.resolveContactOverride = true,
   }) : super(key: key);
 
   @override
@@ -66,7 +81,41 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
 
   @override
   Widget build(BuildContext context) {
-    final provider = avatarImageProvider(widget.avatarUrl);
+    if (widget.resolveContactOverride &&
+        ContactsService.shouldResolveUserIdentity(widget.userId)) {
+      return ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (context, _, __) {
+          final effectiveAvatarUrl = ContactsService.resolvePeerAvatarUrl(
+            widget.userId,
+            widget.avatarUrl,
+          );
+          final effectiveName = ContactsService.resolvePeerName(
+            widget.userId,
+            widget.name,
+          );
+          return _buildAvatarContent(
+            context,
+            effectiveAvatarUrl: effectiveAvatarUrl,
+            effectiveName: effectiveName,
+          );
+        },
+      );
+    }
+
+    return _buildAvatarContent(
+      context,
+      effectiveAvatarUrl: widget.avatarUrl,
+      effectiveName: widget.name,
+    );
+  }
+
+  Widget _buildAvatarContent(
+    BuildContext context, {
+    required String? effectiveAvatarUrl,
+    required String effectiveName,
+  }) {
+    final provider = avatarImageProvider(effectiveAvatarUrl);
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
     final bgColor = widget.backgroundColor ??
@@ -75,6 +124,8 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
     final textColor = themeExt?.palette.onPrimary ?? Colors.white;
     final onlineColor =
         themeExt?.palette.onlineIndicator ?? const Color(0xFF4CAF50);
+    final cutoutBorderColor =
+        themeExt?.palette.surface ?? theme.scaffoldBackgroundColor;
 
     final size = widget.radius * 2;
 
@@ -88,7 +139,9 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
         onBackgroundImageError: provider != null ? (_, __) {} : null,
         child: provider == null
             ? Text(
-                widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
+                effectiveName.isNotEmpty
+                    ? effectiveName.characters.first.toUpperCase()
+                    : '?',
                 style: TextStyle(
                   color: textColor,
                   fontSize: widget.radius * 0.8,
@@ -99,18 +152,87 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
       ),
     );
 
-    Widget content = RepaintBoundary(
+    AvatarDecorationPreset? decoration;
+    if (widget.showDecoration) {
+      decoration = widget.decorationOverride;
+      if (decoration == null &&
+          widget.userId != null &&
+          widget.userId!.isNotEmpty) {
+        try {
+          decoration =
+              context.select<PeerCustomizationCache, AvatarDecorationPreset?>(
+            (c) => c.getSync(widget.userId)?.avatarDecoration,
+          );
+        } catch (_) {
+          decoration = PeerCustomizationCache.instance
+              .getSync(widget.userId)
+              ?.avatarDecoration;
+        }
+      }
+    }
+
+    final Widget baseAvatar = decoration != null
+        ? SizedBox(
+            width: size,
+            height: size,
+            child: OverflowBox(
+              minWidth: size * 1.24,
+              maxWidth: size * 1.24,
+              minHeight: size * 1.24,
+              maxHeight: size * 1.24,
+              child: AvatarDecorationFrame(
+                decoration: decoration,
+                avatarDiameter: size,
+                animate: widget.animateDecoration,
+                child: avatar,
+              ),
+            ),
+          )
+        : avatar;
+
+    final Widget content = RepaintBoundary(
       child: AnimatedBuilder(
         animation: _animation,
         builder: (context, _) {
           final progress = _animation.value;
           if (progress <= 0.0) {
-            return avatar;
+            return baseAvatar;
           }
 
           final indicatorDiameter = (widget.radius * 0.55).clamp(8.0, 16.0);
           final indicatorRadius = indicatorDiameter / 2;
           final gap = (indicatorDiameter * 0.2).clamp(1.8, 2.8);
+
+          if (decoration == null) {
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                baseAvatar,
+                Positioned(
+                  right: -gap,
+                  bottom: -gap,
+                  child: Transform.scale(
+                    scale: progress,
+                    alignment: Alignment.center,
+                    child: Container(
+                      key: const ValueKey('avatar_online_indicator'),
+                      width: indicatorDiameter + gap * 2,
+                      height: indicatorDiameter + gap * 2,
+                      decoration: BoxDecoration(
+                        color: onlineColor,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: cutoutBorderColor,
+                          width: gap,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
           final indicatorCenter =
               Offset(size - indicatorRadius, size - indicatorRadius);
 
@@ -121,8 +243,9 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
                 clipper: _AvatarCutoutClipper(
                   center: indicatorCenter,
                   cutoutRadius: (indicatorRadius + gap) * progress,
+                  clipToOval: false,
                 ),
-                child: avatar,
+                child: baseAvatar,
               ),
               Positioned(
                 right: 0,
@@ -131,6 +254,7 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
                   scale: progress,
                   alignment: Alignment.center,
                   child: Container(
+                    key: const ValueKey('avatar_online_indicator'),
                     width: indicatorDiameter,
                     height: indicatorDiameter,
                     decoration: BoxDecoration(
@@ -160,25 +284,42 @@ class _AvatarWithStatusState extends State<AvatarWithStatus>
 class _AvatarCutoutClipper extends CustomClipper<Path> {
   final Offset center;
   final double cutoutRadius;
+  final bool clipToOval;
 
   const _AvatarCutoutClipper({
     required this.center,
     required this.cutoutRadius,
+    this.clipToOval = true,
   });
 
   @override
   Path getClip(Size size) {
-    final avatarPath = Path()
-      ..addOval(Rect.fromLTWH(0, 0, size.width, size.height));
-    if (cutoutRadius <= 0) return avatarPath;
+    final outerPath = Path();
+    if (clipToOval) {
+      outerPath.addOval(Rect.fromLTWH(0, 0, size.width, size.height));
+    } else {
+      // Allow the 1.24x AvatarDecorationFrame overflow box to extend outside
+      // size while still punching a clean gap around the online dot.
+      outerPath.addRect(
+        Rect.fromLTRB(
+          -size.width * 0.5,
+          -size.height * 0.5,
+          size.width * 1.5,
+          size.height * 1.5,
+        ),
+      );
+    }
+    if (cutoutRadius <= 0) return outerPath;
 
     final cutoutPath = Path()
       ..addOval(Rect.fromCircle(center: center, radius: cutoutRadius));
-    return Path.combine(PathOperation.difference, avatarPath, cutoutPath);
+    return Path.combine(PathOperation.difference, outerPath, cutoutPath);
   }
 
   @override
   bool shouldReclip(covariant _AvatarCutoutClipper oldClipper) {
-    return oldClipper.center != center || oldClipper.cutoutRadius != cutoutRadius;
+    return oldClipper.center != center ||
+        oldClipper.cutoutRadius != cutoutRadius ||
+        oldClipper.clipToOval != clipToOval;
   }
 }

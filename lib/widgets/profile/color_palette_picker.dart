@@ -4,18 +4,21 @@ import 'package:ios_color_picker/show_ios_color_picker.dart';
 
 import '../../services/profile_theme_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../common/glass_modal_sheet.dart';
 
-/// Виджет горизонтальной/сеточной палитры круглых цветов профиля по аналогии с Telegram.
+/// Виджет горизонтальной двухрядной палитры круглых цветов обложки профиля.
 class ColorPalettePicker extends StatefulWidget {
   final ProfileColorPreset? selectedPreset;
   final ValueChanged<ProfileColorPreset> onSelect;
   final VoidCallback? onPickCustomColor;
+  final EdgeInsetsGeometry horizontalPadding;
 
   const ColorPalettePicker({
     Key? key,
     required this.selectedPreset,
     required this.onSelect,
     this.onPickCustomColor,
+    this.horizontalPadding = const EdgeInsets.symmetric(horizontal: 16),
   }) : super(key: key);
 
   @override
@@ -23,7 +26,8 @@ class ColorPalettePicker extends StatefulWidget {
 }
 
 class _ColorPalettePickerState extends State<ColorPalettePicker> {
-  final IOSColorPickerController _colorPickerController = IOSColorPickerController();
+  final IOSColorPickerController _colorPickerController =
+      IOSColorPickerController();
 
   @override
   void dispose() {
@@ -32,11 +36,17 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
   }
 
   void _openColorPicker() {
+    if (widget.onPickCustomColor != null) {
+      widget.onPickCustomColor!();
+      return;
+    }
     HapticUtils.selection();
 
-    final startingColor = (widget.selectedPreset?.isCustom == true && widget.selectedPreset?.isGradient != true
+    final startingColor = (widget.selectedPreset?.isCustom == true &&
+                widget.selectedPreset?.isGradient != true
             ? widget.selectedPreset!.backgroundColor
-            : (widget.selectedPreset?.backgroundColor ?? const Color(0xFF2B82C9)))
+            : (widget.selectedPreset?.backgroundColor ??
+                const Color(0xFF2B82C9)))
         .withValues(alpha: 1.0);
 
     _colorPickerController.showIOSCustomColorPicker(
@@ -66,163 +76,182 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
     _showGradientPickerSheet(context, color1, color2);
   }
 
-  void _showGradientPickerSheet(BuildContext context, Color initialColor1, Color initialColor2) {
+  void _showGradientPickerSheet(
+    BuildContext context,
+    Color initialColor1,
+    Color initialColor2,
+  ) {
     Color c1 = initialColor1.withValues(alpha: 1.0);
     Color c2 = initialColor2.withValues(alpha: 1.0);
 
-    // Выбираем пользовательский градиент сразу
     widget.onSelect(ProfileColorPreset.fromCustomGradient(c1, c2));
 
-    showModalBottomSheet(
+    showTheavGlassModalSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1E2C3A),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (bottomSheetContext) {
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        final isDark = theme.brightness == Brightness.dark;
+        final borderSwatchColor = isDark
+            ? Colors.white.withValues(alpha: 0.38)
+            : Colors.black.withValues(alpha: 0.16);
+
         return StatefulBuilder(
-          builder: (context, setSheetState) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white24,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
+          builder: (ctx, setSheetState) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  translateOrFallback(
+                    ctx,
+                    'customizationGradientSheetTitle',
+                    'Two-Color Gradient',
                   ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Настройка двухцветного градиента',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
                   ),
-                  const SizedBox(height: 20),
-                  // Предпросмотр диагонального круга
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        colors: [c1, c1, c2, c2],
-                        stops: const [0.0, 0.5, 0.5, 1.0],
-                        transform: const GradientRotation(-math.pi / 4),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          blurRadius: 8,
-                          spreadRadius: 1,
-                        ),
-                      ],
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [c1, c1, c2, c2],
+                      stops: const [0.0, 0.5, 0.5, 1.0],
+                      transform: const GradientRotation(-math.pi / 4),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      // Кнопка выбор Цвет 1
-                      GestureDetector(
-                        onTap: () {
-                          HapticUtils.selection();
-                          _colorPickerController.showIOSCustomColorPicker(
-                            context: context,
-                            startingColor: c1,
-                            onColorChanged: (newColor) {
-                              final opaque = newColor.withValues(alpha: 1.0);
-                              setSheetState(() {
-                                c1 = opaque;
-                              });
-                              widget.onSelect(ProfileColorPreset.fromCustomGradient(c1, c2));
-                            },
-                          );
-                        },
-                        child: Column(
-                          children: [
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: c1,
-                                border: Border.all(color: Colors.white38, width: 2),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'Первый цвет',
-                              style: TextStyle(color: Colors.white70, fontSize: 13),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.swap_horiz_rounded, color: Colors.white38, size: 28),
-                      // Кнопка выбор Цвет 2
-                      GestureDetector(
-                        onTap: () {
-                          HapticUtils.selection();
-                          _colorPickerController.showIOSCustomColorPicker(
-                            context: context,
-                            startingColor: c2,
-                            onColorChanged: (newColor) {
-                              final opaque = newColor.withValues(alpha: 1.0);
-                              setSheetState(() {
-                                c2 = opaque;
-                              });
-                              widget.onSelect(ProfileColorPreset.fromCustomGradient(c1, c2));
-                            },
-                          );
-                        },
-                        child: Column(
-                          children: [
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: c2,
-                                border: Border.all(color: Colors.white38, width: 2),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'Второй цвет',
-                              style: TextStyle(color: Colors.white70, fontSize: 13),
-                            ),
-                          ],
-                        ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.22),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2B82C9),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    GestureDetector(
+                      onTap: () {
+                        HapticUtils.selection();
+                        _colorPickerController.showIOSCustomColorPicker(
+                          context: ctx,
+                          startingColor: c1,
+                          onColorChanged: (newColor) {
+                            final opaque = newColor.withValues(alpha: 1.0);
+                            setSheetState(() => c1 = opaque);
+                            widget.onSelect(
+                              ProfileColorPreset.fromCustomGradient(c1, c2),
+                            );
+                          },
+                        );
+                      },
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: c1,
+                              border: Border.all(
+                                color: borderSwatchColor,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            translateOrFallback(
+                              ctx,
+                              'customizationFirstColor',
+                              'First color',
+                            ),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        'Готово',
-                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                    ),
+                    Icon(
+                      Icons.swap_horiz_rounded,
+                      color: theme.colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.6),
+                      size: 26,
+                    ),
+                    GestureDetector(
+                      onTap: () {
+                        HapticUtils.selection();
+                        _colorPickerController.showIOSCustomColorPicker(
+                          context: ctx,
+                          startingColor: c2,
+                          onColorChanged: (newColor) {
+                            final opaque = newColor.withValues(alpha: 1.0);
+                            setSheetState(() => c2 = opaque);
+                            widget.onSelect(
+                              ProfileColorPreset.fromCustomGradient(c1, c2),
+                            );
+                          },
+                        );
+                      },
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 46,
+                            height: 46,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: c2,
+                              border: Border.all(
+                                color: borderSwatchColor,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            translateOrFallback(
+                              ctx,
+                              'customizationSecondColor',
+                              'Second color',
+                            ),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      backgroundColor:
+                          theme.colorScheme.primary.withValues(alpha: 0.12),
+                      foregroundColor: theme.colorScheme.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text(
+                      translateOrFallback(ctx, 'ok', 'OK'),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                ],
-              ),
+                ),
+              ],
             );
           },
         );
@@ -232,52 +261,66 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // Ряд 1: Сплошные цвета + кнопка выбора своего цвета
         SizedBox(
           height: 44,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: widget.horizontalPadding,
             itemCount: ProfileColorPresets.row1Solids.length + 1,
             separatorBuilder: (_, __) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
               if (index < ProfileColorPresets.row1Solids.length) {
                 final preset = ProfileColorPresets.row1Solids[index];
                 return _buildColorCircle(
+                  context: context,
                   preset: preset,
                   isSelected: widget.selectedPreset?.id == preset.id,
+                  isDark: isDark,
                 );
               }
-              // Кнопка выбора собственного сплошного цвета
-              final isCustomSolidSelected = widget.selectedPreset?.isCustom == true &&
-                  widget.selectedPreset?.isGradient != true;
-              return _buildCustomColorButton(isSelected: isCustomSolidSelected);
+              final isCustomSolidSelected =
+                  widget.selectedPreset?.isCustom == true &&
+                      widget.selectedPreset?.isGradient != true;
+              return _buildCustomColorButton(
+                context: context,
+                isSelected: isCustomSolidSelected,
+                isDark: isDark,
+              );
             },
           ),
         ),
         const SizedBox(height: 10),
-        // Ряд 2: Диагональные двухцветные полукруги + кнопка выбора своего градиента
         SizedBox(
           height: 44,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: widget.horizontalPadding,
             itemCount: ProfileColorPresets.row2Gradients.length + 1,
             separatorBuilder: (_, __) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
               if (index < ProfileColorPresets.row2Gradients.length) {
                 final preset = ProfileColorPresets.row2Gradients[index];
                 return _buildColorCircle(
+                  context: context,
                   preset: preset,
                   isSelected: widget.selectedPreset?.id == preset.id,
+                  isDark: isDark,
                 );
               }
-              // Кнопка выбора собственного градиента
-              final isCustomGradientSelected = widget.selectedPreset?.isCustom == true &&
-                  widget.selectedPreset?.isGradient == true;
-              return _buildCustomGradientColorButton(isSelected: isCustomGradientSelected);
+              final isCustomGradientSelected =
+                  widget.selectedPreset?.isCustom == true &&
+                      widget.selectedPreset?.isGradient == true;
+              return _buildCustomGradientColorButton(
+                context: context,
+                isSelected: isCustomGradientSelected,
+                isDark: isDark,
+              );
             },
           ),
         ),
@@ -286,39 +329,45 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
   }
 
   Widget _buildColorCircle({
+    required BuildContext context,
     required ProfileColorPreset preset,
     required bool isSelected,
+    required bool isDark,
   }) {
     const size = 36.0;
 
-    Widget circleContent;
-
-    if (preset.isGradient) {
-      final colors = preset.gradientColors!;
-      circleContent = Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            colors: [colors[0], colors[0], colors[1], colors[1]],
-            stops: const [0.0, 0.5, 0.5, 1.0],
-            transform: const GradientRotation(-math.pi / 4),
-          ),
-        ),
-      );
-    } else {
-      circleContent = Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: preset.backgroundColor,
-        ),
-      );
-    }
+    final Widget circleContent = preset.isGradient
+        ? Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [
+                  preset.gradientColors![0],
+                  preset.gradientColors![0],
+                  preset.gradientColors![1],
+                  preset.gradientColors![1],
+                ],
+                stops: const [0.0, 0.5, 0.5, 1.0],
+                transform: const GradientRotation(-math.pi / 4),
+              ),
+            ),
+          )
+        : Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: preset.backgroundColor,
+            ),
+          );
 
     if (isSelected) {
+      final ringColor = (!isDark && preset.ringColor.computeLuminance() > 0.72)
+          ? preset.backgroundColor
+          : preset.ringColor;
+
       return GestureDetector(
         onTap: () {
           HapticUtils.selection();
@@ -332,7 +381,7 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: preset.ringColor,
+              color: ringColor,
               width: 2.0,
             ),
           ),
@@ -354,9 +403,13 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
     );
   }
 
-  /// Плашка с иконкой палитры для выбора собственного сплошного цвета
-  Widget _buildCustomColorButton({required bool isSelected}) {
+  Widget _buildCustomColorButton({
+    required BuildContext context,
+    required bool isSelected,
+    required bool isDark,
+  }) {
     const size = 36.0;
+    final theme = Theme.of(context);
 
     final child = Container(
       width: size,
@@ -400,7 +453,7 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: Colors.white,
+              color: isDark ? Colors.white : theme.colorScheme.primary,
               width: 2.0,
             ),
           ),
@@ -419,9 +472,13 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
     );
   }
 
-  /// Плашка с иконкой палитры для выбора собственного градиента (2 цвета)
-  Widget _buildCustomGradientColorButton({required bool isSelected}) {
+  Widget _buildCustomGradientColorButton({
+    required BuildContext context,
+    required bool isSelected,
+    required bool isDark,
+  }) {
     const size = 36.0;
+    final theme = Theme.of(context);
 
     List<Color> colors = [const Color(0xFF5AB6F0), const Color(0xFF2575C0)];
 
@@ -471,7 +528,7 @@ class _ColorPalettePickerState extends State<ColorPalettePicker> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: Colors.white,
+              color: isDark ? Colors.white : theme.colorScheme.primary,
               width: 2.0,
             ),
           ),

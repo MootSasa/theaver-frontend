@@ -3,9 +3,12 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
 import 'community_service.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import '../config/app_config.dart';
 import '../models/community_models.dart';
+import '../models/profile_customization.dart';
+import 'peer_customization_cache.dart';
 
 /// Unified peer item returned by `GET /api/search` in `my_peers` and `global_peers`.
 class SearchPeer {
@@ -21,6 +24,7 @@ class SearchPeer {
   final bool isPublic;
   final int memberCount;
   final bool isMember;
+  final PeerCustomization? peerCustomization;
 
   const SearchPeer({
     required this.peerType,
@@ -35,6 +39,7 @@ class SearchPeer {
     this.isPublic = false,
     this.memberCount = 0,
     this.isMember = false,
+    this.peerCustomization,
   });
 
   bool get isUser => peerType == 'user';
@@ -61,6 +66,7 @@ class SearchPeer {
     bool? isPublic,
     int? memberCount,
     bool? isMember,
+    PeerCustomization? peerCustomization,
   }) {
     return SearchPeer(
       peerType: peerType ?? this.peerType,
@@ -75,6 +81,7 @@ class SearchPeer {
       isPublic: isPublic ?? this.isPublic,
       memberCount: memberCount ?? this.memberCount,
       isMember: isMember ?? this.isMember,
+      peerCustomization: peerCustomization ?? this.peerCustomization,
     );
   }
 
@@ -106,22 +113,50 @@ class SearchPeer {
   }
 
   factory SearchPeer.fromJson(Map<String, dynamic> json) {
+    final peerType =
+        (json['peer_type'] ?? json['chat_type'] ?? 'user').toString();
+    final id = (json['id'] ?? json['community_id'] ?? '').toString();
+    final rawName =
+        (json['name'] ?? json['display_name'] ?? json['username'] ?? '')
+            .toString();
     final rawAvatar =
         (json['avatar_url'] ?? json['icon_url'])?.toString().trim();
+    final normalizedRawAvatar =
+        (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null;
     final rawChatId = json['chat_id']?.toString().trim();
+    final effectiveName = (peerType == 'user' && id.isNotEmpty)
+        ? ContactsService.resolveName(id, rawName)
+        : rawName;
+    final effectiveAvatar = (peerType == 'user' && id.isNotEmpty)
+        ? ContactsService.resolveAvatarUrl(id, normalizedRawAvatar)
+        : normalizedRawAvatar;
     return SearchPeer(
-      peerType: (json['peer_type'] ?? json['chat_type'] ?? 'user').toString(),
-      id: (json['id'] ?? json['community_id'] ?? '').toString(),
+      peerType: peerType,
+      id: id,
       chatId: (rawChatId != null && rawChatId.isNotEmpty) ? rawChatId : null,
-      name: (json['name'] ?? json['display_name'] ?? json['username'] ?? '').toString(),
+      name: effectiveName,
       username: (json['username'] ?? '').toString(),
       description: (json['description'] ?? '').toString(),
-      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      avatarUrl: effectiveAvatar,
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
       isPublic: json['is_public'] == true,
       memberCount: (json['member_count'] as num?)?.toInt() ?? 0,
       isMember: json['is_member'] == true,
+      peerCustomization: () {
+        final rawCust = json['peer_customization'];
+        final cust = rawCust is Map
+            ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawCust))
+            : (rawCust is String && rawCust.isNotEmpty
+                ? PeerCustomization.tryParseJsonString(rawCust)
+                : null);
+        final custPeerType =
+            (json['type'] ?? json['peer_type'] ?? peerType).toString();
+        if (custPeerType == 'user' && id.isNotEmpty && cust != null) {
+          PeerCustomizationCache.instance.put(id, cust, notify: false);
+        }
+        return cust;
+      }(),
     );
   }
 }
@@ -216,6 +251,7 @@ class SearchResultUser {
   final bool isVerified;
   final bool isMyPeer;
   final bool isOnline;
+  final PeerCustomization? peerCustomization;
 
   SearchResultUser({
     required this.id,
@@ -229,38 +265,60 @@ class SearchResultUser {
     this.isVerified = false,
     this.isMyPeer = false,
     this.isOnline = false,
+    this.peerCustomization,
   });
 
   factory SearchResultUser.fromJson(Map<String, dynamic> json) {
     final rawAvatar = json['avatar_url']?.toString().trim();
+    final normalizedAvatar =
+        (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null;
     final rawChatId = json['chat_id']?.toString().trim();
+    final uid = (json['id'] ?? '').toString();
+    final rawName = (json['name'] ?? json['display_name'] ?? '').toString();
+    final rawCust = json['peer_customization'];
+    final cust = rawCust is Map
+        ? PeerCustomization.fromJson(Map<String, dynamic>.from(rawCust))
+        : null;
+    if (uid.isNotEmpty && cust != null) {
+      PeerCustomizationCache.instance.put(uid, cust, notify: false);
+    }
     return SearchResultUser(
-      id: (json['id'] ?? '').toString(),
-      name: (json['name'] ?? json['display_name'] ?? '').toString(),
+      id: uid,
+      name: uid.isNotEmpty ? ContactsService.resolveName(uid, rawName) : rawName,
       email: (json['email'] ?? '').toString(),
       username: (json['username'] ?? '').toString(),
       bio: (json['bio'] ?? json['description'] ?? '').toString(),
-      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      avatarUrl: uid.isNotEmpty
+          ? ContactsService.resolveAvatarUrl(uid, normalizedAvatar)
+          : normalizedAvatar,
       chatId: (rawChatId != null && rawChatId.isNotEmpty) ? rawChatId : null,
       isBot: json['is_bot'] == true,
       isVerified: json['is_verified'] == true,
       isMyPeer: json['is_member'] == true,
       isOnline: json['is_online'] == true,
+      peerCustomization: cust,
     );
   }
 
   factory SearchResultUser.fromPeer(SearchPeer peer, {bool isMyPeer = false}) {
+    final effectiveName = (peer.isUser && peer.id.isNotEmpty)
+        ? ContactsService.resolveName(peer.id, peer.name)
+        : peer.name;
+    final effectiveAvatar = (peer.isUser && peer.id.isNotEmpty)
+        ? ContactsService.resolveAvatarUrl(peer.id, peer.avatarUrl)
+        : peer.avatarUrl;
     return SearchResultUser(
       id: peer.id,
-      name: peer.name,
+      name: effectiveName,
       email: '',
       username: peer.username,
       bio: peer.description,
-      avatarUrl: peer.avatarUrl,
+      avatarUrl: effectiveAvatar,
       chatId: peer.chatId,
       isBot: peer.isBot,
       isVerified: peer.isVerified,
       isMyPeer: isMyPeer || peer.isMember,
+      peerCustomization: peer.peerCustomization,
     );
   }
 
@@ -426,16 +484,35 @@ class SearchResultMessage {
         .toString();
     final sId = (json['sender_id'] ?? json['user_id'] ?? '').toString();
     final rawAvatar = json['sender_avatar']?.toString().trim();
+    final normalizedAvatar =
+        (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null;
+    final senderChatId = json['sender_chat_id']?.toString().trim() ?? '';
+    final isAnon = json['is_from_anonymous_admin'] == true ||
+        json['is_from_anonymous_admin'] == 1;
+    final isHumanSender =
+        sId.isNotEmpty && sId != '0' && senderChatId.isEmpty && !isAnon;
+    final rawSenderName = (json['sender_name'] ?? '').toString();
+    final effectiveSenderName = isHumanSender
+        ? ContactsService.resolveName(sId, rawSenderName)
+        : rawSenderName;
+    final effectiveSenderAvatar = isHumanSender
+        ? ContactsService.resolveAvatarUrl(sId, normalizedAvatar)
+        : normalizedAvatar;
+    final rawChatName = (json['chat_name'] ?? '').toString();
+    final otherUid = json['other_user_id']?.toString().trim() ?? '';
+    final effectiveChatName = (cType == 'private' && otherUid.isNotEmpty)
+        ? ContactsService.resolveName(otherUid, rawChatName)
+        : rawChatName;
 
     return SearchResultMessage(
       id: (json['id'] ?? '').toString(),
       content: (json['content'] ?? '').toString(),
       chatId: cId,
       chatType: cType,
-      chatName: (json['chat_name'] ?? '').toString(),
+      chatName: effectiveChatName,
       senderId: sId,
-      senderName: (json['sender_name'] ?? '').toString(),
-      senderAvatar: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      senderName: effectiveSenderName,
+      senderAvatar: effectiveSenderAvatar,
       messageType: (json['message_type'] ?? 'text').toString(),
       userId: sId,
       channelId: cType == 'channel' ? cId : (json['channel_id'] ?? '').toString(),
@@ -504,22 +581,120 @@ class SearchService {
               : (c.chatType == 'channel'
                   ? 'channel'
                   : (c.chatType == 'community' ? 'community' : 'group'));
+          final dbCust = PeerCustomization.tryParseJsonString(c.peerCustomizationJson);
+          if (peerType == 'user' && c.otherUserId != null && c.otherUserId!.isNotEmpty && dbCust != null) {
+            PeerCustomizationCache.instance.put(c.otherUserId!, dbCust, notify: false);
+          }
+          final peerId = (c.otherUserId != null && c.otherUserId!.isNotEmpty)
+              ? c.otherUserId!
+              : c.chatId;
+          seenPeerIds.add(c.chatId);
+          seenPeerIds.add(peerId);
+          final resolvedName = peerType == 'user'
+              ? ContactsService.resolveName(peerId, c.name)
+              : c.name;
+          final resolvedAvatar = peerType == 'user'
+              ? ContactsService.resolveAvatarUrl(peerId, c.avatarUrl)
+              : c.avatarUrl;
           myPeers.add(
             SearchPeer(
               peerType: peerType,
-              id: (c.otherUserId != null && c.otherUserId!.isNotEmpty)
-                  ? c.otherUserId!
-                  : c.chatId,
+              id: peerId,
               chatId: c.chatId,
-              name: c.name,
+              name: resolvedName,
               username: c.username ?? '',
-              avatarUrl: c.avatarUrl,
+              avatarUrl: resolvedAvatar,
               isBot: c.isBot,
               isVerified: c.isVerified,
               isPublic: c.isPublic,
               isMember: true,
+              peerCustomization: dbCust,
             ),
           );
+        }
+
+        if (type == 'all' || type == 'users') {
+          final lowerQuery = trimmed.toLowerCase();
+          final privateChatByUserId = <String, DbChat>{
+            for (final c in allChats)
+              if (c.chatType == 'private' &&
+                  c.otherUserId != null &&
+                  c.otherUserId!.isNotEmpty)
+                c.otherUserId!: c,
+          };
+
+          for (final c in privateChatByUserId.values) {
+            if (myPeers.length >= limit) break;
+            final uid = c.otherUserId!;
+            if (seenPeerIds.contains(uid) || seenPeerIds.contains(c.chatId)) {
+              continue;
+            }
+            final contact = ContactsService.getCached(uid);
+            final effectiveName = ContactsService.resolveName(uid, c.name);
+            final haystack = [
+              effectiveName,
+              c.name,
+              c.username ?? '',
+              contact?.customName ?? '',
+              contact?.displayName ?? '',
+              contact?.originalDisplayName ?? '',
+              contact?.nickname ?? '',
+            ].join(' ').toLowerCase();
+            if (!haystack.contains(lowerQuery)) continue;
+
+            seenPeerIds.add(uid);
+            seenPeerIds.add(c.chatId);
+            myPeers.add(
+              SearchPeer(
+                peerType: 'user',
+                id: uid,
+                chatId: c.chatId,
+                name: effectiveName,
+                username: c.username ?? contact?.username ?? '',
+                avatarUrl: ContactsService.resolveAvatarUrl(uid, c.avatarUrl),
+                isBot: c.isBot,
+                isVerified: c.isVerified,
+                isPublic: c.isPublic,
+                isMember: true,
+                peerCustomization:
+                    PeerCustomization.tryParseJsonString(c.peerCustomizationJson),
+              ),
+            );
+          }
+
+          for (final ct in ContactsService.getSavedContacts()) {
+            if (myPeers.length >= limit) break;
+            if (ct.contactUserId.isEmpty ||
+                seenPeerIds.contains(ct.contactUserId)) {
+              continue;
+            }
+            final haystack = [
+              ct.effectiveName,
+              ct.customName,
+              ct.displayName,
+              ct.originalDisplayName ?? '',
+              ct.username,
+              ct.nickname,
+            ].join(' ').toLowerCase();
+            if (!haystack.contains(lowerQuery)) continue;
+
+            final linkedChat = privateChatByUserId[ct.contactUserId];
+            seenPeerIds.add(ct.contactUserId);
+            if (linkedChat != null) seenPeerIds.add(linkedChat.chatId);
+            myPeers.add(
+              SearchPeer(
+                peerType: 'user',
+                id: ct.contactUserId,
+                chatId: linkedChat?.chatId,
+                name: ct.effectiveName,
+                username: ct.username,
+                avatarUrl: ct.effectiveAvatarUrl ?? linkedChat?.avatarUrl,
+                isBot: ct.isBot,
+                isVerified: ct.isVerified,
+                isMember: linkedChat != null,
+              ),
+            );
+          }
         }
       }
 
@@ -532,16 +707,31 @@ class SearchService {
         for (final m in localMsgs) {
           final chat = chatById[m.chatId];
           final cType = chat?.chatType ?? 'group';
+          final resolvedChatName = (cType == 'private' &&
+                  chat?.otherUserId != null &&
+                  chat!.otherUserId!.isNotEmpty)
+              ? ContactsService.resolveName(chat.otherUserId, chat.name)
+              : (chat?.name ?? '');
+          final isHumanSender = m.senderId.isNotEmpty &&
+              m.senderId != '0' &&
+              (m.senderChatId == null || m.senderChatId!.isEmpty) &&
+              !m.isFromAnonymousAdmin;
+          final resolvedSenderName = isHumanSender
+              ? ContactsService.resolveName(m.senderId, m.senderName ?? '')
+              : (m.senderName ?? '');
+          final resolvedSenderAvatar = isHumanSender
+              ? ContactsService.resolveAvatarUrl(m.senderId, m.senderAvatarUrl)
+              : m.senderAvatarUrl;
           messages.add(
             SearchResultMessage(
               id: m.serverId ?? m.localId,
               content: m.content,
               chatId: m.chatId,
               chatType: cType,
-              chatName: chat?.name ?? '',
+              chatName: resolvedChatName,
               senderId: m.senderId,
-              senderName: m.senderName ?? '',
-              senderAvatar: m.senderAvatarUrl,
+              senderName: resolvedSenderName,
+              senderAvatar: resolvedSenderAvatar,
               messageType: m.messageType,
               userId: m.senderId,
               channelId: cType == 'channel' ? m.chatId : '',
@@ -571,11 +761,21 @@ class SearchService {
     required String query,
     String type = 'all',
     String? chatId,
+    String? fromUserId,
+    String? messageType,
+    String? minDate,
+    String? maxDate,
     int limit = 20,
     int offset = 0,
   }) async {
     final trimmed = query.trim();
-    if (trimmed.isEmpty && type != 'users') {
+    final hasInChatFilter = chatId != null &&
+        chatId.trim().isNotEmpty &&
+        ((fromUserId != null && fromUserId.trim().isNotEmpty) ||
+            (messageType != null && messageType.trim().isNotEmpty) ||
+            (minDate != null && minDate.trim().isNotEmpty) ||
+            (maxDate != null && maxDate.trim().isNotEmpty));
+    if (trimmed.isEmpty && type != 'users' && !hasInChatFilter) {
       return const UnifiedSearchResult();
     }
 
@@ -587,6 +787,14 @@ class SearchService {
         'limit': limit.toString(),
         if (offset > 0) 'offset': offset.toString(),
         if (chatId != null && chatId.trim().isNotEmpty) 'chat_id': chatId.trim(),
+        if (fromUserId != null && fromUserId.trim().isNotEmpty)
+          'from_user_id': fromUserId.trim(),
+        if (messageType != null && messageType.trim().isNotEmpty)
+          'message_type': messageType.trim(),
+        if (minDate != null && minDate.trim().isNotEmpty)
+          'min_date': minDate.trim(),
+        if (maxDate != null && maxDate.trim().isNotEmpty)
+          'max_date': maxDate.trim(),
       };
 
       final uri = Uri.parse('${AppConfig.baseUrl}/api/search')
@@ -648,14 +856,31 @@ class SearchService {
               c.otherUserId != null &&
               c.otherUserId!.isNotEmpty &&
               seenIds.add(c.otherUserId!)) {
+            final uid = c.otherUserId!;
             users.add(
               SearchResultUser(
-                id: c.otherUserId!,
-                name: c.name,
+                id: uid,
+                name: ContactsService.resolveName(uid, c.name),
                 email: '',
-                username: '',
-                avatarUrl: c.avatarUrl,
+                username: c.username ?? '',
+                avatarUrl: ContactsService.resolveAvatarUrl(uid, c.avatarUrl),
                 chatId: c.chatId,
+                isMyPeer: true,
+              ),
+            );
+          }
+        }
+        for (final ct in ContactsService.getSavedContacts()) {
+          if (ct.contactUserId.isNotEmpty && seenIds.add(ct.contactUserId)) {
+            users.add(
+              SearchResultUser(
+                id: ct.contactUserId,
+                name: ct.effectiveName,
+                email: '',
+                username: ct.username,
+                avatarUrl: ct.effectiveAvatarUrl,
+                isBot: ct.isBot,
+                isVerified: ct.isVerified,
                 isMyPeer: true,
               ),
             );

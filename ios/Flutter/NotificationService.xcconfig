@@ -1,0 +1,5 @@
+// Base configuration of the NotificationService extension target (Debug/Release/Profile).
+// Only pulls in FLUTTER_BUILD_NAME / FLUTTER_BUILD_NUMBER so the extension version
+// matches the app version. Do NOT include Pods-Runner xcconfigs here: the extension
+// must not link Flutter or any CocoaPods.
+#include? "Generated.xcconfig"

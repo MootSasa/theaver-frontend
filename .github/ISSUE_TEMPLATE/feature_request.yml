@@ -1,0 +1,32 @@
+name: Feature Request / Предложить улучшение
+description: Suggest an improvement or new capability for the Theaver client. / Предложить новую функцию или улучшение клиента.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case / Задача или сценарий
+      description: What workflow feels missing or awkward today? / Какого сценария не хватает сейчас?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Behavior / Предлагаемое решение
+      description: Describe how the feature should work. / Опишите, как это должно работать.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platforms
+    attributes:
+      label: Target Platforms / Платформы
+      options:
+        - label: Android
+        - label: iOS
+        - label: Windows
+        - label: macOS
+        - label: Linux
+        - label: Web

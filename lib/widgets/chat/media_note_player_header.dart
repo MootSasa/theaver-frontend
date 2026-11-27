@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/contacts_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/video_note_playback_service.dart';
@@ -76,6 +77,7 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
     _voiceService.addListener(_onServiceChange);
     _videoService.addListener(_onServiceChange);
     _tilingController.addListener(_onServiceChange);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _attachVideoController();
 
     if (_shouldDisplayForCurrentContext()) {
@@ -89,8 +91,14 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
     _voiceService.removeListener(_onServiceChange);
     _videoService.removeListener(_onServiceChange);
     _tilingController.removeListener(_onServiceChange);
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _slideController.dispose();
     super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   void _attachVideoController() {
@@ -163,7 +171,16 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
 
     if (isVideo) {
       final ctrl = _videoService.activeController!;
-      title = _videoService.activeSenderName ?? l10n?.translate('chat_video_note') ?? 'Video message';
+      final rawSenderName = _videoService.activeSenderName;
+      final senderId = _videoService.activeSenderId ??
+          MediaPlaybackCoordinator.instance.activeTrack?.senderId;
+      final resolvedSender =
+          (rawSenderName != null && rawSenderName.isNotEmpty)
+              ? ContactsService.resolvePeerName(senderId, rawSenderName)
+              : null;
+      title = (resolvedSender != null && resolvedSender.isNotEmpty)
+          ? resolvedSender
+          : (l10n?.translate('chat_video_note') ?? 'Video message');
       final pos = ctrl.value.position;
       final dur = ctrl.value.duration;
       subtitle = '${l10n?.translate('chat_video_note') ?? 'Video message'} • ${_formatDuration(dur - pos)}';
@@ -180,7 +197,16 @@ class _MediaNotePlayerHeaderState extends State<MediaNotePlayerHeader>
         MediaPlaybackCoordinator.instance.navigateToActiveChat();
       };
     } else {
-      title = _voiceService.activeSenderName ?? l10n?.translate('chat_voice_message') ?? 'Voice message';
+      final rawSenderName = _voiceService.activeSenderName;
+      final senderId = _voiceService.activeSenderId ??
+          MediaPlaybackCoordinator.instance.activeTrack?.senderId;
+      final resolvedSender =
+          (rawSenderName != null && rawSenderName.isNotEmpty)
+              ? ContactsService.resolvePeerName(senderId, rawSenderName)
+              : null;
+      title = (resolvedSender != null && resolvedSender.isNotEmpty)
+          ? resolvedSender
+          : (l10n?.translate('chat_voice_message') ?? 'Voice message');
       final pos = _voiceService.position;
       final dur = _voiceService.duration;
       final durText = dur > Duration.zero

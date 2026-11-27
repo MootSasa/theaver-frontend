@@ -2,13 +2,13 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/media_cache_manager.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/date_time_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Telegram-style Chat History Calendar with circular media previews for days with photos/videos,
 /// highlighted badges for days with text messages, and platform-adaptive navigation
@@ -136,14 +136,13 @@ class ChatHistoryCalendar extends StatefulWidget {
         },
       );
     } else {
-      return showModalBottomSheet<ChatCalendarDayInfo>(
+      return showTheavModalSheet<ChatCalendarDayInfo>(
         context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        barrierColor: Colors.black.withValues(alpha: 0.45),
+        maxHeightFactor: 0.84,
+        padding: const EdgeInsets.fromLTRB(0, 6, 0, 0),
         builder: (ctx) {
-          return FractionallySizedBox(
-            heightFactor: 0.78,
+          return SizedBox(
+            height: MediaQuery.sizeOf(ctx).height * 0.70,
             child: ChatHistoryCalendar(
               chatId: chatId,
               initialDate: initialDate,
@@ -358,7 +357,7 @@ class _ChatHistoryCalendarState extends State<ChatHistoryCalendar> {
     final isDesktop = ChatHistoryCalendar._isDesktopPlatform(context);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+    final glassEnabled = LiquidGlassProvider.maybeOf(context)?.enabled ?? false;
 
     final surfaceColor = glassEnabled
         ? (isDark
@@ -403,28 +402,7 @@ class _ChatHistoryCalendarState extends State<ChatHistoryCalendar> {
         child: card,
       );
     } else {
-      Widget sheet = Container(
-        decoration: BoxDecoration(
-          color: surfaceColor,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border.all(color: borderColor, width: 0.8),
-        ),
-        child: SafeArea(
-          top: false,
-          child: _buildMobileContent(context, isDark),
-        ),
-      );
-
-      if (glassEnabled) {
-        sheet = ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          child: BackdropFilter(
-            filter: BlurUtils.createDownsampledBlur(18),
-            child: sheet,
-          ),
-        );
-      }
-      return sheet;
+      return _buildMobileContent(context, isDark);
     }
   }
 
@@ -662,17 +640,8 @@ class _ChatHistoryCalendarState extends State<ChatHistoryCalendar> {
 
     return Column(
       children: [
-        const SizedBox(height: 8),
-        Container(
-          width: 36,
-          height: 4,
-          decoration: BoxDecoration(
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.22),
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 12, 6),
+          padding: const EdgeInsets.fromLTRB(20, 4, 12, 6),
           child: Row(
             children: [
               Expanded(
@@ -931,6 +900,7 @@ class _CalendarMediaCircle extends StatelessWidget {
     } else {
       imageWidget = Image.network(
         previewUrl,
+        headers: AppConfig.authHeadersForUrl(previewUrl),
         fit: BoxFit.cover,
         cacheWidth: 120,
         errorBuilder: (_, __, ___) => Container(color: Colors.black45),

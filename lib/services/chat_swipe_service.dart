@@ -39,16 +39,7 @@ enum ChatSwipeAction {
     }
   }
 
-  /// Archive and mute are kept as TODO per user requirement
-  bool get isImplemented {
-    switch (this) {
-      case ChatSwipeAction.archive:
-      case ChatSwipeAction.mute:
-        return false;
-      default:
-        return true;
-    }
-  }
+  bool get isImplemented => true;
 }
 
 /// Service managing the user's preferred swipe-left action on chats.

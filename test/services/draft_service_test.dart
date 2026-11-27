@@ -46,8 +46,8 @@ void main() {
       expect(emptyDraft.isNotEmpty, false);
 
       final draftWithReply = ChatDraft(text: '', replyToMessageId: '42');
-      expect(draftWithReply.isEmpty, false);
-      expect(draftWithReply.isNotEmpty, true);
+      expect(draftWithReply.isEmpty, true);
+      expect(draftWithReply.isNotEmpty, false);
     });
   });
 

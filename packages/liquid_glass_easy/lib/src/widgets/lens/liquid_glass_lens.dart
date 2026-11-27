@@ -17,7 +17,9 @@ import 'liquid_glass_batch.dart';
 import 'liquid_glass_blender.dart';
 import 'liquid_glass_lens_scope.dart';
 import 'liquid_glass_shaders.dart';
+import 'liquid_glass_shape_cache.dart';
 import '../liquid_glass_engine.dart';
+import '../liquid_glass_configuration.dart';
 import 'render_liquid_glass_lens.dart';
 
 /// A liquid-glass lens you can place **anywhere in the widget tree**.
@@ -83,6 +85,27 @@ class LiquidGlassLens extends StatefulWidget {
   /// nothing behind. The change is instant — there is no built-in
   /// show/hide animation; wrap the lens yourself to animate it.
   final bool visibility;
+
+  /// How much of the glass is drawn, from `0` to `1` (the default).
+  ///
+  /// The shader's output is multiplied by it, so the glass fades into the
+  /// backdrop: the refraction, the tint, the rim and an in-shader blur all
+  /// go together, and the lens keeps reading the backdrop the whole way.
+  /// Wrapping a lens in an `Opacity` cannot do that: the glass inside a
+  /// partly transparent layer reads only that layer, so it shows no
+  /// refraction until the fade ends.
+  ///
+  /// What the shader does not draw is left to you, as plain values: scale
+  /// the style's `blur` (the engine's blur is a pass of its own under the
+  /// shader) and its shadow's opacity by the same amount, and fade the
+  /// [child] with an `Opacity` of its own. At `0` the glass costs no
+  /// backdrop pass; the [child] stays.
+  ///
+  /// Inside a `LiquidGlassBlender` each member keeps its own opacity: the
+  /// merged glass blends them across the bridge, as it blends their tints,
+  /// and a member at `0` still shapes its neighbours until it is hidden
+  /// with [visibility].
+  final double opacity;
 
   /// Override for the Impeller fast-path detection, like
   /// `LiquidGlassView.useImpellerBackdrop`. When null, inherits the
@@ -152,6 +175,7 @@ class LiquidGlassLens extends StatefulWidget {
     super.key,
     this.style = const LiquidGlassStyle(),
     this.visibility = true,
+    this.opacity = 1,
     this.useImpellerBackdrop,
     this.touch,
     this.deform,
@@ -159,7 +183,7 @@ class LiquidGlassLens extends StatefulWidget {
     this.honorBackdropAlpha = false,
     this.shaderClip = LiquidGlassShaderClip.outlineTracked,
     this.child,
-  });
+  }) : assert(opacity >= 0 && opacity <= 1);
 
   @override
   State<LiquidGlassLens> createState() => _LiquidGlassLensState();
@@ -230,6 +254,14 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
   /// also relies on GC finalizers for shader instances).
   ui.FragmentShader? _mainShader;
   ui.FragmentShader? _borderShader;
+  final GlobalKey _contentKey = GlobalKey();
+
+  Widget? _keyedContent(BuildContext context, Widget? child) {
+    final Widget? adapted = _adaptContent(context, child);
+    return adapted == null
+        ? null
+        : KeyedSubtree(key: _contentKey, child: adapted);
+  }
 
   @override
   void initState() {
@@ -490,7 +522,7 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
     }
 
     if (blenderScope != null) {
-      final Widget? content = _adaptContent(context, widget.child);
+      final Widget? content = _keyedContent(context, widget.child);
       return blenderScope.buildMember(
         // Only the SHAPE is read from here; the adapted appearance rides
         // along for the solo fallback.
@@ -503,6 +535,8 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
         // takes the group's colour rather than inventing one.
         tint: _activeAdaptivity == null ? null : _appearance.color,
         visible: widget.visibility,
+        // The merged pass draws this member at its own opacity.
+        opacity: widget.opacity,
         // Layout has already resized this member's box; the SCALE is the part
         // the blender cannot infer from it, and the metaball needs it to
         // evaluate the lens at its rest size.
@@ -535,10 +569,12 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
     final bool deformed = !deform.isRest && !restSize.isEmpty;
 
     final LiquidGlassAppearance appearance =
-        _adaptAppearance(style?.appearance ?? widget.style.appearance);
+        LiquidGlassConfiguration.overrideAppearance(context,
+            _adaptAppearance(style?.appearance ?? widget.style.appearance));
     final LiquidGlassRefraction baseRefraction =
-        style?.refraction ?? _refraction;
-    final Widget? content = _adaptContent(context, widget.child);
+        LiquidGlassConfiguration.overrideRefraction(
+            context, style?.refraction ?? _refraction);
+    final Widget? content = _keyedContent(context, widget.child);
 
     // The shape is passed through untouched. The shader evaluates it at REST
     // size in a domain divided by `shapeScale`, so the whole outline stretches
@@ -602,6 +638,7 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
           appearance: appearance,
           refraction: refraction,
           visible: widget.visibility,
+          opacity: widget.opacity,
           child: content == null
               ? null
               : liquidGlassFlexChild(
@@ -628,6 +665,18 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
     final int? backdropId = mode == LiquidGlassLensRenderMode.impellerBackdrop
         ? LiquidGlassBatch.backdropIdOf(context)
         : null;
+    final LiquidGlassBatchMode batchMode = backdropId == null
+        ? LiquidGlassBatchMode.singlePass
+        : LiquidGlassBatch.modeOf(context);
+    // In a batch the batch's blur settings apply, otherwise the engine's.
+    final bool batched = backdropId != null;
+    final bool shaderBlur = (batched
+            ? LiquidGlassBatch.blurMethodOf(context)
+            : LiquidGlassConfiguration.blurMethod) ==
+        LiquidGlassBlurMethod.shader;
+    final bool shaderBlurDispersion = batched
+        ? LiquidGlassBatch.shaderBlurDispersionOf(context)
+        : LiquidGlassConfiguration.shaderBlurDispersion;
 
     // Clip at the deformed lens bounds, scale the content inside it: the
     // child stretches as pixels but can never spill past the glass edge.
@@ -663,11 +712,17 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
         refraction: refraction,
         appearance: appearance,
         borderAlpha: 1.0,
-        glassEnabled: visible,
+        opacity: widget.opacity,
+        // Fully faded: no backdrop pass, the child still painted.
+        glassEnabled: visible && widget.opacity > 0,
         honorBackdropAlpha: widget.honorBackdropAlpha,
         screenSize: screenSize,
         devicePixelRatio: dpr,
         backdropId: backdropId,
+        batchMode: batchMode,
+        shaderBlur: shaderBlur,
+        shaderBlurDispersion: shaderBlurDispersion,
+        shapeCache: !LiquidGlassShapeCacheExclude.of(context),
         shaderClip: widget.shaderClip,
         scope: scope,
         child: visible ? clippedChild : null,
@@ -716,11 +771,16 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
   final LiquidGlassRefraction refraction;
   final LiquidGlassAppearance appearance;
   final double borderAlpha;
+  final double opacity;
   final bool glassEnabled;
   final bool honorBackdropAlpha;
   final Size screenSize;
   final double devicePixelRatio;
   final int? backdropId;
+  final LiquidGlassBatchMode batchMode;
+  final bool shaderBlur;
+  final bool shaderBlurDispersion;
+  final bool shapeCache;
   final LiquidGlassShaderClip shaderClip;
   final LiquidGlassLensScope? scope;
 
@@ -734,11 +794,16 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
     required this.refraction,
     required this.appearance,
     required this.borderAlpha,
+    required this.opacity,
     required this.glassEnabled,
     required this.honorBackdropAlpha,
     required this.screenSize,
     required this.devicePixelRatio,
     required this.backdropId,
+    required this.batchMode,
+    required this.shaderBlur,
+    required this.shaderBlurDispersion,
+    required this.shapeCache,
     required this.shaderClip,
     required this.scope,
     super.child,
@@ -756,11 +821,16 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
       refraction: refraction,
       appearance: appearance,
       borderAlpha: borderAlpha,
+      opacity: opacity,
       glassEnabled: glassEnabled,
       honorBackdropAlpha: honorBackdropAlpha,
       screenSize: screenSize,
       devicePixelRatio: devicePixelRatio,
       backdropId: backdropId,
+      batchMode: batchMode,
+      shaderBlur: shaderBlur,
+      shaderBlurDispersion: shaderBlurDispersion,
+      shapeCache: shapeCache,
       shaderClip: shaderClip,
       captureRevision: scope?.captureRevision,
       currentImage: scope?.currentImage,
@@ -782,11 +852,16 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
       ..refraction = refraction
       ..appearance = appearance
       ..borderAlpha = borderAlpha
+      ..opacity = opacity
       ..glassEnabled = glassEnabled
       ..honorBackdropAlpha = honorBackdropAlpha
       ..screenSize = screenSize
       ..devicePixelRatio = devicePixelRatio
       ..backdropId = backdropId
+      ..batchMode = batchMode
+      ..shaderBlur = shaderBlur
+      ..shaderBlurDispersion = shaderBlurDispersion
+      ..shapeCache = shapeCache
       ..shaderClip = shaderClip
       ..captureRevision = scope?.captureRevision
       ..currentImage = scope?.currentImage
@@ -806,6 +881,10 @@ class _LiteGlassFallback extends StatelessWidget {
   final LiquidGlassRefraction refraction;
   final bool visible;
 
+  /// The lens's [LiquidGlassLens.opacity]: the tint and the rim fade by it,
+  /// as they do in the shader.
+  final double opacity;
+
   /// Deformed size / rest size; `(1,1)` when undeformed.
   final Offset shapeScale;
   final Widget? child;
@@ -815,6 +894,7 @@ class _LiteGlassFallback extends StatelessWidget {
     required this.appearance,
     required this.refraction,
     required this.visible,
+    this.opacity = 1,
     this.shapeScale = const Offset(1, 1),
     this.child,
   });
@@ -825,16 +905,19 @@ class _LiteGlassFallback extends StatelessWidget {
 
     // The tint is the lite's own, a fill of the shape. The rim is painted
     // over the finished surface and reads nothing, so the frost's read is
-    // the only one a lite lens costs.
+    // the only one a lite lens costs. The clip is the exact outline, the
+    // curve the lite cuts its own rim to.
     return liquidGlassClip(
-      shape: shape,
+      shape: shape.copyWith(clipQuality: LiquidGlassClipQuality.exact),
       shapeScale: shapeScale,
       child: LiquidGlassLite(
         shape: shape,
         shapeScale: shapeScale,
         blur: appearance.blur,
-        magnification: refraction.magnification,
-        color: appearance.color,
+        magnification: 1 + (refraction.magnification - 1) * opacity,
+        color: appearance.color
+            .withValues(alpha: appearance.color.a * opacity),
+        borderAlpha: opacity,
         child: child,
       ),
     );

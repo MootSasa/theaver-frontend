@@ -1,9 +1,9 @@
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../services/liquid_glass_provider.dart';
+import 'profile_material_surface.dart';
 
 /// Компактная центрированная капсула музыкального статуса (`♪ Название трека - Автор >`).
 ///
@@ -69,14 +69,18 @@ class LiquidGlassMusicStatus extends StatelessWidget {
     );
   }
 
-  Widget _buildPillRow(Color textColor, Color mutedColor) {
+  Widget _buildPillRow(
+    Color textColor,
+    Color mutedColor, {
+    Color? iconColor,
+  }) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         iconoir.MusicDoubleNote(
           width: 14,
           height: 14,
-          color: mutedColor,
+          color: iconColor ?? mutedColor,
         ),
         const SizedBox(width: 6),
         Flexible(
@@ -151,14 +155,7 @@ class LiquidGlassMusicStatus extends StatelessWidget {
   }
 
   Widget _buildClassicPill(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark || hasColoredTheme;
-    final textColor = isDark
-        ? Colors.white.withValues(alpha: 0.92)
-        : theme.colorScheme.onSurface;
-    final mutedColor = isDark
-        ? Colors.white.withValues(alpha: 0.68)
-        : theme.colorScheme.onSurfaceVariant;
+    final mat = ProfileMaterialStyle.of(context);
 
     return GestureDetector(
       onTap: onTap,
@@ -168,7 +165,7 @@ class LiquidGlassMusicStatus extends StatelessWidget {
           borderRadius: BorderRadius.circular(15),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.06),
+              color: Colors.black.withValues(alpha: mat.isDark ? 0.18 : 0.06),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
@@ -176,24 +173,24 @@ class LiquidGlassMusicStatus extends StatelessWidget {
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(15),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: mat.wrapBlur(
+            sigma: 14.0,
             child: Container(
               height: 30,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0x992C2C2E)
-                    : const Color(0xB3FFFFFF),
+                color: mat.buttonFill,
                 borderRadius: BorderRadius.circular(15),
                 border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.12)
-                      : Colors.black.withValues(alpha: 0.08),
+                  color: mat.borderColor,
                   width: 0.5,
                 ),
               ),
-              child: _buildPillRow(textColor, mutedColor),
+              child: _buildPillRow(
+                mat.foreground,
+                mat.subtext,
+                iconColor: mat.primary,
+              ),
             ),
           ),
         ),

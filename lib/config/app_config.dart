@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/account_manager.dart';
 
 /// AppConfig provides centralized 4-tier dynamic configuration for the application:
 /// 1. SharedPreferences runtime override (custom_server_url / custom_api_url)
@@ -46,7 +47,7 @@ class AppConfig {
   static const String defaultProdWebBaseUrl = 'https://theaver.app';
 
   static const String defaultDevApiBaseUrl = 'http://localhost:8080';
-  static const String defaultDevStorageBaseUrl = 'http://localhost:9000';
+  static const String defaultDevStorageBaseUrl = 'http://localhost:8333';
   static const String defaultDevWsBaseUrl = 'ws://localhost:8080/api/ws';
   static const String defaultDevWebBaseUrl = 'http://localhost:3000';
 
@@ -94,19 +95,18 @@ class AppConfig {
         final info = await PackageInfo.fromPlatform();
         if (hasEnvAppVersion && appVersion.isNotEmpty) {
           _currentVersion = appVersion;
-        } else if (info.version.isNotEmpty && appVersion == '1.0.0') {
+        } else if (info.version.isNotEmpty) {
           _currentVersion = info.version;
         }
-        if (hasEnvBuildNumber && appBuildNumber > 1) {
+        if (hasEnvBuildNumber && appBuildNumber > 0) {
           _currentBuildNumber = appBuildNumber;
         } else {
           final b = int.tryParse(info.buildNumber);
           if (b != null && b > 0) {
-            // Normalize Flutter --split-per-abi versionCode (abiPrefix * 1000 + buildNumber)
-            final normalized = (b >= 1000 && b < 10000) ? (b % 1000) : b;
-            if (normalized > _currentBuildNumber) {
-              _currentBuildNumber = normalized;
-            }
+            _currentBuildNumber =
+                (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+                    ? normalizeAndroidBuildNumber(b, version: info.version)
+                    : b;
           }
         }
       } catch (_) {}
@@ -201,7 +201,7 @@ class AppConfig {
     return isProduction ? defaultProdWsBaseUrl : defaultDevWsBaseUrl;
   }
 
-  /// Active Storage Base URL (e.g. `https://storage.theaver.app` or `http://192.168.1.50:9000`)
+  /// Active Storage Base URL (e.g. `https://storage.theaver.app` or `http://192.168.1.50:8333`)
   static String get storageUrl {
     if (_customStorageUrl != null && _customStorageUrl!.isNotEmpty) {
       return _customStorageUrl!;
@@ -280,7 +280,7 @@ class AppConfig {
     return '$wsScheme$hostAndPath/api/ws';
   }
 
-  /// Derives the Storage URL (MinIO/S3) from an API base URL.
+  /// Derives the Storage URL (SeaweedFS S3) from an API base URL.
   static String deriveStorageUrl(String apiBaseUrl) {
     final trimmed = apiBaseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     if (trimmed.isEmpty) return defaultDevStorageBaseUrl;
@@ -301,14 +301,14 @@ class AppConfig {
         return '${uri.scheme}://storage.$domain';
       }
 
-      // Check if port 8080 -> standard MinIO port 9000
+      // Check if port 8080 -> standard SeaweedFS S3 port 8333
       if (uri.hasPort && uri.port == 8080) {
-        return '${uri.scheme}://${uri.host}:9000';
+        return '${uri.scheme}://${uri.host}:8333';
       }
 
       // For standard localhost / LAN IPs without port or with standard ports
       if (uri.host == 'localhost' || uri.host == '127.0.0.1' || RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(uri.host)) {
-        return '${uri.scheme}://${uri.host}:9000';
+        return '${uri.scheme}://${uri.host}:8333';
       }
 
       return '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}';
@@ -327,23 +327,115 @@ class AppConfig {
     return '$webBaseUrl/join/$inviteCode';
   }
 
-  /// Resolves relative or absolute media / storage URLs.
-  /// Returns full URL with storageUrl prepended if relative path.
-  static String? resolveMediaUrl(String? url) {
-    if (url == null) return null;
+  /// Returns `true` when [url] refers to a local device file path rather than
+  /// an HTTP URL, data/blob URI, or relative server/storage object path.
+  static bool isLocalFilePath(String? url) {
+    if (url == null) return false;
     final trimmed = url.trim();
-    if (trimmed.isEmpty) return null;
-
-    // Check if it's already a local file path
+    if (trimmed.isEmpty) return false;
+    if (trimmed.startsWith('http://') ||
+        trimmed.startsWith('https://') ||
+        trimmed.startsWith('data:') ||
+        trimmed.startsWith('blob:') ||
+        trimmed.startsWith('/api/') ||
+        trimmed.startsWith('api/') ||
+        trimmed.startsWith('/uploads/') ||
+        trimmed.startsWith('/media/')) {
+      return false;
+    }
     if (trimmed.startsWith('file://') ||
+        trimmed.startsWith('content://') ||
         trimmed.startsWith('/data/') ||
         trimmed.startsWith('/storage/') ||
+        trimmed.startsWith('/sdcard/') ||
+        trimmed.startsWith('/mnt/') ||
         trimmed.startsWith('/var/') ||
         trimmed.startsWith('/tmp/') ||
         trimmed.startsWith('/private/') ||
         trimmed.startsWith('/Users/') ||
         trimmed.startsWith('/home/') ||
+        trimmed.startsWith('/run/') ||
+        trimmed.startsWith('/opt/') ||
+        trimmed.startsWith('/app/') ||
         RegExp(r'^[a-zA-Z]:[/\\]').hasMatch(trimmed)) {
+      return true;
+    }
+    if (trimmed.contains('\\')) return true;
+    return false;
+  }
+
+  static const List<String> _legacyInternalStorageHosts = [
+    'localhost',
+    '127.0.0.1',
+    'seaweedfs',
+    'minio',
+  ];
+
+  static const List<int> _legacyInternalStoragePorts = [8333, 9000];
+
+  static const Set<String> _volatileCacheQueryParams = {
+    'mt',
+    'x-amz-algorithm',
+    'x-amz-credential',
+    'x-amz-date',
+    'x-amz-expires',
+    'x-amz-signedheaders',
+    'x-amz-signature',
+    'x-amz-security-token',
+    'awsaccesskeyid',
+    'signature',
+    'expires',
+  };
+
+  /// Rewrites internal Docker/dev SeaweedFS (:8333) or legacy MinIO (:9000) URLs
+  /// to the active [storageUrl] when matching.
+  static String? rewriteInternalStorageUrl(String url) {
+    final parsed = Uri.tryParse(url);
+    if (parsed == null || (parsed.scheme != 'http' && parsed.scheme != 'https')) {
+      return null;
+    }
+    final host = parsed.host.toLowerCase();
+    if (!_legacyInternalStorageHosts.contains(host) ||
+        !_legacyInternalStoragePorts.contains(parsed.port)) {
+      return null;
+    }
+    final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
+    return '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
+  }
+
+  static bool _hasPresignQuery(Uri uri) {
+    for (final key in uri.queryParameters.keys) {
+      if (key.toLowerCase() == 'x-amz-signature') return true;
+    }
+    return false;
+  }
+
+  static bool _isKnownStorageUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    if (host.isEmpty) return false;
+    if (host == 'storage.theaver.app' ||
+        host.endsWith('.storage.theaver.app') ||
+        (_legacyInternalStorageHosts.contains(host) &&
+            _legacyInternalStoragePorts.contains(uri.port))) {
+      return true;
+    }
+    final configured = Uri.tryParse(storageUrl);
+    return configured != null &&
+        configured.host.isNotEmpty &&
+        host == configured.host.toLowerCase() &&
+        uri.port == configured.port;
+  }
+
+  /// Resolves relative or absolute media / storage URLs.
+  /// Rewrites legacy `/avatars/<obj>` URLs (non-presigned) to the authenticated
+  /// `/api/files/avatar/<obj>` backend proxy to respect private S3 bucket ACLs.
+  static String? resolveMediaUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+
+    // Preserve local file paths without prepending storageUrl.
+    if (isLocalFilePath(trimmed)) {
       return trimmed;
     }
 
@@ -352,34 +444,100 @@ class AppConfig {
       return trimmed;
     }
 
-    // If it's a localhost / 127.0.0.1 / minio MinIO URL and storageUrl is configured to a remote/different host, rewrite it to storageUrl
-    if (trimmed.startsWith('http://localhost:9000') ||
-        trimmed.startsWith('http://127.0.0.1:9000') ||
-        trimmed.startsWith('http://minio:9000') ||
-        trimmed.startsWith('https://localhost:9000') ||
-        trimmed.startsWith('https://127.0.0.1:9000') ||
-        trimmed.startsWith('https://minio:9000')) {
-      final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
-      final parsed = Uri.tryParse(trimmed);
-      if (parsed != null) {
-        return '$base${parsed.path}${parsed.hasQuery ? '?${parsed.query}' : ''}';
-      }
-    }
+    final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
 
-    if (trimmed.startsWith('http://') ||
-        trimmed.startsWith('https://')) {
-      return trimmed;
+    // Rewrite internal SeaweedFS/MinIO origin to active storageUrl before path checks.
+    final rewrittenInternal = rewriteInternalStorageUrl(trimmed);
+    final candidate = rewrittenInternal ?? trimmed;
+
+    if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+      final parsed = Uri.tryParse(candidate);
+      if (parsed != null &&
+          _isKnownStorageUri(parsed) &&
+          !_hasPresignQuery(parsed) &&
+          parsed.path.startsWith('/avatars/')) {
+        final rest = parsed.path.substring('/avatars/'.length);
+        if (rest.isNotEmpty) {
+          return '$apiBase/api/files/avatar/$rest${parsed.hasQuery ? '?${parsed.query}' : ''}';
+        }
+      }
+      return candidate;
     }
 
     if (trimmed.startsWith('/api/') || trimmed.startsWith('api/')) {
-      final apiBase = baseUrl.replaceAll(RegExp(r'/+$'), '');
       final path = trimmed.startsWith('/') ? trimmed : '/$trimmed';
       return '$apiBase$path';
+    }
+
+    if (trimmed.startsWith('/avatars/') || trimmed.startsWith('avatars/')) {
+      final rest = trimmed.startsWith('/avatars/')
+          ? trimmed.substring('/avatars/'.length)
+          : trimmed.substring('avatars/'.length);
+      if (rest.isNotEmpty) {
+        return '$apiBase/api/files/avatar/$rest';
+      }
     }
 
     final base = storageUrl.replaceAll(RegExp(r'/+$'), '');
     final path = trimmed.startsWith('/') ? trimmed : '/$trimmed';
     return '$base$path';
+  }
+
+  /// Returns `Authorization: Bearer <token>` headers when [url] targets a
+  /// protected `/api/files/` route on [baseUrl] (or a relative `/api/files/`
+  /// path), and returns `null` for external origins or presigned S3 URLs.
+  static Map<String, String>? authHeadersForUrl(
+    String? url, {
+    String? tokenOverride,
+  }) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+
+    final token = (tokenOverride ?? AccountManager().currentAccount?.token)?.trim();
+    if (token == null || token.isEmpty) return null;
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || _hasPresignQuery(uri)) return null;
+    if (!uri.path.contains('/api/files/')) return null;
+
+    if (uri.hasAuthority) {
+      final apiUri = Uri.tryParse(baseUrl);
+      final apiHost = apiUri?.host.toLowerCase() ?? '';
+      if (apiHost.isEmpty || uri.host.toLowerCase() != apiHost) {
+        return null;
+      }
+    }
+
+    return {'Authorization': 'Bearer $token'};
+  }
+
+  /// Strips rotating `?mt=` avatar tickets and volatile S3 signature query
+  /// parameters so image widgets share a stable disk cache key.
+  static String? cacheKeyForUrl(String? url) {
+    if (url == null) return null;
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return null;
+    final hashIdx = trimmed.indexOf('#');
+    final noFrag = hashIdx != -1 ? trimmed.substring(0, hashIdx) : trimmed;
+    final uri = Uri.tryParse(noFrag);
+    if (uri == null) return noFrag;
+    if (!uri.hasQuery) return noFrag;
+
+    final filtered = <String, List<String>>{};
+    uri.queryParametersAll.forEach((k, values) {
+      if (!_volatileCacheQueryParams.contains(k.toLowerCase())) {
+        filtered[k] = values;
+      }
+    });
+    return Uri(
+      scheme: uri.scheme,
+      userInfo: uri.userInfo,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: uri.path,
+      queryParameters: filtered.isEmpty ? null : filtered,
+    ).toString();
   }
 
   // ============================================
@@ -424,7 +582,7 @@ class AppConfig {
         // LAN IP or localhost
         _webDiscoveredApiUrl = '$scheme://$host:8080';
         _webDiscoveredWsUrl = '$wsScheme://$host:8080/api/ws';
-        _webDiscoveredStorageUrl = '$scheme://$host:9000';
+        _webDiscoveredStorageUrl = '$scheme://$host:8333';
       }
     } catch (e) {
       debugPrint('[AppConfig] Error discovering web URLs: $e');
@@ -472,6 +630,66 @@ class AppConfig {
   static const String _defaultBuildDate = '08.08.2026';
   static const String _envBuildDate = String.fromEnvironment('BUILD_DATE');
 
+  /// Short Git commit hash injected during release builds (`--dart-define=GIT_COMMIT=...`)
+  static const String gitCommit = String.fromEnvironment('GIT_COMMIT', defaultValue: '');
+
+  static String get shortGitCommit {
+    final trimmed = gitCommit.trim();
+    if (trimmed.isEmpty) return 'dev';
+    return trimmed.length > 8 ? trimmed.substring(0, 8) : trimmed;
+  }
+
+  /// Official links displayed on the "About Theaver" screen
+  static const String newsChannelUrl = String.fromEnvironment(
+    'NEWS_CHANNEL_URL',
+    defaultValue: 'https://theaver.app/c/theaver_news',
+  );
+  static const String betaChannelUrl = String.fromEnvironment(
+    'BETA_CHANNEL_URL',
+    defaultValue: 'https://theaver.app/c/theaver_beta',
+  );
+  static const String officialChatUrl = String.fromEnvironment(
+    'OFFICIAL_CHAT_URL',
+    defaultValue: 'https://theaver.app/c/theaver_chat',
+  );
+  static const String floodChatUrl = String.fromEnvironment(
+    'FLOOD_CHAT_URL',
+    defaultValue: 'https://theaver.app/c/theaver_offtop',
+  );
+  static const String sourceCodeUrl = String.fromEnvironment(
+    'SOURCE_CODE_URL',
+    defaultValue: 'https://github.com/MootSasa/theaver-frontend',
+  );
+  static const String privacyPolicyUrl = String.fromEnvironment(
+    'PRIVACY_POLICY_URL',
+    defaultValue: 'https://theaver.app/privacy',
+  );
+
+  /// Strips the ABI prefix (`1000`, `2000`, `4000`) added by Flutter `--split-per-abi`
+  /// when `--dart-define=APP_BUILD_NUMBER` was not explicitly compiled in.
+  static int normalizeAndroidBuildNumber(int rawBuild, {String? version}) {
+    if (version != null && version.isNotEmpty) {
+      final dashIdx = version.indexOf('-');
+      if (dashIdx != -1) {
+        final pre = version.substring(dashIdx + 1);
+        final match = RegExp(r'(\d+)$').firstMatch(pre);
+        final versionBuild = match != null ? int.tryParse(match.group(1)!) : null;
+        if (versionBuild != null && versionBuild > 0) {
+          if (rawBuild == versionBuild) return rawBuild;
+          for (final prefix in [4000, 2000, 1000]) {
+            if (rawBuild - prefix == versionBuild) {
+              return versionBuild;
+            }
+          }
+        }
+      }
+    }
+    if (rawBuild >= 1000 && rawBuild < 10000) {
+      return rawBuild % 1000;
+    }
+    return rawBuild;
+  }
+
   // Runtime values loaded dynamically from PackageInfo (pubspec.yaml / platform) or backend on Web
   static String _currentVersion = appVersion;
   static int _currentBuildNumber = appBuildNumber;
@@ -487,14 +705,14 @@ class AppConfig {
   static int get currentBuildNumber => _currentBuildNumber;
 
   /// Returns the Web release channel enforced by the current domain on Flutter Web
-  /// (`alpha.theaver.app` -> `'alpha'`, `beta.theaver.app` -> `'beta'`, `theaver.app` -> `'stable'`),
+  /// (`alpha.theaver.app` -> `'alpha'`, `beta.theaver.app` -> `'beta'`, `app.theaver.app` -> `'stable'`),
   /// or `null` when running on `localhost` / custom dev hosts.
   static String? get webDomainChannel {
     if (!kIsWeb) return null;
     final host = Uri.base.host.toLowerCase();
     if (host.startsWith('alpha.')) return 'alpha';
     if (host.startsWith('beta.')) return 'beta';
-    if (host == 'theaver.app' || host == 'app.theaver.app') return 'stable';
+    if (host == 'app.theaver.app') return 'stable';
     return null;
   }
 
@@ -506,7 +724,7 @@ class AppConfig {
       case 'beta':
         return 'https://beta.theaver.app';
       default:
-        return 'https://theaver.app';
+        return 'https://app.theaver.app';
     }
   }
 

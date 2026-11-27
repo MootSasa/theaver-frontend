@@ -5,8 +5,13 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import '../../config/app_config.dart';
+import '../../models/profile_customization.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../../utils/swipe_back_route.dart';
+import '../tiling/tile_viewport_scope.dart';
+import '../user/avatar_decoration_frame.dart';
 
 /// Аватарка с Telegram-подобной анимацией плавного раскрытия.
 ///
@@ -29,8 +34,18 @@ class ExpandableAvatar extends StatefulWidget {
   /// Коллбэк при нажатии на аватарку
   final VoidCallback? onTap;
 
-  /// Фактор расширения: 0.0 = маленькая круглая, 1.0 = большая квадратная
+  /// Непрерывный фактор морфинга в стиле Telegram: 0.0 = круглая аватарка, 1.0 = полноширинный квадрат 1:1
   final double expandFactor;
+
+  /// Эластичное преднатяжение круглой аватарки при потягивании вниз до порога раскрытия (0.0 .. 1.0 -> 110..136dp круг)
+  final double pullPreviewProgress;
+
+  /// Опциональный диаметр свёрнутого состояния (используется для бесшовного стыка со скролл-метаболом)
+  final double? collapsedDiameterOverride;
+
+  /// Опциональная высота развёрнутого фото (в Telegram при скролле вверх фото сначала уходит/подрезается вверх
+  /// по высоте без уменьшения ширины `screenWidth`, и только после порога `expandProgress < 0.33` сворачивается в круг)
+  final double? expandedHeightOverride;
 
   /// Прогресс перетягивания вниз поверх уже раскрытой аватарки (0.0 .. 1.0) для Telegram-зума
   final double overExpandProgress;
@@ -47,6 +62,13 @@ class ExpandableAvatar extends StatefulWidget {
 
   /// Цвет фона экрана
   final Color? backgroundColor;
+
+  /// Декорация рамки вокруг круглой аватарки (плавно растворяется при раскрытии)
+  final AvatarDecorationPreset? decoration;
+
+  /// Показывать ли встроенный оверлей декорации внутри [ExpandableAvatar].
+  /// Отключается, когда внешний слой метабола рисует рамку отдельным необрезаемым компаньоном.
+  final bool showDecoration;
 
   /// Имя пользователя для плейсхолдера
   final String displayName;
@@ -72,6 +94,9 @@ class ExpandableAvatar extends StatefulWidget {
   /// Опциональный обработчик вертикального перетаскивания (для плавного сворачивания/разворачивания)
   final GestureDragUpdateCallback? onVerticalDragUpdate;
 
+  /// Опциональный билдер плейсхолдера вместо первой буквы [displayName]
+  final Widget Function(BuildContext context, double iconSize)? fallbackBuilder;
+
   /// Опциональный обработчик завершения вертикального перетаскивания
   final GestureDragEndCallback? onVerticalDragEnd;
 
@@ -81,11 +106,16 @@ class ExpandableAvatar extends StatefulWidget {
     this.avatarFile,
     this.onTap,
     this.expandFactor = 0.0,
+    this.pullPreviewProgress = 0.0,
+    this.collapsedDiameterOverride,
+    this.expandedHeightOverride,
     this.overExpandProgress = 0.0,
     this.bottomCollapseOverlap = 0.0,
     this.isCollapsing = false,
     this.tintColor,
     this.backgroundColor,
+    this.decoration,
+    this.showDecoration = true,
     this.displayName = '',
     this.heroTagPrefix = 'avatar_hero',
     this.chatAvatarHeroTag,
@@ -95,45 +125,48 @@ class ExpandableAvatar extends StatefulWidget {
     this.onVerticalDragStart,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
+    this.fallbackBuilder,
   }) : super(key: key);
 
-  /// Вычисляет нелинейный размер аватарки с эффектом заевшего механизма.
-  /// До порога 0.38 размер медленно растягивается с замедлением скорости к порогу.
-  /// После порога 0.38 размер резко раскрывается в большой квадрат.
-  static double calculateAvatarSize(double screenWidth, double expandFactor) {
-    final p = expandFactor.clamp(0.0, 1.0);
-    const threshold = 0.38;
-    const smallSize = 110.0;
-    const thresholdSize = 138.0;
+  static const double baseCollapsedSize = 110.0;
+  static const double maxPullPreviewExtraSize = 28.0;
 
-    if (p < threshold) {
-      final u = p / threshold; // 0.0 .. 1.0
-      // Замедление по мере приближения к порогу (эффект заевшего механизма)
-      final progress = math.sin(u * math.pi / 2);
-      return smallSize + (thresholdSize - smallSize) * progress;
-    } else {
-      final v = (p - threshold) / (1.0 - threshold); // 0.0 .. 1.0
-      // Резкий переход в большой квадрат
-      final progress = Curves.easeOutQuart.transform(v);
-      return thresholdSize + (screenWidth - thresholdSize) * progress;
-    }
+  /// Вычисляет размер круглой аватарки с учётом эластичного потягивания вниз до порога раскрытия (`110 -> 136dp`),
+  /// как в Telegram (`ProfileActivity`: `avatarScale` `96 -> 138` до срабатывания `isPulledDown`).
+  static double calculateCollapsedPreviewSize({
+    double baseSize = baseCollapsedSize,
+    double pullPreviewProgress = 0.0,
+    double expandFactor = 0.0,
+  }) {
+    final preview = Curves.easeOutQuad.transform(
+      pullPreviewProgress.clamp(0.0, 1.0),
+    );
+    final fadeOut = (1.0 - expandFactor.clamp(0.0, 1.0));
+    return baseSize + maxPullPreviewExtraSize * preview * fadeOut;
   }
 
-  /// Вычисляет скругление углов аватарки.
-  /// До порога 0.38 аватарка строго круглая (size / 2).
-  /// После порога 0.38 скругление быстро исчезает, переходя в квадрат.
+  /// Гладкая линейная интерполяция размера между кругом и полноширинным квадратом (`1:1`) без излома на `0.38`
+  /// (вся динамика разгона/торможения задаётся кривой/пружиной самого `expandFactor`, как в Telegram).
+  static double calculateAvatarSize(
+    double screenWidth,
+    double expandFactor, {
+    double pullPreviewProgress = 0.0,
+    double? collapsedSizeOverride,
+  }) {
+    final p = expandFactor.clamp(0.0, 1.0);
+    final startSize = calculateCollapsedPreviewSize(
+      baseSize: collapsedSizeOverride ?? baseCollapsedSize,
+      pullPreviewProgress: pullPreviewProgress,
+      expandFactor: p,
+    );
+    return startSize + (screenWidth - startSize) * p;
+  }
+
+  /// Непрерывное скругление углов от полного круга (`size / 2` при `0.0`) до квадрата (`0.0` при `1.0`),
+  /// начинающее скруглять квадрат с первой же миллисекунды сворачивания (`ProfileActivity.setRoundRadiusForExpand`).
   static double calculateBorderRadius(double size, double expandFactor) {
     final p = expandFactor.clamp(0.0, 1.0);
-    const threshold = 0.38;
-
-    if (p < threshold) {
-      return size / 2;
-    } else {
-      final v = (p - threshold) / (1.0 - threshold);
-      // Быстрый переход из круга в квадрат на первой трети пути после порога
-      final cornerProgress = Curves.easeOutCubic.transform((v / 0.30).clamp(0.0, 1.0));
-      return (size / 2) * (1.0 - cornerProgress);
-    }
+    return (size * 0.5) * (1.0 - p);
   }
 
   @override
@@ -244,7 +277,9 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         if (count > 1) {
           _currentVirtualPage = _virtualPageForRealIndex(targetReal, count);
           if (_loopPageController.hasClients) {
-            if (widget.expandFactor < 0.98) {
+            final bool isCoveredByFullscreenViewer =
+                ModalRoute.of(context)?.isCurrent == false;
+            if (widget.expandFactor < 0.98 && !isCoveredByFullscreenViewer) {
               _loopPageController.animateToPage(
                 _currentVirtualPage,
                 duration: const Duration(milliseconds: 300),
@@ -318,22 +353,35 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    final screenWidth = MediaQuery.of(context).size.width;
+    final screenWidth = TileViewportScope.widthOf(context);
     final largeSize = screenWidth;
     final progress = widget.expandFactor.clamp(0.0, 1.0);
     final extraOverPullSize = 36.0 *
         Curves.easeOutCubic
             .transform(widget.overExpandProgress.clamp(0.0, 1.0));
 
-    // Нелинейный расчет размера аватарки ("эффект заевшего механизма") + небольшое увеличение при вытягивании вниз
-    final size = ExpandableAvatar.calculateAvatarSize(largeSize, progress) +
+    final boxWidth = ExpandableAvatar.calculateAvatarSize(
+          largeSize,
+          progress,
+          pullPreviewProgress: widget.pullPreviewProgress,
+          collapsedSizeOverride: widget.collapsedDiameterOverride,
+        ) +
+        extraOverPullSize;
+    final fullExpandedHeight = widget.expandedHeightOverride ?? largeSize;
+    final boxHeight = ExpandableAvatar.calculateAvatarSize(
+          fullExpandedHeight,
+          progress,
+          pullPreviewProgress: widget.pullPreviewProgress,
+          collapsedSizeOverride: widget.collapsedDiameterOverride,
+        ) +
         extraOverPullSize;
 
-    // Расчет скругления (до порога 0.38 строго круг)
-    final borderRadius = ExpandableAvatar.calculateBorderRadius(size, progress);
+    final minBoxDim = math.min(boxWidth, boxHeight);
+    final borderRadius =
+        ExpandableAvatar.calculateBorderRadius(minBoxDim, progress);
 
     // Размер иконки/буквы плейсхолдера
-    final iconProgress = progress < 0.38 ? 0.0 : Curves.easeOutQuart.transform(((progress - 0.38) / 0.62).clamp(0.0, 1.0));
+    final iconProgress = Curves.easeInOutCubic.transform(progress);
     final iconSize = lerpDouble(50.0, 120.0, iconProgress);
 
     // Цвет фона плейсхолдера
@@ -363,7 +411,7 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Widget avatarContent;
 
     if (isFullyExpanded && widget.avatarUrls.length > 1) {
-      avatarContent = _buildPageView(size, size, iconSize, bgColor, isDark, Alignment.topCenter, enableInnerHero);
+      avatarContent = _buildPageView(boxWidth, boxHeight, iconSize, bgColor, isDark, Alignment.center, enableInnerHero);
     } else if (_currentPage != 0 && targetUrl != null && primaryUrl != null && targetUrl != primaryUrl) {
       avatarContent = AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
@@ -371,25 +419,25 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         switchOutCurve: Curves.easeInOutCubic,
         child: SizedBox.expand(
           key: ValueKey(targetUrl),
-          child: _buildAvatarImage(targetUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, enableInnerHero),
+          child: _buildAvatarImage(targetUrl, boxWidth, boxHeight, bgColor, iconSize, isDark, Alignment.center, enableInnerHero),
         ),
       );
     } else {
       avatarContent = (primaryUrl != null && primaryUrl.isNotEmpty
-          ? _buildAvatarImage(primaryUrl, size, size, bgColor, iconSize, isDark, Alignment.topCenter, enableInnerHero)
+          ? _buildAvatarImage(primaryUrl, boxWidth, boxHeight, bgColor, iconSize, isDark, Alignment.center, enableInnerHero)
           : (widget.avatarFile != null
               ? Image.file(
                   widget.avatarFile!,
                   fit: BoxFit.cover,
-                  alignment: Alignment.topCenter,
-                  width: size,
-                  height: size,
+                  alignment: Alignment.center,
+                  width: boxWidth,
+                  height: boxHeight,
                 )
               : const SizedBox.expand()));
     }
 
     final dissolveProgress = Curves.easeInOutCubic
-        .transform(((progress - 0.38) / 0.62).clamp(0.0, 1.0));
+        .transform(((progress - 0.15) / 0.85).clamp(0.0, 1.0));
 
     Widget innerStack = Stack(
       clipBehavior: Clip.hardEdge,
@@ -403,21 +451,23 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
           ),
         ),
 
-        // 2. Буквенный плейсхолдер если нет фото
+        // 2. Плейсхолдер если нет фото
         if (widget.avatarFile == null && widget.avatarUrls.isEmpty)
           Center(
-            child: Text(
-              widget.displayName.isNotEmpty
-                  ? widget.displayName[0].toUpperCase()
-                  : '?',
-              style: TextStyle(
-                color: bgColor.computeLuminance() > 0.5
-                    ? Colors.black54
-                    : Colors.white70,
-                fontSize: iconSize,
-                fontWeight: FontWeight.w300,
-              ),
-            ),
+            child: widget.fallbackBuilder != null
+                ? widget.fallbackBuilder!(context, iconSize)
+                : Text(
+                    widget.displayName.isNotEmpty
+                        ? widget.displayName[0].toUpperCase()
+                        : '?',
+                    style: TextStyle(
+                      color: bgColor.computeLuminance() > 0.5
+                          ? Colors.black54
+                          : Colors.white70,
+                      fontSize: iconSize,
+                      fontWeight: FontWeight.w300,
+                    ),
+                  ),
           ),
 
         // 3. Верхний градиентный скрайм для контраста индикаторов историй
@@ -430,13 +480,13 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
 
     // Истинное альфа-растворение нижней кромки развёрнутой аватарки в реальный фон/градиент экрана
     if (dissolveProgress > 0.001) {
-      final safeSize = math.max(1.0, size);
+      final safeHeight = math.max(1.0, boxHeight);
       final overlapShift =
-          (widget.bottomCollapseOverlap * dissolveProgress).clamp(0.0, safeSize * 0.45);
-      final endStop = ((safeSize - overlapShift) / safeSize).clamp(0.10, 1.0);
+          (widget.bottomCollapseOverlap * dissolveProgress).clamp(0.0, safeHeight * 0.45);
+      final endStop = ((safeHeight - overlapShift) / safeHeight).clamp(0.10, 1.0);
       final dissolveHeight = 44.0 * dissolveProgress;
       final startStop =
-          (endStop - (dissolveHeight / safeSize)).clamp(0.0, endStop);
+          (endStop - (dissolveHeight / safeHeight)).clamp(0.0, endStop);
       final midStop =
           (startStop + (endStop - startStop) * 0.55).clamp(startStop, endStop);
 
@@ -461,8 +511,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     }
 
     Widget avatarContentBox = Container(
-      width: size,
-      height: size,
+      width: boxWidth,
+      height: boxHeight,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(borderRadius),
       ),
@@ -499,13 +549,37 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
       );
     }
 
+    Widget finalChild = avatarContentBox;
+    final dec = widget.decoration;
+    if (widget.showDecoration && dec != null && progress < 0.28) {
+      final frameOpacity =
+          (1.0 - (progress / 0.26).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+      if (frameOpacity > 0.001) {
+        finalChild = Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            avatarContentBox,
+            IgnorePointer(
+              child: AvatarDecorationFrame(
+                decoration: dec,
+                avatarDiameter: minBoxDim,
+                opacity: frameOpacity,
+                child: SizedBox(width: minBoxDim, height: minBoxDim),
+              ),
+            ),
+          ],
+        );
+      }
+    }
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: isFullyExpanded && widget.avatarUrls.length > 1 ? null : widget.onTap,
       onVerticalDragStart: widget.onVerticalDragStart,
       onVerticalDragUpdate: widget.onVerticalDragUpdate,
       onVerticalDragEnd: widget.onVerticalDragEnd,
-      child: avatarContentBox,
+      child: finalChild,
     );
   }
 
@@ -593,17 +667,18 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     double iconSize,
     Color bgColor,
     bool isDark, [
-    Alignment imgAlignment = Alignment.topCenter,
+    Alignment imgAlignment = Alignment.center,
     bool enableHero = true,
   ]) {
     _ensureLoopControllerSynced();
     final count = widget.avatarUrls.length;
-    return PageView.builder(
-      key: _pageViewKey,
-      controller: _loopPageController,
-      physics: const BouncingScrollPhysics(),
-      itemCount: count * _kInfiniteLoopMultiplier,
-      onPageChanged: (virtualIndex) {
+    return SwipeBackBlocker(
+      child: PageView.builder(
+        key: _pageViewKey,
+        controller: _loopPageController,
+        physics: const BouncingScrollPhysics(),
+        itemCount: count * _kInfiniteLoopMultiplier,
+        onPageChanged: (virtualIndex) {
         if (count == 0) return;
         _currentVirtualPage = virtualIndex;
         final realIndex = ((virtualIndex % count) + count) % count;
@@ -651,13 +726,236 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
             enableHero && isActiveVirtualPage,
           ),
         );
-      },
+        },
+      ),
     );
   }
 
   /// Линейная интерполяция double
   static double lerpDouble(double a, double b, double t) {
     return a + (b - a) * t;
+  }
+
+  Widget _buildRawAvatarSource(
+    String cleanUrl, {
+    required double width,
+    required double height,
+    required BoxFit fit,
+    required Alignment alignment,
+    required Color bgColor,
+    required double iconSize,
+    required bool isDark,
+  }) {
+    if (cleanUrl.startsWith('data:')) {
+      final provider = avatarFullImageProvider(cleanUrl);
+      if (provider != null) {
+        return Image(
+          image: provider,
+          fit: fit,
+          alignment: alignment,
+          width: width,
+          height: height,
+          gaplessPlayback: true,
+          errorBuilder: (context, error, stackTrace) =>
+              _avatarErrorWidget(bgColor, iconSize, isDark),
+        );
+      }
+      return _avatarErrorWidget(bgColor, iconSize, isDark);
+    }
+
+    if (!kIsWeb && cleanUrl.startsWith('file://')) {
+      try {
+        final filePath = Uri.parse(cleanUrl).toFilePath();
+        final file = File(filePath);
+        if (file.existsSync()) {
+          return Image.file(
+            file,
+            fit: fit,
+            alignment: alignment,
+            width: width,
+            height: height,
+            gaplessPlayback: true,
+            errorBuilder: (context, error, stackTrace) =>
+                _avatarErrorWidget(bgColor, iconSize, isDark),
+          );
+        }
+        return _avatarErrorWidget(bgColor, iconSize, isDark);
+      } catch (_) {
+        return _avatarErrorWidget(bgColor, iconSize, isDark);
+      }
+    }
+
+    if (!kIsWeb && File(cleanUrl).existsSync()) {
+      return Image.file(
+        File(cleanUrl),
+        fit: fit,
+        alignment: alignment,
+        width: width,
+        height: height,
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) =>
+            _avatarErrorWidget(bgColor, iconSize, isDark),
+      );
+    }
+
+    final validUrl = stripAvatarCropFragment(getValidAvatarUrl(cleanUrl));
+    if (validUrl != null &&
+        (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
+      return CachedNetworkImage(
+        imageUrl: validUrl,
+        cacheKey: AppConfig.cacheKeyForUrl(validUrl),
+        httpHeaders: AppConfig.authHeadersForUrl(validUrl),
+        fit: fit,
+        alignment: alignment,
+        width: width,
+        height: height,
+        fadeInDuration: Duration.zero,
+        fadeOutDuration: Duration.zero,
+        placeholder: (context, _) => Container(
+          width: width,
+          height: height,
+          color: bgColor,
+        ),
+        errorWidget: (context, _, __) =>
+            _avatarErrorWidget(bgColor, iconSize, isDark),
+      );
+    }
+
+    return _avatarErrorWidget(bgColor, iconSize, isDark);
+  }
+
+  Widget _buildFramedAvatarBox({
+    required String cleanUrl,
+    required AvatarCropSpec? miniCrop,
+    required double boxWidth,
+    required double boxHeight,
+    required double expandT,
+    required bool lockToSquareScale,
+    required Color bgColor,
+    required double iconSize,
+    required bool isDark,
+    required Alignment imgAlignment,
+  }) {
+    final double safeW = math.max(1.0, boxWidth);
+    final double safeH = math.max(1.0, boxHeight);
+    final bool hasSubCrop = miniCrop != null && !miniCrop.isFullSquare;
+
+    if (hasSubCrop) {
+      final double imgAspect = miniCrop.imageAspectRatio.clamp(0.2, 5.0);
+      final double wCover;
+      final double hCover;
+      final double x1;
+      final double y1;
+      final double cx1;
+      final double cy1;
+      final double refSide;
+
+      if (lockToSquareScale) {
+        final double squareSide = math.max(safeW, safeH);
+        wCover = imgAspect >= 1.0 ? squareSide * imgAspect : squareSide;
+        hCover = imgAspect >= 1.0 ? squareSide : squareSide / imgAspect;
+        x1 = (squareSide * 0.5 - miniCrop.cx * wCover)
+            .clamp(squareSide - wCover, 0.0);
+        y1 = (squareSide * 0.5 - miniCrop.cy * hCover)
+            .clamp(squareSide - hCover, 0.0);
+        cx1 = (squareSide * 0.5 - x1) / math.max(1e-6, wCover);
+        cy1 = (squareSide * 0.5 - y1) / math.max(1e-6, hCover);
+        refSide = squareSide;
+      } else {
+        final double boxAspect = safeW / safeH;
+        wCover = imgAspect >= boxAspect ? safeH * imgAspect : safeW;
+        hCover = imgAspect >= boxAspect ? safeH : safeW / imgAspect;
+        x1 = (safeW * 0.5 - miniCrop.cx * wCover).clamp(safeW - wCover, 0.0);
+        y1 = (safeH * 0.5 - miniCrop.cy * hCover).clamp(safeH - hCover, 0.0);
+        cx1 = (safeW * 0.5 - x1) / math.max(1e-6, wCover);
+        cy1 = (safeH * 0.5 - y1) / math.max(1e-6, hCover);
+        refSide = math.min(safeW, safeH);
+      }
+
+      final double miniSideAtCover = math.max(1e-6, miniCrop.nw * wCover);
+      final double zoom0 = math.max(1.0, refSide / miniSideAtCover);
+      final double t = expandT.clamp(0.0, 1.0);
+      final double invZoom = lerpDouble(1.0 / zoom0, 1.0, t);
+      final double zoom = invZoom > 1e-6 ? (1.0 / invZoom) : 1.0;
+      final double wRender = wCover * zoom;
+      final double hRender = hCover * zoom;
+      final double focusX = lerpDouble(miniCrop.cx, cx1, t);
+      final double focusY = lerpDouble(miniCrop.cy, cy1, t);
+      final double xRender =
+          (safeW * 0.5 - focusX * wRender).clamp(safeW - wRender, 0.0);
+      final double yRender =
+          (safeH * 0.5 - focusY * hRender).clamp(safeH - hRender, 0.0);
+
+      return SizedBox(
+        width: safeW,
+        height: safeH,
+        child: ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                left: xRender,
+                top: yRender,
+                width: wRender,
+                height: hRender,
+                child: _buildRawAvatarSource(
+                  cleanUrl,
+                  width: wRender,
+                  height: hRender,
+                  fit: BoxFit.fill,
+                  alignment: Alignment.center,
+                  bgColor: bgColor,
+                  iconSize: iconSize,
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (lockToSquareScale && safeH < safeW - 0.5) {
+      final double squareSide = safeW;
+      return SizedBox(
+        width: safeW,
+        height: safeH,
+        child: ClipRect(
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Positioned(
+                left: (safeW - squareSide) * 0.5,
+                top: (safeH - squareSide) * 0.5,
+                width: squareSide,
+                height: squareSide,
+                child: _buildRawAvatarSource(
+                  cleanUrl,
+                  width: squareSide,
+                  height: squareSide,
+                  fit: BoxFit.cover,
+                  alignment: imgAlignment,
+                  bgColor: bgColor,
+                  iconSize: iconSize,
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return _buildRawAvatarSource(
+      cleanUrl,
+      width: safeW,
+      height: safeH,
+      fit: BoxFit.cover,
+      alignment: imgAlignment,
+      bgColor: bgColor,
+      iconSize: iconSize,
+      isDark: isDark,
+    );
   }
 
   /// Построение виджета изображения аватарки с поддержкой data:, file: и network URL
@@ -668,84 +966,27 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
     Color bgColor,
     double iconSize,
     bool isDark, [
-    Alignment imgAlignment = Alignment.topCenter,
+    Alignment imgAlignment = Alignment.center,
     bool enableHero = true,
   ]) {
-    Widget imageWidget;
+    final ({String? cleanUrl, AvatarCropSpec? crop}) split =
+        AvatarCropSpec.split(url);
+    final String cleanUrl = split.cleanUrl ?? url;
+    final AvatarCropSpec? miniCrop = split.crop;
+    final double clampedExpand = widget.expandFactor.clamp(0.0, 1.0);
 
-    if (url.startsWith('data:')) {
-      final provider = avatarImageProvider(url);
-      if (provider != null) {
-        imageWidget = Image(
-          image: provider,
-          fit: BoxFit.cover,
-          alignment: imgAlignment,
-          width: width,
-          height: height,
-          gaplessPlayback: true,
-          errorBuilder: (context, error, stackTrace) =>
-              _avatarErrorWidget(bgColor, iconSize, isDark),
-        );
-      } else {
-        return _avatarErrorWidget(bgColor, iconSize, isDark);
-      }
-    } else if (!kIsWeb && url.startsWith('file://')) {
-      try {
-        final filePath = Uri.parse(url).toFilePath();
-        final file = File(filePath);
-        if (file.existsSync()) {
-          imageWidget = Image.file(
-            file,
-            fit: BoxFit.cover,
-            alignment: imgAlignment,
-            width: width,
-            height: height,
-            gaplessPlayback: true,
-            errorBuilder: (context, error, stackTrace) =>
-                _avatarErrorWidget(bgColor, iconSize, isDark),
-          );
-        } else {
-          imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
-        }
-      } catch (_) {
-        imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
-      }
-    } else {
-      if (!kIsWeb && File(url).existsSync()) {
-        imageWidget = Image.file(
-          File(url),
-          fit: BoxFit.cover,
-          alignment: imgAlignment,
-          width: width,
-          height: height,
-          gaplessPlayback: true,
-          errorBuilder: (context, error, stackTrace) =>
-              _avatarErrorWidget(bgColor, iconSize, isDark),
-        );
-      } else {
-        final validUrl = getValidAvatarUrl(url);
-        if (validUrl != null && (validUrl.startsWith('http://') || validUrl.startsWith('https://'))) {
-          imageWidget = CachedNetworkImage(
-            imageUrl: validUrl,
-            fit: BoxFit.cover,
-            alignment: imgAlignment,
-            width: width,
-            height: height,
-            fadeInDuration: Duration.zero,
-            fadeOutDuration: Duration.zero,
-            placeholder: (context, _) => Container(
-              width: width,
-              height: height,
-              color: bgColor,
-            ),
-            errorWidget: (context, _, __) =>
-                _avatarErrorWidget(bgColor, iconSize, isDark),
-          );
-        } else {
-          imageWidget = _avatarErrorWidget(bgColor, iconSize, isDark);
-        }
-      }
-    }
+    final Widget imageWidget = _buildFramedAvatarBox(
+      cleanUrl: cleanUrl,
+      miniCrop: miniCrop,
+      boxWidth: width,
+      boxHeight: height,
+      expandT: clampedExpand,
+      lockToSquareScale: true,
+      bgColor: bgColor,
+      iconSize: iconSize,
+      isDark: isDark,
+      imgAlignment: imgAlignment,
+    );
 
     if (!enableHero) {
       return imageWidget;
@@ -756,8 +997,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         : 'avatar_hero_$url';
 
     final double initialRadius = ExpandableAvatar.calculateBorderRadius(
-      width,
-      widget.expandFactor.clamp(0.0, 1.0),
+      math.min(width, height),
+      clampedExpand,
     );
 
     return Hero(
@@ -769,24 +1010,48 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
         fromHeroContext,
         toHeroContext,
       ) {
-        final CurvedAnimation curvedAnimation = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        );
-        return AnimatedBuilder(
-          animation: curvedAnimation,
-          builder: (context, child) {
-            final double currentRadius =
-                lerpDouble(initialRadius, 0.0, curvedAnimation.value);
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(currentRadius),
-              child: Material(
-                type: MaterialType.transparency,
-                child: SizedBox.expand(child: imageWidget),
-              ),
-            );
-          },
+        return RepaintBoundary(
+          child: AnimatedBuilder(
+            animation: animation,
+            builder: (context, child) {
+              final double rawT = animation.value.clamp(0.0, 1.0);
+              final double tFlight = flightDirection == HeroFlightDirection.push
+                  ? Curves.easeOutCubic.transform(rawT)
+                  : Curves.easeInCubic.transform(rawT);
+              final double currentRadius = lerpDouble(initialRadius, 0.0, tFlight);
+              final double shuttleExpand = lerpDouble(clampedExpand, 1.0, tFlight);
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(currentRadius),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double bw = constraints.maxWidth.isFinite &&
+                              constraints.maxWidth > 0.0
+                          ? constraints.maxWidth
+                          : math.max(1.0, width);
+                      final double bh = constraints.maxHeight.isFinite &&
+                              constraints.maxHeight > 0.0
+                          ? constraints.maxHeight
+                          : math.max(1.0, height);
+                      return _buildFramedAvatarBox(
+                        cleanUrl: cleanUrl,
+                        miniCrop: miniCrop,
+                        boxWidth: bw,
+                        boxHeight: bh,
+                        expandT: shuttleExpand,
+                        lockToSquareScale: false,
+                        bgColor: bgColor,
+                        iconSize: iconSize,
+                        isDark: isDark,
+                        imgAlignment: imgAlignment,
+                      );
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
         );
       },
       child: imageWidget,

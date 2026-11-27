@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'chat_service.dart';
@@ -238,7 +239,20 @@ class TilingLayoutController extends ChangeNotifier {
     }
   }
 
-  Size _windowSize = const Size(1100, 750);
+  static Size _resolveInitialWindowSize() {
+    try {
+      final view = WidgetsBinding.instance.platformDispatcher.views.firstOrNull;
+      if (view != null && view.devicePixelRatio > 0) {
+        final logical = view.physicalSize / view.devicePixelRatio;
+        if (logical.width > 0 && logical.height > 0) {
+          return logical;
+        }
+      }
+    } catch (_) {}
+    return const Size(1100, 750);
+  }
+
+  Size _windowSize = _resolveInitialWindowSize();
   Size get windowSize => _windowSize;
 
   /// Находится ли окно в узком однооконном режиме (`width < 640px` и не более 1 открытого чата).
@@ -301,6 +315,8 @@ class TilingLayoutController extends ChangeNotifier {
 
   DateTime? _lastBackActionTime;
   final Set<Route<dynamic>> _activePoppingRoutes = <Route<dynamic>>{};
+  int _interactiveSwipePopDepth = 0;
+  bool _suppressRoutePopUntilMicrotask = false;
 
   /// Фиксирует начало/завершение перехода «Назад» для защиты от двойного срабатывания
   /// системного жеста «Назад» и гонки анимаций закрытия экранов.
@@ -308,9 +324,42 @@ class TilingLayoutController extends ChangeNotifier {
     _lastBackActionTime = DateTime.now();
   }
 
+  /// Помечает, что интерактивный жест свайпа «Назад» уже довёл пружинную анимацию
+  /// до `0.0`, поэтому последующий вызов `Navigator.pop()` не должен включать
+  /// дополнительную `220ms` блокировку `isPopTransitionActive`.
+  void recordInteractiveSwipePopCompleted() {
+    _lastBackActionTime = null;
+    if (!_suppressRoutePopUntilMicrotask) {
+      _suppressRoutePopUntilMicrotask = true;
+      scheduleMicrotask(() {
+        _suppressRoutePopUntilMicrotask = false;
+      });
+    }
+  }
+
+  /// Выполняет завершающий `pop` (или кастомный `onSwipeBackPop`) после полного
+  /// завершения интерактивного свайпа без наложения `220ms` блокировки.
+  Future<void> runInteractiveSwipePop(
+    FutureOr<void> Function() popAction,
+  ) async {
+    _interactiveSwipePopDepth++;
+    _lastBackActionTime = null;
+    try {
+      await popAction();
+    } finally {
+      _interactiveSwipePopDepth--;
+      _lastBackActionTime = null;
+    }
+  }
+
   /// Фиксирует `pop` маршрута в любом `Navigator` (корневом или тайловом) и отслеживает
   /// его анимацию закрытия до полного завершения (`AnimationStatus.dismissed`).
   void recordRoutePop(Route<dynamic> route) {
+    if (_interactiveSwipePopDepth > 0 || _suppressRoutePopUntilMicrotask) {
+      _suppressRoutePopUntilMicrotask = false;
+      _lastBackActionTime = null;
+      return;
+    }
     _lastBackActionTime = DateTime.now();
     if (route is TransitionRoute<dynamic>) {
       final anim = route.animation;

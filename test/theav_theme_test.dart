@@ -375,6 +375,67 @@ void main() {
       expect(TheavThemeService.extractThemeCode('Just a random message without links'), isNull);
     });
   });
+
+  group('Built-in Light & Dark Theme Symmetry Tests', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('All 6 built-in theme families provide both Light and Dark counterparts', () {
+      expect(TheavThemeService.builtInThemes.length, 12);
+      expect(TheavThemeService.builtInThemes[0].id, 'theaver_classic');
+      expect(TheavThemeService.builtInThemes[1].id, 'dark_slate');
+
+      final lightThemes = TheavThemeService.builtInThemesForBrightness(false);
+      final darkThemes = TheavThemeService.builtInThemesForBrightness(true);
+      expect(lightThemes.length, 6);
+      expect(darkThemes.length, 6);
+      expect(lightThemes.every((t) => !t.isDark && t.isBuiltIn), isTrue);
+      expect(darkThemes.every((t) => t.isDark && t.isBuiltIn), isTrue);
+
+      for (final builtIn in TheavThemeService.builtInThemes) {
+        final counterpart = TheavThemeService.getBuiltInCounterpart(builtIn.id);
+        expect(
+          counterpart,
+          isNotNull,
+          reason: '${builtIn.id} must have a symmetric counterpart',
+        );
+        expect(counterpart!.isDark, isNot(builtIn.isDark));
+        expect(
+          TheavThemeService.getBuiltInCounterpart(counterpart.id)?.id,
+          builtIn.id,
+        );
+      }
+
+      for (int i = 0; i < lightThemes.length; i++) {
+        expect(
+          TheavThemeService.getBuiltInCounterpart(lightThemes[i].id)?.id,
+          darkThemes[i].id,
+        );
+      }
+    });
+
+    test('ThemeProvider syncs counterpart theme while preserving System mode when requested', () async {
+      SharedPreferences.setMockInitialValues({});
+      final provider = ThemeProvider();
+      addTearDown(provider.dispose);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(provider.themeMode, ThemeMode.system);
+      final emeraldLight = TheavThemeService.builtInThemes
+          .firstWhere((t) => t.id == 'emerald_nature');
+
+      await provider.setActiveTheme(
+        emeraldLight,
+        syncCounterpart: true,
+        preserveSystemMode: true,
+      );
+
+      expect(provider.activeLightTheme.id, 'emerald_nature');
+      expect(provider.activeDarkTheme.id, 'emerald_nature_dark');
+      expect(provider.themeMode, ThemeMode.system);
+    });
+  });
 }
 
 

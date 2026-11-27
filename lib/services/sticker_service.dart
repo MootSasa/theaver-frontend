@@ -15,7 +15,18 @@ import '../config/app_config.dart';
 import '../utils/emoji_utils.dart';
 import 'auth_service.dart';
 import 'emoji_effect_cache_service.dart';
+import 'media_cache_manager.dart';
 import 'websocket_service.dart';
+
+int? _parseStickerNullableInt(dynamic raw) {
+  if (raw == null) return null;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw.toString().trim());
+}
+
+int _parseStickerInt(dynamic raw, [int fallback = 0]) =>
+    _parseStickerNullableInt(raw) ?? fallback;
 
 /// Real-time progress snapshot for Telegram sticker/emoji pack import or custom pack upload.
 class StickerImportProgress {
@@ -161,12 +172,8 @@ class StickerItem {
         : '';
 
     return StickerItem(
-      id: (json['id'] as num?)?.toInt() ??
-          int.tryParse(json['id']?.toString() ?? '') ??
-          0,
-      packId: (json['pack_id'] as num?)?.toInt() ??
-          int.tryParse(json['pack_id']?.toString() ?? '') ??
-          0,
+      id: _parseStickerInt(json['id']),
+      packId: _parseStickerInt(json['pack_id']),
       packShortName: json['pack_short_name']?.toString() ?? '',
       packTitle: json['pack_title']?.toString() ?? '',
       fileUrl: fileUrl,
@@ -175,10 +182,10 @@ class StickerItem {
       effectEmoji: verifiedEffectEmoji,
       effectAnimationUrl: json['effect_animation_url']?.toString() ?? '',
       format: json['format']?.toString() ?? 'webp',
-      width: (json['width'] as num?)?.toInt() ?? 512,
-      height: (json['height'] as num?)?.toInt() ?? 512,
-      fileSize: (json['file_size'] as num?)?.toInt() ?? 0,
-      orderIndex: (json['order_index'] as num?)?.toInt() ?? 0,
+      width: _parseStickerInt(json['width'], 512),
+      height: _parseStickerInt(json['height'], 512),
+      fileSize: _parseStickerInt(json['file_size']),
+      orderIndex: _parseStickerInt(json['order_index']),
       hasAlpha: json['has_alpha'] != false,
       isAdaptiveTextColor: json['is_adaptive_text_color'] == true,
       ocrText: json['ocr_text']?.toString() ?? '',
@@ -231,12 +238,19 @@ class StickerPack {
   final String title;
   final bool isAnimated;
   final bool isCustomEmoji;
+  final bool? _isAdaptiveTextColor;
   final bool isOfficial;
   final bool isInstalled;
   final String thumbnailUrl;
   final int stickersCount;
   final int installedCount;
   final List<StickerItem> stickers;
+
+  /// Hot-Reload-safe getter: existing instances instantiated before adding
+  /// [_isAdaptiveTextColor] compute adaptive support from child stickers.
+  bool get isAdaptiveTextColor =>
+      _isAdaptiveTextColor ??
+      (isCustomEmoji && stickers.any((s) => s.isAdaptiveTextColor));
 
   const StickerPack({
     required this.id,
@@ -245,13 +259,14 @@ class StickerPack {
     required this.title,
     this.isAnimated = false,
     this.isCustomEmoji = false,
+    bool? isAdaptiveTextColor,
     this.isOfficial = false,
     this.isInstalled = false,
     this.thumbnailUrl = '',
     this.stickersCount = 0,
     this.installedCount = 0,
     this.stickers = const [],
-  });
+  }) : _isAdaptiveTextColor = isAdaptiveTextColor;
 
   List<StickerItem> get items => stickers;
   String get coverUrl => thumbnailUrl;
@@ -276,26 +291,44 @@ class StickerPack {
     }
 
     return StickerPack(
-      id: (json['id'] as num?)?.toInt() ??
-          int.tryParse(json['id']?.toString() ?? '') ??
-          0,
-      ownerId: (json['owner_id'] as num?)?.toInt(),
+      id: _parseStickerInt(json['id']),
+      ownerId: _parseStickerNullableInt(json['owner_id']),
       shortName: json['short_name']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
       isAnimated: json['is_animated'] == true,
       isCustomEmoji: json['is_custom_emoji'] == true,
+      isAdaptiveTextColor: json['is_adaptive_text_color'] == true,
       isOfficial: json['is_official'] == true,
       isInstalled: json['is_installed'] == true,
       thumbnailUrl: thumb,
-      stickersCount: (json['stickers_count'] as num?)?.toInt() ??
-          parsedStickers.length,
-      installedCount: (json['installed_count'] as num?)?.toInt() ?? 0,
+      stickersCount: _parseStickerInt(
+        json['stickers_count'],
+        parsedStickers.length,
+      ),
+      installedCount: _parseStickerInt(json['installed_count']),
       stickers: parsedStickers,
     );
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        if (ownerId != null) 'owner_id': ownerId,
+        'short_name': shortName,
+        'title': title,
+        'is_animated': isAnimated,
+        'is_custom_emoji': isCustomEmoji,
+        'is_adaptive_text_color': isAdaptiveTextColor,
+        'is_official': isOfficial,
+        'is_installed': isInstalled,
+        'thumbnail_url': thumbnailUrl,
+        'stickers_count': stickersCount,
+        'installed_count': installedCount,
+        'stickers': stickers.map((s) => s.toMediaPayload()).toList(),
+      };
+
   StickerPack copyWith({
     bool? isInstalled,
+    bool? isAdaptiveTextColor,
     List<StickerItem>? stickers,
   }) {
     return StickerPack(
@@ -305,6 +338,7 @@ class StickerPack {
       title: title,
       isAnimated: isAnimated,
       isCustomEmoji: isCustomEmoji,
+      isAdaptiveTextColor: isAdaptiveTextColor ?? _isAdaptiveTextColor,
       isOfficial: isOfficial,
       isInstalled: isInstalled ?? this.isInstalled,
       thumbnailUrl: thumbnailUrl,
@@ -353,10 +387,10 @@ class GifItemModel {
       url: url,
       previewUrl: prev.isNotEmpty ? prev : url,
       mp4Url: json['mp4_url']?.toString() ?? '',
-      width: (json['width'] as num?)?.toInt() ?? 320,
-      height: (json['height'] as num?)?.toInt() ?? 240,
-      duration: (json['duration'] as num?)?.toInt() ?? 0,
-      useCount: (json['use_count'] as num?)?.toInt() ?? 1,
+      width: _parseStickerInt(json['width'], 320),
+      height: _parseStickerInt(json['height'], 240),
+      duration: _parseStickerInt(json['duration']),
+      useCount: _parseStickerInt(json['use_count'], 1),
       isSaved: json['is_saved'] == true,
     );
   }
@@ -491,6 +525,54 @@ class StickerService extends ChangeNotifier {
   List<StickerPack> get featuredStickerPacks => _featuredStickerPacks;
   List<StickerPack> get installedEmojiPacks => _installedEmojiPacks;
   List<StickerPack> get featuredEmojiPacks => _featuredEmojiPacks;
+
+  /// Returns installed & featured custom emoji packs containing at least one
+  /// monotone (adaptive-color) custom emoji, with non-adaptive items filtered out.
+  List<StickerPack> get adaptiveEmojiPacks {
+    final seenIds = <int>{};
+    final result = <StickerPack>[];
+    for (final pack in [..._installedEmojiPacks, ..._featuredEmojiPacks]) {
+      if (!pack.isCustomEmoji || !seenIds.add(pack.id)) continue;
+      final packAdaptive = pack.isAdaptiveTextColor;
+      final adaptiveStickers = <StickerItem>[];
+      for (final st in pack.stickers) {
+        if (st.isAdaptiveTextColor) {
+          adaptiveStickers.add(st);
+        } else if (packAdaptive) {
+          adaptiveStickers.add(StickerItem(
+            id: st.id,
+            packId: st.packId,
+            packShortName: st.packShortName,
+            packTitle: st.packTitle,
+            fileUrl: st.fileUrl,
+            thumbnailUrl: st.thumbnailUrl,
+            emojiList: st.emojiList,
+            effectEmoji: st.effectEmoji,
+            effectAnimationUrl: st.effectAnimationUrl,
+            format: st.format,
+            width: st.width,
+            height: st.height,
+            fileSize: st.fileSize,
+            orderIndex: st.orderIndex,
+            hasAlpha: st.hasAlpha,
+            isAdaptiveTextColor: true,
+            ocrText: st.ocrText,
+            visualDescriptionRu: st.visualDescriptionRu,
+            visualDescriptionEn: st.visualDescriptionEn,
+            tags: st.tags,
+          ));
+        }
+      }
+      if (adaptiveStickers.isNotEmpty) {
+        result.add(pack.copyWith(
+          isAdaptiveTextColor: true,
+          stickers: adaptiveStickers,
+        ));
+      }
+    }
+    return result;
+  }
+
   List<StickerPack> get featuredPacks => [
         ..._featuredStickerPacks,
         ..._featuredEmojiPacks,
@@ -537,8 +619,15 @@ class StickerService extends ChangeNotifier {
   static String resolveUrl(String rawUrl) {
     final trimmed = rawUrl.trim();
     if (trimmed.isEmpty) return '';
+    if (trimmed.startsWith('/avatars/') || trimmed.startsWith('avatars/')) {
+      return AppConfig.resolveMediaUrl(trimmed) ?? '';
+    }
+    final rewrittenInternal = AppConfig.rewriteInternalStorageUrl(trimmed);
+    if (rewrittenInternal != null) {
+      return AppConfig.resolveMediaUrl(rewrittenInternal) ?? rewrittenInternal;
+    }
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return trimmed;
+      return AppConfig.resolveMediaUrl(trimmed) ?? trimmed;
     }
     final base = AppConfig.baseUrl.replaceAll(RegExp(r'/$'), '');
     if (trimmed.startsWith('/')) {
@@ -641,6 +730,21 @@ class StickerService extends ChangeNotifier {
         _cacheStickerItem(st);
       }
     }
+  }
+
+  /// Seeds custom emoji packs in tests without performing HTTP requests.
+  @visibleForTesting
+  void debugSeedCustomEmojiPacksForTest({
+    List<StickerPack> installedEmojiPacks = const [],
+    List<StickerPack> featuredEmojiPacks = const [],
+    bool initialized = true,
+  }) {
+    _installedEmojiPacks = List<StickerPack>.from(installedEmojiPacks);
+    _featuredEmojiPacks = List<StickerPack>.from(featuredEmojiPacks);
+    _initialized = initialized;
+    _indexPacksInCache(_installedEmojiPacks);
+    _indexPacksInCache(_featuredEmojiPacks);
+    notifyListeners();
   }
 
   static const Set<String> _removedDefaultPackSlugs = {
@@ -898,15 +1002,17 @@ class StickerService extends ChangeNotifier {
     String query, {
     bool? isCustomEmoji,
     String? packType,
+    bool adaptiveOnly = false,
   }) async {
     final effectiveCustomEmoji =
-        isCustomEmoji ?? (packType == 'custom_emoji');
+        adaptiveOnly || (isCustomEmoji ?? (packType == 'custom_emoji'));
     final trimmed = query.trim();
     if (trimmed.isEmpty) return [];
 
-    // 1. Local matches from installed packs
-    final packs =
-        effectiveCustomEmoji ? _installedEmojiPacks : _installedStickerPacks;
+    // 1. Local matches from installed (or adaptive custom emoji) packs
+    final packs = adaptiveOnly
+        ? adaptiveEmojiPacks
+        : (effectiveCustomEmoji ? _installedEmojiPacks : _installedStickerPacks);
     final Map<int, StickerItem> merged = {};
     for (final p in packs) {
       for (final st in p.stickers) {
@@ -923,6 +1029,7 @@ class StickerService extends ChangeNotifier {
         queryParameters: {
           'q': trimmed,
           'custom_emoji': effectiveCustomEmoji ? 'true' : 'false',
+          if (adaptiveOnly) 'adaptive': 'true',
         },
       );
       final resp = await http.get(uri, headers: headers);
@@ -931,6 +1038,7 @@ class StickerService extends ChangeNotifier {
         if (d is Map && d['stickers'] is List) {
           for (final item in (d['stickers'] as List).whereType<Map>()) {
             final parsed = StickerItem.fromJson(Map<String, dynamic>.from(item));
+            if (adaptiveOnly && !parsed.isAdaptiveTextColor) continue;
             _stickerByIdCache[parsed.id] = parsed;
             merged[parsed.id] = parsed;
           }
@@ -1274,9 +1382,11 @@ class StickerService extends ChangeNotifier {
     required String shortName,
     bool? isCustomEmoji,
     String? packType,
+    bool isAdaptiveTextColor = false,
   }) async {
     final effectiveCustomEmoji =
         isCustomEmoji ?? (packType == 'custom_emoji');
+    final effectiveAdaptive = effectiveCustomEmoji && isAdaptiveTextColor;
     try {
       final headers = await _authHeaders();
       final resp = await http.post(
@@ -1286,6 +1396,7 @@ class StickerService extends ChangeNotifier {
           'title': title.trim(),
           'short_name': shortName.trim(),
           'is_custom_emoji': effectiveCustomEmoji,
+          'is_adaptive_text_color': effectiveAdaptive,
         }),
       );
       if (resp.statusCode == 201 || resp.statusCode == 200) {
@@ -1501,29 +1612,39 @@ class StickerService extends ChangeNotifier {
             cacheFile = File(p.join(cacheDir.path, '$safeKey.json'));
             if (await cacheFile.exists()) {
               bytes = await cacheFile.readAsBytes();
+              if (bytes.isNotEmpty) {
+                try {
+                  final cachedComp = await LottieComposition.fromBytes(bytes);
+                  _lottieCompositionCache[fullUrl] = cachedComp;
+                  return cachedComp;
+                } catch (_) {
+                  // Purge corrupt cached bytes (e.g. .webp previously saved as .json)
+                  bytes = null;
+                  try {
+                    await cacheFile.delete();
+                  } catch (_) {}
+                }
+              }
             }
           }
         } catch (_) {}
       }
 
-      if (bytes == null || bytes.isEmpty) {
-        final resp = await http.get(Uri.parse(fullUrl));
-        if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
-          return null;
-        }
-        final Uint8List raw = resp.bodyBytes;
-        // Decompress gzip if .tgs (magic bytes 0x1f 0x8b) in background isolate
-        final Uint8List decoded =
-            (raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b)
-                ? await compute(_decompressGzipBytesIsolate, raw)
-                : raw;
-        if (cacheFile != null && decoded.isNotEmpty) {
-          unawaited(cacheFile.writeAsBytes(decoded));
-        }
-        bytes = decoded;
+      final resp = await http.get(Uri.parse(fullUrl));
+      if (resp.statusCode != 200 || resp.bodyBytes.isEmpty) {
+        return null;
       }
+      final Uint8List raw = resp.bodyBytes;
+      // Decompress gzip if .tgs (magic bytes 0x1f 0x8b) in background isolate
+      final Uint8List decoded =
+          (raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b)
+              ? await compute(_decompressGzipBytesIsolate, raw)
+              : raw;
 
-      final comp = await LottieComposition.fromBytes(bytes);
+      final comp = await LottieComposition.fromBytes(decoded);
+      if (cacheFile != null && decoded.isNotEmpty) {
+        unawaited(cacheFile.writeAsBytes(decoded));
+      }
       _lottieCompositionCache[fullUrl] = comp;
       return comp;
     } catch (e) {
@@ -1537,7 +1658,8 @@ class StickerService extends ChangeNotifier {
     }
   }
 
-  /// Bakes the first frame of a vector sticker/custom-emoji into a GPU texture so idle stickers consume 0% CPU.
+  /// Bakes a representative static frame of a vector sticker/custom-emoji into a GPU texture
+  /// so idle stickers consume 0% CPU and fade-in `.tgs` animations never produce blank frame-0 icons.
   Future<ui.Image?> getBakedFirstFrame(
     String rawUrl, {
     LottieComposition? composition,
@@ -1557,6 +1679,7 @@ class StickerService extends ChangeNotifier {
       composition: comp,
       progress: 0.0,
       targetPx: px,
+      ensureVisible: true,
     );
     if (img != null) {
       _bakedFrameCache[key] = img;
@@ -1590,7 +1713,31 @@ class StickerService extends ChangeNotifier {
     if (kIsWeb) return null;
     final fullUrl = resolveUrl(rawUrl);
     if (fullUrl.isEmpty) return null;
-    return _rasterFileCache[fullUrl];
+    final mem = _rasterFileCache[fullUrl];
+    if (mem != null) return mem;
+    final mediaCached =
+        MediaCacheManager.instance.getCachedFileSync(fullUrl);
+    if (mediaCached != null) {
+      _rasterFileCache[fullUrl] = mediaCached;
+      return mediaCached;
+    }
+    return null;
+  }
+
+  @visibleForTesting
+  void putRasterFileCacheForTest(String rawUrl, File file) {
+    final fullUrl = resolveUrl(rawUrl);
+    if (fullUrl.isNotEmpty) {
+      _rasterFileCache[fullUrl] = file;
+    }
+  }
+
+  @visibleForTesting
+  void removeRasterFileCacheForTest(String rawUrl) {
+    final fullUrl = resolveUrl(rawUrl);
+    if (fullUrl.isNotEmpty) {
+      _rasterFileCache.remove(fullUrl);
+    }
   }
 
   /// Downloads and caches a raster sticker or GIF file on disk so scrolling never re-fetches over HTTP.
@@ -1616,10 +1763,36 @@ class StickerService extends ChangeNotifier {
 
   Future<File?> _downloadRasterFileInternal(String fullUrl) async {
     try {
+      final mediaCached =
+          await MediaCacheManager.instance.getCachedFile(fullUrl);
+      if (mediaCached != null &&
+          await mediaCached.exists() &&
+          await mediaCached.length() > 16) {
+        _rasterFileCache[fullUrl] = mediaCached;
+        return mediaCached;
+      }
+
+      if (MediaCacheManager.instance.extractProtectedObjectName(
+            fullUrl,
+            ignorePresignQuery: true,
+          ) !=
+          null) {
+        final downloaded =
+            await MediaCacheManager.instance.downloadMedia(fullUrl);
+        if (downloaded != null &&
+            await downloaded.exists() &&
+            await downloaded.length() > 16) {
+          _rasterFileCache[fullUrl] = downloaded;
+          return downloaded;
+        }
+        return null;
+      }
+
       final cacheDir = await _getRasterCacheDir();
       if (cacheDir == null) return null;
 
-      final safeKey = base64Url.encode(utf8.encode(fullUrl)).replaceAll('=', '');
+      final cacheKeySource = AppConfig.cacheKeyForUrl(fullUrl) ?? fullUrl;
+      final safeKey = base64Url.encode(utf8.encode(cacheKeySource)).replaceAll('=', '');
       final ext = fullUrl.toLowerCase().contains('.gif') ? '.gif' : '.webp';
       final file = File(p.join(cacheDir.path, '$safeKey$ext'));
       if (await file.exists() && await file.length() > 16) {
@@ -1634,7 +1807,10 @@ class StickerService extends ChangeNotifier {
       }
       _activeRasterDownloads++;
       try {
-        final resp = await http.get(Uri.parse(fullUrl));
+        final resp = await http.get(
+          Uri.parse(fullUrl),
+          headers: AppConfig.authHeadersForUrl(fullUrl),
+        );
         if (resp.statusCode == 200 && resp.bodyBytes.length > 16) {
           await file.writeAsBytes(resp.bodyBytes, flush: false);
           _rasterFileCache[fullUrl] = file;

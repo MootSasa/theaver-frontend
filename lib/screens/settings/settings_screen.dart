@@ -1,8 +1,10 @@
-import 'dart:io';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'about_theaver_screen.dart';
+import 'profile_customization_screen.dart';
 import 'profile_screen.dart';
 import 'notifications_screen.dart';
 import 'privacy_screen.dart';
@@ -13,21 +15,23 @@ import 'power_saving_screen.dart';
 import 'language_screen.dart';
 import 'chat_settings_screen.dart';
 import 'accounts_screen.dart';
+import 'bots_and_mini_apps_screen.dart';
+import 'settings_search_index.dart';
 import 'wallets_screen.dart';
-import 'service_menu_screen.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
+import '../../theme/theav_theme.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/settings_service.dart';
 import '../../services/profile_instant_cache.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../widgets/chat/liquid_glass_bottom_bar.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/common/glass_modal_sheet.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import 'package:http/http.dart' as http;
 import '../auth/login_screen.dart';
@@ -38,8 +42,9 @@ import '../../services/notification_service.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/update_service.dart';
 import '../../services/tiling_layout_controller.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'widgets/update_dialog.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/power_saving_provider.dart';
+import '../../theme/theme_provider.dart';
 
 /// Экран настроек.
 ///
@@ -59,302 +64,36 @@ class _SettingsScreenState extends State<SettingsScreen>
     with AutomaticKeepAliveClientMixin {
   final AccountManager _accountManager = AccountManager();
   Account? _currentAccount;
+  final TextEditingController _searchController = TextEditingController();
+  final List<SettingsSearchEntry> _searchEntries =
+      SettingsSearchIndex.defaultEntries();
+  String _searchQuery = '';
 
-  int _versionTapCount = 0;
-  DateTime? _lastTapTime;
-  bool _isCheckingUpdate = false;
-
-  Future<void> _checkAppUpdates(BuildContext context) async {
-    if (_isCheckingUpdate) return;
-    setState(() => _isCheckingUpdate = true);
+  void _openAboutTheaver() {
     HapticUtils.tap();
-
-    try {
-      if (kIsWeb) {
-        await AppConfig.syncWebVersionFromServer(channel: _updateChannel);
-        if (mounted) setState(() {});
-      }
-      final update = await AppUpdateService.instance.checkForUpdate(silent: false);
-      if (!mounted) return;
-
-      if (update.hasUpdate) {
-        UpdateDialog.show(context, update, isManual: true);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('У вас установлена последняя версия Theaver'),
-            duration: Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Не удалось проверить обновления: $e'),
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isCheckingUpdate = false);
-      }
-    }
-  }
-
-  String _getSystemAbi() {
-    if (kIsWeb) return 'web';
-    try {
-      return Platform.operatingSystem;
-    } catch (_) {
-      return defaultTargetPlatform.name;
-    }
-  }
-
-  void _handleVersionTap() {
-    final now = DateTime.now();
-    if (_lastTapTime != null &&
-        now.difference(_lastTapTime!) > const Duration(seconds: 2)) {
-      _versionTapCount = 0;
-    }
-    _lastTapTime = now;
-    _versionTapCount++;
-
-    HapticUtils.tap();
-
-    if (_versionTapCount >= 5) {
-      _versionTapCount = 0;
-      Navigator.push(
-        context,
-        SwipeBackPageRoute(
-          builder: (_) => const ServiceMenuScreen(),
-        ),
-      );
-    }
-  }
-
-  String _updateChannel = 'stable';
-
-  Future<void> _loadUpdateChannel() async {
-    final ch = await AppUpdateService.instance.getChannel();
-    if (kIsWeb) {
-      await AppConfig.syncWebVersionFromServer(channel: ch);
-    }
-    if (mounted) {
-      setState(() => _updateChannel = ch);
-    }
-  }
-
-  Future<void> _selectUpdateChannel(BuildContext context) async {
-    final selected = await showDialog<String>(
-      context: context,
-      builder: (dialogCtx) => SimpleDialog(
-        title: const Text('Канал обновлений'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(dialogCtx, 'stable'),
-            child: Row(
-              children: [
-                Icon(
-                  _updateChannel == 'stable' ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: Theme.of(dialogCtx).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      kIsWeb ? 'Stable — theaver.app' : 'Stable (Стабильный)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text('Рекомендуется для всех пользователей', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(dialogCtx, 'beta'),
-            child: Row(
-              children: [
-                Icon(
-                  _updateChannel == 'beta' ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: Theme.of(dialogCtx).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      kIsWeb ? 'Beta — beta.theaver.app' : 'Beta (Бета-тестирование)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text('Новые функции до официального релиза', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(dialogCtx, 'alpha'),
-            child: Row(
-              children: [
-                Icon(
-                  _updateChannel == 'alpha' ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: Theme.of(dialogCtx).colorScheme.primary,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      kIsWeb ? 'Alpha — alpha.theaver.app' : 'Alpha / Dev (Разработка)',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text('Ранние сборки для тестирования', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(builder: (_) => const AboutTheaverScreen()),
     );
-
-    if (selected != null && selected != _updateChannel) {
-      await AppUpdateService.instance.setChannel(selected);
-      if (kIsWeb) {
-        if (AppConfig.webDomainChannel != null) {
-          final targetUrl = AppConfig.getWebChannelUrl(selected);
-          await launchUrl(Uri.parse(targetUrl), webOnlyWindowName: '_self');
-          return;
-        }
-        await AppConfig.syncWebVersionFromServer(channel: selected);
-      }
-      if (mounted) {
-        setState(() => _updateChannel = selected);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Выбран канал обновлений: ${_getChannelTitle(selected)}'),
-            duration: const Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
   }
 
-  String _getChannelTitle(String ch) {
-    switch (ch) {
-      case 'beta':
-        return 'Beta';
-      case 'alpha':
-        return 'Alpha';
-      default:
-        return 'Stable';
-    }
-  }
-
-  Widget _buildVersionInfoSection(ThemeData theme, AppLocalizations l10n) {
-    final systemAbi = _getSystemAbi();
-    final buildDate = AppConfig.buildDate;
+  Widget _buildVersionInfoSection(ThemeData theme) {
     final appVersion = AppConfig.currentVersion;
     final appBuild = AppConfig.currentBuildNumber;
 
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 24.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _handleVersionTap,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Theaver v$appVersion (#$appBuild) ($systemAbi)',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    l10n.translate('build_date').replaceAll('{date}', buildDate),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: _openAboutTheaver,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 20.0),
+          child: Text(
+            'Theaver v$appVersion ($appBuild)',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.65),
             ),
-            const SizedBox(height: 10),
-            Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                TextButton.icon(
-                  onPressed: _isCheckingUpdate ? null : () => _checkAppUpdates(context),
-                  icon: _isCheckingUpdate
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh_rounded, size: 16),
-                  label: Text(
-                    _isCheckingUpdate ? 'Проверка...' : 'Проверить обновления',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.08),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: () => _selectUpdateChannel(context),
-                  icon: Icon(
-                    _updateChannel == 'beta'
-                        ? Icons.science_outlined
-                        : (_updateChannel == 'alpha'
-                            ? Icons.developer_mode_outlined
-                            : Icons.verified_outlined),
-                    size: 16,
-                  ),
-                  label: Text(
-                    'Канал: ${_getChannelTitle(_updateChannel)}',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    backgroundColor: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.08),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                  ),
-                ),
-              ],
-            ),
-          ],
+            textAlign: TextAlign.center,
+          ),
         ),
       ),
     );
@@ -368,7 +107,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     super.initState();
     _currentAccount = _accountManager.currentAccount;
     _accountManager.addListener(_onAccountChanged);
-    _loadUpdateChannel();
     ProfileInstantCache.instance.warmupSelf();
   }
 
@@ -383,7 +121,35 @@ class _SettingsScreenState extends State<SettingsScreen>
   @override
   void dispose() {
     _accountManager.removeListener(_onAccountChanged);
+    _searchController.dispose();
     super.dispose();
+  }
+
+  static String _languageNativeName(String code) {
+    const names = {
+      'en': 'English',
+      'ru': 'Русский',
+      'es': 'Español',
+      'fr': 'Français',
+      'de': 'Deutsch',
+      'it': 'Italiano',
+      'pt': 'Português',
+      'zh': '中文',
+      'ja': '日本語',
+      'ko': '한국어',
+    };
+    return names[code] ?? code.toUpperCase();
+  }
+
+  String _themeSubtitle(ThemeProvider themeProvider, AppLocalizations l10n) {
+    final modeLabel = themeProvider.scheduleEnabled
+        ? l10n.translate('theme_schedule_title')
+        : switch (themeProvider.themeMode) {
+            ThemeMode.light => l10n.translate('theme_light'),
+            ThemeMode.dark => l10n.translate('theme_dark'),
+            ThemeMode.system => l10n.translate('theme_system'),
+          };
+    return '${themeProvider.activeTheme.name} • $modeLabel';
   }
 
   @override
@@ -391,62 +157,154 @@ class _SettingsScreenState extends State<SettingsScreen>
     super.build(context); // AutomaticKeepAliveClientMixin
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final theav = TheavTheme.of(context);
+    final accent = theav.accent;
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
     final currentAccount = _currentAccount;
+    final themeProvider = context.watch<ThemeProvider>();
+    final notifProvider = context.watch<NotificationSettingsProvider>();
+    final powerSaving = context.watch<PowerSavingProvider>();
+    final localeProvider = context.watch<LocaleProvider>();
+    final isSearching = _searchQuery.trim().isNotEmpty;
+    final searchResults = isSearching
+        ? SettingsSearchIndex.filter(
+            _searchEntries,
+            _searchQuery,
+            translate: l10n.translate,
+            isWeb: kIsWeb,
+          )
+        : const <SettingsSearchEntry>[];
 
     // Меню «три точки» — содержит «Выйти» и «Очистить данные»
-    final appBarActions = [
-      PopupMenuButton<String>(
-        onSelected: (value) {
-          switch (value) {
-            case 'logout':
-              _handleLogout(context);
-              break;
-            case 'clear_data':
-              _showClearDataDialog(context);
-              break;
-          }
-        },
-        itemBuilder: (context) => [
-          PopupMenuItem(
-            value: 'logout',
-            child: ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: Text(
-                l10n.translate('menu_logout'),
-                style: const TextStyle(color: Colors.red),
-              ),
-              contentPadding: EdgeInsets.zero,
-              minLeadingWidth: 24,
+    final popupMenuButton = PopupMenuButton<String>(
+      padding: EdgeInsets.zero,
+      onSelected: (value) {
+        switch (value) {
+          case 'logout':
+            _handleLogout(context);
+            break;
+          case 'clear_data':
+            _showClearDataDialog(context);
+            break;
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(
+          value: 'logout',
+          child: ListTile(
+            leading: iconoir.LogOut(
+              width: 20,
+              height: 20,
+              color: theav.palette.error,
             ),
-          ),
-          PopupMenuItem(
-            value: 'clear_data',
-            child: ListTile(
-              leading: const Icon(Icons.delete_forever, color: Colors.orange),
-              title: Text(
-                l10n.translate('clear_data_title'),
-                style: const TextStyle(color: Colors.orange),
-              ),
-              contentPadding: EdgeInsets.zero,
-              minLeadingWidth: 24,
+            title: Text(
+              l10n.translate('menu_logout'),
+              style: TextStyle(color: theav.palette.error),
             ),
+            contentPadding: EdgeInsets.zero,
+            minLeadingWidth: 24,
           ),
-        ],
-        icon: const Icon(Icons.more_vert),
-      ),
-    ];
-
-    // AppBar title — крупная надпись «Настройки»
-    final appBarTitle = Text(
-      l10n.translate('settings_title'),
-      style: const TextStyle(
-        fontSize: 28,
-        fontWeight: FontWeight.bold,
+        ),
+        PopupMenuItem(
+          value: 'clear_data',
+          child: ListTile(
+            leading: const iconoir.Trash(
+              width: 20,
+              height: 20,
+              color: Colors.orange,
+            ),
+            title: Text(
+              l10n.translate('clear_data_title'),
+              style: const TextStyle(color: Colors.orange),
+            ),
+            contentPadding: EdgeInsets.zero,
+            minLeadingWidth: 24,
+          ),
+        ),
+      ],
+      icon: iconoir.MoreVert(
+        width: 22,
+        height: 22,
+        color: headerFg,
       ),
     );
+    final headerActions = [
+      SettingsHeaderAction(child: popupMenuButton),
+    ];
 
     // Содержимое списка настроек (без обёртки ListView)
     final listChildren = <Widget>[
+      // Settings Search Bar
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+        child: TextField(
+          key: const ValueKey<String>('settings_search_input'),
+          controller: _searchController,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search, size: 20),
+            hintText: l10n.trOr('settings_search_hint', 'Search settings...'),
+            filled: true,
+            fillColor: theme.cardColor,
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide.none,
+            ),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      _searchController.clear();
+                      setState(() => _searchQuery = '');
+                    },
+                  )
+                : null,
+          ),
+          onChanged: (val) => setState(() => _searchQuery = val),
+        ),
+      ),
+
+      if (isSearching) ...[
+        if (searchResults.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
+            child: Column(
+              children: [
+                Icon(Icons.search_off, size: 48, color: Colors.grey[500]),
+                const SizedBox(height: 12),
+                Text(
+                  l10n.translate('search_no_results'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                ),
+              ],
+            ),
+          )
+        else
+          SettingsGroup(
+            children: searchResults.map((entry) {
+              return ListTile(
+                leading: Icon(entry.icon, color: accent),
+                title: Text(entry.resolveTitle(l10n.translate)),
+                subtitle: Text(
+                  entry.resolveSection(l10n.translate),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+                trailing: const iconoir.NavArrowRight(
+                  width: 18,
+                  height: 18,
+                  color: Colors.grey,
+                ),
+                onTap: () {
+                  HapticUtils.tap();
+                  entry.onSelect?.call(context);
+                },
+              );
+            }).toList(),
+          ),
+      ] else ...[
       // Current Account Section
       if (currentAccount != null) ...[
         _buildCurrentAccountSection(theme, l10n, currentAccount),
@@ -457,7 +315,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Profile Section
           ListTile(
-            leading: const Icon(Icons.person, color: Color(0xFF0088CC)),
+            leading: iconoir.User(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_profile')),
             onTap: () {
               HapticUtils.tap();
@@ -476,9 +334,30 @@ class _SettingsScreenState extends State<SettingsScreen>
             },
           ),
 
+          // Profile Customization Studio
+          ListTile(
+            leading: iconoir.Spark(width: 22, height: 22, color: accent),
+            title: Text(
+              translateOrFallback(
+                context,
+                'customizationTitle',
+                'Profile Customization',
+              ),
+            ),
+            onTap: () {
+              HapticUtils.tap();
+              Navigator.push(
+                context,
+                SwipeBackPageRoute(
+                  builder: (_) => const ProfileCustomizationScreen(),
+                ),
+              );
+            },
+          ),
+
           // Accounts Section
           ListTile(
-            leading: const Icon(Icons.switch_account, color: Color(0xFF0088CC)),
+            leading: iconoir.UserCircle(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('accounts_title')),
             subtitle: Text(
               '${_accountManager.accounts.length} ${l10n.translate('accounts_count')}',
@@ -502,8 +381,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Add Account Section
           ListTile(
-            leading:
-                const Icon(Icons.add_circle_outline, color: Color(0xFF0088CC)),
+            leading: iconoir.UserPlus(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_add_account')),
             onTap: () {
               HapticUtils.tap();
@@ -522,8 +400,12 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Chat Settings Section (Wallpaper + Liquid Glass)
           ListTile(
-            leading: const Icon(Icons.chat, color: Color(0xFF0088CC)),
+            leading: iconoir.ChatBubble(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_chat_settings')),
+            subtitle: Text(
+              _themeSubtitle(themeProvider, l10n),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -535,7 +417,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Privacy Section
           ListTile(
-            leading: const Icon(Icons.privacy_tip, color: Color(0xFF0088CC)),
+            leading: iconoir.ShieldCheck(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_privacy')),
             onTap: () {
               HapticUtils.tap();
@@ -548,8 +430,14 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Notifications Section
           ListTile(
-            leading: const Icon(Icons.notifications, color: Color(0xFF0088CC)),
+            leading: iconoir.Bell(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_notifications')),
+            subtitle: Text(
+              notifProvider.globalSettings.notificationsEnabled
+                  ? l10n.translate('settings_status_enabled')
+                  : l10n.translate('settings_status_muted'),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -565,7 +453,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Data & Storage Section
           ListTile(
-            leading: const Icon(Icons.storage, color: Color(0xFF0088CC)),
+            leading: iconoir.Database(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_data_storage')),
             onTap: () {
               HapticUtils.tap();
@@ -578,7 +466,7 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Devices Section
           ListTile(
-            leading: const Icon(Icons.devices, color: Color(0xFF0088CC)),
+            leading: iconoir.Laptop(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_devices')),
             onTap: () {
               HapticUtils.tap();
@@ -591,13 +479,32 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Chat Folders Section
           ListTile(
-            leading: const Icon(Icons.folder, color: Color(0xFF0088CC)),
+            leading: iconoir.Folder(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_folders')),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
                 context,
                 SwipeBackPageRoute(builder: (_) => const FoldersScreen()),
+              );
+            },
+          ),
+
+          // Bots and Mini Apps Hub
+          ListTile(
+            leading: iconoir.AppWindow(width: 22, height: 22, color: accent),
+            title: const Text('Боты и Mini Apps'),
+            subtitle: Text(
+              '@BotMother, мини-приложения и inline-боты',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            onTap: () {
+              HapticUtils.tap();
+              Navigator.push(
+                context,
+                SwipeBackPageRoute(
+                  builder: (_) => const BotsAndMiniAppsScreen(),
+                ),
               );
             },
           ),
@@ -608,8 +515,7 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Wallets and Cards Section
           ListTile(
-            leading: const Icon(Icons.account_balance_wallet,
-                color: Color(0xFF0088CC)),
+            leading: iconoir.Wallet(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_wallets_cards')),
             onTap: () {
               HapticUtils.tap();
@@ -626,8 +532,14 @@ class _SettingsScreenState extends State<SettingsScreen>
         children: [
           // Power Saving Section
           ListTile(
-            leading: const Icon(Icons.battery_saver, color: Color(0xFF0088CC)),
+            leading: iconoir.BatteryCharging(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_power_saving')),
+            subtitle: Text(
+              powerSaving.isActive
+                  ? l10n.translate('settings_status_enabled')
+                  : l10n.translate('settings_status_off'),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -639,8 +551,12 @@ class _SettingsScreenState extends State<SettingsScreen>
 
           // Language Section
           ListTile(
-            leading: const Icon(Icons.language, color: Color(0xFF0088CC)),
+            leading: iconoir.Language(width: 22, height: 22, color: accent),
             title: Text(l10n.translate('settings_language')),
+            subtitle: Text(
+              _languageNativeName(localeProvider.locale.languageCode),
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
             onTap: () {
               HapticUtils.tap();
               Navigator.push(
@@ -649,96 +565,95 @@ class _SettingsScreenState extends State<SettingsScreen>
               );
             },
           ),
+
+          // About Theaver Section
+          ListTile(
+            leading: iconoir.InfoCircle(width: 22, height: 22, color: accent),
+            title: Text(l10n.translate('settings_about_theaver')),
+            trailing: kIsWeb
+                ? null
+                : ValueListenableBuilder<AppUpdateDownloadState>(
+                    valueListenable: AppUpdateService.instance.stateNotifier,
+                    builder: (context, state, _) {
+                      final update = state.availableUpdate;
+                      if (!state.hasAvailableUpdate || update == null) {
+                        return const SizedBox.shrink();
+                      }
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary
+                              .withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'v${update.latestVersion}',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+            onTap: _openAboutTheaver,
+          ),
         ],
       ),
+      ],
 
       const SizedBox(height: 24),
-      _buildVersionInfoSection(theme, l10n),
+      _buildVersionInfoSection(theme),
       const SizedBox(height: 24),
     ];
 
-    // ListView для classic-режима
-    final listView = ListView(
-      physics: const ClampingScrollPhysics(),
-      padding: widget.isEmbedded
-          ? const EdgeInsets.only(bottom: 120)
-          : null,
-      children: listChildren,
-    );
-
     // Встроенный режим — используется внутри PageView на главном экране
     if (widget.isEmbedded) {
-      final topPadding = MediaQuery.of(context).padding.top + 52.0;
       return ListView(
         physics: const ClampingScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 100),
-        children: [
-          SizedBox(height: topPadding),
-          ...listChildren,
-        ],
+        padding: EdgeInsets.only(
+          top: SettingsFloatingHeader.topClearanceOf(context),
+          bottom: 100,
+        ),
+        children: listChildren,
       );
     }
 
     // Самостоятельный экран (не встроенный)
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
+    final glassProvider = maybeLiquidGlassProvider(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
+    final isLite = glassProvider?.isLite ?? false;
 
-        if (glassEnabled) {
-          final topPadding =
-              MediaQuery.of(context).padding.top + kToolbarHeight;
-
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: listView,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: appBarTitle,
-                    actions: appBarActions,
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-            bottomNavigationBar: LiquidGlassBottomBar(
+    return SettingsFloatingScaffold(
+      title: l10n.translate('settings_title'),
+      actions: headerActions,
+      body: ListView(
+        physics: const ClampingScrollPhysics(),
+        padding: EdgeInsets.only(
+          top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+          bottom: 24,
+        ),
+        children: listChildren,
+      ),
+      bottomNavigationBar: glassEnabled
+          ? LiquidGlassBottomBar(
               selectedIndex: 0,
               onTabSelected: (index) {
                 if (index != 0) {
                   Navigator.pop(context);
                 }
               },
-              isLite: glassProvider.isLite,
+              isLite: isLite,
+            )
+          : ClassicBottomBar(
+              selectedIndex: 0,
+              onTabSelected: (index) {
+                if (index != 0) {
+                  Navigator.pop(context);
+                }
+              },
             ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: appBarTitle,
-            actions: appBarActions,
-            centerTitle: true,
-          ),
-          body: listView,
-          bottomNavigationBar: ClassicBottomBar(
-            selectedIndex: 0,
-            onTabSelected: (index) {
-              if (index != 0) {
-                Navigator.pop(context);
-              }
-            },
-          ),
-        );
-      },
     );
   }
 
@@ -819,9 +734,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.chevron_right,
-                  color: theme.colorScheme.onSurfaceVariant.withOpacity(0),
+                iconoir.NavArrowRight(
+                  width: 18,
+                  height: 18,
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0),
                 ),
               ],
             ),
@@ -856,7 +772,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       ),
     );
 
-    if (confirmed == true) {
+    if (confirmed == true && context.mounted) {
       TilingLayoutController.instance.closeAllChats();
       // 1. Immediately kick user to LoginScreen using root navigator
       final nav = DeepLinkService().navigatorKey.currentState ??

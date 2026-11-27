@@ -5,9 +5,15 @@ import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/community_models.dart';
+import '../models/profile_customization.dart';
 import '../utils/date_time_utils.dart';
+import 'chat_instant_cache.dart';
+import 'chat_service.dart';
 import 'community_service.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
+import 'peer_customization_cache.dart';
+import 'profile_instant_cache.dart';
 import 'sync_service.dart';
 import 'websocket_service.dart';
 
@@ -29,6 +35,19 @@ class ChatSubscription {
   final void Function(WebSocketEvent event)? onMessagePinned;
   final void Function(WebSocketEvent event)? onMessageUnpinned;
   final void Function(WebSocketEvent event)? onCallbackQueryAnswer;
+  final void Function(WebSocketEvent event)? onMessageViewsUpdated;
+  final void Function(WebSocketEvent event)? onPostCommentsUpdated;
+  final void Function(WebSocketEvent event)? onChatSettingsUpdated;
+  final void Function(WebSocketEvent event)? onMemberUpdated;
+  final void Function(WebSocketEvent event)? onChatDeleted;
+  final void Function(WebSocketEvent event)? onScheduledMessagesUpdated;
+  final void Function(WebSocketEvent event)? onJoinRequestsUpdated;
+  final void Function(WebSocketEvent event)? onMessageBurned;
+  final void Function(WebSocketEvent event)? onChatAutoDeleteUpdated;
+  final void Function(WebSocketEvent event)? onChatAppearanceUpdated;
+  final void Function(WebSocketEvent event)? onScreenshotTaken;
+  final void Function(WebSocketEvent event)? onForumTopicUpdated;
+  final void Function(WebSocketEvent event)? onUnreadBadgesUpdated;
   final VoidCallback? onReconnect;
 
   ChatSubscription({
@@ -48,6 +67,19 @@ class ChatSubscription {
     this.onMessagePinned,
     this.onMessageUnpinned,
     this.onCallbackQueryAnswer,
+    this.onMessageViewsUpdated,
+    this.onPostCommentsUpdated,
+    this.onChatSettingsUpdated,
+    this.onMemberUpdated,
+    this.onChatDeleted,
+    this.onScheduledMessagesUpdated,
+    this.onJoinRequestsUpdated,
+    this.onMessageBurned,
+    this.onChatAutoDeleteUpdated,
+    this.onChatAppearanceUpdated,
+    this.onScreenshotTaken,
+    this.onForumTopicUpdated,
+    this.onUnreadBadgesUpdated,
     this.onReconnect,
   });
 
@@ -103,6 +135,19 @@ class ChatRealtimeManager {
     void Function(WebSocketEvent event)? onMessagePinned,
     void Function(WebSocketEvent event)? onMessageUnpinned,
     void Function(WebSocketEvent event)? onCallbackQueryAnswer,
+    void Function(WebSocketEvent event)? onMessageViewsUpdated,
+    void Function(WebSocketEvent event)? onPostCommentsUpdated,
+    void Function(WebSocketEvent event)? onChatSettingsUpdated,
+    void Function(WebSocketEvent event)? onMemberUpdated,
+    void Function(WebSocketEvent event)? onChatDeleted,
+    void Function(WebSocketEvent event)? onScheduledMessagesUpdated,
+    void Function(WebSocketEvent event)? onJoinRequestsUpdated,
+    void Function(WebSocketEvent event)? onMessageBurned,
+    void Function(WebSocketEvent event)? onChatAutoDeleteUpdated,
+    void Function(WebSocketEvent event)? onChatAppearanceUpdated,
+    void Function(WebSocketEvent event)? onScreenshotTaken,
+    void Function(WebSocketEvent event)? onForumTopicUpdated,
+    void Function(WebSocketEvent event)? onUnreadBadgesUpdated,
     VoidCallback? onReconnect,
   }) {
     if (!_isInitialized) {
@@ -126,6 +171,19 @@ class ChatRealtimeManager {
       onMessagePinned: onMessagePinned,
       onMessageUnpinned: onMessageUnpinned,
       onCallbackQueryAnswer: onCallbackQueryAnswer,
+      onMessageViewsUpdated: onMessageViewsUpdated,
+      onPostCommentsUpdated: onPostCommentsUpdated,
+      onChatSettingsUpdated: onChatSettingsUpdated,
+      onMemberUpdated: onMemberUpdated,
+      onChatDeleted: onChatDeleted,
+      onScheduledMessagesUpdated: onScheduledMessagesUpdated,
+      onJoinRequestsUpdated: onJoinRequestsUpdated,
+      onMessageBurned: onMessageBurned,
+      onChatAutoDeleteUpdated: onChatAutoDeleteUpdated,
+      onChatAppearanceUpdated: onChatAppearanceUpdated,
+      onScreenshotTaken: onScreenshotTaken,
+      onForumTopicUpdated: onForumTopicUpdated,
+      onUnreadBadgesUpdated: onUnreadBadgesUpdated,
       onReconnect: onReconnect,
     );
 
@@ -270,9 +328,16 @@ class ChatRealtimeManager {
         final pinId = rawPinId is num
             ? rawPinId.toInt()
             : int.tryParse(rawPinId?.toString() ?? '');
+        final hasPinIds = event.data.containsKey('pinned_message_ids');
+        final pinIds = _extractPinnedIds(event.data['pinned_message_ids']);
         if (pinChatId != null) {
           try {
-            await AppDatabase().updateChatPinnedMessageId(pinChatId, pinId);
+            await AppDatabase().updateChatPinnedMessageId(
+              pinChatId,
+              pinId,
+              pinnedMessageIds: pinIds,
+              updatePinnedMessageIds: hasPinIds,
+            );
           } catch (_) {}
         }
         _dispatchForChat(pinChatId, (s) => s.onMessagePinned?.call(event));
@@ -284,10 +349,16 @@ class ChatRealtimeManager {
         final nextPinId = rawNextPinId is num
             ? rawNextPinId.toInt()
             : int.tryParse(rawNextPinId?.toString() ?? '');
+        final hasUnpinIds = event.data.containsKey('pinned_message_ids');
+        final unpinIds = _extractPinnedIds(event.data['pinned_message_ids']);
         if (unpinChatId != null) {
           try {
-            await AppDatabase()
-                .updateChatPinnedMessageId(unpinChatId, nextPinId);
+            await AppDatabase().updateChatPinnedMessageId(
+              unpinChatId,
+              nextPinId,
+              pinnedMessageIds: unpinIds,
+              updatePinnedMessageIds: hasUnpinIds,
+            );
           } catch (_) {}
         }
         _dispatchForChat(
@@ -312,6 +383,18 @@ class ChatRealtimeManager {
         await _handleChatUpdate(event);
         break;
 
+      case WebSocketEventType.chatArchiveUpdated:
+        final archiveChatId =
+            event.data['chat_id']?.toString() ?? event.data['id']?.toString();
+        final isArchived =
+            event.data['is_archived'] == true || event.data['is_archived'] == 1;
+        if (archiveChatId != null && archiveChatId.isNotEmpty) {
+          try {
+            await AppDatabase().setChatArchived(archiveChatId, isArchived);
+          } catch (_) {}
+        }
+        break;
+
       case WebSocketEventType.userStatus:
         final statusUserId = event.data['user_id']?.toString();
         final statusIsOnline = event.data['is_online'] == true;
@@ -332,12 +415,181 @@ class ChatRealtimeManager {
         break;
 
       case WebSocketEventType.userAvatarUpdated:
-        await _handleUserAvatarUpdated(event);
-        _dispatchGlobal((s) => s.onUserAvatarUpdated?.call(event));
+        final resolvedAvatarEvent = await _handleUserAvatarUpdated(event);
+        _dispatchGlobal(
+          (s) => s.onUserAvatarUpdated?.call(resolvedAvatarEvent),
+        );
         break;
 
       case WebSocketEventType.userAppearanceUpdated:
+        final appUserId = event.data['user_id']?.toString();
+        if (appUserId != null && appUserId.isNotEmpty) {
+          PeerCustomizationCache.instance.mergeFromJson(appUserId, event.data);
+          final cachedJson =
+              PeerCustomizationCache.instance.getSync(appUserId)?.toJsonString();
+          try {
+            await AppDatabase().updateUserCustomizationJson(appUserId, cachedJson);
+          } catch (_) {}
+        }
         _dispatchGlobal((s) => s.onUserAppearanceUpdated?.call(event));
+        break;
+
+      case WebSocketEventType.messageViewsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          event.data['chat_id']?.toString(),
+          (s) => s.onMessageViewsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.postCommentsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          event.data['chat_id']?.toString(),
+          (s) => s.onPostCommentsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatSettingsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onChatSettingsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.memberUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          event.data['chat_id']?.toString(),
+          (s) => s.onMemberUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatDeleted:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onChatDeleted?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.scheduledMessagesUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onScheduledMessagesUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.joinRequestsUpdated:
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          (event.data['chat_id'] ?? event.data['id'])?.toString(),
+          (s) => s.onJoinRequestsUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatUnreadMarked:
+        final markChatId = event.data['chat_id']?.toString();
+        final isMarked = event.data['is_marked_unread'] == true;
+        if (markChatId != null && markChatId.isNotEmpty) {
+          try {
+            final dbChat = await AppDatabase().getChat(markChatId);
+            if (isMarked && (dbChat == null || dbChat.unreadCount == 0)) {
+              await AppDatabase().updateUnreadCount(markChatId, -1);
+            } else if (!isMarked && dbChat?.unreadCount == -1) {
+              await AppDatabase().updateUnreadCount(markChatId, 0);
+            }
+          } catch (_) {}
+        }
+        _dispatchForChat(
+          markChatId,
+          (s) => s.onUnreadCountUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.messageBurned:
+        final burnChatId = event.data['chat_id']?.toString();
+        final burnMsgId = event.data['message_id']?.toString();
+        if (burnMsgId != null && burnMsgId.isNotEmpty) {
+          try {
+            await AppDatabase().markMessageBurned(
+              burnMsgId,
+              viewedAt: event.data['viewed_at']?.toString(),
+              expiresAt: event.data['expires_at']?.toString(),
+              isBurned: event.data['is_burned'] == true,
+            );
+          } catch (_) {}
+        }
+        _dispatchForChat(burnChatId, (s) => s.onMessageBurned?.call(event));
+        break;
+
+      case WebSocketEventType.chatAutoDeleteUpdated:
+        final autoChatId = event.data['chat_id']?.toString();
+        final rawTtl = event.data['message_auto_delete_time'] ??
+            event.data['ttl_seconds'];
+        final ttlSec = rawTtl is num
+            ? rawTtl.toInt()
+            : int.tryParse(rawTtl?.toString() ?? '') ?? 0;
+        if (autoChatId != null && autoChatId.isNotEmpty) {
+          try {
+            await AppDatabase().updateChatAutoDeleteTime(autoChatId, ttlSec);
+          } catch (_) {}
+        }
+        _dispatchForChat(
+          autoChatId,
+          (s) => s.onChatAutoDeleteUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.chatAppearanceUpdated:
+        final appChatId = event.data['chat_id']?.toString();
+        final rawApp = event.data['appearance'];
+        if (appChatId != null && appChatId.isNotEmpty) {
+          try {
+            await AppDatabase().updateChatAppearanceJson(
+              appChatId,
+              rawApp is Map ? jsonEncode(rawApp) : null,
+            );
+          } catch (_) {}
+        }
+        _dispatchForChat(
+          appChatId,
+          (s) => s.onChatAppearanceUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.screenshotTaken:
+        final scrChatId = event.data['chat_id']?.toString();
+        _dispatchForChat(scrChatId, (s) => s.onScreenshotTaken?.call(event));
+        break;
+
+      case WebSocketEventType.forumTopicUpdated:
+        final topicChatId = event.data['chat_id']?.toString();
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          topicChatId,
+          (s) => s.onForumTopicUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.unreadBadgesUpdated:
+        final badgeChatId = event.data['chat_id']?.toString();
+        await ChatService.handleWebSocketEvent(event);
+        _dispatchForChat(
+          badgeChatId,
+          (s) => s.onUnreadBadgesUpdated?.call(event),
+        );
+        break;
+
+      case WebSocketEventType.contactUpdated:
+      case WebSocketEventType.contactDeleted:
+        await ContactsService.applyRemoteContactEvent(event.type, event.data);
+        await SyncService.syncInstantCachesAfterContactEvent(
+          event.type,
+          event.data,
+        );
         break;
 
       default:
@@ -397,11 +649,200 @@ class ChatRealtimeManager {
     }
   }
 
+  Map<String, dynamic> _resolveIncomingMessageData(Map<String, dynamic> raw) {
+    final msgData = Map<String, dynamic>.from(raw);
+    final senderId = msgData['sender_id']?.toString().trim() ?? '';
+    final senderChatId = msgData['sender_chat_id']?.toString().trim() ?? '';
+    final isAnon = msgData['is_from_anonymous_admin'] == true ||
+        msgData['is_from_anonymous_admin'] == 1;
+    final isMirrored =
+        (msgData['channel_post_id']?.toString().trim() ?? '').isNotEmpty;
+    final senderIsBot = msgData['sender_is_bot'] == true ||
+        msgData['sender_is_bot'] == 1 ||
+        msgData['is_bot'] == true ||
+        msgData['is_bot'] == 1;
+    final isHumanUser = ContactsService.shouldResolveUserIdentity(
+      senderId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: senderIsBot,
+    );
+    if (isHumanUser) {
+      final rawName = msgData['sender_name']?.toString() ?? '';
+      final resolvedName = ContactsService.resolvePeerName(
+        senderId,
+        rawName,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: senderIsBot,
+      );
+      if (resolvedName.isNotEmpty || msgData.containsKey('sender_name')) {
+        msgData['sender_name'] = resolvedName;
+      }
+      final rawAvatar = msgData['sender_avatar_url']?.toString();
+      final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+        senderId,
+        rawAvatar,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: senderIsBot,
+      );
+      if (resolvedAvatar != null || msgData.containsKey('sender_avatar_url')) {
+        msgData['sender_avatar_url'] = resolvedAvatar;
+      }
+    }
+
+    final replySenderId = msgData['reply_to_sender_id']?.toString().trim() ?? '';
+    final replySenderChatId =
+        msgData['reply_to_sender_chat_id']?.toString().trim() ?? '';
+    final replyIsAnon = msgData['reply_to_is_from_anonymous_admin'] == true ||
+        msgData['reply_to_is_from_anonymous_admin'] == 1;
+    final replyIsChannel =
+        msgData['reply_to_chat_type']?.toString().trim() == 'channel';
+    final replyIsBot = msgData['reply_to_sender_is_bot'] == true ||
+        msgData['reply_to_sender_is_bot'] == 1;
+    if (ContactsService.shouldResolveUserIdentity(
+      replySenderId,
+      senderChatId: replySenderChatId,
+      isAnonymousAdmin: replyIsAnon,
+      isMirroredChannelPost: replyIsChannel,
+      isBot: replyIsBot,
+    )) {
+      final rawReplyName = msgData['reply_to_sender_name']?.toString() ?? '';
+      final resolvedReplyName = ContactsService.resolvePeerName(
+        replySenderId,
+        rawReplyName,
+        senderChatId: replySenderChatId,
+        isAnonymousAdmin: replyIsAnon,
+        isMirroredChannelPost: replyIsChannel,
+        isBot: replyIsBot,
+      );
+      if (resolvedReplyName.isNotEmpty) {
+        msgData['reply_to_sender_name'] = resolvedReplyName;
+      }
+    }
+    if (msgData['reply_info'] is Map) {
+      final replyMap = Map<String, dynamic>.from(msgData['reply_info'] as Map);
+      final rSid = replyMap['sender_id']?.toString().trim() ?? '';
+      final rScid =
+          (replyMap['sender_chat_id'] ?? msgData['reply_to_sender_chat_id'])
+              ?.toString()
+              .trim();
+      final rAnon = replyMap['is_from_anonymous_admin'] == true ||
+          replyMap['is_from_anonymous_admin'] == 1 ||
+          replyIsAnon;
+      final rBot = replyMap['is_bot'] == true ||
+          replyMap['is_bot'] == 1 ||
+          replyIsBot;
+      if (ContactsService.shouldResolveUserIdentity(
+        rSid,
+        senderChatId: rScid,
+        isAnonymousAdmin: rAnon,
+        isMirroredChannelPost: replyIsChannel,
+        isBot: rBot,
+      )) {
+        final rName = replyMap['sender_name']?.toString() ?? '';
+        replyMap['sender_name'] = ContactsService.resolvePeerName(
+          rSid,
+          rName,
+          senderChatId: rScid,
+          isAnonymousAdmin: rAnon,
+          isMirroredChannelPost: replyIsChannel,
+          isBot: rBot,
+        );
+        msgData['reply_info'] = replyMap;
+      }
+    }
+
+    final rawFwdUserId =
+        msgData['forwarded_from_user_id']?.toString().trim() ?? '';
+    final rawFwdChatId =
+        msgData['forwarded_from_chat_id']?.toString().trim() ?? '';
+    final rawFwdId = msgData['forward_from_id']?.toString().trim() ?? '';
+    final fwdIsBot = msgData['forwarded_from_is_bot'] == true ||
+        msgData['forwarded_from_is_bot'] == 1 ||
+        msgData['forward_from_is_bot'] == true ||
+        msgData['forward_from_is_bot'] == 1;
+    String? effectiveFwdId;
+    bool isUserFwd = false;
+    if (rawFwdUserId.isNotEmpty && rawFwdUserId != '0') {
+      effectiveFwdId = rawFwdUserId;
+      isUserFwd = true;
+    } else if (rawFwdChatId.isNotEmpty && rawFwdChatId != '0') {
+      effectiveFwdId = rawFwdChatId.startsWith('chat:')
+          ? rawFwdChatId
+          : 'chat:$rawFwdChatId';
+    } else if (rawFwdId.isNotEmpty && rawFwdId != '0') {
+      effectiveFwdId = rawFwdId;
+      if (!rawFwdId.startsWith('chat:')) {
+        isUserFwd = true;
+      }
+    }
+    if (effectiveFwdId != null) {
+      msgData['forward_from_id'] = effectiveFwdId;
+    }
+    if (isUserFwd &&
+        ContactsService.shouldResolveUserIdentity(
+          effectiveFwdId,
+          isBot: fwdIsBot,
+        )) {
+      final rawFwdName =
+          (msgData['forward_from_name'] ?? msgData['forwarded_from_name'])
+              ?.toString();
+      if (rawFwdName != null) {
+        final resolvedFwdName = ContactsService.resolvePeerName(
+          effectiveFwdId,
+          rawFwdName,
+          isBot: fwdIsBot,
+        );
+        msgData['forward_from_name'] = resolvedFwdName;
+        if (msgData.containsKey('forwarded_from_name')) {
+          msgData['forwarded_from_name'] = resolvedFwdName;
+        }
+      }
+      final rawFwdAvatar = (msgData['forwarded_from_avatar_url'] ??
+              msgData['forward_from_avatar_url'])
+          ?.toString();
+      final resolvedFwdAvatar = ContactsService.resolvePeerAvatarUrl(
+        effectiveFwdId,
+        rawFwdAvatar,
+        isBot: fwdIsBot,
+      );
+      if (msgData.containsKey('forward_from_avatar_url')) {
+        msgData['forward_from_avatar_url'] = resolvedFwdAvatar;
+      }
+      if (msgData.containsKey('forwarded_from_avatar_url')) {
+        msgData['forwarded_from_avatar_url'] = resolvedFwdAvatar;
+      }
+    }
+    return msgData;
+  }
+
   Future<void> _handleNewMessage(WebSocketEvent event) async {
     final chatId = event.data['chat_id']?.toString();
-    final messageData =
+    final rawMessageData =
         event.data['message'] as Map<String, dynamic>? ?? event.data;
     if (chatId == null) return;
+    final messageData = _resolveIncomingMessageData(rawMessageData);
+    final WebSocketEvent resolvedEvent = event.data['message'] is Map
+        ? WebSocketEvent(
+            type: event.type,
+            rawType: event.rawType,
+            data: <String, dynamic>{
+              ...event.data,
+              'message': messageData,
+            },
+            timestamp: event.timestamp,
+          )
+        : WebSocketEvent(
+            type: event.type,
+            rawType: event.rawType,
+            data: messageData,
+            timestamp: event.timestamp,
+          );
 
     try {
       await _persistMessageToDrift(chatId, messageData);
@@ -419,6 +860,10 @@ class ChatRealtimeManager {
           messageData['community_id'] != null ||
           CommunityService.isCommunityChannelId(chatId);
 
+      final threadRootId =
+          messageData['thread_root_message_id']?.toString().trim();
+      final isThreadComment = threadRootId != null && threadRootId.isNotEmpty;
+
       final existing = await AppDatabase().getChat(chatId);
       if (isCommunityChannel) {
         if (existing != null) {
@@ -429,10 +874,11 @@ class ChatRealtimeManager {
         if (!hasActiveSub) {
           CommunityService.incrementChannelUnread(chatId);
         }
-      } else if (existing == null) {
+      } else if (existing == null && !isThreadComment) {
+        final chatType = event.data['chat_type']?.toString() ?? 'private';
         await AppDatabase().saveChat(ChatsCompanion(
           chatId: drift.Value(chatId),
-          chatType: drift.Value(event.data['chat_type']?.toString() ?? 'private'),
+          chatType: drift.Value(chatType),
           name: drift.Value(messageData['sender_name']?.toString() ?? ''),
           avatarUrl: drift.Value(messageData['sender_avatar_url']?.toString()),
           lastMessage: drift.Value(content),
@@ -441,13 +887,18 @@ class ChatRealtimeManager {
           lastMessageIsRound: drift.Value(isRound),
           lastMessageFileUrl: drift.Value(fileUrl),
           lastMessageGroupedId: drift.Value(groupedId),
+          lastMessageSenderId:
+              drift.Value(messageData['sender_id']?.toString()),
+          lastMessageSenderName:
+              drift.Value(messageData['sender_name']?.toString()),
           otherUserId: drift.Value(messageData['sender_id']?.toString()),
           updatedAt: drift.Value(createdAt),
           unreadCount: const drift.Value(0),
           isOnline: const drift.Value(false),
           isPinned: const drift.Value(false),
+          showAuthorProfiles: drift.Value(chatType != 'channel'),
         ));
-      } else {
+      } else if (existing != null) {
         await AppDatabase().updateChatLastMessage(
           chatId: chatId,
           content: content,
@@ -456,6 +907,8 @@ class ChatRealtimeManager {
           isRound: isRound,
           fileUrl: fileUrl,
           groupedId: groupedId,
+          senderId: messageData['sender_id']?.toString(),
+          senderName: messageData['sender_name']?.toString(),
           incrementUnread: false,
         );
       }
@@ -463,14 +916,24 @@ class ChatRealtimeManager {
       debugPrint('ChatRealtimeManager: Error saving message to Drift: $e');
     }
 
-    _dispatchForChat(chatId, (s) => s.onNewMessage?.call(event));
+    _dispatchForChat(chatId, (s) => s.onNewMessage?.call(resolvedEvent));
+  }
+
+  List<int> _extractPinnedIds(dynamic raw) {
+    if (raw is! List) return const [];
+    final ids = <int>[];
+    for (final item in raw) {
+      final parsed = item is num ? item.toInt() : int.tryParse(item.toString());
+      if (parsed != null && parsed > 0) ids.add(parsed);
+    }
+    return ids;
   }
 
   Future<void> _handleMessageEdited(WebSocketEvent event) async {
     final chatId = event.data['chat_id']?.toString();
     final messageId =
         event.data['message_id']?.toString() ?? event.data['id']?.toString();
-    final content = event.data['content']?.toString() ?? '';
+    final content = event.data['content']?.toString();
 
     if (messageId != null) {
       String? entitiesStr;
@@ -479,9 +942,83 @@ class ChatRealtimeManager {
             ? event.data['entities'] as String
             : jsonEncode(event.data['entities']);
       }
+      Map<String, dynamic>? incomingMediaMap;
+      if (event.data['media_payload'] is Map) {
+        incomingMediaMap =
+            Map<String, dynamic>.from(event.data['media_payload'] as Map);
+      } else if (event.data['media_payload'] is String &&
+          (event.data['media_payload'] as String).isNotEmpty) {
+        try {
+          final dec = jsonDecode(event.data['media_payload'] as String);
+          if (dec is Map) incomingMediaMap = Map<String, dynamic>.from(dec);
+        } catch (_) {}
+      } else if (event.data['poll'] is Map) {
+        incomingMediaMap =
+            Map<String, dynamic>.from(event.data['poll'] as Map);
+      }
+
+      DbMessage? existingMsg;
       try {
-        await AppDatabase()
-            .updateMessageContent(messageId, content, entitiesStr);
+        existingMsg = await AppDatabase().getMessageByServerId(messageId);
+      } catch (_) {}
+
+      Map<String, dynamic>? existingMediaMap;
+      if (existingMsg?.mediaPayload != null &&
+          existingMsg!.mediaPayload!.isNotEmpty) {
+        try {
+          final dec = jsonDecode(existingMsg.mediaPayload!);
+          if (dec is Map) existingMediaMap = Map<String, dynamic>.from(dec);
+        } catch (_) {}
+      }
+
+      final mergedMedia = ChatService.mergeIncomingMediaPayload(
+        existingMediaMap,
+        incomingMediaMap,
+        replyMarkup: event.data['reply_markup'],
+      );
+      final String? mediaPayloadStr =
+          mergedMedia != null ? jsonEncode(mergedMedia) : null;
+
+      final bool? hasMediaSpoiler = event.data.containsKey('has_media_spoiler')
+          ? (event.data['has_media_spoiler'] == true ||
+              event.data['has_media_spoiler'] == 1)
+          : null;
+      final isPollEvent = event.data['message_type'] == 'poll' ||
+          existingMsg?.messageType == 'poll';
+      final bool effectiveIsEdited = event.data.containsKey('is_edited')
+          ? (event.data['is_edited'] == true
+              ? true
+              : (existingMsg?.isEdited ?? false))
+          : (isPollEvent ? (existingMsg?.isEdited ?? false) : true);
+      final effectiveContent = content ?? existingMsg?.content ?? '';
+
+      final bool? invertMedia = event.data.containsKey('invert_media')
+          ? (event.data['invert_media'] == true ||
+              event.data['invert_media'] == 1)
+          : null;
+      final String? editedFileUrl = event.data.containsKey('file_url')
+          ? event.data['file_url']?.toString()
+          : null;
+      final String? editedFileName = event.data.containsKey('file_name')
+          ? event.data['file_name']?.toString()
+          : null;
+      final String? editedMessageType = event.data.containsKey('message_type')
+          ? event.data['message_type']?.toString()
+          : null;
+
+      try {
+        await AppDatabase().updateMessageContent(
+          messageId,
+          effectiveContent,
+          entitiesStr,
+          mediaPayloadStr,
+          effectiveIsEdited,
+          hasMediaSpoiler,
+          editedFileUrl,
+          editedFileName,
+          editedMessageType,
+          invertMedia,
+        );
         if (chatId != null) {
           await AppDatabase().refreshChatLastMessageFromDb(chatId);
         }
@@ -497,10 +1034,20 @@ class ChatRealtimeManager {
     final chatId = event.data['chat_id']?.toString();
     final messageId =
         event.data['message_id']?.toString() ?? event.data['id']?.toString();
+    final rawBatch = event.data['message_ids'];
+    final batchIds = <String>[
+      if (rawBatch is List)
+        ...rawBatch.map((e) => e.toString()).where((e) => e.isNotEmpty),
+      if (messageId != null && messageId.isNotEmpty) messageId,
+    ];
 
-    if (messageId != null) {
+    if (batchIds.isNotEmpty) {
       try {
-        await AppDatabase().deleteMessage(messageId);
+        if (batchIds.length == 1) {
+          await AppDatabase().deleteMessage(batchIds.first);
+        } else {
+          await AppDatabase().deleteMessagesBatch(batchIds);
+        }
         if (chatId != null) {
           await AppDatabase().refreshChatLastMessageFromDb(chatId);
         }
@@ -518,23 +1065,91 @@ class ChatRealtimeManager {
     final chatId = chatData['chat_id']?.toString() ?? chatData['id']?.toString();
     if (chatId == null) return;
     try {
+      final chatType = chatData['chat_type']?.toString() ?? 'private';
+      final showAuthor = chatData.containsKey('show_author_profiles')
+          ? (chatData['show_author_profiles'] == true ||
+              chatData['show_author_profiles'] == 1)
+          : (chatType != 'channel');
+      final perms = GroupDefaultPermissions.tryParse(
+        chatData['default_permissions'] ?? chatData['chat_permissions'],
+      );
+      final reactions = ReactionSettings.fromChatJson(chatData);
+      final linkedChatId = chatData['linked_chat_id']?.toString().trim();
+
+      final otherUid = chatData['other_user_id']?.toString();
+      final isBot = chatData['is_bot'] == true || chatData['is_bot'] == 1;
+      final isPrivatePeer = chatType == 'private' &&
+          !isBot &&
+          ContactsService.shouldResolveUserIdentity(otherUid, isBot: isBot);
+      final rawName = chatData['name']?.toString() ?? '';
+      final resolvedName = isPrivatePeer
+          ? ContactsService.resolvePeerName(otherUid, rawName, isBot: isBot)
+          : rawName;
+      final resolvedAvatar = isPrivatePeer
+          ? ContactsService.resolvePeerAvatarUrl(
+              otherUid,
+              chatData['avatar_url']?.toString(),
+              isBot: isBot,
+            )
+          : chatData['avatar_url']?.toString();
+      final lastSenderId = chatData['last_message_sender_id']?.toString();
+      final rawLastSenderName = chatData['last_message_sender_name']?.toString();
+      final resolvedLastSenderName = (chatType != 'channel' &&
+              rawLastSenderName != null &&
+              ContactsService.shouldResolveUserIdentity(lastSenderId))
+          ? ContactsService.resolvePeerName(lastSenderId, rawLastSenderName)
+          : rawLastSenderName;
+
       await AppDatabase().saveChat(ChatsCompanion(
         chatId: drift.Value(chatId),
-        chatType: drift.Value(chatData['chat_type']?.toString() ?? 'private'),
-        name: drift.Value(chatData['name']?.toString() ?? ''),
-        avatarUrl: drift.Value(chatData['avatar_url']?.toString()),
+        chatType: drift.Value(chatType),
+        name: drift.Value(resolvedName),
+        avatarUrl: drift.Value(resolvedAvatar),
         lastMessage: drift.Value(chatData['last_message']?.toString()),
         lastMessageTime: drift.Value(chatData['last_message_time']?.toString()),
         lastMessageType: drift.Value(chatData['last_message_type']?.toString()),
         lastMessageIsRound: drift.Value(chatData['last_message_is_round'] == true),
         lastMessageFileUrl: drift.Value(chatData['last_message_file_url']?.toString()),
         lastMessageGroupedId: drift.Value(chatData['last_message_grouped_id']?.toString()),
-        otherUserId: drift.Value(chatData['other_user_id']?.toString()),
+        otherUserId: drift.Value(otherUid),
         updatedAt: drift.Value(chatData['updated_at']?.toString() ?? DateTime.now().toIso8601String()),
         unreadCount: drift.Value(chatData['unread_count'] as int? ?? 0),
         isOnline: drift.Value(chatData['is_online'] == true),
         lastSeen: drift.Value(chatData['last_seen']?.toString()),
         isPinned: drift.Value(chatData['is_pinned'] == true),
+        showAuthorProfiles: drift.Value(showAuthor),
+        signMessages: drift.Value(
+          chatData['sign_messages'] == true || chatData['sign_messages'] == 1,
+        ),
+        linkedChatId: drift.Value(
+          (linkedChatId != null && linkedChatId.isNotEmpty)
+              ? linkedChatId
+              : null,
+        ),
+        myRole: drift.Value(chatData['my_role']?.toString()),
+        lastMessageSenderId: drift.Value(lastSenderId),
+        lastMessageSenderName: drift.Value(resolvedLastSenderName),
+        hasActiveCall: drift.Value(
+          chatData['has_active_call'] == true ||
+              chatData['has_active_call'] == 1,
+        ),
+        chatPermissionsJson: perms != null
+            ? drift.Value(jsonEncode(perms.toJson()))
+            : const drift.Value.absent(),
+        reactionSettingsJson: reactions != null
+            ? drift.Value(jsonEncode(reactions.toJson()))
+            : const drift.Value.absent(),
+        peerCustomizationJson: drift.Value(chatData['peer_customization'] is Map
+            ? jsonEncode(chatData['peer_customization'])
+            : chatData['peer_customization']?.toString()),
+        hasProtectedContent: drift.Value(
+          chatData['has_protected_content'] == true ||
+              chatData['has_protected_content'] == 1,
+        ),
+        pinnedMessageIdsJson: chatData['pinned_message_ids'] is List
+            ? drift.Value(jsonEncode(
+                _extractPinnedIds(chatData['pinned_message_ids'])))
+            : const drift.Value.absent(),
       ));
     } catch (e) {
       debugPrint('ChatRealtimeManager: Error saving new chat to Drift: $e');
@@ -548,23 +1163,103 @@ class ChatRealtimeManager {
       final existing = await AppDatabase().getChat(chatId);
       if (existing == null) return;
 
+      final perms = GroupDefaultPermissions.tryParse(
+        event.data['default_permissions'] ?? event.data['chat_permissions'],
+      );
+      final reactions = ReactionSettings.fromChatJson(event.data);
+      final rawLinked = event.data['linked_chat_id']?.toString().trim();
+
+      final peerUid =
+          (event.data['other_user_id'] ?? existing.otherUserId)?.toString();
+      final isBot = event.data.containsKey('is_bot')
+          ? (event.data['is_bot'] == true || event.data['is_bot'] == 1)
+          : existing.isBot;
+      final isPrivatePeer = existing.chatType == 'private' &&
+          !isBot &&
+          ContactsService.shouldResolveUserIdentity(peerUid, isBot: isBot);
+      final resolvedName = event.data.containsKey('name')
+          ? (isPrivatePeer
+              ? ContactsService.resolvePeerName(
+                  peerUid,
+                  event.data['name'].toString(),
+                  isBot: isBot,
+                )
+              : event.data['name'].toString())
+          : existing.name;
+      final resolvedAvatar = event.data.containsKey('avatar_url')
+          ? (isPrivatePeer
+              ? ContactsService.resolvePeerAvatarUrl(
+                  peerUid,
+                  event.data['avatar_url']?.toString(),
+                  isBot: isBot,
+                )
+              : event.data['avatar_url']?.toString())
+          : existing.avatarUrl;
+
       final companion = ChatsCompanion(
         chatId: drift.Value(chatId),
-        name: event.data.containsKey('name')
-            ? drift.Value(event.data['name'].toString())
-            : drift.Value(existing.name),
-        avatarUrl: event.data.containsKey('avatar_url')
-            ? drift.Value(event.data['avatar_url']?.toString())
-            : drift.Value(existing.avatarUrl),
+        name: drift.Value(resolvedName),
+        avatarUrl: drift.Value(resolvedAvatar),
         unreadCount: event.data.containsKey('unread_count')
             ? drift.Value(event.data['unread_count'] as int? ?? existing.unreadCount)
             : drift.Value(existing.unreadCount),
         isPinned: event.data.containsKey('is_pinned')
             ? drift.Value(event.data['is_pinned'] as bool? ?? existing.isPinned)
             : drift.Value(existing.isPinned),
+        isArchived: event.data.containsKey('is_archived')
+            ? drift.Value(
+                event.data['is_archived'] == true || event.data['is_archived'] == 1)
+            : drift.Value(existing.isArchived),
         updatedAt: event.data.containsKey('updated_at')
             ? drift.Value(event.data['updated_at'].toString())
             : drift.Value(existing.updatedAt),
+        showAuthorProfiles: event.data.containsKey('show_author_profiles')
+            ? drift.Value(
+                event.data['show_author_profiles'] == true ||
+                    event.data['show_author_profiles'] == 1,
+              )
+            : drift.Value(existing.showAuthorProfiles),
+        signMessages: event.data.containsKey('sign_messages')
+            ? drift.Value(
+                event.data['sign_messages'] == true ||
+                    event.data['sign_messages'] == 1,
+              )
+            : drift.Value(existing.signMessages),
+        linkedChatId: event.data.containsKey('linked_chat_id')
+            ? drift.Value(
+                (rawLinked != null && rawLinked.isNotEmpty) ? rawLinked : null,
+              )
+            : drift.Value(existing.linkedChatId),
+        myRole: event.data.containsKey('my_role')
+            ? drift.Value(event.data['my_role']?.toString())
+            : drift.Value(existing.myRole),
+        hasActiveCall: event.data.containsKey('has_active_call')
+            ? drift.Value(
+                event.data['has_active_call'] == true ||
+                    event.data['has_active_call'] == 1,
+              )
+            : drift.Value(existing.hasActiveCall),
+        chatPermissionsJson: perms != null
+            ? drift.Value(jsonEncode(perms.toJson()))
+            : drift.Value(existing.chatPermissionsJson),
+        reactionSettingsJson: reactions != null
+            ? drift.Value(jsonEncode(reactions.toJson()))
+            : drift.Value(existing.reactionSettingsJson),
+        peerCustomizationJson: event.data.containsKey('peer_customization')
+            ? drift.Value(event.data['peer_customization'] is Map
+                ? jsonEncode(event.data['peer_customization'])
+                : event.data['peer_customization']?.toString())
+            : drift.Value(existing.peerCustomizationJson),
+        hasProtectedContent: event.data.containsKey('has_protected_content')
+            ? drift.Value(
+                event.data['has_protected_content'] == true ||
+                    event.data['has_protected_content'] == 1,
+              )
+            : drift.Value(existing.hasProtectedContent),
+        pinnedMessageIdsJson: event.data.containsKey('pinned_message_ids')
+            ? drift.Value(jsonEncode(
+                _extractPinnedIds(event.data['pinned_message_ids'])))
+            : drift.Value(existing.pinnedMessageIdsJson),
       );
       await AppDatabase().saveChat(companion);
     } catch (e) {
@@ -572,21 +1267,42 @@ class ChatRealtimeManager {
     }
   }
 
-  Future<void> _handleUserAvatarUpdated(WebSocketEvent event) async {
+  Future<WebSocketEvent> _handleUserAvatarUpdated(WebSocketEvent event) async {
     final userId = event.data['user_id']?.toString();
-    final avatarUrl = event.data['avatar_url']?.toString();
-    if (userId == null) return;
+    final rawAvatarUrl = event.data['avatar_url']?.toString();
+    if (userId == null) return event;
+    ContactsService.applyRemoteUserAvatarUpdate(userId, rawAvatarUrl);
+    final effectiveAvatar =
+        ContactsService.resolveAvatarUrl(userId, rawAvatarUrl);
+    ProfileInstantCache.instance.updateUserAvatar(userId, rawAvatarUrl);
+    ChatInstantCache.instance.applyUserContactOverride(
+      userId,
+      effectiveAvatarUrl: effectiveAvatar ?? '',
+    );
     try {
-      await AppDatabase().updateUserAvatarInChats(userId, avatarUrl);
+      await AppDatabase().updateUserAvatarInChats(userId, effectiveAvatar);
       final allChats = await AppDatabase().getChats();
       for (final chat in allChats) {
         if (chat.chatType == 'private' && chat.otherUserId == userId) {
-          await AppDatabase().updateChatAvatar(chat.chatId, avatarUrl);
+          await AppDatabase().updateChatAvatar(chat.chatId, effectiveAvatar);
         }
       }
     } catch (e) {
       debugPrint('ChatRealtimeManager: Error updating user avatar in Drift: $e');
     }
+    if (effectiveAvatar != rawAvatarUrl) {
+      return WebSocketEvent(
+        type: event.type,
+        rawType: event.rawType,
+        data: <String, dynamic>{
+          ...event.data,
+          'original_avatar_url': rawAvatarUrl,
+          'avatar_url': effectiveAvatar,
+        },
+        timestamp: event.timestamp,
+      );
+    }
+    return event;
   }
 
   Future<void> _handleReactionUpdated(WebSocketEvent event) async {
@@ -626,7 +1342,8 @@ class ChatRealtimeManager {
   }
 
   Future<void> _persistMessageToDrift(
-      String chatId, Map<String, dynamic> msgData) async {
+      String chatId, Map<String, dynamic> rawMsgData) async {
+    final msgData = _resolveIncomingMessageData(rawMsgData);
     final serverId =
         msgData['id']?.toString() ?? msgData['server_id']?.toString();
     if (serverId == null) return;
@@ -685,8 +1402,47 @@ class ChatRealtimeManager {
     if (msgData['via_bot_username'] != null) {
       mediaPayloadMap['via_bot_username'] = msgData['via_bot_username'];
     }
+    if (msgData['can_comment'] == true) {
+      mediaPayloadMap['can_comment'] = true;
+    }
+    if (msgData['channel_post_id'] != null &&
+        msgData['channel_post_id'].toString().isNotEmpty) {
+      mediaPayloadMap['channel_post_id'] =
+          msgData['channel_post_id'].toString();
+    }
     final String? mediaPayloadStr =
         mediaPayloadMap.isNotEmpty ? jsonEncode(mediaPayloadMap) : null;
+    final recentRepliersList =
+        RecentReplier.parseList(msgData['recent_repliers']);
+    final String? recentRepliersStr = recentRepliersList.isNotEmpty
+        ? jsonEncode(recentRepliersList.map((r) => r.toJson()).toList())
+        : null;
+    final String? rawThreadRootId =
+        msgData['thread_root_message_id']?.toString().trim();
+
+    final String? senderCustJsonStr = () {
+      final raw = msgData['sender_customization'];
+      if (raw is Map) {
+        final cust = PeerCustomization.fromJson(Map<String, dynamic>.from(raw));
+        final sid = msgData['sender_id']?.toString() ?? '';
+        if (sid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(sid, cust, notify: false);
+        }
+        return cust.toJsonString();
+      } else if (raw is String && raw.isNotEmpty) {
+        return raw;
+      }
+      return null;
+    }();
+    final String? fwdAvatarUrl =
+        (msgData['forwarded_from_avatar_url'] ?? msgData['forward_from_avatar_url'])
+            ?.toString();
+    final Map<String, dynamic>? replyInfoMap = msgData['reply_info'] is Map
+        ? Map<String, dynamic>.from(msgData['reply_info'] as Map)
+        : null;
+    final String? fwdName =
+        (msgData['forward_from_name'] ?? msgData['forwarded_from_name'])
+            ?.toString();
 
     await AppDatabase().saveMessage(MessagesCompanion(
       serverId: drift.Value(serverId),
@@ -697,19 +1453,31 @@ class ChatRealtimeManager {
       messageType: drift.Value(msgType),
       fileUrl: drift.Value(msgData['file_url']?.toString()),
       fileName: drift.Value(msgData['file_name']?.toString()),
-      replyToMessageId:
-          drift.Value(msgData['reply_to_message_id']?.toString()),
+      replyToMessageId: drift.Value(
+        (msgData['reply_to_message_id'] ?? replyInfoMap?['message_id'])
+            ?.toString(),
+      ),
       isQuote: drift.Value(msgData['is_quote'] as bool? ?? false),
       quoteText: drift.Value(msgData['quote_text']?.toString()),
       quoteOffset: drift.Value(msgData['quote_offset'] as int? ?? 0),
       quoteLength: drift.Value(msgData['quote_length'] as int? ?? 0),
-      replyToSenderId:
-          drift.Value(msgData['reply_to_sender_id']?.toString()),
-      replyToSenderName:
-          drift.Value(msgData['reply_to_sender_name']?.toString()),
-      replyToContent: drift.Value(msgData['reply_to_content']?.toString()),
-      replyToMessageType:
-          drift.Value(msgData['reply_to_message_type']?.toString() ?? 'text'),
+      replyToSenderId: drift.Value(
+        (msgData['reply_to_sender_id'] ?? replyInfoMap?['sender_id'])
+            ?.toString(),
+      ),
+      replyToSenderName: drift.Value(
+        (msgData['reply_to_sender_name'] ?? replyInfoMap?['sender_name'])
+            ?.toString(),
+      ),
+      replyToContent: drift.Value(
+        (msgData['reply_to_content'] ?? replyInfoMap?['content'])?.toString(),
+      ),
+      replyToMessageType: drift.Value(
+        (msgData['reply_to_message_type'] ??
+                replyInfoMap?['message_type'] ??
+                'text')
+            .toString(),
+      ),
       isRead: drift.Value(msgData['is_read'] == true),
       isEdited: drift.Value(msgData['is_edited'] == true),
       sendStatus: drift.Value(MessageSendStatus.sent.index),
@@ -718,17 +1486,72 @@ class ChatRealtimeManager {
       createdAt: drift.Value(msgData['created_at']?.toString() ??
           DateTime.now().toIso8601String()),
       isForward: drift.Value(msgData['is_forward'] == true ||
+          msgData['is_forwarded'] == true ||
           msgData['forward_from_id'] != null ||
-          (msgData['forward_from_name'] != null &&
-              msgData['forward_from_name'].toString().isNotEmpty)),
+          msgData['forwarded_from_user_id'] != null ||
+          msgData['forwarded_from_chat_id'] != null ||
+          (fwdName != null && fwdName.isNotEmpty)),
       forwardFromId: drift.Value(msgData['forward_from_id']?.toString()),
-      forwardFromName: drift.Value(msgData['forward_from_name']?.toString()),
+      forwardFromName: drift.Value(fwdName),
       entities: drift.Value(entitiesStr),
       linkPreviewOptions: drift.Value(linkPreviewOptionsStr),
       mediaPayload: drift.Value(mediaPayloadStr),
       invertMedia: drift.Value(invertMedia),
       isRound: drift.Value(isRound),
       groupedId: drift.Value(groupedId),
+      forwardFromAvatarUrl: drift.Value(fwdAvatarUrl),
+      senderCustomizationJson: drift.Value(senderCustJsonStr),
+      viewsCount: drift.Value((msgData['views_count'] as num?)?.toInt() ?? 0),
+      authorSignature: drift.Value(msgData['author_signature']?.toString()),
+      postAuthorId: drift.Value(msgData['post_author_id']?.toString()),
+      senderRole: drift.Value(msgData['sender_role']?.toString()),
+      senderAdminTitle: drift.Value(msgData['sender_admin_title']?.toString()),
+      isFromAnonymousAdmin:
+          drift.Value(msgData['is_from_anonymous_admin'] == true),
+      isSilent: drift.Value(msgData['is_silent'] == true),
+      commentsCount:
+          drift.Value((msgData['comments_count'] as num?)?.toInt() ?? 0),
+      recentRepliersJson: drift.Value(recentRepliersStr),
+      threadRootMessageId: drift.Value(
+        (rawThreadRootId != null && rawThreadRootId.isNotEmpty)
+            ? rawThreadRootId
+            : null,
+      ),
+      hasMediaSpoiler: drift.Value(
+        msgData['has_media_spoiler'] == true ||
+            msgData['has_media_spoiler'] == 1 ||
+            mediaPayloadMap['has_media_spoiler'] == true,
+      ),
+      expiresAt: drift.Value(msgData['expires_at']?.toString()),
+      ttlSeconds: drift.Value((msgData['ttl_seconds'] as num?)?.toInt() ??
+          int.tryParse(msgData['ttl_seconds']?.toString() ?? '') ??
+          0),
+      isViewOnce: drift.Value(
+        msgData['is_view_once'] == true || msgData['is_view_once'] == 1,
+      ),
+      viewedAt: drift.Value(msgData['viewed_at']?.toString()),
+      isBurned: drift.Value(msgData['is_burned'] == true ||
+          ((msgData['is_view_once'] == true || msgData['is_view_once'] == 1) &&
+              msgData['viewed_at'] != null &&
+              msgData['viewed_at'].toString().isNotEmpty)),
+      replyToChatId: drift.Value(msgData['reply_to_chat_id']?.toString()),
+      replyToChatName: drift.Value(msgData['reply_to_chat_name']?.toString()),
+      replyToChatType: drift.Value(msgData['reply_to_chat_type']?.toString()),
+      effectId: drift.Value(msgData['effect_id']?.toString()),
+      topicId: drift.Value(
+        (msgData['topic_id'] as num?)?.toInt() ??
+            int.tryParse(msgData['topic_id']?.toString() ?? ''),
+      ),
+      forwardsCount: drift.Value(
+        (msgData['forwards_count'] as num?)?.toInt() ?? 0,
+      ),
+      senderChatId: drift.Value(msgData['sender_chat_id']?.toString()),
+      senderChatName: drift.Value(msgData['sender_chat_name']?.toString()),
+      senderChatAvatarUrl:
+          drift.Value(msgData['sender_chat_avatar_url']?.toString()),
+      savedTagsJson: msgData['saved_tags'] is List
+          ? drift.Value(jsonEncode(msgData['saved_tags']))
+          : const drift.Value.absent(),
     ));
   }
 }

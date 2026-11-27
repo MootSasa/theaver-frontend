@@ -13,6 +13,7 @@
 #include <flutter_secure_storage_windows/flutter_secure_storage_windows_plugin.h>
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
 #include <fvp/fvp_plugin_c_api.h>
+#include <geolocator_windows/geolocator_windows.h>
 #include <ios_color_picker/ios_color_picker_plugin_c_api.h>
 #include <just_audio_windows/just_audio_windows_plugin.h>
 #include <local_auth_windows/local_auth_plugin.h>
@@ -43,6 +44,8 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("FlutterWebRTCPlugin"));
   FvpPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FvpPluginCApi"));
+  GeolocatorWindowsRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("GeolocatorWindows"));
   IosColorPickerPluginCApiRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("IosColorPickerPluginCApi"));
   JustAudioWindowsPluginRegisterWithRegistrar(

@@ -10,6 +10,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_secure_storage_windows
   flutter_webrtc
   fvp
+  geolocator_windows
   ios_color_picker
   just_audio_windows
   local_auth_windows

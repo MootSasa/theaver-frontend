@@ -31,6 +31,8 @@
 <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
 <uses-permission android:name="android.permission.AUDIO_CAPTURE"/>
+<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
 <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30"/>
 <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
 <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
@@ -87,6 +89,10 @@ android:networkSecurityConfig="@xml/network_security_config">
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <intent-filter>
+                <action android:name="FLUTTER_NOTIFICATION_CLICK"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+            </intent-filter>
             <!-- Deep link: https://theaver.app/u/{userId}, /join/{code}, /c/{channelName} -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW"/>
@@ -95,6 +101,7 @@ android:networkSecurityConfig="@xml/network_security_config">
                 <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/u/"/>
                 <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/join/"/>
                 <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/c/"/>
+                <data android:scheme="https" android:host="theaver.app" android:pathPrefix="/qr-login"/>
             </intent-filter>
             <!-- Deep link: theaver:// scheme -->
             <intent-filter>
@@ -104,6 +111,8 @@ android:networkSecurityConfig="@xml/network_security_config">
                 <data android:scheme="theaver" android:host="u" android:pathPrefix="/"/>
                 <data android:scheme="theaver" android:host="join" android:pathPrefix="/"/>
                 <data android:scheme="theaver" android:host="c" android:pathPrefix="/"/>
+                <data android:scheme="theaver" android:host="qr-login"/>
+                <data android:scheme="theaver" android:host="oauth-callback"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
@@ -133,6 +142,33 @@ android:networkSecurityConfig="@xml/network_security_config">
         <service
             android:name=".CallForegroundService"
             android:foregroundServiceType="phoneCall|microphone|camera|mediaProjection|dataSync"
+            android:exported="false" />
+
+        <!-- Chat notifications are rendered natively (avatar, history, reply/read actions)
+             for every source. These services replace the plugin services and forward
+             everything that is not a chat message back to the plugins. -->
+        <service
+            android:name="io.flutter.plugins.firebase.messaging.FlutterFirebaseMessagingService"
+            tools:node="remove" />
+        <service
+            android:name=".notifications.TheaverFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name="com.huawei.hms.flutter.push.hms.FlutterHmsMessageService"
+            tools:node="remove" />
+        <service
+            android:name=".notifications.TheaverHmsMessageService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.huawei.push.action.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <receiver
+            android:name=".notifications.NotificationActionReceiver"
             android:exported="false" />
 
         <!-- FileProvider for installing APK updates across Android 7.0 - 15+ -->

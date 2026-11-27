@@ -1,3 +1,4 @@
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -13,12 +14,15 @@ import 'theme/theme_provider.dart';
 import 'screens/auth/splash_screen.dart';
 import 'services/settings_service.dart';
 import 'services/account_manager.dart';
+import 'services/app_lock_service.dart';
+import 'widgets/security/app_lock_gate.dart';
 import 'services/chat_folder_service.dart';
 import 'services/chat_swipe_service.dart';
 import 'services/cache_service.dart';
 import 'services/draft_service.dart';
 import 'services/emoji_haptic_service.dart';
 import 'services/chat_realtime_manager.dart';
+import 'services/sync_service.dart';
 import 'services/database/app_database.dart';
 import 'services/liquid_glass_provider.dart';
 import 'services/unread_count_provider.dart';
@@ -26,11 +30,14 @@ import 'services/deep_link_service.dart';
 import 'services/notification_settings_provider.dart';
 import 'services/push_service_detector.dart';
 import 'services/privacy_settings_provider.dart';
+import 'services/power_saving_provider.dart';
 import 'services/banking_cards_provider.dart';
 import 'services/wallet_security_provider.dart';
 import 'services/wallpaper_provider.dart';
 import 'services/profile_theme_provider.dart';
+import 'services/peer_customization_cache.dart';
 import 'services/profile_instant_cache.dart';
+import 'services/chat_instant_cache.dart';
 import 'utils/emoji_utils.dart';
 import 'l10n/app_localizations.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -44,13 +51,16 @@ import 'screens/chat/user_profile_screen.dart';
 import 'screens/search/search_screen.dart';
 import 'utils/swipe_back_route.dart';
 import 'services/tiling_layout_controller.dart';
+import 'widgets/bot/mini_app_webview_sheet.dart';
 import 'widgets/chat/floating_video_note_overlay.dart';
+import 'widgets/media_viewer/floating_video_pip_overlay.dart';
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:audio_session/audio_session.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  MiniAppSessionController.instance.ensureInitialized();
   debugPrint('main() started');
 
   if (kIsWeb) {
@@ -143,8 +153,11 @@ void main() async {
   // Initialize services
   await SettingsService().init();
   await AccountManager().init();
+  await AppLockService.instance.init();
   await ProfileInstantCache.instance.init();
+  await ChatInstantCache.instance.init();
   AppDatabase.setActiveUser(AccountManager().currentAccount?.userId);
+  unawaited(SyncService().sweepInterruptedPendingMessages());
   await ChatFolderService().init();
   await ChatSwipeService().init();
   await CacheService().init();
@@ -223,8 +236,13 @@ class TheaverApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => NotificationSettingsProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => PrivacySettingsProvider()..loadAll()),
         ChangeNotifierProvider(create: (_) => WallpaperProvider()..init()),
+        ChangeNotifierProvider.value(value: PeerCustomizationCache.instance..init()),
         ChangeNotifierProvider(create: (_) => ProfileThemeProvider()..init(), lazy: false),
         ChangeNotifierProvider(create: (_) => WalletSecurityProvider()),
+        ChangeNotifierProvider.value(value: AppLockService.instance),
+        ChangeNotifierProvider<PowerSavingProvider>.value(
+          value: PowerSavingProvider.instance..init(),
+        ),
         ChangeNotifierProvider(create: (_) => CallStateProvider(), lazy: false),
         ChangeNotifierProvider.value(value: EmojiHapticService.instance),
         ChangeNotifierProxyProvider<WalletSecurityProvider, BankingCardsProvider>(
@@ -263,17 +281,23 @@ class TheaverApp extends StatelessWidget {
             navigatorObservers: [TilingBackGuardNavigatorObserver()],
             home: const SplashScreen(),
             builder: (context, child) {
-              return Stack(
-                children: [
-                  ActiveCallTopBanner(
-                    onRestoreCall: () => _restoreActiveCall(context),
-                    child: child ?? const SizedBox.shrink(),
-                  ),
-                  CallPipOverlay(
-                    onRestoreCall: () => _restoreActiveCall(context),
-                  ),
-                  const FloatingVideoNoteOverlay(),
-                ],
+              return AppLockGate(
+                child: Stack(
+                  children: [
+                    ActiveCallTopBanner(
+                      onRestoreCall: () => _restoreActiveCall(context),
+                      child: MinimizedMiniAppHost(
+                        navigatorKey: DeepLinkService().navigatorKey,
+                        child: child ?? const SizedBox.shrink(),
+                      ),
+                    ),
+                    CallPipOverlay(
+                      onRestoreCall: () => _restoreActiveCall(context),
+                    ),
+                    const FloatingVideoNoteOverlay(),
+                    const FloatingVideoPipOverlay(),
+                  ],
+                ),
               );
             },
             onGenerateRoute: (settings) {

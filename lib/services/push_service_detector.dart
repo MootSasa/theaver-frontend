@@ -101,8 +101,9 @@ class PushServiceDetector {
     }
 
     if (!Platform.isAndroid) {
-      // iOS / macOS / Windows / Linux — FCM работает через APNS на iOS
-      if (Platform.isIOS || Platform.isMacOS) {
+      // iOS — FCM через APNs. macOS / Windows / Linux — push не используется,
+      // уведомления приходят через WebSocket.
+      if (Platform.isIOS) {
         _detected = PushServiceType.gms;
       } else {
         _detected = PushServiceType.none;

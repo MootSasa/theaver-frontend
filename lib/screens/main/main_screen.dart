@@ -1,5 +1,5 @@
 import '../../utils/image_utils.dart';
-import '../../utils/emoji_utils.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -13,52 +13,61 @@ import '../../screens/chat/create_private_chat_screen.dart';
 import '../../screens/chat/create_group_screen.dart';
 import '../../screens/chat/create_channel_screen.dart';
 import '../../screens/chat/create_chat_screen.dart';
+import '../../screens/contacts/contacts_screen.dart';
 import '../../screens/settings/settings_screen.dart';
 import '../../screens/settings/profile_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/channel_screen.dart';
-import '../../screens/chat/system_notifications_screen.dart';
+import '../../screens/chat/forum_topics_screen.dart';
 import '../../services/search_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/draft_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/local_storage_service.dart';
 import '../../services/account_manager.dart';
 import '../../services/deep_link_service.dart';
 import '../../services/cache_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/unread_count_provider.dart';
 import '../../screens/auth/login_screen.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/user/avatar_with_status.dart';
 import '../../models/theav_theme.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../services/sync_service.dart';
 import '../../services/database/app_database.dart';
-import 'package:drift/drift.dart' show Value;
 import '../../utils/swipe_back_route.dart';
 import '../../utils/date_time_utils.dart';
+import '../../utils/blur_utils.dart';
 import '../../services/update_service.dart';
 import '../settings/widgets/update_dialog.dart';
-import '../../widgets/chat/round_video_thumbnail.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/call/call_device_transfer_banner.dart';
 import '../../widgets/notifications/notification_permission_dialog.dart';
+import '../../widgets/notifications/huawei_autostart_prompt.dart';
 import '../../services/notification_service.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/settings_service.dart';
 import '../../services/proximity_audio_service.dart';
+import '../../services/archive_preferences_service.dart';
+import '../chat/archived_chats_screen.dart';
 import '../../models/chat_folder.dart';
 import '../../services/chat_folder_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/voice_playback_service.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/tiling_layout_controller.dart';
-import '../../widgets/chat/swipeable_chat_tile.dart';
+import '../../widgets/chat/chat_batch_dialogs.dart';
+import '../../widgets/chat/chat_list_tile_item.dart';
+import '../../widgets/chat/chat_selection_header.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
 import '../../models/community_models.dart';
@@ -76,9 +85,20 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   int _currentIndex = 1; // 0: Settings, 1: Chats, 2: Search
+  final Set<int> _visitedPages = <int>{1};
   int _activeFilter = 0; // Index of the active folder in _folderService.folders
   final ChatFolderService _folderService = ChatFolderService();
   String _lastTilingSignature = '';
+  Timer? _saveChatsDebounceTimer;
+
+  void _scheduleSaveChats() {
+    _saveChatsDebounceTimer?.cancel();
+    _saveChatsDebounceTimer = Timer(const Duration(milliseconds: 650), () {
+      if (mounted) {
+        _localStorage.saveChats(_chats);
+      }
+    });
+  }
 
   void _onServiceUpdate() {
     if (mounted) setState(() {});
@@ -87,10 +107,13 @@ class _MainScreenState extends State<MainScreen>
   void _onTilingUpdate() {
     if (!mounted) return;
     final tiling = TilingLayoutController.instance;
-    final openIds = tiling.chatTiles.map((t) => t.chatId).join(',');
-    final focusedId = tiling.focusedChatTile?.chatId ?? '';
-    final isTwoCol = tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
-    final sig = '$openIds|$focusedId|$isTwoCol|${tiling.isWorkspaceMounted}';
+    final isTwoCol =
+        tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
+    // В однооконном мобильном режиме (< 640px) список чатов не подсвечивает активный тайл справа,
+    // поэтому не вызываем лишний полный setState() всех строк чатов в момент старта анимации открытия чата.
+    final sig = isTwoCol
+        ? '${tiling.chatTiles.map((t) => t.chatId).join(",")}|${tiling.focusedChatTile?.chatId ?? ""}|1|${tiling.isWorkspaceMounted}'
+        : 'single|${tiling.isWorkspaceMounted}';
     if (sig != _lastTilingSignature) {
       _lastTilingSignature = sig;
       setState(() {});
@@ -99,6 +122,7 @@ class _MainScreenState extends State<MainScreen>
 
   // PageController для свайпа между Настройками и Чатами
   final PageController _pageController = PageController(initialPage: 1);
+  final ScrollController _chatsScrollController = ScrollController();
   static const ValueKey<String> _pageViewKey = ValueKey<String>('main_page_view');
   bool? _lastGlassEnabled;
 
@@ -113,13 +137,23 @@ class _MainScreenState extends State<MainScreen>
 
   // Chats list & Communities
   List<Chat> _chats = [];
+  List<Chat> _archivedChats = [];
   List<Community> _communities = [];
+  final Set<String> _markedUnreadCommunityIds = <String>{};
   bool _isLoadingChats = true;
   StreamSubscription<List<DbChat>>? _chatsStreamSubscription;
+  StreamSubscription<List<DbChat>>? _archivedChatsStreamSubscription;
   String? _currentUserId;
   final Map<String, ({bool isOnline, String? lastSeen})> _liveUserPresence = {};
-  final Map<String, ({String action, String? userName, Timer timer})>
-      _chatTypingStates = {};
+  final Map<
+      String,
+      ({
+        String action,
+        String? userId,
+        String? rawUserName,
+        String? userName,
+        Timer timer,
+      })> _chatTypingStates = {};
   final Map<String, List<MessageEntity>> _chatLastMessageEntities = {};
 
   Future<void> _loadCommunities() async {
@@ -148,8 +182,12 @@ class _MainScreenState extends State<MainScreen>
         : (c.description.isNotEmpty
             ? c.description
             : '${c.memberCount} участн. • Сообщество');
+    final syntheticId = 'community_${c.id}';
+    final effectiveUnread = c.totalUnreadCount > 0
+        ? c.totalUnreadCount
+        : (_markedUnreadCommunityIds.contains(syntheticId) ? -1 : 0);
     return Chat(
-      id: 'community_${c.id}',
+      id: syntheticId,
       chatType: 'community',
       name: c.name,
       avatarUrl: c.avatarUrl,
@@ -157,9 +195,31 @@ class _MainScreenState extends State<MainScreen>
       lastMessageTime: c.createdAt.toIso8601String(),
       lastMessageType: 'text',
       updatedAt: c.createdAt.toIso8601String(),
-      unreadCount: c.totalUnreadCount,
+      unreadCount: effectiveUnread,
       otherUserId: c.id,
     );
+  }
+
+  static bool _isEmptyGhostPrivateChat(Chat chat) {
+    if (chat.chatType != 'private') return false;
+    final hasLastMsg =
+        chat.lastMessage != null && chat.lastMessage!.isNotEmpty;
+    final hasMediaType =
+        chat.lastMessageType != null && chat.lastMessageType!.isNotEmpty;
+    final hasMediaFile =
+        chat.lastMessageFileUrl != null && chat.lastMessageFileUrl!.isNotEmpty;
+    final hasLastTime =
+        chat.lastMessageTime != null && chat.lastMessageTime!.isNotEmpty;
+    final hasDraft =
+        (chat.draft != null && chat.draft!.isNotEmpty) ||
+        (DraftService().getPublishedDraft(chat.id)?.isNotEmpty ?? false);
+    return !hasLastMsg &&
+        !hasMediaType &&
+        !hasMediaFile &&
+        !hasLastTime &&
+        !hasDraft &&
+        !chat.isPinned &&
+        chat.unreadCount == 0;
   }
 
   List<Chat> get _chatsWithCommunities {
@@ -205,8 +265,21 @@ class _MainScreenState extends State<MainScreen>
 
   void _initChatsStream() {
     _chatsStreamSubscription?.cancel();
+    _archivedChatsStreamSubscription?.cancel();
     _currentUserId ??= _accountManager.currentAccount?.userId;
     final db = AppDatabase(_currentUserId);
+    _archivedChatsStreamSubscription = db.watchArchivedChats().listen((dbArchived) {
+      if (!mounted) return;
+      final archived = dbArchived
+          .where((c) =>
+              c.chatType != 'community' &&
+              c.chatType != 'community_channel' &&
+              !CommunityService.isCommunityChannelId(c.chatId))
+          .map(_dbChatToChat)
+          .toList();
+      setState(() => _archivedChats = archived);
+      ChatInstantCache.instance.putChatSummaries(archived);
+    });
     _chatsStreamSubscription = db.watchChats().listen((dbChats) async {
       if (!mounted) return;
       final mappedChats = <Chat>[];
@@ -233,11 +306,8 @@ class _MainScreenState extends State<MainScreen>
           if (hasSaved) continue;
           hasSaved = true;
         }
-        // Exclude empty private chats with no message, no draft, not pinned
-        if (chat.chatType == 'private' &&
-            (chat.lastMessage == null || chat.lastMessage!.isEmpty) &&
-            (chat.draft == null || chat.draft!.text.isEmpty) &&
-            !chat.isPinned) {
+        // Exclude empty private ghost chats with no text, media, draft, pin, or unread
+        if (_isEmptyGhostPrivateChat(chat)) {
           continue;
         }
         mappedChats.add(chat);
@@ -249,12 +319,23 @@ class _MainScreenState extends State<MainScreen>
         }
       });
       DraftService().populateFromChats(_chats);
+      ChatInstantCache.instance.putChatSummaries(_chats);
+      unawaited(
+        ChatInstantCache.instance.prewarmFromDatabase(
+          _currentUserId,
+          chatIds: _chats.take(20).map((c) => c.id),
+        ),
+      );
     });
   }
 
   // Multi-select mode
   bool _isSelectMode = false;
   Set<String> _selectedChatIds = {};
+  bool _isSelectionMenuOpen = false;
+  final ValueNotifier<({double extent, bool armed})> _archivePullNotifier =
+      ValueNotifier<({double extent, bool armed})>((extent: 0.0, armed: false));
+  static const double _kArchivePullThreshold = 58.0;
 
   // Top glass bar & morph context menu
   bool _isTopMenuOpen = false;
@@ -265,14 +346,13 @@ class _MainScreenState extends State<MainScreen>
   // Bottom-right '+' create chat morph menu
   bool _isCreateMenuOpen = false;
 
-  // Animation controllers for Material mode top/bottom bar morphing
-  late final AnimationController _classicTopMenuController;
-  late final AnimationController _classicFolderMenuController;
+  // Animation controllers for selection bottom bar hide & Material '+' menu
+  late final AnimationController _selectModeController;
   late final AnimationController _classicCreateMenuController;
-  late final CurvedAnimation _classicTopMenuAnimation;
-  late final CurvedAnimation _classicFolderMenuAnimation;
+  late final AnimationController _embeddedTabSwipeBackController;
+  late final CurvedAnimation _selectModeAnimation;
   late final CurvedAnimation _classicCreateMenuAnimation;
-  int _topMenuTabIndex = 1;
+  int? _swipingFromTabIndex;
 
   // Loading states
   bool _isLoading = false;
@@ -291,25 +371,15 @@ class _MainScreenState extends State<MainScreen>
   @override
   void initState() {
     super.initState();
-    _classicTopMenuController = AnimationController(
+    _selectModeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 280),
+      duration: const Duration(milliseconds: 260),
       reverseDuration: const Duration(milliseconds: 220),
     );
-    _classicTopMenuAnimation = CurvedAnimation(
-      parent: _classicTopMenuController,
-      curve: Curves.easeInOutCubic,
-      reverseCurve: Curves.easeInOutCubic,
-    );
-    _classicFolderMenuController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 280),
-      reverseDuration: const Duration(milliseconds: 220),
-    );
-    _classicFolderMenuAnimation = CurvedAnimation(
-      parent: _classicFolderMenuController,
-      curve: Curves.easeInOutCubic,
-      reverseCurve: Curves.easeInOutCubic,
+    _selectModeAnimation = CurvedAnimation(
+      parent: _selectModeController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
     );
     _classicCreateMenuController = AnimationController(
       vsync: this,
@@ -321,14 +391,20 @@ class _MainScreenState extends State<MainScreen>
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
     );
+    _embeddedTabSwipeBackController = AnimationController(
+      vsync: this,
+      value: 1.0,
+    )..addListener(_syncEmbeddedTabSwipeProgress);
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
     DraftService().draftsNotifier.addListener(_onDraftsChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _accountManager.addListener(_onAccountChanged);
     _folderService.addListener(_onServiceUpdate);
     ChatSwipeService().addListener(_onServiceUpdate);
     VoicePlaybackService().addListener(_onServiceUpdate);
     VideoNotePlaybackService().addListener(_onServiceUpdate);
+    ArchivePreferencesService().addListener(_onServiceUpdate);
     TilingLayoutController.instance.addListener(_onTilingUpdate);
     TilingLayoutController.instance.registerTileBackHandler(
       TilingLayoutController.kLeftTileId,
@@ -356,6 +432,10 @@ class _MainScreenState extends State<MainScreen>
     if (!mounted || ModalRoute.of(context)?.isCurrent == false) return false;
     if (_isTopMenuOpen) {
       _closeTopMenu();
+      return true;
+    }
+    if (_isSelectionMenuOpen) {
+      setState(() => _isSelectionMenuOpen = false);
       return true;
     }
     if (_isFolderMenuOpen) {
@@ -393,6 +473,11 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _initApp() async {
     _currentUserId = _accountManager.currentAccount?.userId;
     AppDatabase.setActiveUser(_currentUserId);
+    await ContactsService.init(userId: _currentUserId);
+    unawaited(
+      ContactsService.getContacts(forceRefresh: true, includeOverrides: true),
+    );
+    unawaited(ArchivePreferencesService().init());
 
     // 1. Немедленно подписываемся на локальный стрим SQLite (UI мгновенно получает кэш)
     _initChatsStream();
@@ -410,6 +495,7 @@ class _MainScreenState extends State<MainScreen>
     ProximityAudioService.instance.registerListeners();
 
     // 4. Проверка обновлений в фоне + периодический таймер
+    unawaited(AppUpdateService.instance.init());
     _checkForUpdates();
     _updateCheckTimer?.cancel();
     _updateCheckTimer = Timer.periodic(
@@ -426,18 +512,18 @@ class _MainScreenState extends State<MainScreen>
     await Future.delayed(const Duration(milliseconds: 1200));
     if (!mounted) return;
     await NotificationPermissionDialog.checkAndPrompt(context);
+    if (!mounted) return;
+    await HuaweiAutoStartPrompt.maybeShow(context);
   }
 
-  Future<void> _checkForUpdates({
-    bool fromBackgroundTimer = false,
-    bool forceDeviceNotify = false,
-  }) async {
+  Future<void> _checkForUpdates({bool fromBackgroundTimer = false}) async {
+    if (kIsWeb) return;
     try {
       final isAutoCheck = await AppUpdateService.instance.isAutoCheckEnabled();
       if (!isAutoCheck) return;
 
-      if (!fromBackgroundTimer && !forceDeviceNotify) {
-        // Небольшая задержка, чтобы не забивать сеть в момент первичной отрисовки UI
+      if (!fromBackgroundTimer) {
+        // Небольшая задержка, чтобы не забивать сеть в момент первичной отричной отрисовки UI
         await Future.delayed(const Duration(seconds: 2));
       }
       if (!mounted) return;
@@ -447,13 +533,13 @@ class _MainScreenState extends State<MainScreen>
       if (!mounted) return;
 
       if (update.hasUpdate) {
-        final shouldNotify = forceDeviceNotify ||
-            await AppUpdateService.instance.shouldNotifyDevice(update);
+        final shouldNotify = await AppUpdateService.instance.shouldNotifyDevice(update);
         if (shouldNotify) {
           await NotificationService().showAppUpdateNotification(update);
           await AppUpdateService.instance.markDeviceNotified(update.latestBuild);
         }
-        if (!fromBackgroundTimer && mounted) {
+        final shouldPrompt = await AppUpdateService.instance.shouldPromptInApp(update);
+        if (!fromBackgroundTimer && shouldPrompt && mounted) {
           UpdateDialog.show(context, update, isManual: false);
         }
       }
@@ -463,9 +549,10 @@ class _MainScreenState extends State<MainScreen>
   }
 
   void _onAppUpdateAvailable(WebSocketEvent event) {
+    if (kIsWeb) return;
     debugPrint('MainScreen: app_update_available WS event received: ${event.data}');
     if (!mounted) return;
-    _checkForUpdates(fromBackgroundTimer: false, forceDeviceNotify: true);
+    _checkForUpdates(fromBackgroundTimer: false);
   }
 
   Future<void> _initOfflineFirst() async {
@@ -522,6 +609,7 @@ class _MainScreenState extends State<MainScreen>
     _wsService.subscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.subscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.subscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.subscribe(WebSocketEventType.chatArchiveUpdated, _onChatArchiveUpdated);
     _wsService.subscribe(WebSocketEventType.typing, _onChatTyping);
 
     // Now connect — the 'connected' event will be caught by our listeners
@@ -553,7 +641,10 @@ class _MainScreenState extends State<MainScreen>
       return;
     }
 
-    final userName = event.data['user_name']?.toString();
+    final rawUserName = event.data['user_name']?.toString();
+    final resolvedUserName = (typingUserId != null && typingUserId.isNotEmpty)
+        ? ContactsService.resolveName(typingUserId, rawUserName ?? '')
+        : rawUserName;
     _chatTypingStates[chatId]?.timer.cancel();
     final timer = Timer(const Duration(seconds: 4), () {
       _chatTypingStates.remove(chatId);
@@ -563,7 +654,11 @@ class _MainScreenState extends State<MainScreen>
     });
     _chatTypingStates[chatId] = (
       action: action,
-      userName: userName,
+      userId: typingUserId,
+      rawUserName: rawUserName,
+      userName: (resolvedUserName != null && resolvedUserName.isNotEmpty)
+          ? resolvedUserName
+          : rawUserName,
       timer: timer,
     );
     if (mounted) {
@@ -621,11 +716,8 @@ class _MainScreenState extends State<MainScreen>
         if (mounted) _loadCommunities();
         return;
       }
-      // Ignore empty private chats without messages or drafts that are not pinned
-      if (newChat.chatType == 'private' &&
-          (newChat.lastMessage == null || newChat.lastMessage!.isEmpty) &&
-          (newChat.draft == null || newChat.draft!.text.isEmpty) &&
-          !newChat.isPinned) {
+      // Ignore empty private ghost chats without text, media, drafts, pin, or unread
+      if (_isEmptyGhostPrivateChat(newChat)) {
         return;
       }
 
@@ -676,53 +768,70 @@ class _MainScreenState extends State<MainScreen>
 
       final chatIndex = _chats.indexWhere((c) => c.id == chatId);
       if (chatIndex != -1) {
-        Chat? updatedChat;
-        setState(() {
-          final chat = _chats[chatIndex];
-
-          // Get unread count from provider (authoritative source)
-          int newUnreadCount = chat.unreadCount;
+        Message? parsedMsg;
+        if (messageData != null) {
           try {
-            newUnreadCount =
-                context.read<UnreadCountProvider>().getCount(chatId);
+            parsedMsg = Message.fromJson(messageData);
           } catch (_) {}
+        }
+        if (parsedMsg != null) {
+          ChatInstantCache.instance.upsertMessage(chatId, parsedMsg);
+        }
 
-          final msgType = messageData?['message_type'] as String? ?? 'text';
-          final isRound =
-              messageData?['is_round'] == true || msgType == 'round';
-          final fileUrl = messageData?['file_url'] as String?;
-          final groupedId = messageData?['grouped_id'] as String?;
-          final content = messageData?['content'] as String? ?? '';
-          List<MessageEntity> msgEntities = const [];
-          if (messageData != null) {
+        Chat? updatedChat;
+        {
+          final msgEntities = parsedMsg?.entities ?? const <MessageEntity>[];
+          final senderId = parsedMsg?.senderId ??
+              messageData?['sender_id']?.toString();
+          final senderName = parsedMsg?.senderName ??
+              messageData?['sender_name']?.toString();
+
+          setState(() {
+            final chat = _chats[chatIndex];
+
+            // Get unread count from provider (authoritative source)
+            int newUnreadCount = chat.unreadCount;
             try {
-              msgEntities = Message.fromJson(messageData).entities;
+              newUnreadCount =
+                  context.read<UnreadCountProvider>().getCount(chatId);
             } catch (_) {}
+
+            final msgType = messageData?['message_type'] as String? ?? 'text';
+            final isRound =
+                messageData?['is_round'] == true || msgType == 'round';
+            final fileUrl = messageData?['file_url'] as String?;
+            final groupedId = messageData?['grouped_id'] as String?;
+            final content = messageData?['content'] as String? ?? '';
+            _chatLastMessageEntities[chatId] = msgEntities;
+
+            final newChat = chat.copyWith(
+              lastMessage: content,
+              lastMessageTime:
+                  messageData?['created_at'] as String? ?? chat.lastMessageTime,
+              lastMessageType: msgType,
+              lastMessageIsRound: isRound,
+              lastMessageFileUrl: fileUrl,
+              lastMessageGroupedId: groupedId,
+              lastMessageEntities: msgEntities,
+              lastMessageSenderId: senderId,
+              lastMessageSenderName: senderName,
+              updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
+              unreadCount: newUnreadCount,
+            );
+            updatedChat = newChat;
+
+            // Update the chat in place
+            _chats[chatIndex] = newChat;
+            // Re-sort: pinned/saved chats stay in their fixed positions,
+            // unpinned chats sort by updated_at
+            _sortChats();
+          });
+          if (updatedChat != null) {
+            ChatInstantCache.instance.putChatSummaries([updatedChat!]);
           }
-          _chatLastMessageEntities[chatId] = msgEntities;
-
-          final newChat = chat.copyWith(
-            lastMessage: content,
-            lastMessageTime:
-                messageData?['created_at'] as String? ?? chat.lastMessageTime,
-            lastMessageType: msgType,
-            lastMessageIsRound: isRound,
-            lastMessageFileUrl: fileUrl,
-            lastMessageGroupedId: groupedId,
-            lastMessageEntities: msgEntities,
-            updatedAt: messageData?['created_at'] as String? ?? chat.updatedAt,
-            unreadCount: newUnreadCount,
-          );
-          updatedChat = newChat;
-
-          // Update the chat in place
-          _chats[chatIndex] = newChat;
-          // Re-sort: pinned/saved chats stay in their fixed positions,
-          // unpinned chats sort by updated_at
-          _sortChats();
-        });
-        // Save to local storage
-        _localStorage.saveChats(_chats);
+          // Save to local storage
+          _localStorage.saveChats(_chats);
+        }
 
         // Сохранить в Drift только поля последнего сообщения (чтобы не затереть unreadCount и isOnline)
         final db = AppDatabase(_currentUserId);
@@ -737,14 +846,15 @@ class _MainScreenState extends State<MainScreen>
               isRound: updatedChat!.lastMessageIsRound,
               fileUrl: updatedChat!.lastMessageFileUrl,
               groupedId: updatedChat!.lastMessageGroupedId,
+              senderId: updatedChat!.lastMessageSenderId,
+              senderName: updatedChat!.lastMessageSenderName,
               incrementUnread: false,
             );
           } catch (_) {}
         }
-        if (messageData != null) {
+        if (parsedMsg != null) {
           try {
-            final msg = Message.fromJson(messageData);
-            db.saveMessage(msg.toCompanion());
+            db.saveMessage(parsedMsg.toCompanion());
           } catch (_) {}
         }
       } else {
@@ -752,6 +862,15 @@ class _MainScreenState extends State<MainScreen>
         _loadChats(silent: true);
       }
     }
+  }
+
+  void _onChatArchiveUpdated(WebSocketEvent event) {
+    final chatId =
+        event.data['chat_id']?.toString() ?? event.data['id']?.toString();
+    if (chatId == null || chatId.isEmpty) return;
+    final isArchived =
+        event.data['is_archived'] == true || event.data['is_archived'] == 1;
+    unawaited(AppDatabase(_currentUserId).setChatArchived(chatId, isArchived));
   }
 
   void _onChatUpdate(WebSocketEvent event) {
@@ -814,7 +933,10 @@ class _MainScreenState extends State<MainScreen>
   void _onUnreadCountUpdated(WebSocketEvent event) {
     debugPrint('Unread count updated: ${event.data}');
     final chatId = event.data['chat_id']?.toString();
-    final unreadCount = event.data['unread_count'] as int? ?? 0;
+    final rawUnread = event.data['unread_count'];
+    final unreadCount = rawUnread is num
+        ? rawUnread.toInt()
+        : (int.tryParse(rawUnread?.toString() ?? '') ?? 0);
     final rawInboxHwm = event.data['last_read_inbox_message_id'];
     final inboxHwm = rawInboxHwm is num
         ? rawInboxHwm.toInt()
@@ -901,7 +1023,9 @@ class _MainScreenState extends State<MainScreen>
       setState(() {
         for (int i = 0; i < _chats.length; i++) {
           if (_chats[i].chatType == 'private' && _chats[i].otherUserId == userId) {
-            _chats[i] = _chats[i].copyWith(avatarUrl: avatarUrl);
+            final effectiveAvatar =
+                ContactsService.resolveAvatarUrl(userId, avatarUrl);
+            _chats[i] = _chats[i].copyWith(avatarUrl: effectiveAvatar);
           } else if (isMe && _chats[i].chatType == 'saved') {
             _chats[i] = _chats[i].copyWith(avatarUrl: avatarUrl);
           }
@@ -911,16 +1035,37 @@ class _MainScreenState extends State<MainScreen>
     }
 
     try {
-      AppDatabase().updateUserAvatarInChats(userId, avatarUrl);
+      final effectiveAvatar =
+          ContactsService.resolveAvatarUrl(userId, avatarUrl);
+      unawaited(AppDatabase().updateUserAvatarInChats(userId, effectiveAvatar));
     } catch (_) {}
   }
 
   /// Handle real-time appearance settings changes (sync across devices)
   void _onUserAppearanceUpdated(WebSocketEvent event) {
     final userId = event.data['user_id']?.toString();
+    if (userId != null && userId.isNotEmpty) {
+      PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
+    }
     final currentAccount = _accountManager.currentAccount;
     if (currentAccount != null && currentAccount.userId == userId && mounted) {
-      context.read<ProfileThemeProvider>().init();
+      context.read<ProfileThemeProvider>().applyAppearanceUpdateMap(
+            event.data,
+            targetUserId: userId,
+          );
+    }
+    if (userId != null && userId.isNotEmpty && mounted) {
+      final updatedCust = PeerCustomizationCache.instance.getSync(userId);
+      if (updatedCust != null) {
+        final idx = _chats.indexWhere(
+          (c) => c.chatType == 'private' && c.otherUserId == userId,
+        );
+        if (idx != -1) {
+          setState(() {
+            _chats[idx] = _chats[idx].copyWith(peerCustomization: updatedCust);
+          });
+        }
+      }
     }
   }
 
@@ -931,6 +1076,7 @@ class _MainScreenState extends State<MainScreen>
         (event.data['message_id'] ?? event.data['messageId'])?.toString();
     if (chatId != null) {
       if (messageId != null) {
+        ChatInstantCache.instance.removeMessages(chatId, [messageId]);
         try {
           await AppDatabase().deleteMessage(messageId);
         } catch (_) {}
@@ -964,6 +1110,7 @@ class _MainScreenState extends State<MainScreen>
       final provider = context.read<UnreadCountProvider>();
       bool changed = false;
       for (int i = 0; i < _chats.length; i++) {
+        if (!provider.hasAuthoritativeCount(_chats[i].id)) continue;
         final providerCount = provider.getCount(_chats[i].id);
         if (_chats[i].unreadCount != providerCount) {
           _chats[i] = _chats[i].copyWith(unreadCount: providerCount);
@@ -972,7 +1119,7 @@ class _MainScreenState extends State<MainScreen>
       }
       if (changed) {
         setState(() {});
-        _localStorage.saveChats(_chats);
+        _scheduleSaveChats();
       }
     } catch (_) {}
   }
@@ -1007,15 +1154,14 @@ class _MainScreenState extends State<MainScreen>
       }
     } catch (_) {}
 
-    _localStorage.saveChats(_chats);
+    _scheduleSaveChats();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // При возврате из фона: восстановить статус активного чата,
-      // переподключить WS если не подключён, затем обновить чаты
-      NotificationService().onAppResume();
+      // При возврате из фона: переподключить WS если не подключён, затем обновить чаты.
+      // Состояние foreground/background отслеживает сам NotificationService.
       if (!_isWsConnected) {
         _wsService.tryReconnect();
         _loadChats();
@@ -1024,11 +1170,6 @@ class _MainScreenState extends State<MainScreen>
           DateTime.now().difference(_lastUpdateCheckAt!) > const Duration(hours: 1)) {
         _checkForUpdates(fromBackgroundTimer: true);
       }
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      // При уходе в фон: снять подавление push-уведомлений для этого устройства
-      NotificationService().onAppPause();
     }
   }
 
@@ -1054,7 +1195,8 @@ class _MainScreenState extends State<MainScreen>
           final serverChats = (result['chats'] as List<Chat>)
               .where((c) => !c.isCommunityChannel)
               .toList();
-          DraftService().populateFromChats(serverChats);
+          DraftService().populateFromChats(serverChats, authoritative: true);
+          ChatInstantCache.instance.putChatSummaries(serverChats);
 
           for (final chat in serverChats) {
             _chatLastMessageEntities[chat.id] = chat.lastMessageEntities;
@@ -1078,7 +1220,7 @@ class _MainScreenState extends State<MainScreen>
           // которых больше нет в списке чатов сервера
           try {
             final serverIds = serverChats.map((c) => c.id).toSet();
-            final staleIds = _chats
+            final staleIds = [..._chats, ..._archivedChats]
                 .where(
                   (c) =>
                       c.chatType != 'saved' &&
@@ -1141,6 +1283,7 @@ class _MainScreenState extends State<MainScreen>
                 if (res['success'] == true && res['messages'] is List<Message>) {
                   final msgs = res['messages'] as List<Message>;
                   if (msgs.isNotEmpty) {
+                    ChatInstantCache.instance.putMessages(chat.id, msgs);
                     await db.saveMessages(
                       msgs.map((m) => m.toCompanion(fallbackChatId: chat.id)).toList(),
                     );
@@ -1220,32 +1363,22 @@ class _MainScreenState extends State<MainScreen>
       effectiveLastSeen = live.lastSeen ?? model.lastSeen;
     }
 
-    return Chat(
-      id: model.chatId,
-      chatType: model.chatType,
+    if (model.chatType == 'private' &&
+        model.otherUserId != null &&
+        model.otherUserId!.isNotEmpty) {
+      name = ContactsService.resolveName(model.otherUserId, name);
+      avatarUrl = ContactsService.resolveAvatarUrl(model.otherUserId, avatarUrl);
+    }
+
+    return Chat.fromDbChat(
+      model,
+      lastMessageEntities: _chatLastMessageEntities[model.chatId] ?? const [],
+      unreadCountOverride: effectiveUnreadCount,
+      isOnlineOverride: effectiveIsOnline,
+      lastSeenOverride: effectiveLastSeen,
+    ).copyWith(
       name: name,
       avatarUrl: avatarUrl,
-      lastMessage: model.lastMessage,
-      lastMessageTime: model.lastMessageTime,
-      lastMessageType: model.lastMessageType,
-      lastMessageIsRound: model.lastMessageIsRound,
-      lastMessageFileUrl: model.lastMessageFileUrl,
-      lastMessageGroupedId: model.lastMessageGroupedId,
-      lastMessageEntities:
-          _chatLastMessageEntities[model.chatId] ?? const [],
-      otherUserId: model.otherUserId,
-      updatedAt: model.updatedAt,
-      unreadCount: effectiveUnreadCount,
-      isOnline: effectiveIsOnline,
-      lastSeen: effectiveLastSeen,
-      isPinned: model.isPinned,
-      lastReadInboxMessageId: model.lastReadInboxMessageId,
-      lastReadOutboxMessageId: model.lastReadOutboxMessageId,
-      pinnedMessageId: model.pinnedMessageId,
-      username: model.username,
-      isPublic: model.isPublic,
-      isBot: model.isBot,
-      isVerified: model.isVerified,
     );
   }
 
@@ -1255,49 +1388,29 @@ class _MainScreenState extends State<MainScreen>
     if (chat.chatType == 'saved' && (avatarUrl == null || avatarUrl.isEmpty)) {
       avatarUrl = _accountManager.currentAccount?.avatarUrl;
     }
-    return ChatsCompanion(
-      chatId: Value(chat.id),
-      chatType: Value(chat.isCommunityChannel ? 'community_channel' : chat.chatType),
-      name: Value(chat.name),
-      avatarUrl: Value(avatarUrl),
-      lastMessage: Value(chat.lastMessage),
-      lastMessageTime: Value(chat.lastMessageTime),
-      lastMessageType: Value(chat.lastMessageType),
-      lastMessageIsRound: Value(chat.lastMessageIsRound),
-      lastMessageFileUrl: Value(chat.lastMessageFileUrl),
-      lastMessageGroupedId: Value(chat.lastMessageGroupedId),
-      otherUserId: Value(chat.otherUserId),
-      updatedAt: Value(chat.updatedAt),
-      unreadCount: Value(chat.unreadCount),
-      isOnline: Value(chat.isOnline),
-      lastSeen: Value(chat.lastSeen),
-      isPinned: Value(chat.isPinned),
-      lastReadInboxMessageId: Value(chat.lastReadInboxMessageId),
-      lastReadOutboxMessageId: Value(chat.lastReadOutboxMessageId),
-      pinnedMessageId: Value(chat.pinnedMessageId),
-      username: Value(chat.username),
-      isPublic: Value(chat.isPublic),
-      isBot: Value(chat.isBot),
-      isVerified: Value(chat.isVerified),
-    );
+    final normalized = avatarUrl != chat.avatarUrl
+        ? chat.copyWith(avatarUrl: avatarUrl)
+        : chat;
+    return normalized.toCompanion();
   }
 
   @override
   void dispose() {
-    _classicTopMenuAnimation.dispose();
-    _classicFolderMenuAnimation.dispose();
+    _selectModeAnimation.dispose();
     _classicCreateMenuAnimation.dispose();
-    _classicTopMenuController.dispose();
-    _classicFolderMenuController.dispose();
+    _selectModeController.dispose();
     _classicCreateMenuController.dispose();
+    _archivePullNotifier.dispose();
     NotificationService().isMainScreenReady = false;
     WidgetsBinding.instance.removeObserver(this);
     DraftService().draftsNotifier.removeListener(_onDraftsChanged);
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _accountManager.removeListener(_onAccountChanged);
     _folderService.removeListener(_onServiceUpdate);
     ChatSwipeService().removeListener(_onServiceUpdate);
     VoicePlaybackService().removeListener(_onServiceUpdate);
     VideoNotePlaybackService().removeListener(_onServiceUpdate);
+    ArchivePreferencesService().removeListener(_onServiceUpdate);
     TilingLayoutController.instance.removeListener(_onTilingUpdate);
     TilingLayoutController.instance.unregisterTileBackHandler(
       TilingLayoutController.kLeftTileId,
@@ -1312,13 +1425,16 @@ class _MainScreenState extends State<MainScreen>
       TilingLayoutController.instance.onChatTileClosed = null;
     }
     _searchDebounce?.cancel();
+    _embeddedTabSwipeBackController.dispose();
     _searchController.dispose();
     _searchFocusNode.dispose();
     _pageController.dispose();
+    _chatsScrollController.dispose();
     _wsSubscription?.cancel();
     _connectionCheckTimer?.cancel();
     _updateCheckTimer?.cancel();
     _chatsStreamSubscription?.cancel();
+    _archivedChatsStreamSubscription?.cancel();
     // Don't disconnect WebSocket on dispose - it's a singleton and should stay connected
     // for the entire app lifecycle. Only unsubscribe OUR callbacks (not UnreadCountProvider's!).
     // Using unsubscribe() instead of unsubscribeAll() to avoid wiping other subscribers.
@@ -1333,7 +1449,12 @@ class _MainScreenState extends State<MainScreen>
     _wsService.unsubscribe(WebSocketEventType.userAvatarUpdated, _onUserAvatarUpdated);
     _wsService.unsubscribe(WebSocketEventType.userAppearanceUpdated, _onUserAppearanceUpdated);
     _wsService.unsubscribe(WebSocketEventType.appUpdateAvailable, _onAppUpdateAvailable);
+    _wsService.unsubscribe(WebSocketEventType.chatArchiveUpdated, _onChatArchiveUpdated);
     _wsService.unsubscribe(WebSocketEventType.typing, _onChatTyping);
+    if (_saveChatsDebounceTimer?.isActive ?? false) {
+      _saveChatsDebounceTimer!.cancel();
+      _localStorage.saveChats(_chats);
+    }
     for (final state in _chatTypingStates.values) {
       state.timer.cancel();
     }
@@ -1364,17 +1485,28 @@ class _MainScreenState extends State<MainScreen>
       _exitSelectMode();
     }
     _liveUserPresence.clear();
+    _saveChatsDebounceTimer?.cancel();
     for (final state in _chatTypingStates.values) {
       state.timer.cancel();
     }
     _chatTypingStates.clear();
     AppDatabase.setActiveUser(newUserId);
+    unawaited(() async {
+      await ContactsService.init(userId: newUserId);
+      await ContactsService.getContacts(
+        forceRefresh: true,
+        includeOverrides: true,
+      );
+    }());
+    unawaited(ArchivePreferencesService().init());
     CommunityService.clearMemoryCache();
+    ChatInstantCache.instance.clearMemory();
 
     setState(() {
       _activeFilter = 0;
       _chats = [];
       _communities = [];
+      _markedUnreadCommunityIds.clear();
       _isLoadingChats = true;
     });
     if (_currentIndex != 1) {
@@ -1389,6 +1521,71 @@ class _MainScreenState extends State<MainScreen>
     try {
       SyncService().syncFromServer();
     } catch (_) {}
+  }
+
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    bool changed = false;
+    for (int i = 0; i < _chats.length; i++) {
+      final c = _chats[i];
+      if (c.chatType == 'private' &&
+          !c.isBot &&
+          c.otherUserId != null &&
+          c.otherUserId!.isNotEmpty) {
+        final uid = c.otherUserId!;
+        final contact = ContactsService.getCached(uid);
+        final baseName =
+            (contact?.originalDisplayName?.trim().isNotEmpty ?? false)
+                ? contact!.originalDisplayName!.trim()
+                : ((contact?.displayName.trim().isNotEmpty ?? false)
+                    ? contact!.displayName.trim()
+                    : c.name);
+        final nextName = ContactsService.resolvePeerName(
+          uid,
+          baseName,
+          isBot: c.isBot,
+        );
+        final baseAvatar = (contact != null &&
+                !contact.hasCustomAvatar &&
+                (contact.originalAvatarUrl?.trim().isNotEmpty ?? false))
+            ? contact.originalAvatarUrl!.trim()
+            : c.avatarUrl;
+        final nextAvatar = ContactsService.resolvePeerAvatarUrl(
+          uid,
+          baseAvatar,
+          isBot: c.isBot,
+        );
+        if (nextName != c.name || nextAvatar != c.avatarUrl) {
+          _chats[i] = c.copyWith(name: nextName, avatarUrl: nextAvatar);
+          changed = true;
+        }
+      }
+    }
+    if (_chatTypingStates.isNotEmpty) {
+      final keys = _chatTypingStates.keys.toList();
+      for (final k in keys) {
+        final t = _chatTypingStates[k]!;
+        final uid = t.userId;
+        if (uid == null || uid.isEmpty) continue;
+        final nextTyping =
+            ContactsService.resolveName(uid, t.rawUserName ?? '');
+        final effective =
+            nextTyping.isNotEmpty ? nextTyping : t.rawUserName;
+        if (effective != t.userName) {
+          _chatTypingStates[k] = (
+            action: t.action,
+            userId: uid,
+            rawUserName: t.rawUserName,
+            userName: effective,
+            timer: t.timer,
+          );
+        }
+      }
+    }
+    if (changed) {
+      ChatInstantCache.instance.putChatSummaries(_chats);
+    }
+    setState(() {});
   }
 
   void _onDraftsChanged() {
@@ -1466,7 +1663,36 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
+  bool _canSwipeBackToChatsTab() {
+    if (!mounted) return false;
+    if (_currentIndex == 1) return false;
+    if (_isSelectMode ||
+        _isTopMenuOpen ||
+        _isFolderMenuOpen ||
+        _isCreateMenuOpen ||
+        _isSelectionMenuOpen) {
+      return false;
+    }
+    if (TilingLayoutController.instance.isPopTransitionActive) return false;
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    return true;
+  }
+
+  void _syncEmbeddedTabSwipeProgress() {
+    final fromIndex = _swipingFromTabIndex;
+    if (fromIndex == null || !_pageController.hasClients) return;
+    final pos = _pageController.position;
+    if (!pos.hasViewportDimension || pos.viewportDimension <= 0) return;
+    final width = pos.viewportDimension;
+    final t = _embeddedTabSwipeBackController.value.clamp(0.0, 1.0);
+    final double targetPixels =
+        fromIndex == 2 ? (1.0 + t) * width : (1.0 - t) * width;
+    pos.jumpTo(targetPixels.clamp(pos.minScrollExtent, pos.maxScrollExtent));
+  }
+
   void _onTabTapped(int index) {
+    _swipingFromTabIndex = null;
     if (_isTopMenuOpen) {
       _closeTopMenu();
     }
@@ -1483,6 +1709,7 @@ class _MainScreenState extends State<MainScreen>
     }
     setState(() {
       _currentIndex = index;
+      _visitedPages.add(index);
       if (index == 2) {
         _searchController.clear();
         _searchQuery = '';
@@ -1496,6 +1723,45 @@ class _MainScreenState extends State<MainScreen>
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeOutCubic,
     );
+  }
+
+  void _onTabReselected(int index) {
+    if (_isTopMenuOpen) {
+      _closeTopMenu();
+    }
+    if (_isFolderMenuOpen) {
+      _closeFolderMenu();
+    }
+    if (_isCreateMenuOpen) {
+      _closeCreateMenu();
+    }
+    if (index == 1) {
+      if (_chatsScrollController.hasClients &&
+          _chatsScrollController.offset > 0) {
+        _chatsScrollController.animateTo(
+          0.0,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      }
+      return;
+    }
+    if (index == 2) {
+      _searchFocusNode.requestFocus();
+      return;
+    }
+    if (index == 0) {
+      final primaryScroll = PrimaryScrollController.maybeOf(context);
+      if (primaryScroll != null &&
+          primaryScroll.hasClients &&
+          primaryScroll.offset > 0) {
+        primaryScroll.animateTo(
+          0.0,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    }
   }
 
   void _openCreateMenu() {
@@ -1560,6 +1826,12 @@ class _MainScreenState extends State<MainScreen>
       case CreateChatOptionType.joinByCode:
         _showCreateCommunityDialog(initialJoinMode: true);
         break;
+      case CreateChatOptionType.contacts:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const ContactsScreen()),
+        );
+        break;
     }
   }
 
@@ -1573,28 +1845,18 @@ class _MainScreenState extends State<MainScreen>
     if (_isCreateMenuOpen) {
       _closeCreateMenu();
     }
-    _topMenuTabIndex = _currentIndex;
     HapticUtils.tap();
-    _classicTopMenuController.forward();
     setState(() {
+      _isSelectionMenuOpen = false;
       _isTopMenuOpen = true;
     });
   }
 
   void _closeTopMenu() {
     if (!_isTopMenuOpen) return;
-    _classicTopMenuController.reverse();
     setState(() {
       _isTopMenuOpen = false;
     });
-  }
-
-  void _toggleTopMenu() {
-    if (_isTopMenuOpen) {
-      _closeTopMenu();
-    } else {
-      _openTopMenu();
-    }
   }
 
   void _openFolderMenu() {
@@ -1607,15 +1869,14 @@ class _MainScreenState extends State<MainScreen>
       _closeCreateMenu();
     }
     HapticUtils.tap();
-    _classicFolderMenuController.forward();
     setState(() {
+      _isSelectionMenuOpen = false;
       _isFolderMenuOpen = true;
     });
   }
 
   void _closeFolderMenu() {
     if (!_isFolderMenuOpen) return;
-    _classicFolderMenuController.reverse();
     setState(() {
       _isFolderMenuOpen = false;
     });
@@ -1627,21 +1888,6 @@ class _MainScreenState extends State<MainScreen>
     } else {
       _openFolderMenu();
     }
-  }
-
-  double _calculateTitleWidth(BuildContext context) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: _currentTitleText,
-        style: const TextStyle(
-          fontSize: 18,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.2,
-        ),
-      ),
-      textDirection: Directionality.of(context),
-    )..layout();
-    return tp.width;
   }
 
   String get _currentTitleText {
@@ -1689,23 +1935,24 @@ class _MainScreenState extends State<MainScreen>
     return true;
   }
 
-  List<_MorphMenuItemData> _getMenuItems(int index, [BuildContext? ctx]) {
-    final l10n = (ctx ?? context).l10n;
+  List<SelectionMorphMenuItem> _getMenuItems(int index, [BuildContext? ctx]) {
+    final targetCtx = ctx ?? context;
+    final l10n = targetCtx.l10n;
     switch (index) {
       case 0: // Settings
         return [
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'profile',
             label: l10n.translate('settings_profile'),
             iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'clear_data',
             label: l10n.translate('clear_data_title'),
             iconBuilder: (color, size) => iconoir.Trash(color: color, width: size, height: size),
             color: Colors.orange,
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'logout',
             label: l10n.translate('menu_logout'),
             iconBuilder: (color, size) => iconoir.LogOut(color: color, width: size, height: size),
@@ -1714,12 +1961,12 @@ class _MainScreenState extends State<MainScreen>
         ];
       case 2: // Search
         return [
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'clear_search',
             label: 'Очистить поиск',
             iconBuilder: (color, size) => iconoir.Trash(color: color, width: size, height: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'profile',
             label: l10n.translate('settings_profile'),
             iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
@@ -1727,38 +1974,47 @@ class _MainScreenState extends State<MainScreen>
         ];
       case 1: // Chats
       default:
+        final showArchiveMenuItem =
+            ArchivePreferencesService().isHiddenAboveList &&
+                _archivedChats.isNotEmpty;
         return [
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'select_chats',
-            label: 'Выбрать чаты',
+            label: l10n.translate('chat_select_chats'),
             iconBuilder: (color, size) => iconoir.ListSelect(color: color, width: size, height: size),
           ),
-          _MorphMenuItemData(
+          if (showArchiveMenuItem)
+            SelectionMorphMenuItem(
+              id: 'open_archive',
+              label: l10n.translate('archive_title'),
+              iconBuilder: (color, size) => iconoir.Archive(color: color, width: size, height: size),
+            ),
+          SelectionMorphMenuItem(
             id: 'new_chat',
             label: l10n.translate('chat_new_private'),
             iconBuilder: (color, size) => iconoir.UserPlus(color: color, width: size, height: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'new_group',
             label: l10n.translate('chat_new_group'),
             iconBuilder: (color, size) => iconoir.Group(color: color, width: size, height: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'new_channel',
             label: l10n.translate('chat_new_channel'),
             iconBuilder: (color, size) => iconoir.Megaphone(color: color, width: size, height: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'new_community',
             label: 'Новое сообщество',
             iconBuilder: (color, size) => Icon(Icons.hub_outlined, color: color, size: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'join_by_code',
             label: 'Войти по коду',
             iconBuilder: (color, size) => Icon(Icons.tag_rounded, color: color, size: size),
           ),
-          _MorphMenuItemData(
+          SelectionMorphMenuItem(
             id: 'profile',
             label: l10n.translate('settings_profile'),
             iconBuilder: (color, size) => iconoir.User(color: color, width: size, height: size),
@@ -1767,20 +2023,15 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  double _getMenuHeight(int index) {
-    final count = _getMenuItems(index).length;
-    return count * 44.0 + 12.0;
-  }
-
   void _handleMenuAction(String actionId) {
     _closeTopMenu();
 
     switch (actionId) {
       case 'select_chats':
-        setState(() {
-          _isSelectMode = true;
-          _selectedChatIds = {};
-        });
+        _enterSelectMode();
+        break;
+      case 'open_archive':
+        _openArchivedChatsScreen();
         break;
       case 'new_chat':
         Navigator.push(
@@ -1925,438 +2176,177 @@ class _MainScreenState extends State<MainScreen>
     );
   }
 
-  Widget _buildTopGlassBar(
-    BuildContext context,
-    LiquidGlassProvider glassProvider,
-  ) {
-    const double ctrlSize = 44.0;
-    const double menuWidth = 200.0;
-    const double folderMenuWidth = 220.0;
-    const double barRadius = ctrlSize / 2; // 22.0 — stadium capsule ratio
-    final double menuHeight = _getMenuHeight(_currentIndex);
-    final double folderMenuHeight =
-        math.max(44.0, _folderService.folders.length * 44.0 + 12.0);
+  Widget _buildAdaptiveTopBar(BuildContext context) {
+    final notifProvider = context.watch<NotificationSettingsProvider>();
+    final folders = _folderService.folders;
+    final activeFolder = (_activeFilter >= 0 && _activeFilter < folders.length)
+        ? folders[_activeFilter]
+        : (folders.isNotEmpty ? folders.first : ChatFolder.defaults.first);
+    final folderChats = _chatsWithCommunities
+        .where((chat) => activeFolder.matchesChat(chat))
+        .toList();
+    final selectedChats = folderChats
+        .where((c) => _selectedChatIds.contains(c.id))
+        .toList();
+    final regularSelected = selectedChats
+        .where((c) => c.chatType != 'saved' && c.chatType != 'community')
+        .toList();
+    final nonSavedSelected =
+        selectedChats.where((c) => c.chatType != 'saved').toList();
 
-    final morphStyle = glassProvider.createStyle(
-      context: context,
-      cornerRadius: barRadius,
-      refractionIndex: 1.1,
-      refractionWidth: 24.0,
-    );
-    const morphMotion = LiquidGlassMorphMotion.fluid;
+    final allPinned = regularSelected.isNotEmpty &&
+        regularSelected.every((c) => c.isPinned);
+    final allMuted = regularSelected.isNotEmpty &&
+        regularSelected.every(
+          (c) => notifProvider.isChatMuted(c.id, chatType: c.chatType),
+        );
+    final anyUnread = regularSelected
+        .any((c) => c.unreadCount > 0 || c.unreadCount == -1);
+    final allSelected =
+        folderChats.isNotEmpty && selectedChats.length == folderChats.length;
+    final canSplit = TilingLayoutController.instance.windowSize.width >=
+        TilingLayoutController.kTwoColumnBreakpoint;
 
-    final double closedPillWidth =
-        math.max(130.0, _calculateTitleWidth(context) + 48.0);
-
-    final double barHeight = _isFolderMenuOpen
-        ? math.max(ctrlSize + 4, folderMenuHeight + 8)
-        : (_isTopMenuOpen
-            ? math.max(ctrlSize + 4, menuHeight + 8)
-            : ctrlSize + 4);
-
-    final Widget folderPillPositioned = Positioned(
-      key: const ValueKey<String>('main_folder_pill_pos'),
-      top: 2,
-      left: 0,
-      right: 0,
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: SizedBox(
-          width: math.max(folderMenuWidth, closedPillWidth),
-          height: folderMenuHeight,
-          child: LiquidGlassMorph(
-            key: const ValueKey<String>('main_folder_menu_morph'),
-            alignment: Alignment.topCenter,
-            motion: morphMotion,
-            smoothness: 28,
-            style: morphStyle,
-            child: _isFolderMenuOpen
-                ? _FolderMorphMenu(
-                    key: const ValueKey<String>('folder_menu'),
-                    width: folderMenuWidth,
-                    activeFilter: _activeFilter,
-                    folders: _folderService.folders,
-                    unreadCounts: List.generate(
-                      _folderService.folders.length,
-                      (index) => _getUnreadCountForFilter(index),
-                    ),
-                    onSelectFolder: (index) {
-                      HapticUtils.selection();
-                      setState(() => _activeFilter = index);
-                      _closeFolderMenu();
-                    },
-                  )
-                : _TitlePillContent(
-                    key: const ValueKey<String>('title_pill'),
-                    title: _currentTitleText,
-                    titleKey: _currentTitleKey,
-                    isConnected: _isTitleConnected,
-                    onTap: _currentIndex == 1 ? _toggleFolderMenu : null,
-                  ),
-          ),
-        ),
-      ),
-    );
-
-    final Widget topMenuPositioned = Positioned(
-      key: const ValueKey<String>('main_top_menu_pos'),
-      top: 2,
-      right: 16,
-      child: SizedBox(
-        width: menuWidth,
-        height: menuHeight,
-        child: LiquidGlassMorph(
-          key: const ValueKey<String>('main_top_menu_morph'),
-          alignment: Alignment.topRight,
-          motion: morphMotion,
-          smoothness: 28,
-          style: morphStyle,
-          child: _isTopMenuOpen
-              ? _TopMorphMenu(
-                  key: const ValueKey<String>('menu'),
-                  width: menuWidth,
-                  items: _getMenuItems(_currentIndex, context),
-                  onItemTap: _handleMenuAction,
-                )
-              : _ThreeDotsGlyph(
-                  key: const ValueKey<String>('glyph'),
-                  size: ctrlSize,
-                  onTap: _toggleTopMenu,
-                ),
-        ),
-      ),
-    );
-
-    return SizedBox(
-      width: double.infinity,
-      height: barHeight,
-      child: LiquidGlassBlender(
-        smoothness: 0,
-        style: morphStyle,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            if (_isFolderMenuOpen || _isTopMenuOpen)
-              Positioned.fill(
-                key: const ValueKey<String>('main_top_bar_dismiss_backdrop'),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: () {
-                    if (_isFolderMenuOpen) _closeFolderMenu();
-                    if (_isTopMenuOpen) _closeTopMenu();
-                  },
-                ),
-              ),
-            if (_isFolderMenuOpen) ...[
-              topMenuPositioned,
-              folderPillPositioned,
-            ] else ...[
-              folderPillPositioned,
-              topMenuPositioned,
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSelectModeBar(BuildContext context) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
-    return Container(
-      height: 44,
-      margin: const EdgeInsets.symmetric(horizontal: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: primaryColor,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: primaryColor.withValues(alpha: 0.35),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const iconoir.Xmark(color: Colors.white, width: 20, height: 20),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            onPressed: _exitSelectMode,
-          ),
-          const SizedBox(width: 8),
-          Text(
-            'Выбрано: ${_selectedChatIds.length}',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const Spacer(),
-          IconButton(
-            icon: const iconoir.ListSelect(color: Colors.white, width: 20, height: 20),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            tooltip: 'Выбрать все',
-            onPressed: _selectAllChats,
-          ),
-          IconButton(
-            icon: const iconoir.MoreVert(color: Colors.white, width: 20, height: 20),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            onPressed: _showSelectedChatsMenu,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildClassicTopBar(BuildContext context) {
-    final theme = Theme.of(context);
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final p = themeExt?.palette;
-    final isDark = theme.brightness == Brightness.dark;
-
-    final barBackgroundColor = p?.surface ??
-        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
-    final borderColor = p?.divider ??
-        (isDark
-            ? Colors.white.withValues(alpha: 0.1)
-            : Colors.black.withValues(alpha: 0.06));
-    final double baseShadowAlpha = isDark ? 0.35 : 0.08;
-
-    const double ctrlSize = 44.0;
-    const double menuWidth = 200.0;
-    final int menuTabIndex =
-        _classicTopMenuController.value > 0 ? _topMenuTabIndex : _currentIndex;
-    final double menuHeight = _getMenuHeight(menuTabIndex);
     const double folderMenuWidth = 220.0;
     final double folderMenuHeight =
-        math.max(44.0, _folderService.folders.length * 44.0 + 12.0);
+        math.max(44.0, folders.length * 44.0 + 12.0);
 
-    final double closedPillWidth =
-        math.max(130.0, _calculateTitleWidth(context) + 48.0);
-
-    return AnimatedBuilder(
-      animation: Listenable.merge([
-        _classicTopMenuAnimation,
-        _classicFolderMenuAnimation,
-      ]),
-      builder: (context, _) {
-        final double topProgress = _classicTopMenuAnimation.value;
-        final double folderProgress = _classicFolderMenuAnimation.value;
-
-        final double currentTopWidth =
-            ctrlSize + (menuWidth - ctrlSize) * topProgress;
-        final double currentTopHeight =
-            ctrlSize + (menuHeight - ctrlSize) * topProgress;
-
-        final double currentFolderWidth =
-            closedPillWidth + (folderMenuWidth - closedPillWidth) * folderProgress;
-        final double currentFolderHeight =
-            ctrlSize + (folderMenuHeight - ctrlSize) * folderProgress;
-
-        final double currentBarHeight = math.max(
-          ctrlSize + 4,
-          math.max(currentTopHeight, currentFolderHeight) + 8,
-        );
-
-        final folderPillWidget = Positioned(
-          top: 2,
-          left: 0,
-          right: 0,
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: Container(
-              width: currentFolderWidth,
-              height: currentFolderHeight,
-              decoration: BoxDecoration(
-                color: barBackgroundColor,
-                borderRadius: BorderRadius.circular(22.0),
-                border: Border.all(color: borderColor, width: 0.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(
-                      alpha: (baseShadowAlpha *
-                              (0.6 + 0.4 * folderProgress))
-                          .clamp(0.0, 1.0),
-                    ),
-                    blurRadius: 10 + 6 * folderProgress,
-                    offset: Offset(0, 3 + 3 * folderProgress),
-                  ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                clipBehavior: Clip.hardEdge,
-                children: [
-                  // Folder menu items
-                  if (folderProgress > 0.01)
-                    Positioned(
-                      top: 0,
-                      left: (currentFolderWidth - folderMenuWidth) / 2,
-                      width: folderMenuWidth,
-                      height: folderMenuHeight,
-                      child: Opacity(
-                        opacity: ((folderProgress - 0.15) / 0.85)
-                            .clamp(0.0, 1.0),
-                        child: Transform.translate(
-                          offset:
-                              Offset(0, -10.0 * (1.0 - folderProgress)),
-                          child: IgnorePointer(
-                            ignoring: folderProgress < 0.9,
-                            child: _FolderMorphMenu(
-                              key: const ValueKey<String>('folder_menu'),
-                              width: folderMenuWidth,
-                              activeFilter: _activeFilter,
-                              folders: _folderService.folders,
-                              unreadCounts: List.generate(
-                                _folderService.folders.length,
-                                (index) => _getUnreadCountForFilter(index),
-                              ),
-                              onSelectFolder: (index) {
-                                HapticUtils.selection();
-                                setState(() => _activeFilter = index);
-                                _closeFolderMenu();
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-
-                  // Title pill content ("Theaver")
-                  if (folderProgress < 0.99)
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      height: ctrlSize,
-                      child: Opacity(
-                        opacity: (1.0 - (folderProgress / 0.35))
-                            .clamp(0.0, 1.0),
-                        child: Transform.scale(
-                          scale: 1.0 - 0.15 * folderProgress,
-                          child: IgnorePointer(
-                            ignoring: folderProgress > 0.1,
-                            child: _TitlePillContent(
-                              key: const ValueKey<String>('title_pill'),
-                              title: _currentTitleText,
-                              titleKey: _currentTitleKey,
-                              isConnected: _isTitleConnected,
-                              onTap: _currentIndex == 1
-                                  ? _toggleFolderMenu
-                                  : null,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+    final overflowItems = <SelectionMorphMenuItem>[
+      if (selectedChats.length == 1 && canSplit)
+        SelectionMorphMenuItem(
+          id: 'open_adjacent',
+          label: context.l10n.translate('selection_open_adjacent'),
+          iconBuilder: (color, size) =>
+              iconoir.ViewColumns2(color: color, width: size, height: size),
+        ),
+      if (regularSelected.isNotEmpty)
+        SelectionMorphMenuItem(
+          id: 'toggle_read',
+          label: context.l10n.translate(
+            anyUnread ? 'selection_mark_read' : 'selection_mark_unread',
           ),
-        );
-
-        final threeDotsWidget = Positioned(
-          top: 2,
-          right: 16,
-          child: Container(
-            width: currentTopWidth,
-            height: currentTopHeight,
-            decoration: BoxDecoration(
-              color: barBackgroundColor,
-              borderRadius: BorderRadius.circular(22.0),
-              border: Border.all(color: borderColor, width: 0.5),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(
-                    alpha:
-                        (baseShadowAlpha * (0.6 + 0.4 * topProgress))
-                            .clamp(0.0, 1.0),
-                  ),
-                  blurRadius: 10 + 6 * topProgress,
-                  offset: Offset(0, 3 + 3 * topProgress),
-                ),
-              ],
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Stack(
-              clipBehavior: Clip.hardEdge,
-              children: [
-                // Menu items
-                if (topProgress > 0.01)
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    width: menuWidth,
-                    height: menuHeight,
-                    child: Opacity(
-                      opacity: ((topProgress - 0.15) / 0.85)
-                          .clamp(0.0, 1.0),
-                      child: Transform.translate(
-                        offset:
-                            Offset(0, -10.0 * (1.0 - topProgress)),
-                        child: IgnorePointer(
-                          ignoring: topProgress < 0.9,
-                          child: _TopMorphMenu(
-                            key: const ValueKey<String>('menu'),
-                            width: menuWidth,
-                            items: _getMenuItems(menuTabIndex, context),
-                            onItemTap: _handleMenuAction,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-
-                // Three dots glyph
-                if (topProgress < 0.99)
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    width: ctrlSize,
-                    height: ctrlSize,
-                    child: Opacity(
-                      opacity: (1.0 - (topProgress / 0.35))
-                          .clamp(0.0, 1.0),
-                      child: Transform.scale(
-                        scale: 1.0 - 0.2 * topProgress,
-                        child: IgnorePointer(
-                          ignoring: topProgress > 0.1,
-                          child: _ThreeDotsGlyph(
-                            key: const ValueKey<String>('glyph'),
-                            size: ctrlSize,
-                            onTap: _toggleTopMenu,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
+          iconBuilder: (color, size) =>
+              iconoir.DoubleCheck(color: color, width: size, height: size),
+        ),
+      if (selectedChats.isNotEmpty)
+        SelectionMorphMenuItem(
+          id: 'add_to_folder',
+          label: context.l10n.translate('selection_add_to_folder'),
+          iconBuilder: (color, size) =>
+              iconoir.Folder(color: color, width: size, height: size),
+        ),
+      if (selectedChats.any((c) => c.chatType != 'community'))
+        SelectionMorphMenuItem(
+          id: 'clear_history',
+          label: context.l10n.translate('selection_clear_history'),
+          iconBuilder: (color, size) =>
+              iconoir.Erase(color: color, width: size, height: size),
+        ),
+      if (folderChats.isNotEmpty)
+        SelectionMorphMenuItem(
+          id: 'select_all',
+          label: context.l10n.translate(
+            allSelected ? 'selection_deselect_all' : 'selection_select_all',
           ),
-        );
+          iconBuilder: (color, size) =>
+              iconoir.ListSelect(color: color, width: size, height: size),
+        ),
+    ];
 
-        return SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 8.0),
-            child: SizedBox(
-              width: double.infinity,
-              height: currentBarHeight,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: folderProgress > 0
-                    ? [threeDotsWidget, folderPillWidget]
-                    : [folderPillWidget, threeDotsWidget],
-              ),
-            ),
-          ),
-        );
+    return ChatListAdaptiveTopBar(
+      isSelectMode: _isSelectMode,
+      selectedCount: selectedChats.length,
+      onCancelSelection: _exitSelectMode,
+      isSelectionOverflowOpen: _isSelectionMenuOpen,
+      onSelectionOverflowOpenChanged: (open) {
+        if (open) {
+          if (_isTopMenuOpen) _closeTopMenu();
+          if (_isFolderMenuOpen) _closeFolderMenu();
+          if (_isCreateMenuOpen) _closeCreateMenu();
+        }
+        setState(() => _isSelectionMenuOpen = open);
       },
+      selectionConfig: SelectionQuickActionsConfig(
+        canPin: nonSavedSelected.isNotEmpty,
+        isUnpin: allPinned,
+        onPin: () => _batchTogglePin(nonSavedSelected),
+        canMute: regularSelected.isNotEmpty,
+        isUnmute: allMuted,
+        onMute: () => _batchToggleMute(regularSelected),
+        canArchive: regularSelected.isNotEmpty,
+        isUnarchive: false,
+        onArchive: () => _batchArchiveChats(regularSelected),
+        canDelete: nonSavedSelected.isNotEmpty,
+        onDelete: () => _batchDeleteChats(nonSavedSelected),
+        overflowItems: overflowItems,
+        onOverflowAction: (id) async {
+          switch (id) {
+            case 'open_adjacent':
+              if (selectedChats.isNotEmpty) {
+                final target = selectedChats.first;
+                _exitSelectMode();
+                _openChat(target, inAdjacentTile: true);
+              }
+              break;
+            case 'toggle_read':
+              await _batchToggleRead(regularSelected);
+              break;
+            case 'add_to_folder':
+              final applied = await ChatBatchDialogs.showAddToFolderSheet(
+                context,
+                selectedChats,
+              );
+              if (applied && mounted) _exitSelectMode();
+              break;
+            case 'clear_history':
+              await ChatBatchDialogs.executeClearHistory(
+                context,
+                selectedChats,
+                currentUserId: _currentUserId,
+                onBeforeExecute: _exitSelectMode,
+              );
+              break;
+            case 'select_all':
+              _selectAllOrDeselect(folderChats);
+              break;
+          }
+        },
+      ),
+      normalTitle: _currentTitleText,
+      normalTitleKey: _currentTitleKey,
+      isTitleConnected: _isTitleConnected,
+      onTitleTap: _currentIndex == 1 ? _toggleFolderMenu : null,
+      openCenterMenu: _currentIndex == 1
+          ? _FolderMorphMenu(
+              key: const ValueKey<String>('folder_menu'),
+              width: folderMenuWidth,
+              activeFilter: _activeFilter,
+              folders: folders,
+              unreadCounts: List.generate(
+                folders.length,
+                (index) => _getUnreadCountForFilter(index),
+              ),
+              onSelectFolder: (index) {
+                HapticUtils.selection();
+                setState(() => _activeFilter = index);
+                _closeFolderMenu();
+              },
+            )
+          : null,
+      openCenterMenuWidth: folderMenuWidth,
+      openCenterMenuHeight: folderMenuHeight,
+      isCenterMenuOpen: _currentIndex == 1 && _isFolderMenuOpen,
+      onDismissCenterMenu: _closeFolderMenu,
+      normalMenuItems: _getMenuItems(_currentIndex, context),
+      isNormalMenuOpen: _isTopMenuOpen,
+      onNormalMenuOpenChanged: (open) {
+        if (open) {
+          _openTopMenu();
+        } else {
+          _closeTopMenu();
+        }
+      },
+      onNormalMenuAction: _handleMenuAction,
     );
   }
 
@@ -2374,31 +2364,172 @@ class _MainScreenState extends State<MainScreen>
     return 0;
   }
 
+  void _openArchivedChatsScreen() {
+    if (_isSelectMode) _exitSelectMode();
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => const ArchivedChatsScreen(),
+      ),
+    );
+  }
+
+  Future<void> _hideArchiveAboveList() async {
+    HapticUtils.impact();
+    await ArchivePreferencesService().setHiddenAboveList(true);
+    if (!mounted) return;
+    final l10n = context.l10n;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(l10n.translate('archive_hidden_toast')),
+        action: SnackBarAction(
+          label: l10n.translate('common_undo'),
+          onPressed: () {
+            unawaited(ArchivePreferencesService().setHiddenAboveList(false));
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _markAllArchivedRead() async {
+    final unread = _archivedChats
+        .where((c) => c.unreadCount > 0 || c.unreadCount == -1)
+        .toList();
+    if (unread.isEmpty) return;
+
+    final db = AppDatabase(_currentUserId);
+    final ids = unread.map((c) => c.id).toList();
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+
+    await db.batchMarkAsRead(ids);
+    for (final id in ids) {
+      unreadProvider?.setCount(id, 0);
+    }
+    for (final chat in unread) {
+      if (chat.unreadCount > 0) {
+        unawaited(ChatService.markMessagesAsRead(chatId: chat.id));
+      }
+    }
+  }
+
+  Future<void> _showArchiveRowContextMenu(
+    BuildContext itemContext,
+    Offset? globalPos,
+  ) async {
+    final overlay = Overlay.of(context, rootOverlay: true)
+        .context
+        .findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+
+    Offset anchorPos;
+    if (globalPos != null) {
+      anchorPos = globalPos;
+    } else {
+      final box = itemContext.findRenderObject() as RenderBox?;
+      if (box != null) {
+        anchorPos = box.localToGlobal(box.size.center(Offset.zero));
+      } else {
+        anchorPos = overlay.size.center(Offset.zero);
+      }
+    }
+
+    final hasUnread = _archivedChats
+        .any((c) => c.unreadCount > 0 || c.unreadCount == -1);
+    final l10n = context.l10n;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+
+    final selected = await showMenu<String>(
+      context: context,
+      useRootNavigator: true,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(anchorPos.dx, anchorPos.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      items: [
+        PopupMenuItem<String>(
+          value: 'hide',
+          child: Row(
+            children: [
+              iconoir.EyeClosed(width: 18, height: 18, color: onSurface),
+              const SizedBox(width: 10),
+              Text(l10n.translate('archive_hide_above_list')),
+            ],
+          ),
+        ),
+        if (hasUnread)
+          PopupMenuItem<String>(
+            value: 'mark_all_read',
+            child: Row(
+              children: [
+                iconoir.DoubleCheck(width: 18, height: 18, color: onSurface),
+                const SizedBox(width: 10),
+                Text(l10n.translate('archive_mark_all_read')),
+              ],
+            ),
+          ),
+        PopupMenuItem<String>(
+          value: 'settings',
+          child: Row(
+            children: [
+              iconoir.Settings(width: 18, height: 18, color: onSurface),
+              const SizedBox(width: 10),
+              Text(l10n.translate('archive_settings')),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (!mounted || selected == null) return;
+    switch (selected) {
+      case 'hide':
+        await _hideArchiveAboveList();
+        break;
+      case 'mark_all_read':
+        await _markAllArchivedRead();
+        break;
+      case 'settings':
+        await ChatBatchDialogs.showArchiveSettingsSheet(context);
+        break;
+    }
+  }
+
   Widget _buildChatList(BuildContext context, {double topPadding = 8}) {
     final l10n = context.l10n;
+    final double safeTopPadding = math.max(0.0, topPadding);
 
     if (_isLoadingChats && _chats.isEmpty && _communities.isEmpty) {
-      // Use topPadding so the indicator is visible below the glass AppBar
       return Padding(
-        padding: EdgeInsets.only(top: topPadding),
+        padding: EdgeInsets.only(top: safeTopPadding),
         child: const Center(child: CircularProgressIndicator()),
       );
     }
 
-    // Filter chats based on active folder rules
     final folders = _folderService.folders;
     final activeFolder = (_activeFilter >= 0 && _activeFilter < folders.length)
         ? folders[_activeFilter]
         : (folders.isNotEmpty ? folders.first : ChatFolder.defaults.first);
 
     final allItems = _chatsWithCommunities;
-    List<Chat> filteredChats =
+    final List<Chat> filteredChats =
         allItems.where((chat) => activeFolder.matchesChat(chat)).toList();
 
-    if (filteredChats.isEmpty) {
+    final bool hasArchivedInAll =
+        activeFolder.id == 'all' && _archivedChats.isNotEmpty;
+    final bool isArchiveHidden = ArchivePreferencesService().isHiddenAboveList;
+    final bool showArchivedTile = hasArchivedInAll && !isArchiveHidden;
+    final bool enablePullReveal =
+        hasArchivedInAll && isArchiveHidden && !_isSelectMode;
+
+    if (filteredChats.isEmpty && !showArchivedTile && !enablePullReveal) {
       if (_isLoadingChats && activeFolder.id != 'communities') {
         return Padding(
-          padding: EdgeInsets.only(top: topPadding),
+          padding: EdgeInsets.only(top: safeTopPadding),
           child: const Center(child: CircularProgressIndicator()),
         );
       }
@@ -2482,285 +2613,391 @@ class _MainScreenState extends State<MainScreen>
       );
     }
 
-    return ListView.builder(
-      cacheExtent: 3000.0,
+    final Widget scrollList = ListView.builder(
+      controller: _chatsScrollController,
+      cacheExtent: 600.0,
       physics: const AlwaysScrollableScrollPhysics(
         parent: BouncingScrollPhysics(),
       ),
       padding: EdgeInsets.only(
-        top: topPadding,
+        top: safeTopPadding,
         bottom: 100,
       ),
-      itemCount: filteredChats.length,
+      itemCount: filteredChats.length + (showArchivedTile ? 1 : 0),
       itemBuilder: (itemContext, index) {
-        final chat = filteredChats[index];
+        if (showArchivedTile && index == 0) {
+          return _buildArchivedChatsHeaderTile(itemContext);
+        }
+        final chat = filteredChats[showArchivedTile ? index - 1 : index];
         return _buildChatListItem(itemContext, chat);
       },
     );
-  }
 
-  Widget _buildChatListItem(BuildContext context, Chat chat) {
-    Widget iconWidget;
-    switch (chat.chatType) {
-      case 'private':
-        iconWidget = const iconoir.User(color: Colors.white, width: 22, height: 22);
-        break;
-      case 'group':
-        iconWidget = const iconoir.Group(color: Colors.white, width: 22, height: 22);
-        break;
-      case 'channel':
-        iconWidget = const iconoir.Megaphone(color: Colors.white, width: 22, height: 22);
-        break;
-      case 'community':
-        iconWidget = const Icon(Icons.hub_rounded, color: Colors.white, size: 22);
-        break;
-      case 'saved':
-        iconWidget = const iconoir.Bookmark(color: Colors.white, width: 22, height: 22);
-        break;
-      case 'system':
-        iconWidget = const iconoir.ShieldCheck(color: Colors.white, width: 22, height: 22);
-        break;
-      default:
-        iconWidget = const iconoir.ChatBubble(color: Colors.white, width: 22, height: 22);
+    if (!enablePullReveal) {
+      return scrollList;
     }
 
-    final hasUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
-    final isPrivateChat = chat.chatType == 'private';
-    final isCommunity = chat.chatType == 'community';
-    final isSelected = _selectedChatIds.contains(chat.id);
+    final primaryColor = Theme.of(context).colorScheme.primary;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-    const double avatarRadius = 22.0;
-
-    final String? effectiveAvatarUrl = chat.chatType == 'saved' && (chat.avatarUrl == null || chat.avatarUrl!.isEmpty)
-        ? (_accountManager.currentAccount?.avatarUrl ?? _accountManager.currentAccount?.localAvatarPath)
-        : chat.avatarUrl;
-
-    final avatarWidget = isPrivateChat
-        ? AvatarWithStatus(
-            avatarUrl: effectiveAvatarUrl,
-            name: chat.name,
-            radius: avatarRadius,
-            isOnline: _isSelectMode ? false : chat.isOnline,
-          )
-        : isCommunity
-            ? Container(
-                width: avatarRadius * 2,
-                height: avatarRadius * 2,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary,
-                  borderRadius: BorderRadius.circular(14),
-                  image: effectiveAvatarUrl != null &&
-                          effectiveAvatarUrl.isNotEmpty &&
-                          avatarImageProvider(effectiveAvatarUrl) != null
-                      ? DecorationImage(
-                          image: avatarImageProvider(effectiveAvatarUrl)!,
-                          fit: BoxFit.cover,
-                        )
-                      : null,
-                ),
-                alignment: Alignment.center,
-                child: effectiveAvatarUrl == null || effectiveAvatarUrl.isEmpty
-                    ? iconWidget
-                    : null,
-              )
-            : SizedBox(
-                width: avatarRadius * 2,
-                height: avatarRadius * 2,
-                child: CircleAvatar(
-                  radius: avatarRadius,
-                  backgroundColor: Theme.of(context).colorScheme.primary,
-                  backgroundImage:
-                      effectiveAvatarUrl != null && effectiveAvatarUrl.isNotEmpty
-                          ? avatarImageProvider(effectiveAvatarUrl)
-                          : null,
-                  child: effectiveAvatarUrl == null || effectiveAvatarUrl.isEmpty
-                      ? iconWidget
-                      : null,
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        final current = _archivePullNotifier.value;
+        if (notification is ScrollUpdateNotification) {
+          if (notification.metrics.pixels < 0) {
+            final pull = (-notification.metrics.pixels).clamp(0.0, 96.0);
+            if (notification.dragDetails != null) {
+              final armed = pull >= _kArchivePullThreshold;
+              if (armed && !current.armed) {
+                HapticUtils.impact();
+              }
+              if ((pull - current.extent).abs() > 0.5 ||
+                  armed != current.armed) {
+                _archivePullNotifier.value = (extent: pull, armed: armed);
+              }
+            } else {
+              if (current.armed) {
+                _archivePullNotifier.value = (extent: 0.0, armed: false);
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _openArchivedChatsScreen();
+                });
+              } else if (current.extent > 0) {
+                _archivePullNotifier.value = (extent: pull, armed: false);
+              }
+            }
+          } else if (current.extent > 0 || current.armed) {
+            _archivePullNotifier.value = (extent: 0.0, armed: false);
+          }
+        } else if (notification is ScrollEndNotification) {
+          if (current.armed) {
+            _archivePullNotifier.value = (extent: 0.0, armed: false);
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _openArchivedChatsScreen();
+            });
+          } else if (current.extent > 0) {
+            _archivePullNotifier.value = (extent: 0.0, armed: false);
+          }
+        }
+        return false;
+      },
+      child: Stack(
+        children: [
+          Positioned.fill(child: scrollList),
+          ValueListenableBuilder<({double extent, bool armed})>(
+            valueListenable: _archivePullNotifier,
+            builder: (context, pullState, _) {
+              if (pullState.extent <= 2.0) {
+                return const SizedBox.shrink();
+              }
+              final double pullProgress =
+                  (pullState.extent / _kArchivePullThreshold).clamp(0.0, 1.0);
+              return Positioned(
+                top: safeTopPadding + 4,
+                left: 16,
+                right: 16,
+                child: IgnorePointer(
+                  child: Opacity(
+                    opacity: pullProgress,
+                    child: Transform.translate(
+                      offset: Offset(0, -10.0 * (1.0 - pullProgress)),
+                      child: Center(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 140),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: pullState.armed
+                                ? primaryColor.withValues(alpha: 0.18)
+                                : (isDark
+                                    ? const Color(0xFF2C2C2E)
+                                    : Colors.white),
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              AnimatedRotation(
+                                turns: pullState.armed ? 0.5 : 0.0,
+                                duration: const Duration(milliseconds: 160),
+                                child: iconoir.NavArrowDown(
+                                  width: 16,
+                                  height: 16,
+                                  color: pullState.armed
+                                      ? primaryColor
+                                      : theme.colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                l10n.translate(
+                                  pullState.armed
+                                      ? 'archive_release_hint'
+                                      : 'archive_pull_hint',
+                                ),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: pullState.armed
+                                      ? primaryColor
+                                      : theme.colorScheme.onSurface,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               );
+            },
+          ),
+        ],
+      ),
+    );
+  }
 
-    final Widget leadingWidget = Stack(
-      clipBehavior: Clip.none,
-      children: [
-        avatarWidget,
-        if (_isSelectMode && isSelected)
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: Container(
-              width: 18,
-              height: 18,
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: Theme.of(context).scaffoldBackgroundColor,
-                  width: 2,
-                ),
+  Widget _buildArchivedChatsHeaderTile(BuildContext context) {
+    final l10n = context.l10n;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final primaryColor = theme.colorScheme.primary;
+    final notifProvider = context.watch<NotificationSettingsProvider>();
+
+    int unmutedUnread = 0;
+    int totalUnread = 0;
+    for (final c in _archivedChats) {
+      final count =
+          c.unreadCount > 0 ? c.unreadCount : (c.unreadCount == -1 ? 1 : 0);
+      totalUnread += count;
+      if (!notifProvider.isChatMuted(c.id, chatType: c.chatType)) {
+        unmutedUnread += count;
+      }
+    }
+    final bool hasUnmutedUnread = unmutedUnread > 0;
+
+    final previewChats = _archivedChats.take(4).toList();
+    final baseSubtitleStyle = TextStyle(
+      fontSize: 13.5,
+      color: Colors.grey[500],
+    );
+    final unreadSubtitleStyle = TextStyle(
+      fontSize: 13.5,
+      fontWeight: FontWeight.w600,
+      color: theme.colorScheme.onSurface.withValues(alpha: 0.88),
+    );
+
+    final List<TextSpan> previewSpans = [];
+    for (int i = 0; i < previewChats.length; i++) {
+      final chat = previewChats[i];
+      final isChatUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
+      previewSpans.add(
+        TextSpan(
+          text: chat.name,
+          style: isChatUnread ? unreadSubtitleStyle : baseSubtitleStyle,
+        ),
+      );
+      if (i < previewChats.length - 1) {
+        previewSpans.add(TextSpan(text: ', ', style: baseSubtitleStyle));
+      }
+    }
+
+    final Widget tile = Builder(
+      builder: (tileContext) => GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapUp: _isSelectMode
+            ? null
+            : (details) =>
+                _showArchiveRowContextMenu(tileContext, details.globalPosition),
+        child: ListTile(
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          leading: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: hasUnmutedUnread
+                    ? [
+                        primaryColor.withValues(alpha: 0.85),
+                        primaryColor,
+                      ]
+                    : const [
+                        Color(0xFF78909C),
+                        Color(0xFF546E7A),
+                      ],
               ),
-              child: const Center(
-                child: iconoir.Check(
-                  color: Colors.white,
-                  width: 11,
-                  height: 11,
-                ),
+            ),
+            child: const Center(
+              child: iconoir.Archive(
+                color: Colors.white,
+                width: 22,
+                height: 22,
               ),
             ),
           ),
-      ],
-    );
-
-    final Widget? trailingWidget = _isSelectMode
-        ? null
-        : Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (chat.lastMessageTime != null)
-                Text(
-                  _formatChatTime(context, chat.lastMessageTime!),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: hasUnread
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey[500],
-                  ),
-                ),
-              const SizedBox(height: 4),
-              if (hasUnread)
-                Container(
-                  height: 18,
-                  constraints: const BoxConstraints(minWidth: 18),
-                  padding: chat.unreadCount == -1
-                      ? EdgeInsets.zero
-                      : const EdgeInsets.symmetric(horizontal: 5),
+          title: Text(
+            l10n.translate('archive_title'),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: RichText(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            text: TextSpan(children: previewSpans),
+          ),
+          trailing: totalUnread > 0
+              ? Container(
+                  height: 20,
+                  constraints: const BoxConstraints(minWidth: 20),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadge ??
-                        Theme.of(context).colorScheme.primary,
-                    borderRadius: BorderRadius.circular(9),
+                    color: hasUnmutedUnread
+                        ? primaryColor
+                        : (isDark
+                            ? Colors.white24
+                            : Colors.grey.withValues(alpha: 0.45)),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Center(
                     widthFactor: 1.0,
                     heightFactor: 1.0,
-                    child: chat.unreadCount == -1
-                        ? const SizedBox(width: 18, height: 18)
-                        : Text(
-                            chat.unreadCount > 99 ? '99+' : chat.unreadCount.toString(),
-                            style: TextStyle(
-                              color: Theme.of(context).extension<TheavThemeExtension>()?.palette.unreadBadgeText ??
-                                  Theme.of(context).colorScheme.onPrimary,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              height: 1.0,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                  ),
-                )
-              else
-                const SizedBox(height: 18),
-            ],
-          );
-
-    final tiling = TilingLayoutController.instance;
-    final isChatOpenInTile = tiling.isChatOpen(chat.id);
-    final isChatFocusedInTile = tiling.focusedChatTile?.chatId == chat.id;
-    final primaryColor = Theme.of(context).colorScheme.primary;
-
-    final chatTileBgColor = isSelected
-        ? primaryColor.withValues(alpha: 0.08)
-        : isChatFocusedInTile
-            ? primaryColor.withValues(alpha: 0.12)
-            : isChatOpenInTile
-                ? primaryColor.withValues(alpha: 0.06)
-                : null;
-
-    final chatTile = Material(
-      color: chatTileBgColor ?? Colors.transparent,
-      type: chatTileBgColor != null
-          ? MaterialType.canvas
-          : MaterialType.transparency,
-      child: ListTile(
-        onLongPress: () {
-          HapticUtils.impact();
-          if (_isSelectMode) {
-            // Long press on a selected chat in select mode shows the batch menu
-            if (isSelected) {
-              _showSelectedChatsMenu();
-            } else {
-              _toggleChatSelection(chat.id);
-            }
-          } else {
-            // Enter select mode and select this chat
-            _enterSelectMode(chat.id);
-          }
-        },
-        onTap: () {
-          if (_isSelectMode) {
-            HapticUtils.selection();
-            _toggleChatSelection(chat.id);
-          } else {
-            HapticUtils.tap();
-            _openChat(chat);
-          }
-        },
-        leading: leadingWidget,
-        title: Row(
-          children: [
-            if (chat.isPinned || chat.chatType == 'saved')
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: iconoir.Pin(
-                  width: 14,
-                  height: 14,
-                  color: hasUnread
-                      ? Theme.of(context).colorScheme.primary
-                      : Colors.grey[500],
-                ),
-              ),
-            Expanded(
-              child: Row(
-                children: [
-                  Flexible(
                     child: Text(
-                      chat.chatType == 'saved'
-                          ? context.l10n.translate('chat_saved_messages')
-                          : chat.name,
-                      style: TextStyle(
-                        fontWeight: hasUnread ? FontWeight.w600 : FontWeight.w500,
+                      totalUnread > 99 ? '99+' : '$totalUnread',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        height: 1.0,
                       ),
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  PeerBadgesRow(
-                    isBot: chat.isBot,
-                    isVerified: chat.isVerified || chat.chatType == 'system',
-                    verifiedIconSize: 15,
-                  ),
-                ],
-              ),
-            ),
-          ],
+                )
+              : null,
+          onTap: _isSelectMode ? null : _openArchivedChatsScreen,
+          onLongPress: _isSelectMode
+              ? null
+              : () => _showArchiveRowContextMenu(tileContext, null),
         ),
-        subtitle: _buildChatSubtitle(context, chat, hasUnread),
-        trailing: trailingWidget,
       ),
     );
 
-    if (_isSelectMode) {
-      return chatTile;
-    }
+    return Dismissible(
+      key: const ValueKey('archive_header_dismiss'),
+      direction:
+          _isSelectMode ? DismissDirection.none : DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        color: Colors.blueGrey.withValues(alpha: 0.25),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              l10n.translate('archive_hide_above_list'),
+              style: TextStyle(
+                color: theme.colorScheme.onSurface,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 8),
+            iconoir.EyeClosed(
+              width: 18,
+              height: 18,
+              color: theme.colorScheme.onSurface,
+            ),
+          ],
+        ),
+      ),
+      confirmDismiss: (_) async {
+        await _hideArchiveAboveList();
+        return false;
+      },
+      child: tile,
+    );
+  }
 
-    return SwipeableChatTile(
-      key: ValueKey('chat_swipe_${chat.id}'),
+  Widget _buildChatListItem(BuildContext context, Chat chat) {
+    final tiling = TilingLayoutController.instance;
+    final notifProvider = context.watch<NotificationSettingsProvider>();
+    final isMuted = notifProvider.isChatMuted(
+      chat.id,
+      chatType: chat.chatType,
+    );
+    final isSelected = _selectedChatIds.contains(chat.id);
+    final typing = _chatTypingStates[chat.id];
+    final String? resolvedTypingName = typing != null
+        ? ((typing.userId != null && typing.userId!.isNotEmpty)
+            ? () {
+                final resolved = ContactsService.resolveName(
+                  typing.userId,
+                  typing.rawUserName ?? '',
+                );
+                return resolved.isNotEmpty ? resolved : typing.userName;
+              }()
+            : typing.userName)
+        : null;
+    final fallbackSavedAvatar = _accountManager.currentAccount?.avatarUrl ??
+        _accountManager.currentAccount?.localAvatarPath;
+
+    return ChatListTileItem(
+      key: ValueKey<String>('main_chat_row_${chat.id}'),
       chat: chat,
-      enabled: !_isSelectMode,
+      isSelectMode: _isSelectMode,
+      isSelected: isSelected,
+      isMuted: isMuted,
+      currentUserId: _currentUserId,
+      fallbackSavedAvatarUrl: fallbackSavedAvatar,
+      typingInfo: typing != null
+          ? (action: typing.action, userName: resolvedTypingName)
+          : null,
+      fallbackEntities: _chatLastMessageEntities[chat.id] ?? const [],
+      isOpenInTile: tiling.windowSize.width >=
+              TilingLayoutController.kTwoColumnBreakpoint &&
+          tiling.isChatOpen(chat.id),
+      isFocusedInTile: tiling.windowSize.width >=
+              TilingLayoutController.kTwoColumnBreakpoint &&
+          tiling.focusedChatTile?.chatId == chat.id,
+      onTap: () {
+        if (_isSelectMode) {
+          HapticUtils.selection();
+          _toggleChatSelection(chat.id);
+        } else {
+          HapticUtils.tap();
+          _openChat(chat);
+        }
+      },
+      onLongPress: () {
+        HapticUtils.impact();
+        if (_isSelectMode) {
+          _toggleChatSelection(chat.id);
+        } else {
+          _enterSelectMode(chat.id);
+        }
+      },
       onSecondaryTapUp: (details) {
         _showChatContextMenu(context, chat, details.globalPosition);
       },
       onCreateDragPayload: (initialRect, globalPos) =>
-          _createChatDragPayload(chat, initialRect, globalPos),
-      onAction: (action) async {
+          ChatBatchDialogs.createDragPayload(
+        context,
+        chat,
+        initialRect,
+        globalPos,
+      ),
+      onSwipeAction: (action) async {
         switch (action) {
           case ChatSwipeAction.read:
             await _toggleReadChat(chat);
@@ -2774,52 +3011,13 @@ class _MainScreenState extends State<MainScreen>
             }
             break;
           case ChatSwipeAction.archive:
-            if (mounted) {
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(content: Text('Архивация чатов скоро будет доступна')),
-              );
-            }
+            await _toggleArchiveChat(chat);
             break;
           case ChatSwipeAction.mute:
-            if (mounted) {
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(content: Text('Отключение уведомлений скоро будет доступно')),
-              );
-            }
+            await _toggleMuteChat(chat);
             break;
         }
       },
-      child: chatTile,
-    );
-  }
-
-  DraggingChatPayload _createChatDragPayload(
-    Chat chat,
-    Rect initialRect,
-    Offset globalPos,
-  ) {
-    final effectiveSavedAvatar = chat.avatarUrl ??
-        _accountManager.currentAccount?.avatarUrl ??
-        _accountManager.currentAccount?.localAvatarPath;
-    final translatedSaved = context.l10n.translate('chat_saved_messages');
-    final displayName = chat.chatType == 'saved'
-        ? (translatedSaved != 'chat_saved_messages'
-            ? translatedSaved
-            : 'Избранное')
-        : (chat.chatType == 'system' && chat.name.isEmpty
-            ? context.l10n.translate('system_notifications_title')
-            : chat.name);
-
-    return DraggingChatPayload(
-      chatId: chat.id,
-      chatType: chat.chatType,
-      chatName: displayName,
-      avatarUrl: chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl,
-      otherUserId: chat.otherUserId,
-      otherUserOnline: chat.isOnline,
-      otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
-      initialGlobalRect: initialRect,
-      currentGlobalPos: globalPos,
     );
   }
 
@@ -2835,6 +3033,11 @@ class _MainScreenState extends State<MainScreen>
     final canSplit = TilingLayoutController.instance.windowSize.width >=
         TilingLayoutController.kTwoColumnBreakpoint;
     final hasUnread = chat.unreadCount > 0 || chat.unreadCount == -1;
+    final l10n = context.l10n;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final isMuted = context
+        .read<NotificationSettingsProvider>()
+        .isChatMuted(chat.id, chatType: chat.chatType);
 
     final selected = await showMenu<String>(
       context: context,
@@ -2856,7 +3059,7 @@ class _MainScreenState extends State<MainScreen>
                   color: Theme.of(context).colorScheme.primary,
                 ),
                 const SizedBox(width: 10),
-                const Text('Открыть в соседнем окне'),
+                Text(l10n.translate('selection_open_adjacent')),
               ],
             ),
           ),
@@ -2867,31 +3070,27 @@ class _MainScreenState extends State<MainScreen>
               iconoir.ChatBubble(
                 width: 18,
                 height: 18,
-                color: Theme.of(context).colorScheme.onSurface,
+                color: onSurface,
               ),
               const SizedBox(width: 10),
-              const Text('Открыть чат'),
+              Text(l10n.translate('chat_open_chat')),
             ],
           ),
         ),
-        if (chat.chatType != 'saved')
+        if (chat.chatType != 'saved' && chat.chatType != 'community')
           PopupMenuItem<String>(
             value: 'pin',
             child: Row(
               children: [
                 chat.isPinned
-                    ? iconoir.PinSlash(
-                        width: 18,
-                        height: 18,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      )
-                    : iconoir.Pin(
-                        width: 18,
-                        height: 18,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
+                    ? iconoir.PinSlash(width: 18, height: 18, color: onSurface)
+                    : iconoir.Pin(width: 18, height: 18, color: onSurface),
                 const SizedBox(width: 10),
-                Text(chat.isPinned ? 'Открепить' : 'Закрепить'),
+                Text(
+                  l10n.translate(
+                    chat.isPinned ? 'selection_unpin' : 'selection_pin',
+                  ),
+                ),
               ],
             ),
           ),
@@ -2899,13 +3098,57 @@ class _MainScreenState extends State<MainScreen>
           value: 'read',
           child: Row(
             children: [
-              iconoir.DoubleCheck(
-                width: 18,
-                height: 18,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+              iconoir.DoubleCheck(width: 18, height: 18, color: onSurface),
               const SizedBox(width: 10),
-              Text(hasUnread ? 'Отметить прочитанным' : 'Отметить непрочитанным'),
+              Text(
+                l10n.translate(
+                  hasUnread ? 'selection_mark_read' : 'selection_mark_unread',
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (chat.chatType != 'saved' && chat.chatType != 'community')
+          PopupMenuItem<String>(
+            value: 'archive',
+            child: Row(
+              children: [
+                iconoir.Archive(width: 18, height: 18, color: onSurface),
+                const SizedBox(width: 10),
+                Text(
+                  l10n.translate(
+                    chat.isArchived
+                        ? 'selection_unarchive'
+                        : 'selection_archive',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (chat.chatType != 'saved' && chat.chatType != 'community')
+          PopupMenuItem<String>(
+            value: 'mute',
+            child: Row(
+              children: [
+                isMuted
+                    ? iconoir.Bell(width: 18, height: 18, color: onSurface)
+                    : iconoir.BellOff(width: 18, height: 18, color: onSurface),
+                const SizedBox(width: 10),
+                Text(
+                  l10n.translate(
+                    isMuted ? 'selection_unmute' : 'selection_mute',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        PopupMenuItem<String>(
+          value: 'add_to_folder',
+          child: Row(
+            children: [
+              iconoir.Folder(width: 18, height: 18, color: onSurface),
+              const SizedBox(width: 10),
+              Text(l10n.translate('selection_add_to_folder')),
             ],
           ),
         ),
@@ -2913,24 +3156,34 @@ class _MainScreenState extends State<MainScreen>
           value: 'select',
           child: Row(
             children: [
-              iconoir.CheckCircle(
-                width: 18,
-                height: 18,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
+              iconoir.CheckCircle(width: 18, height: 18, color: onSurface),
               const SizedBox(width: 10),
-              const Text('Выбрать чаты'),
+              Text(l10n.translate('chat_select_chats')),
             ],
           ),
         ),
+        if (chat.chatType != 'community')
+          PopupMenuItem<String>(
+            value: 'clear_history',
+            child: Row(
+              children: [
+                iconoir.Erase(width: 18, height: 18, color: onSurface),
+                const SizedBox(width: 10),
+                Text(l10n.translate('selection_clear_history')),
+              ],
+            ),
+          ),
         if (chat.chatType != 'saved')
-          const PopupMenuItem<String>(
+          PopupMenuItem<String>(
             value: 'delete',
             child: Row(
               children: [
-                iconoir.Trash(width: 18, height: 18, color: Colors.red),
-                SizedBox(width: 10),
-                Text('Удалить чат', style: TextStyle(color: Colors.red)),
+                const iconoir.Trash(width: 18, height: 18, color: Colors.red),
+                const SizedBox(width: 10),
+                Text(
+                  l10n.translate('selection_delete'),
+                  style: const TextStyle(color: Colors.red),
+                ),
               ],
             ),
           ),
@@ -2951,8 +3204,24 @@ class _MainScreenState extends State<MainScreen>
       case 'read':
         await _toggleReadChat(chat);
         break;
+      case 'archive':
+        await _toggleArchiveChat(chat);
+        break;
+      case 'mute':
+        await _toggleMuteChat(chat);
+        break;
+      case 'add_to_folder':
+        await ChatBatchDialogs.showAddToFolderSheet(context, [chat]);
+        break;
       case 'select':
         _enterSelectMode(chat.id);
+        break;
+      case 'clear_history':
+        await ChatBatchDialogs.executeClearHistory(
+          context,
+          [chat],
+          currentUserId: _currentUserId,
+        );
         break;
       case 'delete':
         await _batchDeleteChats([chat]);
@@ -2961,25 +3230,64 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _toggleReadChat(Chat chat) async {
+    if (chat.chatType == 'community') {
+      final commId = chat.otherUserId ??
+          (chat.id.startsWith('community_')
+              ? chat.id.substring('community_'.length)
+              : chat.id);
+      if (chat.unreadCount > 0 || chat.unreadCount == -1) {
+        final idx = _communities.indexWhere((c) => c.id == commId);
+        if (mounted) {
+          setState(() {
+            _markedUnreadCommunityIds.remove(chat.id);
+            if (idx != -1) {
+              final target = _communities[idx];
+              for (final ch in target.channels) {
+                if (ch.unreadCount > 0) {
+                  CommunityService.resetChannelUnread(ch.id);
+                  unawaited(ChatService.markMessagesAsRead(chatId: ch.id));
+                }
+              }
+              _communities[idx] = target.copyWith(
+                channels: [
+                  for (final ch in target.channels) ch.copyWith(unreadCount: 0),
+                ],
+              );
+            }
+          });
+        }
+      } else if (mounted) {
+        setState(() {
+          _markedUnreadCommunityIds.add(chat.id);
+        });
+      }
+      return;
+    }
+
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
     final db = AppDatabase(_currentUserId);
     if (chat.unreadCount > 0 || chat.unreadCount == -1) {
       await db.batchMarkAsRead([chat.id]);
-      try {
-        context.read<UnreadCountProvider>().setCount(chat.id, 0);
-      } catch (_) {}
-      await ChatService.markMessagesAsRead(chatId: chat.id);
+      unreadProvider?.setCount(chat.id, 0);
+      if (chat.unreadCount == -1) {
+        await ChatService.unmarkChatUnread(chat.id);
+      } else {
+        await ChatService.markMessagesAsRead(chatId: chat.id);
+      }
     } else {
       await db.updateUnreadCount(chat.id, -1);
-      try {
-        context.read<UnreadCountProvider>().setCount(chat.id, -1);
-      } catch (_) {}
+      unreadProvider?.setCount(chat.id, -1);
+      unawaited(ChatService.markChatUnread(chat.id));
     }
   }
 
   Future<void> _togglePinChat(Chat chat) async {
-    if (chat.chatType == 'saved') return;
+    if (chat.chatType == 'saved' || chat.chatType == 'community') return;
     final newPinned = !chat.isPinned;
-    await AppDatabase().batchSetPinned([chat.id], newPinned);
+    await AppDatabase(_currentUserId).batchSetPinned([chat.id], newPinned);
     if (newPinned) {
       await ChatService.pinChat(chatId: chat.id);
     } else {
@@ -2987,364 +3295,272 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  Widget? _buildChatSubtitle(BuildContext context, Chat chat, bool hasUnread) {
-    final typingState = _chatTypingStates[chat.id];
-    if (typingState != null) {
-      final loc = AppLocalizations.of(context);
-      final isGroup = chat.chatType == 'group';
-      final userName = typingState.userName;
-      final String statusText;
-      if (isGroup && userName != null && userName.isNotEmpty) {
-        final String key;
-        if (typingState.action == 'record_voice') {
-          key = 'chat_user_recording_voice';
-        } else if (typingState.action == 'record_round') {
-          key = 'chat_user_recording_round';
-        } else {
-          key = 'chat_user_typing';
-        }
-        statusText =
-            (loc?.translate(key) ?? '$userName typing...').replaceAll('{name}', userName);
-      } else {
-        final String key;
-        if (typingState.action == 'record_voice') {
-          key = 'chat_status_recording_voice';
-        } else if (typingState.action == 'record_round') {
-          key = 'chat_status_recording_round';
-        } else {
-          key = 'chat_status_typing';
-        }
-        statusText = loc?.translate(key) ?? 'typing...';
+  Future<void> _toggleArchiveChat(Chat chat) async {
+    if (chat.chatType == 'saved' || chat.chatType == 'community') return;
+    final targetArchived = !chat.isArchived;
+    final db = AppDatabase(_currentUserId);
+    await db.setChatArchived(chat.id, targetArchived);
+
+    final res = targetArchived
+        ? await ChatService.archiveChat(chatId: chat.id)
+        : await ChatService.unarchiveChat(chatId: chat.id);
+
+    if (res['success'] != true) {
+      await db.setChatArchived(chat.id, !targetArchived);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              res['message']?.toString() ?? 'Не удалось обновить архив',
+            ),
+          ),
+        );
       }
-      final accentColor = Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF5CB8E6)
-          : Theme.of(context).colorScheme.primary;
-      return Text(
-        statusText,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: accentColor,
-          fontWeight: FontWeight.w500,
-          fontSize: 14,
+      return;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            targetArchived
+                ? '${chat.name} перемещён в архив'
+                : '${chat.name} возвращён из архива',
+          ),
+          action: SnackBarAction(
+            label: 'Отменить',
+            onPressed: () {
+              unawaited(
+                _toggleArchiveChat(chat.copyWith(isArchived: targetArchived)),
+              );
+            },
+          ),
         ),
       );
     }
-
-    final draft = DraftService().getPublishedDraft(chat.id);
-    if (draft != null && draft.isNotEmpty) {
-      final draftPrefix = AppLocalizations.of(context)?.translate('chat_draft') ?? 'Черновик';
-      final bool hasDraftText = draft.text.trim().isNotEmpty;
-      final draftText = hasDraftText ? draft.text : '...';
-      final draftStyle = TextStyle(
-        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
-        fontSize: 14,
-      );
-      return RichText(
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        text: TextSpan(
-          children: [
-            TextSpan(
-              text: '$draftPrefix: ',
-              style: const TextStyle(
-                color: Colors.redAccent,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
-            EmojiUtils.buildPreviewWithCustomEmojis(
-              draftText,
-              style: draftStyle,
-              entities: hasDraftText ? draft.entities : const [],
-              emojiSize: 16.0,
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (chat.isLastMessageRoundVideo) {
-      final primary = Theme.of(context).colorScheme.primary;
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          RoundVideoThumbnail(
-            videoUrl: chat.lastMessageFileUrl,
-            size: 18,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              AppLocalizations.of(context)?.translate('chat_video_note') ??
-                  'Video message',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: primary,
-                fontWeight: FontWeight.w500,
-                fontSize: 14,
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    final loc = AppLocalizations.of(context);
-    String? displaySubtitle;
-    if (chat.isLastMessageUnsupported) {
-      displaySubtitle =
-          loc?.translate('message_unsupported_preview') ?? 'Unsupported message';
-    } else if (chat.lastMessageType?.toLowerCase() == 'call') {
-      displaySubtitle = Chat.formatCallPreview(
-        chat.lastMessage,
-        currentUserId: _currentUserId,
-      );
-    } else {
-      displaySubtitle = chat.lastMessage;
-      if (displaySubtitle == null || displaySubtitle.trim().isEmpty) {
-        if (chat.lastMessageGroupedId != null &&
-            chat.lastMessageGroupedId!.isNotEmpty) {
-          displaySubtitle = loc?.translate('chat_album') ?? 'Album';
-        } else {
-          final msgType = chat.lastMessageType?.toLowerCase();
-          if (msgType == 'photo' || msgType == 'image') {
-            displaySubtitle = loc?.translate('chat_photo') ?? 'Photo';
-          } else if (msgType == 'video') {
-            displaySubtitle = loc?.translate('chat_video') ?? 'Video';
-          } else if (msgType == 'album') {
-            displaySubtitle = loc?.translate('chat_album') ?? 'Album';
-          } else if (msgType == 'voice' || msgType == 'audio') {
-            displaySubtitle =
-                loc?.translate('chat_voice_message') ?? 'Voice message';
-          } else if (msgType == 'file') {
-            displaySubtitle = loc?.translate('chat_file') ?? 'File';
-          }
-        }
-      }
-    }
-
-    if (displaySubtitle == null || displaySubtitle.trim().isEmpty) {
-      return null;
-    }
-
-    final themeExt = Theme.of(context).extension<TheavThemeExtension>();
-    final subtitleColor = hasUnread
-        ? (themeExt?.palette.chatSubtitleUnread ?? Theme.of(context).colorScheme.onSurface)
-        : (themeExt?.palette.chatSubtitle ??
-            Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
-
-    final subtitleStyle = TextStyle(
-      color: subtitleColor,
-      fontWeight: hasUnread ? FontWeight.w500 : FontWeight.normal,
-      fontSize: 14,
-    );
-    final effectiveEntities = (displaySubtitle == chat.lastMessage)
-        ? (chat.lastMessageEntities.isNotEmpty
-            ? chat.lastMessageEntities
-            : (_chatLastMessageEntities[chat.id] ?? const <MessageEntity>[]))
-        : const <MessageEntity>[];
-
-    return RichText(
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      text: EmojiUtils.buildPreviewWithCustomEmojis(
-        displaySubtitle,
-        style: subtitleStyle,
-        entities: effectiveEntities,
-        emojiSize: 16.0,
-      ),
-    );
   }
 
-  /// Enter multi-select mode with the given chat pre-selected
-  void _enterSelectMode(String chatId) {
+  Future<void> _toggleMuteChat(Chat chat) async {
+    if (chat.chatType == 'saved' || chat.chatType == 'community') return;
+    final notifProvider = context.read<NotificationSettingsProvider>();
+    final currentlyMuted =
+        notifProvider.isChatMuted(chat.id, chatType: chat.chatType);
+    await notifProvider.setMuteState(
+      chat.id,
+      currentlyMuted ? MuteState.notMuted : MuteState.muted,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            currentlyMuted
+                ? 'Уведомления для «${chat.name}» включены'
+                : 'Уведомления для «${chat.name}» отключены',
+          ),
+        ),
+      );
+    }
+  }
+
+  /// Enter multi-select mode (optionally pre-selecting [chatId])
+  void _enterSelectMode([String? chatId]) {
+    if (_isTopMenuOpen) _closeTopMenu();
+    if (_isFolderMenuOpen) _closeFolderMenu();
+    if (_isCreateMenuOpen) _closeCreateMenu();
+    _selectModeController.forward();
     setState(() {
       _isSelectMode = true;
-      _selectedChatIds = {chatId};
+      _isSelectionMenuOpen = false;
+      _selectedChatIds = chatId != null ? {chatId} : {};
     });
   }
 
   /// Exit multi-select mode
   void _exitSelectMode() {
+    _selectModeController.reverse();
     setState(() {
       _isSelectMode = false;
+      _isSelectionMenuOpen = false;
       _selectedChatIds = {};
     });
   }
 
-  /// Select all chats (respecting current filter)
-  void _selectAllChats() {
-    final folders = _folderService.folders;
-    final activeFolder = (_activeFilter >= 0 && _activeFilter < folders.length)
-        ? folders[_activeFilter]
-        : (folders.isNotEmpty ? folders.first : ChatFolder.defaults.first);
-
+  /// Select all visible folder chats, or clear selection if all are selected
+  void _selectAllOrDeselect(List<Chat> folderChats) {
+    final allSelected = folderChats.isNotEmpty &&
+        folderChats.every((c) => _selectedChatIds.contains(c.id));
     setState(() {
-      _selectedChatIds = _chats
-          .where((chat) => activeFolder.matchesChat(chat))
-          .map((c) => c.id)
-          .toSet();
+      if (allSelected) {
+        _selectedChatIds = {};
+      } else {
+        _selectedChatIds = folderChats.map((c) => c.id).toSet();
+      }
     });
   }
 
   /// Toggle selection of a single chat
   void _toggleChatSelection(String chatId) {
+    final shouldExit = _selectedChatIds.contains(chatId) &&
+        _selectedChatIds.length == 1;
+    if (shouldExit) {
+      _exitSelectMode();
+      return;
+    }
     setState(() {
       if (_selectedChatIds.contains(chatId)) {
         _selectedChatIds.remove(chatId);
-        // If no chats selected, exit select mode
-        if (_selectedChatIds.isEmpty) {
-          _isSelectMode = false;
-        }
       } else {
         _selectedChatIds.add(chatId);
       }
     });
   }
 
-  /// Show context menu for selected chats (pin/unpin, mark read, delete)
-  void _showSelectedChatsMenu() {
-    if (_selectedChatIds.isEmpty) return;
-
-    final selectedChats =
-        _chats.where((c) => _selectedChatIds.contains(c.id)).toList();
-    final count = selectedChats.length;
-    final allPinned =
-        selectedChats.every((c) => c.isPinned || c.chatType == 'saved');
-    final anyUnread = selectedChats.any((c) => c.unreadCount > 0 || c.unreadCount == -1);
-    final hasSavedChat = selectedChats.any((c) => c.chatType == 'saved');
-    final deletableChats =
-        selectedChats.where((c) => c.chatType != 'saved').toList();
-
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'Выбрано чатов: $count',
-                style:
-                    const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const Divider(height: 1),
-            if (selectedChats.length == 1 &&
-                TilingLayoutController.instance.windowSize.width >=
-                    TilingLayoutController.kTwoColumnBreakpoint)
-              ListTile(
-                leading: iconoir.ViewColumns2(
-                  color: Theme.of(context).colorScheme.primary,
-                  width: 22,
-                  height: 22,
-                ),
-                title: const Text('Открыть в соседнем окне'),
-                onTap: () {
-                  Navigator.pop(context);
-                  final target = selectedChats.first;
-                  _exitSelectMode();
-                  _openChat(target, inAdjacentTile: true);
-                },
-              ),
-            // Pin/Unpin
-            if (!hasSavedChat || selectedChats.length > 1)
-              ListTile(
-                leading: allPinned
-                    ? iconoir.PinSlash(color: Theme.of(context).colorScheme.primary, width: 22, height: 22)
-                    : iconoir.Pin(color: Theme.of(context).colorScheme.primary, width: 22, height: 22),
-                title: Text(allPinned ? 'Открепить чаты' : 'Закрепить чаты'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _batchTogglePin(selectedChats);
-                },
-              ),
-            // Mark as read
-            if (anyUnread)
-              ListTile(
-                leading: iconoir.DoubleCheck(color: Theme.of(context).colorScheme.primary, width: 22, height: 22),
-                title: const Text('Отметить как прочитанные'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _batchMarkAsRead(selectedChats);
-                },
-              ),
-            // Delete (not for saved chat)
-            if (deletableChats.isNotEmpty)
-              ListTile(
-                leading: const iconoir.Trash(color: Colors.red, width: 22, height: 22),
-                title: Text(
-                  'Удалить чаты${hasSavedChat ? ' (кроме Избранного)' : ''}',
-                  style: const TextStyle(color: Colors.red),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _batchDeleteChats(deletableChats);
-                },
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
   /// Batch toggle pin status for selected chats
   Future<void> _batchTogglePin(List<Chat> chats) async {
-    final toPin = <Chat>[];
-    final toUnpin = <Chat>[];
+    final pinnable = chats
+        .where((c) => c.chatType != 'saved' && c.chatType != 'community')
+        .toList();
+    if (pinnable.isEmpty) return;
 
-    for (final chat in chats) {
-      if (chat.chatType == 'saved') continue; // Skip saved chat
-      if (chat.isPinned) {
-        toUnpin.add(chat);
-      } else {
-        toPin.add(chat);
-      }
-    }
+    final allPinned = pinnable.every((c) => c.isPinned);
+    final newPinned = !allPinned;
+    final db = AppDatabase(_currentUserId);
+    final messenger = ScaffoldMessenger.maybeOf(context);
 
-    final db = AppDatabase();
-
-    // Оптимистичное обновление SQLite — стрим мгновенно обновит UI
-    if (toPin.isNotEmpty) {
-      await db.batchSetPinned(toPin.map((c) => c.id).toList(), true);
-    }
-    if (toUnpin.isNotEmpty) {
-      await db.batchSetPinned(toUnpin.map((c) => c.id).toList(), false);
-    }
+    await db.batchSetPinned(pinnable.map((c) => c.id).toList(), newPinned);
     _exitSelectMode();
 
     int successCount = 0;
-    for (final chat in toPin) {
-      final result = await ChatService.pinChat(chatId: chat.id);
-      if (result['success'] == true) successCount++;
-    }
-    for (final chat in toUnpin) {
-      final result = await ChatService.unpinChat(chatId: chat.id);
+    for (final chat in pinnable) {
+      final result = newPinned
+          ? await ChatService.pinChat(chatId: chat.id)
+          : await ChatService.unpinChat(chatId: chat.id);
       if (result['success'] == true) successCount++;
     }
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger?.showSnackBar(
         SnackBar(content: Text('Обновлено $successCount чатов')),
       );
     }
   }
 
+  /// Batch toggle mute state for selected chats
+  Future<void> _batchToggleMute(List<Chat> chats) async {
+    final muteable = chats
+        .where((c) => c.chatType != 'saved' && c.chatType != 'community')
+        .toList();
+    if (muteable.isEmpty) return;
+
+    final notifProvider = context.read<NotificationSettingsProvider>();
+    final allMuted = muteable.every(
+      (c) => notifProvider.isChatMuted(c.id, chatType: c.chatType),
+    );
+    final targetState = allMuted ? MuteState.notMuted : MuteState.muted;
+
+    for (final chat in muteable) {
+      await notifProvider.setMuteState(chat.id, targetState);
+    }
+    if (mounted) {
+      _exitSelectMode();
+    }
+  }
+
+  /// Batch move selected chats to archive with Undo snackbar
+  Future<void> _batchArchiveChats(List<Chat> chats) async {
+    final targets = chats
+        .where((c) => c.chatType != 'saved' && c.chatType != 'community')
+        .toList();
+    if (targets.isEmpty) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final l10n = context.l10n;
+    final toastText = l10n
+        .translate('archive_moved_toast')
+        .replaceAll('{count}', '${targets.length}');
+    final undoLabel = l10n.translate('common_undo');
+
+    final db = AppDatabase(_currentUserId);
+    final ids = targets.map((c) => c.id).toList();
+    await db.batchSetArchived(ids, true);
+    _exitSelectMode();
+
+    final failedIds = <String>[];
+    for (final chat in targets) {
+      final res = await ChatService.archiveChat(chatId: chat.id);
+      if (res['success'] != true) {
+        failedIds.add(chat.id);
+      }
+    }
+
+    if (failedIds.isNotEmpty) {
+      await db.batchSetArchived(failedIds, false);
+    }
+
+    final succeededIds =
+        ids.where((id) => !failedIds.contains(id)).toList();
+    if (succeededIds.isEmpty) return;
+
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(toastText),
+        action: SnackBarAction(
+          label: undoLabel,
+          onPressed: () {
+            unawaited(() async {
+              await db.batchSetArchived(succeededIds, false);
+              for (final id in succeededIds) {
+                await ChatService.unarchiveChat(chatId: id);
+              }
+            }());
+          },
+        ),
+      ),
+    );
+  }
+
+  /// Batch toggle read / unread status for selected chats
+  Future<void> _batchToggleRead(List<Chat> chats) async {
+    final regular =
+        chats.where((c) => c.chatType != 'community').toList();
+    if (regular.isEmpty) return;
+
+    final anyUnread =
+        regular.any((c) => c.unreadCount > 0 || c.unreadCount == -1);
+    if (anyUnread) {
+      await _batchMarkAsRead(regular);
+      return;
+    }
+
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+
+    final db = AppDatabase(_currentUserId);
+    final ids = regular.map((c) => c.id).toList();
+    await db.batchMarkAsUnread(ids);
+    for (final id in ids) {
+      unreadProvider?.setCount(id, -1);
+      unawaited(ChatService.markChatUnread(id));
+    }
+    _exitSelectMode();
+  }
+
   /// Batch mark selected chats as read
   Future<void> _batchMarkAsRead(List<Chat> chats) async {
-    final db = AppDatabase();
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+
+    final db = AppDatabase(_currentUserId);
     final ids = chats.map((c) => c.id).toList();
 
     // Оптимистичное обновление SQLite и провайдера — стрим мгновенно обновит UI
     await db.batchMarkAsRead(ids);
     for (final id in ids) {
-      try {
-        context.read<UnreadCountProvider>().setCount(id, 0);
-      } catch (_) {}
+      unreadProvider?.setCount(id, 0);
     }
     _exitSelectMode();
 
@@ -3356,7 +3572,12 @@ class _MainScreenState extends State<MainScreen>
           successCount++;
         }
       } else if (chat.unreadCount == -1) {
-        successCount++;
+        final result = await ChatService.unmarkChatUnread(chat.id);
+        if (result['success'] == true) {
+          successCount++;
+        } else {
+          successCount++;
+        }
       }
     }
 
@@ -3368,41 +3589,67 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  /// Batch delete selected chats
+  /// Batch delete or leave selected chats with tailored confirmation dialog
   Future<void> _batchDeleteChats(List<Chat> chats) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Удалить чаты?'),
-        content: Text(
-            'Выбранные чаты (${chats.length}) будут удалены из вашего списка.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Удалить'),
-          ),
-        ],
-      ),
+    final deletable = chats.where((c) => c.chatType != 'saved').toList();
+    if (deletable.isEmpty) return;
+
+    final delRes = await ChatBatchDialogs.confirmDeleteChatsWithOptions(
+      context,
+      deletable,
     );
 
-    if (confirmed == true && mounted) {
-      final db = AppDatabase();
-      final ids = chats.map((c) => c.id).toList();
+    if (delRes.confirmed && mounted) {
+      final db = AppDatabase(_currentUserId);
+      final nonCommunityChats =
+          deletable.where((c) => c.chatType != 'community').toList();
+      final communityChats =
+          deletable.where((c) => c.chatType == 'community').toList();
+      final ids = nonCommunityChats.map((c) => c.id).toList();
 
       // Оптимистичное удаление из SQLite — стрим мгновенно обновит UI
-      await db.batchDeleteChats(ids);
+      if (ids.isNotEmpty) {
+        for (final id in ids) {
+          DraftService().cancelPendingPublish(id);
+        }
+        await db.batchDeleteChats(ids);
+      }
+      if (communityChats.isNotEmpty) {
+        final removedCommIds = <String>{};
+        for (final commChat in communityChats) {
+          _markedUnreadCommunityIds.remove(commChat.id);
+          final commId = commChat.otherUserId ??
+              (commChat.id.startsWith('community_')
+                  ? commChat.id.substring('community_'.length)
+                  : commChat.id);
+          removedCommIds.add(commId);
+        }
+        setState(() {
+          _communities.removeWhere((c) => removedCommIds.contains(c.id));
+        });
+      }
       _exitSelectMode();
 
       int deleted = 0;
       int failed = 0;
-      for (final chat in chats) {
-        final result = await ChatService.deleteChat(chat.id);
+      for (final chat in nonCommunityChats) {
+        final result = await ChatService.deleteChat(
+          chat.id,
+          revoke: chat.chatType == 'private' && delRes.revoke,
+        );
         if (result['success'] == true) {
+          deleted++;
+        } else {
+          failed++;
+        }
+      }
+      for (final commChat in communityChats) {
+        final commId = commChat.otherUserId ??
+            (commChat.id.startsWith('community_')
+                ? commChat.id.substring('community_'.length)
+                : commChat.id);
+        final left = await CommunityService.leaveCommunity(commId);
+        if (left) {
           deleted++;
         } else {
           failed++;
@@ -3427,6 +3674,7 @@ class _MainScreenState extends State<MainScreen>
       try {
         context.read<UnreadCountProvider>().setCount(chat.id, 0);
       } catch (_) {}
+      unawaited(ChatService.unmarkChatUnread(chat.id));
     }
 
     final effectiveSavedAvatar = chat.avatarUrl ??
@@ -3437,13 +3685,21 @@ class _MainScreenState extends State<MainScreen>
         ? (translatedSaved != 'chat_saved_messages'
             ? translatedSaved
             : 'Избранное')
-        : (chat.chatType == 'system' && chat.name.isEmpty
-            ? context.l10n.translate('system_notifications_title')
-            : chat.name);
-    final effectiveAvatar =
-        chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
+        : (chat.chatType == 'system'
+            ? PrivateChatScreen.resolveSystemChatTitle(context, chat.name)
+            : (chat.chatType == 'private'
+                ? ContactsService.resolveName(chat.otherUserId, chat.name)
+                : chat.name));
+    final effectiveAvatar = chat.chatType == 'saved'
+        ? effectiveSavedAvatar
+        : (chat.chatType == 'private'
+            ? ContactsService.resolveAvatarUrl(chat.otherUserId, chat.avatarUrl)
+            : chat.avatarUrl);
 
     if (chat.chatType == 'community') {
+      if (_markedUnreadCommunityIds.remove(chat.id) && mounted) {
+        setState(() {});
+      }
       final rawCommId = chat.otherUserId ??
           (chat.id.startsWith('community_')
               ? chat.id.substring('community_'.length)
@@ -3523,8 +3779,8 @@ class _MainScreenState extends State<MainScreen>
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: chat.name,
-              otherUserAvatar: chat.avatarUrl,
+              otherUserName: displayName,
+              otherUserAvatar: effectiveAvatar,
               otherUserOnline: chat.isOnline,
               otherUserLastSeen:
                   DateTimeUtils.parseUtcDateTime(chat.lastSeen),
@@ -3550,9 +3806,15 @@ class _MainScreenState extends State<MainScreen>
         Navigator.push(
           context,
           SwipeBackPageRoute(
-            builder: (_) => SystemNotificationsScreen(
+            builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              chatName: displayName,
+              otherUserName: displayName,
+              otherUserAvatar: effectiveAvatar,
+              otherUserOnline: chat.isOnline,
+              otherUserLastSeen:
+                  DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+              otherUserId: chat.otherUserId,
+              initialChatType: 'system',
             ),
           ),
         ).then((_) => onReturn());
@@ -3561,11 +3823,17 @@ class _MainScreenState extends State<MainScreen>
         Navigator.push(
           context,
           SwipeBackPageRoute(
-            builder: (_) => GroupChatScreen(
-              chatId: chat.id,
-              groupName: chat.name,
-              groupAvatar: chat.avatarUrl,
-            ),
+            builder: (_) => chat.isForum
+                ? ForumTopicsScreen(
+                    chatId: chat.id,
+                    chatName: chat.name,
+                    chatAvatar: chat.avatarUrl,
+                  )
+                : GroupChatScreen(
+                    chatId: chat.id,
+                    groupName: chat.name,
+                    groupAvatar: chat.avatarUrl,
+                  ),
           ),
         ).then((_) => onReturn());
         break;
@@ -3584,31 +3852,6 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  String _formatChatTime(BuildContext context, String timestamp) {
-    try {
-      final localDateTime = DateTimeUtils.parseUtcDateTime(timestamp);
-      if (localDateTime == null) return '';
-      final now = DateTime.now();
-
-      if (DateTimeUtils.isToday(localDateTime, now: now)) {
-        return '${localDateTime.hour.toString().padLeft(2, '0')}:${localDateTime.minute.toString().padLeft(2, '0')}';
-      } else if (DateTimeUtils.isYesterday(localDateTime, now: now)) {
-        return context.l10n.translate('date_yesterday');
-      } else {
-        final days = DateTimeUtils.startOfDay(now)
-            .difference(DateTimeUtils.startOfDay(localDateTime))
-            .inDays;
-        if (days < 7 && days > 0) {
-          return DateTimeUtils.formatWeekday(localDateTime.weekday, context);
-        } else {
-          return '${localDateTime.day}.${localDateTime.month}';
-        }
-      }
-    } catch (e) {
-      return '';
-    }
-  }
-
   /// Sort chats: saved first, then pinned (stable), then by updated_at
   void _sortChats() {
     _chats.sort((a, b) {
@@ -3622,12 +3865,25 @@ class _MainScreenState extends State<MainScreen>
         return a.isPinned ? -1 : 1;
       }
 
-      // Then by parsed updated_at to ensure accurate chronological ordering
-      final dtA = DateTimeUtils.parseUtcDateTime(a.updatedAt) ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      final dtB = DateTimeUtils.parseUtcDateTime(b.updatedAt) ??
-          DateTime.fromMillisecondsSinceEpoch(0);
-      return dtB.compareTo(dtA);
+      // Then by precomputed updatedAtEpochMs (or active published draft time)
+      int effectiveEpochMs(Chat chat) {
+        int ts = chat.updatedAtEpochMs;
+        final bool canShowDraft =
+            chat.chatType != 'channel' ||
+            chat.canPostInChannel ||
+            chat.myRole == 'owner' ||
+            chat.myRole == 'admin' ||
+            chat.myRole == 'moderator';
+        if (canShowDraft) {
+          final draft = DraftService().getPublishedDraft(chat.id);
+          if (draft != null && draft.isNotEmpty) {
+            ts = math.max(ts, draft.updatedAt.millisecondsSinceEpoch);
+          }
+        }
+        return ts;
+      }
+
+      return effectiveEpochMs(b).compareTo(effectiveEpochMs(a));
     });
   }
 
@@ -3648,6 +3904,7 @@ class _MainScreenState extends State<MainScreen>
       child: PopScope(
         canPop: _currentIndex == 1 &&
             !_isTopMenuOpen &&
+            !_isSelectionMenuOpen &&
             !_isFolderMenuOpen &&
             !_isCreateMenuOpen &&
             !_isSelectMode,
@@ -3655,6 +3912,10 @@ class _MainScreenState extends State<MainScreen>
           if (didPop) return;
           if (_isTopMenuOpen) {
             _closeTopMenu();
+            return;
+          }
+          if (_isSelectionMenuOpen) {
+            setState(() => _isSelectionMenuOpen = false);
             return;
           }
           if (_isFolderMenuOpen) {
@@ -3675,8 +3936,16 @@ class _MainScreenState extends State<MainScreen>
         },
         child: Consumer<LiquidGlassProvider>(
           builder: (context, glassProvider, _) {
-            final totalUnread =
-                context.watch<UnreadCountProvider>().totalUnread;
+            final unreadProvider = context.watch<UnreadCountProvider>();
+            final notifProvider = context.watch<NotificationSettingsProvider>();
+            final notifGlobal = notifProvider.globalSettings;
+            final totalUnread = unreadProvider.getBadgeCount(
+              badgeEnabled: notifGlobal.badgeEnabled,
+              badgeMode: notifGlobal.badgeMode,
+              includeMutedChats: notifGlobal.includeMutedChats,
+              isMutedResolver: (chatId, chatType) =>
+                  notifProvider.isChatMuted(chatId, chatType: chatType),
+            );
             final primaryColor = Theme.of(context).colorScheme.primary;
 
             if (_lastGlassEnabled != glassProvider.enabled) {
@@ -3694,11 +3963,14 @@ class _MainScreenState extends State<MainScreen>
 
             // PageView: страница 0 = Настройки, страница 1 = Чаты, страница 2 = Поиск
             // Свайп влево → Настройки, свайп вправо → Чаты
-            final Widget pageView = PageView(
+            final Widget rawPageView = PageView(
                   key: _pageViewKey,
                   controller: _pageController,
                   physics: const NeverScrollableScrollPhysics(),
                   onPageChanged: (page) {
+                    if (_swipingFromTabIndex != null) {
+                      return;
+                    }
                     if (_isTopMenuOpen) {
                       _closeTopMenu();
                     }
@@ -3715,6 +3987,7 @@ class _MainScreenState extends State<MainScreen>
                     if (_currentIndex != page) {
                       setState(() {
                         _currentIndex = page;
+                        _visitedPages.add(page);
                         if (page == 2) {
                           // Поиск — очищаем поле при переходе
                           _searchController.clear();
@@ -3729,10 +4002,12 @@ class _MainScreenState extends State<MainScreen>
                   },
                   children: [
                     // Страница 0: Настройки (встроенная)
-                    const RepaintBoundary(
-                      child: _KeepAlivePage(
-                        child: SettingsScreen(isEmbedded: true),
-                      ),
+                    RepaintBoundary(
+                      child: _visitedPages.contains(0)
+                          ? const _KeepAlivePage(
+                              child: SettingsScreen(isEmbedded: true),
+                            )
+                          : const SizedBox.shrink(),
                     ),
 
                     // Страница 1: Чаты
@@ -3780,61 +4055,97 @@ class _MainScreenState extends State<MainScreen>
 
                     // Страница 2: Поиск
                     RepaintBoundary(
-                      child: _KeepAlivePage(
-                        child: SafeArea(
-                          child: Column(
-                            children: [
-                              // Отступ под стационарный верхний бар
-                              const SizedBox(height: 52),
-                              // Поле поиска
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 8),
-                                child: TextField(
-                                  controller: _searchController,
-                                  autofocus: false,
-                                  focusNode: _searchFocusNode,
-                                  decoration: InputDecoration(
-                                    hintText: l10n.translate('common_search'),
-                                    prefixIcon: Padding(
-                                      padding: const EdgeInsets.all(12),
-                                      child: iconoir.Search(
-                                        width: 20,
-                                        height: 20,
-                                        color: Theme.of(context).iconTheme.color ?? Colors.grey,
+                      child: _visitedPages.contains(2)
+                          ? _KeepAlivePage(
+                              child: SafeArea(
+                                child: Column(
+                                  children: [
+                                    // Отступ под стационарный верхний бар
+                                    const SizedBox(height: 52),
+                                    // Поле поиска
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 8),
+                                      child: TextField(
+                                        controller: _searchController,
+                                        autofocus: false,
+                                        focusNode: _searchFocusNode,
+                                        decoration: InputDecoration(
+                                          hintText: l10n.translate('common_search'),
+                                          prefixIcon: Padding(
+                                            padding: const EdgeInsets.all(12),
+                                            child: iconoir.Search(
+                                              width: 20,
+                                              height: 20,
+                                              color: Theme.of(context).iconTheme.color ?? Colors.grey,
+                                            ),
+                                          ),
+                                          suffixIcon: IconButton(
+                                            icon: const iconoir.Xmark(width: 20, height: 20),
+                                            onPressed: () {
+                                              _searchController.clear();
+                                              setState(() {
+                                                _searchQuery = '';
+                                                _unifiedSearchResult =
+                                                    UnifiedSearchResult.empty;
+                                              });
+                                            },
+                                          ),
+                                          border: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(12),
+                                            borderSide: BorderSide.none,
+                                          ),
+                                          filled: true,
+                                        ),
                                       ),
                                     ),
-                                    suffixIcon: IconButton(
-                                      icon: const iconoir.Xmark(width: 20, height: 20),
-                                      onPressed: () {
-                                        _searchController.clear();
-                                        setState(() {
-                                          _searchQuery = '';
-                                          _unifiedSearchResult =
-                                              UnifiedSearchResult.empty;
-                                        });
-                                      },
+                                    _buildSearchFilterChips(context),
+                                    // Результаты поиска
+                                    Expanded(
+                                      child: _buildSearchResults(),
                                     ),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: BorderSide.none,
-                                    ),
-                                    filled: true,
-                                  ),
+                                  ],
                                 ),
-                              ),
-                              _buildSearchFilterChips(context),
-                              // Результаты поиска
-                              Expanded(
-                                child: _buildSearchResults(),
-                              ),
-                            ],
-                          ),
-                        ), // closes SafeArea
-                      ), // closes _KeepAlivePage
+                              ), // closes SafeArea
+                            )
+                          : const SizedBox.shrink(), // closes _KeepAlivePage
                     ),
                   ], // closes PageView children
                 ); // closes PageView
+
+            final Widget pageView = InteractiveSwipeBackGestureDetector(
+              animationController: _embeddedTabSwipeBackController,
+              canSwipeBack: _canSwipeBackToChatsTab,
+              onDragStart: () {
+                _swipingFromTabIndex = _currentIndex;
+                _embeddedTabSwipeBackController.value = 1.0;
+                if (_currentIndex == 2) {
+                  _searchFocusNode.unfocus();
+                }
+              },
+              onRestored: () {
+                final originTab = _swipingFromTabIndex;
+                _swipingFromTabIndex = null;
+                _embeddedTabSwipeBackController.value = 1.0;
+                if (originTab != null && _pageController.hasClients) {
+                  _pageController.jumpToPage(originTab);
+                }
+              },
+              onDismissed: () {
+                _swipingFromTabIndex = null;
+                _embeddedTabSwipeBackController.value = 1.0;
+                if (_pageController.hasClients) {
+                  _pageController.jumpToPage(1);
+                }
+                if (mounted && _currentIndex != 1) {
+                  setState(() {
+                    _currentIndex = 1;
+                    _visitedPages.add(1);
+                  });
+                }
+              },
+              child: rawPageView,
+            );
 
             final isDark = Theme.of(context).brightness == Brightness.dark;
             final statusBarHeight = MediaQuery.of(context).padding.top;
@@ -3852,7 +4163,8 @@ class _MainScreenState extends State<MainScreen>
               const double bottomMargin = 12.0;
               const double maxGroupWidth = 560.0;
 
-              final double totalRequiredWidth = screen - edgePadding * 2;
+              final double totalRequiredWidth =
+                  math.max(0.0, screen - edgePadding * 2);
               final double leftMargin;
               final double actionMargin;
               final double barWidth;
@@ -3860,9 +4172,11 @@ class _MainScreenState extends State<MainScreen>
               if (totalRequiredWidth <= maxGroupWidth) {
                 leftMargin = edgePadding;
                 actionMargin = edgePadding;
-                barWidth = totalRequiredWidth - actionSize - spacing;
+                barWidth =
+                    math.max(120.0, totalRequiredWidth - actionSize - spacing);
               } else {
-                final double groupLeft = (screen - maxGroupWidth) / 2;
+                final double groupLeft =
+                    math.max(0.0, (screen - maxGroupWidth) / 2);
                 leftMargin = groupLeft;
                 actionMargin = groupLeft;
                 barWidth = maxGroupWidth - actionSize - spacing;
@@ -3886,233 +4200,312 @@ class _MainScreenState extends State<MainScreen>
                   ? (bottomMargin + keyboardHeight - safeBottom)
                   : bottomMargin;
 
-              return LiquidGlassScaffold(
-                pixelRatio: 1.0,
-                useSync: true,
-                batch: false,
-                backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-                appBar: _isSelectMode
-                    ? _buildSelectModeBar(context)
-                    : _buildTopGlassBar(context, glassProvider),
-                appBarTopMargin: 8.0,
-                lenses: [
-                  if (_isTopMenuOpen || _isFolderMenuOpen || _isCreateMenuOpen)
-                    GestureDetector(
+              return AnimatedBuilder(
+                animation: _selectModeAnimation,
+                builder: (context, _) {
+                  final double hideProgress =
+                      _selectModeAnimation.value.clamp(0.0, 1.0);
+                  final double visibleBottomFromWindow =
+                      math.max(0.0, effectiveBottomMargin + safeBottom);
+                  final double hideOffset =
+                      (barHeight + visibleBottomFromWindow + 36.0) *
+                          hideProgress;
+                  final double actionOpacity =
+                      (1.0 - hideProgress * 1.4).clamp(0.0, 1.0);
+
+                  return LiquidGlassScaffold(
+                    pixelRatio: 1.0,
+                    useSync: true,
+                    batch: false,
+                    backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                    appBar: _buildAdaptiveTopBar(context),
+                    appBarTopMargin: 8.0,
+                    lenses: [
+                      if (_isTopMenuOpen ||
+                          _isFolderMenuOpen ||
+                          _isCreateMenuOpen ||
+                          _isSelectionMenuOpen)
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            if (_isTopMenuOpen) _closeTopMenu();
+                            if (_isFolderMenuOpen) _closeFolderMenu();
+                            if (_isCreateMenuOpen) _closeCreateMenu();
+                            if (_isSelectionMenuOpen) {
+                              setState(() => _isSelectionMenuOpen = false);
+                            }
+                          },
+                        ),
+                    ],
+                    body: Scaffold(
+                      backgroundColor: Colors.transparent,
+                      resizeToAvoidBottomInset: true,
+                      body: Stack(
+                        children: [
+                          Positioned.fill(child: pageView),
+                          Positioned(
+                            top: topBarHeight + 4.0,
+                            left: 0,
+                            right: 0,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: const [
+                                CallDeviceTransferBanner(),
+                                MediaNotePlayerHeader(),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    bottomNavigationBarActionMargin: actionMargin,
+                    floatingActionButtonMargin: actionMargin,
+                    bottomNavigationBar: LiquidGlassTabBar(
+                      items: [
+                        _buildTabBarItem(
+                          iconBuilder: (i) => iconoir.Settings(
+                            color: i.color,
+                            width: i.size,
+                            height: i.size,
+                          ),
+                        ),
+                        _buildTabBarItem(
+                          iconBuilder: (i) {
+                            final icon = iconoir.ChatBubble(
+                              color: i.color,
+                              width: i.size,
+                              height: i.size,
+                            );
+                            if (totalUnread <= 0) return icon;
+                            return Stack(
+                              clipBehavior: Clip.none,
+                              alignment: Alignment.center,
+                              children: [
+                                icon,
+                                Positioned(
+                                  top: -4,
+                                  right: -10,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 5, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: primaryColor,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    constraints: const BoxConstraints(
+                                        minWidth: 16, minHeight: 16),
+                                    child: Text(
+                                      totalUnread > 99 ? '99+' : '$totalUnread',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                        _buildTabBarItem(
+                          iconBuilder: (i) => iconoir.Search(
+                            color: i.color,
+                            width: i.size,
+                            height: i.size,
+                          ),
+                        ),
+                      ],
+                      selectedIndex: _currentIndex,
+                      onChanged: (index) {
+                        if (_isSelectMode) return;
+                        _onTabTapped(index);
+                      },
+                      onReselected: (index) {
+                        if (_isSelectMode) return;
+                        HapticUtils.tap();
+                        _onTabReselected(index);
+                      },
+                      width: barWidth,
+                      height: barHeight,
+                      alignment: Alignment.bottomLeft,
+                      margin: EdgeInsets.only(
+                        left: leftMargin,
+                        bottom: effectiveBottomMargin - hideOffset,
+                      ),
+                      itemPadding: 3,
+                      swell: const LiquidGlassTabBarSwell(scale: 0.024),
+                      style: barStyle,
+                      itemStyle: LiquidGlassTabItemStyle(
+                        selectedColor: primaryColor,
+                        unselectedColor: isDark
+                            ? const Color(0xFF8E8E93)
+                            : const Color(0xFF636366),
+                        iconSize: 26,
+                        labelFontSize: 10,
+                        iconLabelGap: 0,
+                        underGlassIconSize: 30,
+                        underGlassLabelFontSize: 10,
+                        selectedFontWeight: FontWeight.w700,
+                        unselectedFontWeight: FontWeight.w600,
+                      ),
+                      pillStyle: LiquidGlassTabPillStyle(
+                        mode: LiquidGlassPillMode.both,
+                        show: true,
+                        animated: true,
+                        growHeight: 7,
+                        behavior: const LiquidGlassTabPillBehavior(),
+                        rest: LiquidGlassStyle(
+                          shape: _glassShape(28),
+                          color: isDark
+                              ? const Color(0x38FFFFFF)
+                              : const Color(0x2EAEAEB2),
+                        ),
+                      ),
+                    ),
+                    bottomNavigationBarAction: IgnorePointer(
+                      ignoring: _isSelectMode || actionOpacity <= 0.01,
+                      child: SizedBox(
+                        width: CreateChatSelectorPanel.kPanelWidth,
+                        height: CreateChatSelectorPanel.kPanelHeight,
+                        child: LiquidGlassMorph(
+                          key: const ValueKey<String>('main_create_menu_morph'),
+                          alignment: Alignment.bottomRight,
+                          opacity: actionOpacity.clamp(0.0, 1.0),
+                          motion: LiquidGlassMorphMotion.fluid,
+                          smoothness: 28,
+                          style: actionStyle,
+                          touch: !_isCreateMenuOpen
+                              ? const LiquidGlassTouch.flexing(LiquidGlassFlex(
+                                  stretch: 6,
+                                  squeeze: 0.68,
+                                  lean: 0.30,
+                                  grip: 0.50,
+                                ))
+                              : null,
+                          child: _isCreateMenuOpen
+                              ? CreateChatSelectorPanel(
+                                  key: const ValueKey<String>('create_chat_panel'),
+                                  onClose: _closeCreateMenu,
+                                  onSelectOption: _handleCreateOptionSelected,
+                                )
+                              : _PlusActionGlyph(
+                                  key: const ValueKey<String>('plus_action_glyph'),
+                                  size: actionSize,
+                                  onTap: _toggleCreateMenu,
+                                ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              );
+            }
+
+            // Классический режим — матовый single-pass blur HUD поверх контента
+            final Widget classicStack = Stack(
+              children: [
+                Positioned.fill(
+                  key: const ValueKey<String>('main_classic_page_view'),
+                  child: pageView,
+                ),
+                if (_isTopMenuOpen ||
+                    _isFolderMenuOpen ||
+                    _isCreateMenuOpen ||
+                    _isSelectionMenuOpen)
+                  Positioned.fill(
+                    key: const ValueKey<String>(
+                      'main_classic_dismiss_backdrop',
+                    ),
+                    child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {
                         if (_isTopMenuOpen) _closeTopMenu();
                         if (_isFolderMenuOpen) _closeFolderMenu();
                         if (_isCreateMenuOpen) _closeCreateMenu();
+                        if (_isSelectionMenuOpen) {
+                          setState(() => _isSelectionMenuOpen = false);
+                        }
                       },
                     ),
-                ],
-                body: Scaffold(
-                  backgroundColor: Colors.transparent,
-                  resizeToAvoidBottomInset: true,
-                  body: Stack(
-                    children: [
-                      Positioned.fill(child: pageView),
-                      Positioned(
-                        top: topBarHeight + 4.0,
-                        left: 0,
-                        right: 0,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            CallDeviceTransferBanner(),
-                            MediaNotePlayerHeader(),
-                          ],
-                        ),
-                      ),
+                  ),
+                Positioned(
+                  key: const ValueKey<String>('main_classic_banners'),
+                  top: topBarHeight + 4.0,
+                  left: 0,
+                  right: 0,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      CallDeviceTransferBanner(),
+                      MediaNotePlayerHeader(),
                     ],
                   ),
                 ),
-                bottomNavigationBarActionMargin: actionMargin,
-                floatingActionButtonMargin: actionMargin,
-                bottomNavigationBar: LiquidGlassTabBar(
-                  items: [
-                    _buildTabBarItem(
-                      iconBuilder: (i) => iconoir.Settings(
-                        color: i.color,
-                        width: i.size,
-                        height: i.size,
-                      ),
-                    ),
-                    _buildTabBarItem(
-                      iconBuilder: (i) {
-                        final icon = iconoir.ChatBubble(
-                          color: i.color,
-                          width: i.size,
-                          height: i.size,
-                        );
-                        if (totalUnread <= 0) return icon;
-                        return Stack(
-                          clipBehavior: Clip.none,
-                          alignment: Alignment.center,
-                          children: [
-                            icon,
-                            Positioned(
-                              top: -4,
-                              right: -10,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 5, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: primaryColor,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                constraints: const BoxConstraints(
-                                    minWidth: 16, minHeight: 16),
-                                child: Text(
-                                  totalUnread > 99 ? '99+' : '$totalUnread',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                    _buildTabBarItem(
-                      iconBuilder: (i) => iconoir.Search(
-                        color: i.color,
-                        width: i.size,
-                        height: i.size,
-                      ),
-                    ),
-                  ],
-                  selectedIndex: _currentIndex,
-                  onChanged: (index) {
-                    HapticUtils.selection();
-                    _onTabTapped(index);
-                  },
-                  width: barWidth,
-                  height: barHeight,
-                  alignment: Alignment.bottomLeft,
-                  margin: EdgeInsets.only(
-                    left: leftMargin,
-                    bottom: effectiveBottomMargin,
-                  ),
-                  itemPadding: 3,
-                  style: barStyle,
-                  itemStyle: LiquidGlassTabItemStyle(
-                    selectedColor: primaryColor,
-                    unselectedColor: isDark
-                        ? const Color(0xFF8E8E93)
-                        : const Color(0xFF636366),
-                    iconSize: 26,
-                    labelFontSize: 10,
-                    iconLabelGap: 0,
-                    underGlassIconSize: 30,
-                    underGlassLabelFontSize: 10,
-                    selectedFontWeight: FontWeight.w700,
-                    unselectedFontWeight: FontWeight.w600,
-                  ),
-                  pillStyle: LiquidGlassTabPillStyle(
-                    mode: LiquidGlassPillMode.both,
-                    show: true,
-                    animated: true,
-                    growHeight: 7,
-                    rest: LiquidGlassStyle(
-                      shape: _glassShape(28),
-                      color: isDark
-                          ? const Color(0x38FFFFFF)
-                          : const Color(0x2EAEAEB2),
+                Positioned(
+                  key: const ValueKey<String>('main_classic_top_bar'),
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: _buildAdaptiveTopBar(context),
                     ),
                   ),
                 ),
-                bottomNavigationBarAction: SizedBox(
-                  width: CreateChatSelectorPanel.kPanelWidth,
-                  height: CreateChatSelectorPanel.kPanelHeight,
-                  child: LiquidGlassMorph(
-                    key: const ValueKey<String>('main_create_menu_morph'),
-                    alignment: Alignment.bottomRight,
-                    motion: LiquidGlassMorphMotion.fluid,
-                    smoothness: 28,
-                    style: actionStyle,
-                    child: _isCreateMenuOpen
-                        ? CreateChatSelectorPanel(
-                            key: const ValueKey<String>('create_chat_panel'),
-                            onClose: _closeCreateMenu,
-                            onSelectOption: _handleCreateOptionSelected,
-                          )
-                        : _PlusActionGlyph(
-                            key: const ValueKey<String>('plus_action_glyph'),
-                            size: actionSize,
-                            onTap: _toggleCreateMenu,
+                Positioned(
+                  key: const ValueKey<String>('main_classic_bottom_bar'),
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    ignoring: _isSelectMode,
+                    child: AnimatedSlide(
+                      offset: Offset(0, _isSelectMode ? 1.35 : 0.0),
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedOpacity(
+                        opacity: _isSelectMode ? 0.0 : 1.0,
+                        duration: const Duration(milliseconds: 200),
+                        child: SafeArea(
+                          top: false,
+                          child: ClassicBottomBar(
+                            selectedIndex: _currentIndex,
+                            unreadCount: totalUnread,
+                            onTabSelected: (index) {
+                              if (_isSelectMode) return;
+                              _onTabTapped(index);
+                            },
+                            onTabReselected: (index) {
+                              if (_isSelectMode) return;
+                              _onTabReselected(index);
+                            },
+                            onAddTap: _toggleCreateMenu,
+                            bottomPadding: 12,
                           ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              );
-            }
+                Positioned(
+                  key: const ValueKey<String>('main_classic_create_overlay'),
+                  right: 0,
+                  bottom: 0,
+                  child: _buildClassicCreateMenuOverlay(context),
+                ),
+              ],
+            );
 
-            // Классический режим — сплошная заливка бара поверх контента
             return Scaffold(
               backgroundColor: Theme.of(context).scaffoldBackgroundColor,
               resizeToAvoidBottomInset: true,
-              body: Stack(
-                children: [
-                  Positioned.fill(child: pageView),
-                  if (_isTopMenuOpen || _isFolderMenuOpen || _isCreateMenuOpen)
-                    Positioned.fill(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          if (_isTopMenuOpen) _closeTopMenu();
-                          if (_isFolderMenuOpen) _closeFolderMenu();
-                          if (_isCreateMenuOpen) _closeCreateMenu();
-                        },
-                      ),
-                    ),
-                  Positioned(
-                    top: topBarHeight + 4.0,
-                    left: 0,
-                    right: 0,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        CallDeviceTransferBanner(),
-                        MediaNotePlayerHeader(),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: _isSelectMode
-                        ? SafeArea(child: _buildSelectModeBar(context))
-                        : _buildClassicTopBar(context),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: SafeArea(
-                      top: false,
-                      child: ClassicBottomBar(
-                        selectedIndex: _currentIndex,
-                        unreadCount: totalUnread,
-                        onTabSelected: (index) {
-                          _onTabTapped(index);
-                        },
-                        onAddTap: _toggleCreateMenu,
-                        bottomPadding: 12,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: _buildClassicCreateMenuOverlay(context),
-                  ),
-                ],
-              ),
+              body: BackdropGroup.of(context) == null
+                  ? BackdropGroup(child: classicStack)
+                  : classicStack,
             );
           },
         ),
@@ -4125,9 +4518,17 @@ class _MainScreenState extends State<MainScreen>
     final themeExt = theme.extension<TheavThemeExtension>();
     final p = themeExt?.palette;
     final isDark = theme.brightness == Brightness.dark;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
 
-    final barBackgroundColor =
+    final rawBg =
         p?.surface ?? (isDark ? const Color(0xFF2C2C2E) : Colors.white);
+    final barBackgroundColor = BlurUtils.resolveMaterialHudColor(
+      rawBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+      darkAlpha: 0.84,
+      lightAlpha: 0.88,
+    );
     final borderColor = p?.divider ??
         (isDark
             ? Colors.white.withValues(alpha: 0.1)
@@ -4152,17 +4553,72 @@ class _MainScreenState extends State<MainScreen>
             ctrlSize + (panelHeight - ctrlSize) * progress;
         final double currentRadius = 30.0 - 4.0 * progress;
 
+        final Widget menuCard = Container(
+          width: currentWidth,
+          height: currentHeight,
+          decoration: BoxDecoration(
+            color: barBackgroundColor,
+            borderRadius: BorderRadius.circular(currentRadius),
+            border: Border.all(color: borderColor, width: 0.6),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              if (progress > 0.01)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  width: panelWidth,
+                  height: panelHeight,
+                  child: Opacity(
+                    opacity: ((progress - 0.15) / 0.85).clamp(0.0, 1.0),
+                    child: Transform.translate(
+                      offset: Offset(0, 10.0 * (1.0 - progress)),
+                      child: IgnorePointer(
+                        ignoring: progress < 0.85,
+                        child: CreateChatSelectorPanel(
+                          key: const ValueKey<String>(
+                            'classic_create_chat_panel',
+                          ),
+                          onClose: _closeCreateMenu,
+                          onSelectOption: _handleCreateOptionSelected,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (progress < 0.99)
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  width: ctrlSize,
+                  height: ctrlSize,
+                  child: Opacity(
+                    opacity: (1.0 - (progress / 0.35)).clamp(0.0, 1.0),
+                    child: Transform.rotate(
+                      angle: progress * math.pi / 4,
+                      child: IgnorePointer(
+                        ignoring: progress > 0.1,
+                        child: _PlusActionGlyph(
+                          size: ctrlSize,
+                          onTap: _toggleCreateMenu,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+
         return SafeArea(
           top: false,
           child: Padding(
             padding: const EdgeInsets.only(right: 16.0, bottom: 12.0),
-            child: Container(
-              width: currentWidth,
-              height: currentHeight,
+            child: DecoratedBox(
               decoration: BoxDecoration(
-                color: barBackgroundColor,
                 borderRadius: BorderRadius.circular(currentRadius),
-                border: Border.all(color: borderColor, width: 0.6),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(
@@ -4174,56 +4630,14 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ],
               ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                clipBehavior: Clip.hardEdge,
-                children: [
-                  if (progress > 0.01)
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      width: panelWidth,
-                      height: panelHeight,
-                      child: Opacity(
-                        opacity:
-                            ((progress - 0.15) / 0.85).clamp(0.0, 1.0),
-                        child: Transform.translate(
-                          offset: Offset(0, 10.0 * (1.0 - progress)),
-                          child: IgnorePointer(
-                            ignoring: progress < 0.85,
-                            child: CreateChatSelectorPanel(
-                              key: const ValueKey<String>(
-                                'classic_create_chat_panel',
-                              ),
-                              onClose: _closeCreateMenu,
-                              onSelectOption: _handleCreateOptionSelected,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (progress < 0.99)
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      width: ctrlSize,
-                      height: ctrlSize,
-                      child: Opacity(
-                        opacity:
-                            (1.0 - (progress / 0.35)).clamp(0.0, 1.0),
-                        child: Transform.rotate(
-                          angle: progress * math.pi / 4,
-                          child: IgnorePointer(
-                            ignoring: progress > 0.1,
-                            child: _PlusActionGlyph(
-                              size: ctrlSize,
-                              onTap: _toggleCreateMenu,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(currentRadius),
+                child: blurEnabled
+                    ? BackdropFilter.grouped(
+                        filter: BlurUtils.createMaterialHudBlur(sigma: 12.0),
+                        child: menuCard,
+                      )
+                    : menuCard,
               ),
             ),
           ),
@@ -4454,7 +4868,13 @@ class _MainScreenState extends State<MainScreen>
 
   Widget _buildSearchPeerTile(BuildContext context, SearchPeer peer,
       {required bool isGlobal}) {
-    final validAvatar = getValidAvatarUrl(peer.avatarUrl);
+    final effectiveTitle = peer.isUser
+        ? ContactsService.resolveName(peer.id, peer.title)
+        : peer.title;
+    final effectiveAvatar = peer.isUser
+        ? ContactsService.resolveAvatarUrl(peer.id, peer.avatarUrl)
+        : peer.avatarUrl;
+    final validAvatar = getValidAvatarUrl(effectiveAvatar);
     final canJoin = isGlobal &&
         !peer.isMember &&
         (peer.type == 'group' || peer.type == 'channel' || peer.type == 'community');
@@ -4490,7 +4910,7 @@ class _MainScreenState extends State<MainScreen>
         backgroundColor:
             Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
         backgroundImage:
-            validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
+            validAvatar != null ? avatarImageProvider(effectiveAvatar) : null,
         child: validAvatar == null
             ? (peer.type == 'channel'
                 ? iconoir.Megaphone(
@@ -4511,8 +4931,8 @@ class _MainScreenState extends State<MainScreen>
                             color: Theme.of(context).colorScheme.primary,
                           )
                         : Text(
-                            peer.title.isNotEmpty
-                                ? peer.title[0].toUpperCase()
+                            effectiveTitle.isNotEmpty
+                                ? effectiveTitle[0].toUpperCase()
                                 : '?',
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.primary,
@@ -4525,7 +4945,7 @@ class _MainScreenState extends State<MainScreen>
         children: [
           Flexible(
             child: Text(
-              peer.title,
+              effectiveTitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
@@ -4656,12 +5076,15 @@ class _MainScreenState extends State<MainScreen>
           );
           if (chatResult['success'] == true && mounted) {
             final chat = chatResult['chat'] as Chat;
+            final peerName = ContactsService.resolveName(result.id, result.name);
+            final peerAvatar =
+                ContactsService.resolveAvatarUrl(result.id, result.avatarUrl);
             if (TilingLayoutController.instance.isWorkspaceMounted) {
               TilingLayoutController.instance.openChatInActiveTile(
                 chatId: chat.id,
                 chatType: 'private',
-                chatName: result.name,
-                avatarUrl: result.avatarUrl,
+                chatName: peerName,
+                avatarUrl: peerAvatar,
                 otherUserId: result.id,
               );
               return;
@@ -4671,8 +5094,8 @@ class _MainScreenState extends State<MainScreen>
               SwipeBackPageRoute(
                 builder: (_) => PrivateChatScreen(
                   chatId: chat.id,
-                  otherUserName: result.name,
-                  otherUserAvatar: result.avatarUrl,
+                  otherUserName: peerName,
+                  otherUserAvatar: peerAvatar,
                   otherUserId: result.id,
                 ),
               ),
@@ -4853,252 +5276,6 @@ class _KeepAlivePageState extends State<_KeepAlivePage>
   Widget build(BuildContext context) {
     super.build(context);
     return widget.child;
-  }
-}
-
-class _MorphMenuItemData {
-  final String id;
-  final String label;
-  final Widget Function(Color color, double size) iconBuilder;
-  final Color? color;
-
-  const _MorphMenuItemData({
-    required this.id,
-    required this.label,
-    required this.iconBuilder,
-    this.color,
-  });
-}
-
-class _ThreeDotsGlyph extends StatelessWidget {
-  final double size;
-  final VoidCallback onTap;
-
-  const _ThreeDotsGlyph({
-    super.key,
-    required this.size,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: SizedBox(
-        width: size,
-        height: size,
-        child: Center(
-          child: iconoir.MoreVert(
-            width: 22.0,
-            height: 22.0,
-            color: isDark ? Colors.white : const Color(0xFF1C1C1E),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TopMorphMenu extends StatelessWidget {
-  final double width;
-  final List<_MorphMenuItemData> items;
-  final ValueChanged<String> onItemTap;
-
-  const _TopMorphMenu({
-    super.key,
-    required this.width,
-    required this.items,
-    required this.onItemTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final double totalHeight = items.length * 44.0 + 12.0;
-    return SizedBox(
-      width: width,
-      height: totalHeight,
-      child: OverflowBox(
-        minWidth: width,
-        maxWidth: width,
-        minHeight: 0,
-        maxHeight: totalHeight,
-        alignment: Alignment.topCenter,
-        child: Material(
-          color: Colors.transparent,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6.0),
-            child: SingleChildScrollView(
-              physics: const NeverScrollableScrollPhysics(),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (int i = 0; i < items.length; i++)
-                    _MorphMenuRow(
-                      key: ValueKey(items[i].id),
-                      item: items[i],
-                      onTap: () => onItemTap(items[i].id),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MorphMenuRow extends StatelessWidget {
-  final _MorphMenuItemData item;
-  final VoidCallback onTap;
-
-  const _MorphMenuRow({
-    super.key,
-    required this.item,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final itemColor = item.color ?? defaultColor;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: SizedBox(
-        height: 44.0,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14.0),
-          child: Row(
-              children: [
-                item.iconBuilder(itemColor, 20.0),
-                const SizedBox(width: 10.0),
-                Expanded(
-                  child: Text(
-                    item.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15.0,
-                      fontWeight: FontWeight.w500,
-                      color: itemColor,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-  }
-}
-
-class _TitlePillContent extends StatelessWidget {
-  final String title;
-  final String titleKey;
-  final bool isConnected;
-  final VoidCallback? onTap;
-
-  const _TitlePillContent({
-    super.key,
-    required this.title,
-    required this.titleKey,
-    required this.isConnected,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isConnected
-        ? (isDark ? Colors.white : const Color(0xFF1C1C1E))
-        : Colors.grey;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Container(
-        height: 44.0,
-        padding: const EdgeInsets.symmetric(horizontal: 20.0),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Flexible(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 280),
-                transitionBuilder: (child, animation) {
-                  final inAnimation = Tween<Offset>(
-                    begin: const Offset(0.0, -1.0),
-                    end: Offset.zero,
-                  ).animate(CurvedAnimation(
-                    parent: animation,
-                    curve: Curves.easeOutCubic,
-                  ));
-                  final outAnimation = Tween<Offset>(
-                    begin: const Offset(0.0, 1.0),
-                    end: Offset.zero,
-                  ).animate(CurvedAnimation(
-                    parent: animation,
-                    curve: Curves.easeInCubic,
-                  ));
-                  final isIncoming = child.key == ValueKey<String>(titleKey);
-                  return ClipRect(
-                    child: SlideTransition(
-                      position: isIncoming ? inAnimation : outAnimation,
-                      child: FadeTransition(
-                        opacity: animation,
-                        child: child,
-                      ),
-                    ),
-                  );
-                },
-                layoutBuilder: (currentChild, previousChildren) {
-                  return Stack(
-                    alignment: Alignment.center,
-                    clipBehavior: Clip.none,
-                    children: [
-                      ...previousChildren.map(
-                        (w) => Positioned.fill(
-                          child: Center(
-                            child: OverflowBox(
-                              minWidth: 0,
-                              maxWidth: double.infinity,
-                              minHeight: 0,
-                              maxHeight: double.infinity,
-                              child: w,
-                            ),
-                          ),
-                        ),
-                      ),
-                      if (currentChild != null) currentChild,
-                    ],
-                  );
-                },
-                child: Text(
-                  title,
-                  key: ValueKey<String>(titleKey),
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: textColor,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 }
 

@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/bot_service.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -304,7 +303,7 @@ class _BotCommandsPopupState extends State<BotCommandsPopup>
     final isDark = theme.brightness == Brightness.dark;
     final ext = theme.extension<TheavThemeExtension>();
     final colorScheme = theme.colorScheme;
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 
@@ -391,26 +390,35 @@ class _BotCommandsPopupState extends State<BotCommandsPopup>
         ),
       );
     } else {
-      panelBody = ClipRRect(
-        borderRadius: BorderRadius.circular(_kCornerRadius),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: ext?.glassSurfaceColor ??
-                  (isDark
-                      ? Colors.black.withValues(alpha: 0.68)
-                      : Colors.white.withValues(alpha: 0.78)),
-              borderRadius: BorderRadius.circular(_kCornerRadius),
-              border: Border.all(
-                color: ext?.glassBorderColor ??
-                    (isDark ? Colors.white10 : Colors.black12),
-                width: 0.6,
-              ),
-            ),
-            child: commandList,
+      final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+      final bg = BlurUtils.resolveMaterialHudColor(
+        ext?.glassSurfaceColor ??
+            (isDark ? const Color(0xFF1C1C1E) : Colors.white),
+        isDark: isDark,
+        blurEnabled: blurEnabled,
+        darkAlpha: 0.84,
+        lightAlpha: 0.88,
+      );
+      final Widget card = Container(
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(_kCornerRadius),
+          border: Border.all(
+            color: ext?.glassBorderColor ??
+                (isDark ? Colors.white12 : Colors.black12),
+            width: 0.6,
           ),
         ),
+        child: commandList,
+      );
+      panelBody = ClipRRect(
+        borderRadius: BorderRadius.circular(_kCornerRadius),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: card,
+              )
+            : card,
       );
     }
 

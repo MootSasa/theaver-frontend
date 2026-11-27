@@ -1,4 +1,8 @@
+import 'dart:io' show File;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:visibility_detector/visibility_detector.dart';
@@ -222,6 +226,8 @@ class GifMessageWidget extends StatefulWidget {
   final String? previewUrl;
   final int? width;
   final int? height;
+  final String? heroTag;
+  final VoidCallback? onTap;
   final Widget? floatingTimestampBadge;
 
   const GifMessageWidget({
@@ -230,6 +236,8 @@ class GifMessageWidget extends StatefulWidget {
     this.previewUrl,
     this.width,
     this.height,
+    this.heroTag,
+    this.onTap,
     this.floatingTimestampBadge,
   });
 
@@ -242,6 +250,40 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
     'gif_vis_${widget.gifUrl}_${identityHashCode(this)}',
   );
   bool _isVisible = true;
+  bool _isFullLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isFullLoaded = _isFullImageWarmInMemory(_resolveFullUrl());
+  }
+
+  @override
+  void didUpdateWidget(covariant GifMessageWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.gifUrl != widget.gifUrl ||
+        oldWidget.previewUrl != widget.previewUrl) {
+      _isFullLoaded = _isFullImageWarmInMemory(_resolveFullUrl());
+    }
+  }
+
+  String _resolveFullUrl() {
+    return StickerService.resolveUrl(
+      widget.gifUrl.trim().isNotEmpty
+          ? widget.gifUrl.trim()
+          : (widget.previewUrl ?? '').trim(),
+    );
+  }
+
+  bool _isFullImageWarmInMemory(String fullUrl) {
+    if (kIsWeb || fullUrl.isEmpty) return false;
+    final File? syncFile =
+        StickerService.instance.getCachedRasterFileSync(fullUrl);
+    if (syncFile == null) return false;
+    final status =
+        PaintingBinding.instance.imageCache.statusForKey(FileImage(syncFile));
+    return status.keepAlive || status.live;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -262,17 +304,13 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
       displayH = 110.0;
     }
 
-    final String fullUrl = StickerService.resolveUrl(
-      widget.gifUrl.trim().isNotEmpty
-          ? widget.gifUrl.trim()
-          : (widget.previewUrl ?? '').trim(),
-    );
+    final String fullUrl = _resolveFullUrl();
     final String previewUrl =
         (widget.previewUrl != null && widget.previewUrl!.trim().isNotEmpty)
             ? StickerService.resolveUrl(widget.previewUrl!.trim())
             : '';
 
-    return VisibilityDetector(
+    final Widget gifContent = VisibilityDetector(
       key: _visibilityKey,
       onVisibilityChanged: (info) {
         final visible = info.visibleFraction > 0.01;
@@ -289,7 +327,7 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (previewUrl.isNotEmpty && previewUrl != fullUrl)
+                if (previewUrl.isNotEmpty && previewUrl != fullUrl && !_isFullLoaded)
                   RepaintBoundary(
                     child: ControlledAnimatedNetworkImage(
                       url: previewUrl,
@@ -310,6 +348,19 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
                     fit: BoxFit.cover,
                     filterQuality: FilterQuality.low,
                     animate: _isVisible,
+                    onFirstFrameLoaded: () {
+                      if (!mounted || _isFullLoaded) return;
+                      if (SchedulerBinding.instance.schedulerPhase ==
+                          SchedulerPhase.persistentCallbacks) {
+                        SchedulerBinding.instance.addPostFrameCallback((_) {
+                          if (mounted && !_isFullLoaded) {
+                            setState(() => _isFullLoaded = true);
+                          }
+                        });
+                      } else {
+                        setState(() => _isFullLoaded = true);
+                      }
+                    },
                     errorBuilder: (_) => previewUrl.isNotEmpty
                         ? const SizedBox.shrink()
                         : Container(
@@ -358,6 +409,17 @@ class _GifMessageWidgetState extends State<GifMessageWidget> {
           ),
         ),
       ),
+    );
+
+    final Widget heroWrapped = (widget.heroTag != null && widget.heroTag!.isNotEmpty)
+        ? Hero(tag: widget.heroTag!, child: gifContent)
+        : gifContent;
+
+    if (widget.onTap == null) return heroWrapped;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onTap,
+      child: heroWrapped,
     );
   }
 }

@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/config/app_config.dart';
+import 'package:theaver/services/account_manager.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -29,22 +31,22 @@ void main() {
       );
     });
 
-    test('deriveStorageUrl resolves MinIO storage endpoints correctly', () {
+    test('deriveStorageUrl resolves SeaweedFS S3 storage endpoints correctly', () {
       expect(
         AppConfig.deriveStorageUrl('https://api.theaver.app'),
         equals('https://storage.theaver.app'),
       );
       expect(
         AppConfig.deriveStorageUrl('http://localhost:8080'),
-        equals('http://localhost:9000'),
+        equals('http://localhost:8333'),
       );
       expect(
         AppConfig.deriveStorageUrl('http://192.168.1.50:8080'),
-        equals('http://192.168.1.50:9000'),
+        equals('http://192.168.1.50:8333'),
       );
       expect(
         AppConfig.deriveStorageUrl('http://10.0.2.2:8080'),
-        equals('http://10.0.2.2:9000'),
+        equals('http://10.0.2.2:8333'),
       );
     });
 
@@ -74,12 +76,55 @@ void main() {
 
       final resolvedRelative = AppConfig.resolveMediaUrl('/avatars/user1.jpg');
       expect(resolvedRelative, isNotNull);
-      expect(resolvedRelative, endsWith('/avatars/user1.jpg'));
+      expect(resolvedRelative, endsWith('/api/files/avatar/user1.jpg'));
       expect(resolvedRelative, startsWith('http'));
 
       final resolvedWithoutLeadingSlash = AppConfig.resolveMediaUrl('avatars/user2.jpg');
       expect(resolvedWithoutLeadingSlash, isNotNull);
-      expect(resolvedWithoutLeadingSlash, endsWith('/avatars/user2.jpg'));
+      expect(resolvedWithoutLeadingSlash, endsWith('/api/files/avatar/user2.jpg'));
+
+      final resolvedLegacyStorageAvatar = AppConfig.resolveMediaUrl(
+        'https://storage.theaver.app/avatars/u1/a.png',
+      );
+      expect(
+        resolvedLegacyStorageAvatar,
+        equals('${AppConfig.baseUrl}/api/files/avatar/u1/a.png'),
+      );
+
+      const presignedAvatar =
+          'https://storage.theaver.app/avatars/u1/a.png?X-Amz-Signature=deadbeef&X-Amz-Expires=300';
+      expect(AppConfig.resolveMediaUrl(presignedAvatar), equals(presignedAvatar));
+
+      expect(
+        AppConfig.resolveMediaUrl('https://storage.theaver.app/stickers/1.webp'),
+        equals('https://storage.theaver.app/stickers/1.webp'),
+      );
+    });
+
+    test('authHeadersForUrl and cacheKeyForUrl enforce protected API scoping', () {
+      final apiUrl = '${AppConfig.baseUrl}/api/files/avatar/u1/pic.png?mt=12345';
+      expect(
+        AppConfig.authHeadersForUrl(apiUrl, tokenOverride: 'jwt-secret'),
+        equals({'Authorization': 'Bearer jwt-secret'}),
+      );
+      expect(
+        AppConfig.authHeadersForUrl(
+          'https://storage.theaver.app/media/x.png?X-Amz-Signature=abc',
+          tokenOverride: 'jwt-secret',
+        ),
+        isNull,
+      );
+      expect(
+        AppConfig.authHeadersForUrl(
+          'https://evil.example/api/files/avatar/u1/pic.png',
+          tokenOverride: 'jwt-secret',
+        ),
+        isNull,
+      );
+      expect(
+        AppConfig.cacheKeyForUrl('$apiUrl#acrop=0.1,0.1,0.8,0.8'),
+        equals('${AppConfig.baseUrl}/api/files/avatar/u1/pic.png'),
+      );
     });
   });
 
@@ -99,7 +144,7 @@ void main() {
 
       expect(AppConfig.baseUrl, equals(customIp));
       expect(AppConfig.wsUrl, equals('ws://192.168.1.120:8080/api/ws'));
-      expect(AppConfig.storageUrl, equals('http://192.168.1.120:9000'));
+      expect(AppConfig.storageUrl, equals('http://192.168.1.120:8333'));
 
       // Verify persistence in SharedPreferences
       final prefs = await SharedPreferences.getInstance();
@@ -108,6 +153,33 @@ void main() {
       // Reset
       await AppConfig.resetToDefaults();
       expect(AppConfig.baseUrl, equals(AppConfig.prodApiBaseUrl));
+    });
+
+    test('AccountManager.init purges legacy offline test account', () async {
+      SharedPreferences.setMockInitialValues({
+        'accounts': [
+          jsonEncode({
+            'userId': 'test_user_001',
+            'token': 'test_token_offline_mode',
+            'username': 'admin',
+            'displayName': 'Test Admin',
+            'lastLogin': DateTime.now().toIso8601String(),
+          }),
+          jsonEncode({
+            'userId': 'real_user_1',
+            'token': 'real_jwt_token',
+            'username': 'alice',
+            'displayName': 'Alice',
+            'lastLogin': DateTime.now().toIso8601String(),
+          }),
+        ],
+        'current_account_id': 'test_user_001',
+      });
+
+      await AccountManager().init();
+      expect(AccountManager().hasAccount('test_user_001'), isFalse);
+      expect(AccountManager().hasAccount('real_user_1'), isTrue);
+      expect(AccountManager().currentAccount, isNull);
     });
   });
 }

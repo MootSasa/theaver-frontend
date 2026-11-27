@@ -1,6 +1,13 @@
 import 'avatar_gallery_viewer.dart';
-import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../../models/profile_customization.dart';
+import '../../services/contacts_service.dart';
+import '../../services/peer_customization_cache.dart';
+import '../common/peer_badges_widget.dart';
+import '../user/avatar_with_status.dart';
+import '../user/emoji_status_badge.dart';
 
 /// Попап с информацией о пользователе, который был найден через QR-код.
 ///
@@ -88,6 +95,14 @@ class _UserProfilePopupState extends State<UserProfilePopup> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    PeerCustomization? customization;
+    try {
+      customization = context.select<PeerCustomizationCache?, PeerCustomization?>(
+        (cache) => cache?.getSync(widget.userId),
+      );
+    } catch (_) {
+      customization = PeerCustomizationCache.instance.getSync(widget.userId);
+    }
 
     // Цвета из палитры приложения
     final backgroundColor = isDark ? const Color(0xFF2C2C2E) : Colors.white;
@@ -95,148 +110,174 @@ class _UserProfilePopupState extends State<UserProfilePopup> {
     final secondaryColor = isDark ? const Color(0xFF8E8E93) : const Color(0xFF3C3C43);
     const brandColor = Color(0xFF0088CC);
 
-    return Dialog(
-      backgroundColor: backgroundColor,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Кнопка закрытия
-            Align(
-              alignment: Alignment.topRight,
-              child: IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: Icon(Icons.close, color: secondaryColor, size: 20),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ),
-            const SizedBox(height: 8),
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) {
+        final resolvedName = ContactsService.resolvePeerName(
+          widget.userId,
+          widget.displayName,
+        );
+        final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+          widget.userId,
+          widget.avatarUrl,
+        );
 
-            // Аватарка
-            GestureDetector(
-              onTap: widget.avatarUrl != null && widget.avatarUrl!.isNotEmpty
-                  ? () => AvatarGalleryViewer.open(
-                        context,
-                        avatarUrls: [widget.avatarUrl!],
-                        displayName: widget.displayName,
-                      )
-                  : null,
-              child: Hero(
-                tag: 'avatar_hero_${widget.avatarUrl}',
-                flightShuttleBuilder: (
-                  flightContext,
-                  animation,
-                  flightDirection,
-                  fromHeroContext,
-                  toHeroContext,
-                ) {
-                  final CurvedAnimation curvedAnimation = CurvedAnimation(
-                    parent: animation,
-                    curve: Curves.fastOutSlowIn,
-                  );
-                  return AnimatedBuilder(
-                    animation: curvedAnimation,
-                    builder: (context, child) {
-                      final double currentRadius = (1.0 - curvedAnimation.value) * 40.0;
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(currentRadius),
-                        child: toHeroContext.widget,
-                      );
-                    },
-                  );
-                },
-                child: CircleAvatar(
-                  radius: 40,
-                  backgroundColor: isDark ? const Color(0xFF3C3C43) : const Color(0xFFE0E0E0),
-                  backgroundImage: widget.avatarUrl != null && widget.avatarUrl!.isNotEmpty
-                      ? avatarImageProvider(widget.avatarUrl)
-                      : null,
-                  child: widget.avatarUrl == null || widget.avatarUrl!.isEmpty
-                      ? Text(
-                          widget.displayName.isNotEmpty
-                              ? widget.displayName[0].toUpperCase()
-                              : '?',
-                          style: TextStyle(
-                            color: isDark ? Colors.white70 : Colors.black38,
-                            fontSize: 36,
-                            fontWeight: FontWeight.w300,
-                          ),
-                        )
-                      : null,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Имя
-            Text(
-              widget.displayName,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.w600,
-                color: onSurfaceColor,
-              ),
-            ),
-            const SizedBox(height: 4),
-
-            // Username
-            Text(
-              '@${widget.username}',
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 15,
-                color: brandColor,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Кнопка «Начать чат»
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isCreating ? null : _handleStartChat,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: brandColor,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+        return Dialog(
+          backgroundColor: backgroundColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Кнопка закрытия
+                Align(
+                  alignment: Alignment.topRight,
+                  child: IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close, color: secondaryColor, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
                   ),
                 ),
-                child: _isCreating
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Text(
-                        widget.startChatLabel,
+                const SizedBox(height: 8),
+
+                // Аватарка
+                GestureDetector(
+                  onTap: resolvedAvatar != null && resolvedAvatar.isNotEmpty
+                      ? () => AvatarGalleryViewer.open(
+                            context,
+                            avatarUrls: [resolvedAvatar],
+                            displayName: resolvedName,
+                          )
+                      : null,
+                  child: Hero(
+                    tag: 'avatar_hero_$resolvedAvatar',
+                    flightShuttleBuilder: (
+                      flightContext,
+                      animation,
+                      flightDirection,
+                      fromHeroContext,
+                      toHeroContext,
+                    ) {
+                      final CurvedAnimation curvedAnimation = CurvedAnimation(
+                        parent: animation,
+                        curve: Curves.fastOutSlowIn,
+                      );
+                      return AnimatedBuilder(
+                        animation: curvedAnimation,
+                        builder: (context, child) {
+                          final double currentRadius = (1.0 - curvedAnimation.value) * 40.0;
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(currentRadius),
+                            child: toHeroContext.widget,
+                          );
+                        },
+                      );
+                    },
+                    child: AvatarWithStatus(
+                      userId: widget.userId,
+                      avatarUrl: resolvedAvatar,
+                      name: resolvedName,
+                      radius: 40,
+                      backgroundColor:
+                          isDark ? const Color(0xFF3C3C43) : const Color(0xFFE0E0E0),
+                      decorationOverride: customization?.avatarDecoration,
+                      showDecoration: true,
+                      animateDecoration: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // Имя + статус + бейдж
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        resolvedName,
                         textAlign: TextAlign.center,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 15,
+                        style: TextStyle(
+                          fontSize: 20,
                           fontWeight: FontWeight.w600,
+                          color: onSurfaceColor,
                         ),
                       ),
-              ),
+                    ),
+                    if (customization?.activeEmojiStatus != null) ...[
+                      const SizedBox(width: 6),
+                      EmojiStatusBadge(
+                        status: customization!.activeEmojiStatus,
+                        size: 18,
+                        animate: true,
+                      ),
+                    ],
+                    PeerBadgesRow(
+                      badge: customization?.visibleBadge,
+                      interactiveBadge: true,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+
+                // Username
+                Text(
+                  '@${widget.username}',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: brandColor,
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // Кнопка «Начать чат»
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isCreating ? null : _handleStartChat,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: brandColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: _isCreating
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(
+                            widget.startChatLabel,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }

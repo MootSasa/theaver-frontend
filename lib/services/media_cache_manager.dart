@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -46,38 +48,327 @@ class MediaCacheManager {
     receiveTimeout: const Duration(minutes: 10),
   ));
 
+  /// Exposes the internal [Dio] client for attaching hermetic [HttpClientAdapter] mocks in tests.
+  @visibleForTesting
+  Dio get dioForTesting => _dio;
+
   final Map<String, CancelToken> _cancelTokens = {};
+  final Map<String, Future<File?>> _inFlightDownloads = {};
+  final Map<String, ({String url, DateTime expiresAt})> _presignedUrlCache = {};
   final Map<String, ValueNotifier<double>> _progressNotifiers = {};
   final Map<String, ValueNotifier<DownloadByteProgress>> _byteProgressNotifiers = {};
   final Map<String, String> _localPathCache = {};
   final Map<String, Uint8List> _videoThumbnailCache = {};
   final Set<String> _userCancelledUrls = {};
+  final Set<String> _pausedUrls = {};
+  final Map<String, String> _aliasFilenames = {};
+  String? _cachedMediaDirPath;
+  String? _aliasesLoadedForDir;
 
-  /// Synchronously returns a cached [File] if its local path is already known in memory.
-  /// Prevents a 1-frame placeholder flash when cloning media bubbles for the blur context menu.
+  static const Set<String> _publicBuckets = {'releases', 'stickers'};
+  static const Set<String> _volatilePresignQueryParams = {
+    'mt',
+    'x-amz-algorithm',
+    'x-amz-credential',
+    'x-amz-date',
+    'x-amz-expires',
+    'x-amz-signedheaders',
+    'x-amz-signature',
+    'x-amz-security-token',
+    'awsaccesskeyid',
+    'signature',
+    'expires',
+  };
+
+  static bool _isStorageUri(Uri uri) {
+    final host = uri.host.toLowerCase();
+    final storageHost = Uri.tryParse(AppConfig.storageUrl)?.host.toLowerCase() ?? '';
+    return uri.port == 8333 ||
+        uri.port == 9000 ||
+        host.contains('seaweedfs') ||
+        host.contains('minio') ||
+        host.startsWith('storage.') ||
+        (storageHost.isNotEmpty && host == storageHost);
+  }
+
+  /// Extracts a storage object key when [rawOrResolvedUrl] points to the private
+  /// `media` bucket (or `/api/files/download/<objectName>`). Returns `null` for
+  /// public buckets (`releases`, `stickers`), `avatars` (served via
+  /// `/api/files/avatar/`), already-presigned URLs, and external hosts.
+  String? extractProtectedObjectName(
+    String rawOrResolvedUrl, {
+    bool ignorePresignQuery = false,
+  }) {
+    final trimmed = rawOrResolvedUrl.trim();
+    if (trimmed.isEmpty || AppConfig.isLocalFilePath(trimmed)) return null;
+    final resolved = AppConfig.resolveMediaUrl(trimmed) ?? trimmed;
+    final uri = Uri.tryParse(resolved);
+    if (uri == null) return null;
+
+    // Already a presigned S3 URL — must not strip query signature unless
+    // explicitly falling back after an expired-signature 401/403 failure.
+    if (!ignorePresignQuery &&
+        (uri.queryParameters.containsKey('X-Amz-Signature') ||
+            uri.queryParameters.containsKey('x-amz-signature'))) {
+      return null;
+    }
+
+    final rawPath = uri.path;
+    final dlIdx = rawPath.indexOf('/api/files/download/');
+    if (dlIdx != -1) {
+      final obj = rawPath.substring(dlIdx + '/api/files/download/'.length);
+      return obj.isNotEmpty ? Uri.decodeFull(obj) : null;
+    }
+
+    if (!_isStorageUri(uri)) return null;
+
+    final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
+    if (segs.length < 2) return null;
+    final bucket = segs.first.toLowerCase();
+    if (_publicBuckets.contains(bucket) || bucket == 'avatars') return null;
+    return segs.sublist(1).map(Uri.decodeComponent).join('/');
+  }
+
+  /// Resolves the best streaming target `(uri, httpHeaders)` for network video
+  /// playback, obtaining a short-lived presigned MinIO URL (or authenticated
+  /// `/api/files/download/...` fallback) when pointing at the private media bucket.
+  Future<({Uri uri, Map<String, String> headers})?> resolveStreamableVideoTarget(
+    String rawOrResolvedUrl,
+  ) async {
+    final resolved = AppConfig.resolveMediaUrl(rawOrResolvedUrl) ?? rawOrResolvedUrl;
+    if (resolved.isEmpty) return null;
+
+    final objectName = extractProtectedObjectName(resolved);
+    if (objectName != null) {
+      final cached = _presignedUrlCache[objectName];
+      if (cached != null &&
+          DateTime.now().isBefore(
+            cached.expiresAt.subtract(const Duration(minutes: 5)),
+          )) {
+        final uri = Uri.tryParse(cached.url);
+        if (uri != null) {
+          return (uri: uri, headers: const <String, String>{});
+        }
+      }
+
+      final token = await AuthService.getToken();
+      if (token != null && token.isNotEmpty) {
+        try {
+          final resp = await _dio.get<dynamic>(
+            '${AppConfig.baseUrl}/api/files/download-presigned/$objectName',
+            options: Options(
+              headers: {'Authorization': 'Bearer $token'},
+              receiveTimeout: const Duration(seconds: 5),
+              sendTimeout: const Duration(seconds: 5),
+            ),
+          );
+          if (resp.statusCode == 200 &&
+              resp.data is Map &&
+              resp.data['success'] == true) {
+            final dlUrl = resp.data['download_url']?.toString() ?? '';
+            final expiresSec =
+                (resp.data['expires_in'] as num?)?.toInt() ?? 3600;
+            final dlUri = Uri.tryParse(dlUrl);
+            if (dlUri != null) {
+              _presignedUrlCache[objectName] = (
+                url: dlUrl,
+                expiresAt: DateTime.now().add(Duration(seconds: expiresSec)),
+              );
+              return (uri: dlUri, headers: const <String, String>{});
+            }
+          }
+        } catch (_) {}
+
+        final fallbackUri =
+            Uri.tryParse('${AppConfig.baseUrl}/api/files/download/$objectName');
+        if (fallbackUri != null) {
+          return (
+            uri: fallbackUri,
+            headers: <String, String>{'Authorization': 'Bearer $token'},
+          );
+        }
+      }
+    }
+
+    final uri = Uri.tryParse(resolved);
+    if (uri == null) return null;
+    final bool needsAuth =
+        uri.path.toLowerCase().contains('/api/') && objectName == null;
+    if (needsAuth) {
+      final token = await AuthService.getToken();
+      if (token != null && token.isNotEmpty) {
+        return (
+          uri: uri,
+          headers: <String, String>{'Authorization': 'Bearer $token'},
+        );
+      }
+    }
+    return (uri: uri, headers: const <String, String>{});
+  }
+
+  /// Canonicalizes storage/API/presigned/relative URLs and local file paths
+  /// into a single deterministic cache key so identical objects share one entry.
+  String canonicalCacheKey(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return '';
+    final hashIdx = trimmed.indexOf('#');
+    final noFrag = hashIdx != -1 ? trimmed.substring(0, hashIdx) : trimmed;
+    if (AppConfig.isLocalFilePath(noFrag)) {
+      String filePath = noFrag;
+      if (noFrag.startsWith('file://')) {
+        try {
+          filePath = Uri.parse(noFrag).toFilePath();
+        } catch (_) {}
+      }
+      return 'local:${path.normalize(filePath)}';
+    }
+    final protectedObj = extractProtectedObjectName(
+      noFrag,
+      ignorePresignQuery: true,
+    );
+    if (protectedObj != null && protectedObj.isNotEmpty) {
+      return 'obj:$protectedObj';
+    }
+    final resolved = AppConfig.resolveMediaUrl(noFrag) ?? noFrag;
+    final uri = Uri.tryParse(resolved);
+    if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
+      final Map<String, List<String>> filtered = <String, List<String>>{};
+      uri.queryParametersAll.forEach((k, values) {
+        if (!_volatilePresignQueryParams.contains(k.toLowerCase())) {
+          filtered[k] = values;
+        }
+      });
+      final cleanUri = Uri(
+        scheme: uri.scheme,
+        userInfo: uri.userInfo,
+        host: uri.host,
+        port: uri.hasPort ? uri.port : null,
+        path: uri.path,
+        queryParameters: filtered.isEmpty ? null : filtered,
+      );
+      return 'url:${cleanUri.toString()}';
+    }
+    return 'raw:$resolved';
+  }
+
+  String _fnv1aHex(String input) {
+    int hash = 0x811c9dc5;
+    for (final unit in utf8.encode(input)) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xffffffff;
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
+  void _loadAliasesSyncIfNeeded(String dirPath) {
+    if (_aliasesLoadedForDir == dirPath) return;
+    _aliasesLoadedForDir = dirPath;
+    try {
+      final aliasFile = File(path.join(dirPath, 'local_aliases.json'));
+      if (!aliasFile.existsSync()) return;
+      final decoded = jsonDecode(aliasFile.readAsStringSync());
+      if (decoded is Map) {
+        decoded.forEach((k, v) {
+          final keyStr = k.toString();
+          final valStr = v?.toString() ?? '';
+          if (keyStr.isNotEmpty && valStr.isNotEmpty) {
+            _aliasFilenames.putIfAbsent(keyStr, () => valStr);
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveAliases(String dirPath) async {
+    try {
+      final aliasFile = File(path.join(dirPath, 'local_aliases.json'));
+      if (_aliasFilenames.isEmpty) {
+        if (await aliasFile.exists()) {
+          await aliasFile.delete();
+        }
+        return;
+      }
+      await aliasFile.writeAsString(jsonEncode(_aliasFilenames), flush: false);
+    } catch (_) {}
+  }
+
+  /// Fetches and disk-caches remote thumbnail bytes (with automatic private-bucket
+  /// `/api/files/download/...` fallback on 401/403).
+  Future<Uint8List?> fetchThumbnailBytes(String rawOrResolvedUrl) async {
+    if (kIsWeb || rawOrResolvedUrl.isEmpty) return null;
+    final resolved = AppConfig.resolveMediaUrl(rawOrResolvedUrl) ?? rawOrResolvedUrl;
+    final mem = getCachedVideoThumbnailSync(resolved);
+    if (mem != null && mem.isNotEmpty) return mem;
+
+    final file = await downloadMedia(resolved);
+    if (file == null || !await file.exists()) return null;
+    try {
+      final bytes = await file.readAsBytes();
+      if (bytes.isNotEmpty) {
+        cacheVideoThumbnail(resolved, bytes);
+        return bytes;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Synchronously returns a cached [File] if its local path is known in memory
+  /// or present inside the already-discovered media cache directory.
+  /// Prevents a 1-frame placeholder flash when cloning media bubbles or replacing
+  /// optimistic outgoing messages with server messages.
   File? getCachedFileSync(String url) {
     if (kIsWeb || url.isEmpty) return null;
     final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    final cachedPath = _localPathCache[url] ?? _localPathCache[resolvedUrl];
+    final key = canonicalCacheKey(url);
+    final cachedPath = _localPathCache[key] ??
+        _localPathCache[url] ??
+        _localPathCache[resolvedUrl];
     if (cachedPath != null) {
-      return File(cachedPath);
+      final f = File(cachedPath);
+      if (f.existsSync() && f.lengthSync() > 0) {
+        if (key.isNotEmpty) _localPathCache[key] = f.path;
+        return f;
+      }
+      if (key.isNotEmpty) _localPathCache.remove(key);
+      _localPathCache.remove(url);
+      _localPathCache.remove(resolvedUrl);
     }
 
     final uri = Uri.tryParse(url);
     final isNetwork =
         uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-    if (!isNetwork &&
-        !url.startsWith('/api/') &&
-        !url.startsWith('/uploads/')) {
+    if (AppConfig.isLocalFilePath(url) ||
+        (!isNetwork &&
+            !url.startsWith('/api/') &&
+            !url.startsWith('/uploads/') &&
+            !url.startsWith('/media/'))) {
       try {
         final filePath =
             url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
         final directFile = File(filePath);
         if (directFile.existsSync() && directFile.lengthSync() > 0) {
+          if (key.isNotEmpty) _localPathCache[key] = filePath;
           _localPathCache[url] = filePath;
           return directFile;
         }
       } catch (_) {}
+    }
+
+    final mediaDirPath = _cachedMediaDirPath;
+    if (mediaDirPath != null) {
+      _loadAliasesSyncIfNeeded(mediaDirPath);
+      for (final fname in _candidateCacheFilenames(url)) {
+        try {
+          final targetPath = path.join(mediaDirPath, fname);
+          final f = File(targetPath);
+          if (f.existsSync() && f.lengthSync() > 0) {
+            if (key.isNotEmpty) _localPathCache[key] = targetPath;
+            _localPathCache[url] = targetPath;
+            _localPathCache[resolvedUrl] = targetPath;
+            return f;
+          }
+        } catch (_) {}
+      }
     }
     return null;
   }
@@ -85,16 +376,23 @@ class MediaCacheManager {
   /// Synchronously returns a cached video first-frame thumbnail if already extracted.
   Uint8List? getCachedVideoThumbnailSync(String filePath) {
     if (filePath.isEmpty) return null;
-    return _videoThumbnailCache[filePath];
+    final exact = _videoThumbnailCache[filePath];
+    if (exact != null) return exact;
+    final key = canonicalCacheKey(filePath);
+    return key.isNotEmpty ? _videoThumbnailCache[key] : null;
   }
 
   /// Caches an extracted video first-frame thumbnail in memory.
   void cacheVideoThumbnail(String filePath, Uint8List bytes) {
     if (filePath.isEmpty || bytes.isEmpty) return;
-    if (_videoThumbnailCache.length >= 120) {
+    if (_videoThumbnailCache.length >= 240) {
       _videoThumbnailCache.remove(_videoThumbnailCache.keys.first);
     }
     _videoThumbnailCache[filePath] = bytes;
+    final key = canonicalCacheKey(filePath);
+    if (key.isNotEmpty) {
+      _videoThumbnailCache[key] = bytes;
+    }
   }
 
   /// Formats byte count into human-readable string (e.g. 14.2 MB)
@@ -112,41 +410,52 @@ class MediaCacheManager {
 
   /// Get or create a ValueNotifier for tracking download fraction of a URL (0.0 - 1.0)
   ValueNotifier<double> getProgressNotifier(String url) {
-    return _progressNotifiers.putIfAbsent(url, () => ValueNotifier<double>(0.0));
+    final key = canonicalCacheKey(url);
+    return _progressNotifiers.putIfAbsent(
+      key,
+      () => ValueNotifier<double>(0.0),
+    );
   }
 
   /// Get or create a ValueNotifier for tracking byte download progress of a URL
   ValueNotifier<DownloadByteProgress> getByteProgressNotifier(String url) {
+    final key = canonicalCacheKey(url);
     return _byteProgressNotifiers.putIfAbsent(
-      url,
+      key,
       () => ValueNotifier<DownloadByteProgress>(const DownloadByteProgress()),
     );
   }
 
   bool isDownloading(String url) {
-    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    return _cancelTokens.containsKey(url) || _cancelTokens.containsKey(resolvedUrl);
+    final key = canonicalCacheKey(url);
+    if (key.isEmpty) return false;
+    return _cancelTokens.containsKey(key) ||
+        _inFlightDownloads.containsKey(key);
   }
 
   bool wasCancelledByUser(String url) {
-    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    return _userCancelledUrls.contains(url) || _userCancelledUrls.contains(resolvedUrl);
+    final key = canonicalCacheKey(url);
+    return key.isNotEmpty && _userCancelledUrls.contains(key);
+  }
+
+  bool wasDownloadPaused(String url) {
+    final key = canonicalCacheKey(url);
+    return key.isNotEmpty && _pausedUrls.contains(key);
   }
 
   /// Cancel or pause an ongoing download without deleting the partial file or resetting progress
   void cancelDownload(String url, {bool byUser = true}) {
-    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
+    final key = canonicalCacheKey(url);
+    if (key.isEmpty) return;
     if (byUser) {
-      _userCancelledUrls.add(url);
-      _userCancelledUrls.add(resolvedUrl);
+      _userCancelledUrls.add(key);
+      _pausedUrls.remove(key);
+    } else {
+      _pausedUrls.add(key);
     }
-    final token = _cancelTokens.remove(url);
+    final token = _cancelTokens.remove(key);
     if (token != null && !token.isCancelled) {
-      token.cancel('User cancelled');
-    }
-    final resolvedToken = _cancelTokens.remove(resolvedUrl);
-    if (resolvedToken != null && !resolvedToken.isCancelled) {
-      resolvedToken.cancel('User cancelled');
+      token.cancel(byUser ? 'User cancelled' : 'Download paused');
     }
     // Note: Do NOT reset notifiers to 0 so the paused progress state remains displayed
   }
@@ -158,11 +467,12 @@ class MediaCacheManager {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
+    _cachedMediaDirPath = dir.path;
+    _loadAliasesSyncIfNeeded(dir.path);
     return dir;
   }
 
-  /// Generates a sanitized cache filename while preserving media file extension
-  String getCacheFilename(String url) {
+  String _legacyCacheFilename(String url) {
     final uri = Uri.tryParse(url);
     final ext = uri != null ? path.extension(uri.path) : '';
     final sanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
@@ -172,18 +482,74 @@ class MediaCacheManager {
     return sanitized;
   }
 
+  /// Generates a sanitized canonical cache filename while preserving media file extension
+  String getCacheFilename(String url) {
+    final key = canonicalCacheKey(url);
+    if (key.isEmpty) return '';
+    final resolved = AppConfig.resolveMediaUrl(url) ?? url;
+    final uri = Uri.tryParse(resolved);
+    final String extPath = key.startsWith('obj:')
+        ? key.substring(4)
+        : (uri != null ? uri.path : resolved);
+    final ext = path.extension(extPath);
+    String sanitized = key.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+    if (sanitized.length > 180) {
+      sanitized =
+          '${sanitized.substring(0, 90)}_${_fnv1aHex(key)}_${sanitized.substring(sanitized.length - 60)}';
+    }
+    if (ext.isNotEmpty && !sanitized.endsWith(ext)) {
+      return '$sanitized$ext';
+    }
+    return sanitized;
+  }
+
+  List<String> _candidateCacheFilenames(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return const <String>[];
+    final key = canonicalCacheKey(trimmed);
+    final resolved = AppConfig.resolveMediaUrl(trimmed) ?? trimmed;
+    final candidates = <String>{};
+    final alias = _aliasFilenames[key];
+    if (alias != null && alias.isNotEmpty) {
+      candidates.add(alias);
+    }
+    final canonical = getCacheFilename(trimmed);
+    if (canonical.isNotEmpty) {
+      candidates.add(canonical);
+    }
+    final legacyResolved = _legacyCacheFilename(resolved);
+    if (legacyResolved.isNotEmpty) {
+      candidates.add(legacyResolved);
+    }
+    final legacyRaw = _legacyCacheFilename(trimmed);
+    if (legacyRaw.isNotEmpty) {
+      candidates.add(legacyRaw);
+    }
+    final bareSanitized = trimmed.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+    if (bareSanitized.isNotEmpty) {
+      candidates.add(bareSanitized);
+    }
+    return candidates.toList(growable: false);
+  }
+
   /// Checks if the file is cached locally on disk and exists
   Future<File?> getCachedFile(String url) async {
     if (kIsWeb || url.isEmpty) return null;
 
     // Support direct local file paths (e.g., pending outgoing media before upload completes)
+    final key = canonicalCacheKey(url);
     final uri = Uri.tryParse(url);
     final isNetwork = uri != null && (uri.scheme == 'http' || uri.scheme == 'https');
-    if (!isNetwork && !url.startsWith('/api/') && !url.startsWith('/uploads/')) {
+    if (AppConfig.isLocalFilePath(url) ||
+        (!isNetwork &&
+            !url.startsWith('/api/') &&
+            !url.startsWith('/uploads/') &&
+            !url.startsWith('/media/'))) {
       try {
         final filePath = url.startsWith('file://') ? Uri.parse(url).toFilePath() : url;
         final directFile = File(filePath);
         if (await directFile.exists() && await directFile.length() > 0) {
+          if (key.isNotEmpty) _localPathCache[key] = filePath;
           _localPathCache[url] = filePath;
           return directFile;
         }
@@ -191,54 +557,41 @@ class MediaCacheManager {
     }
 
     final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    final cachedPath = _localPathCache[url] ?? _localPathCache[resolvedUrl];
+    final cachedPath = _localPathCache[key] ??
+        _localPathCache[url] ??
+        _localPathCache[resolvedUrl];
     if (cachedPath != null) {
       final f = File(cachedPath);
       if (await f.exists()) {
         try {
           if (await f.length() > 0) {
+            if (key.isNotEmpty) _localPathCache[key] = f.path;
             return f;
           } else {
             await f.delete();
+            if (key.isNotEmpty) _localPathCache.remove(key);
             _localPathCache.remove(url);
             _localPathCache.remove(resolvedUrl);
           }
         } catch (_) {}
       } else {
+        if (key.isNotEmpty) _localPathCache.remove(key);
         _localPathCache.remove(url);
         _localPathCache.remove(resolvedUrl);
       }
     }
 
-    final filename = getCacheFilename(url);
-    final resolvedFilename = getCacheFilename(resolvedUrl);
-    final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final filenamesToCheck = {filename, resolvedFilename, legacySanitized};
+    final mediaDir = await getMediaCacheDirectory();
+    final filenamesToCheck = _candidateCacheFilenames(url);
 
     for (final fname in filenamesToCheck) {
-      // 1. Check primary application cache directory
+      // Check primary app-private cache directory
       try {
-        final cacheDir = await getApplicationCacheDirectory();
-        final targetPath = path.join(cacheDir.path, 'theaver_media', fname);
+        final targetPath = path.join(mediaDir.path, fname);
         final f = File(targetPath);
         if (await f.exists()) {
           if (await f.length() > 0) {
-            _localPathCache[url] = targetPath;
-            _localPathCache[resolvedUrl] = targetPath;
-            return f;
-          } else {
-            await f.delete();
-          }
-        }
-      } catch (_) {}
-
-      // 2. Check legacy documents directory
-      try {
-        final docDir = await getApplicationDocumentsDirectory();
-        final targetPath = path.join(docDir.path, 'theaver_media', fname);
-        final f = File(targetPath);
-        if (await f.exists()) {
-          if (await f.length() > 0) {
+            if (key.isNotEmpty) _localPathCache[key] = targetPath;
             _localPathCache[url] = targetPath;
             _localPathCache[resolvedUrl] = targetPath;
             return f;
@@ -255,34 +608,30 @@ class MediaCacheManager {
   /// Checks if a partial download file (.tmp) exists and returns its current progress
   Future<DownloadByteProgress?> getPartialProgress(String url, {int? totalSize}) async {
     if (kIsWeb || url.isEmpty) return null;
-    final filename = getCacheFilename(url);
-    final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final filenamesToCheck = {filename, legacySanitized};
+    final key = canonicalCacheKey(url);
+    final mediaDir = await getMediaCacheDirectory();
+    final filenamesToCheck = _candidateCacheFilenames(url);
 
-    // Check primary cache directory first, then legacy documents directory
-    for (final dirGetter in [getApplicationCacheDirectory, getApplicationDocumentsDirectory]) {
-      for (final fname in filenamesToCheck) {
-        try {
-          final dir = await dirGetter();
-          final tempPath = path.join(dir.path, 'theaver_media', '$fname.tmp');
-          final tempFile = File(tempPath);
-          if (await tempFile.exists()) {
-            final len = await tempFile.length();
-            if (len > 0) {
-              final tot = totalSize ?? len;
-              final fraction = tot > 0 ? (len / tot).clamp(0.0, 1.0) : 0.0;
-              final prog = DownloadByteProgress(
-                receivedBytes: len,
-                totalBytes: tot,
-                fraction: fraction,
-              );
-              _byteProgressNotifiers[url]?.value = prog;
-              _progressNotifiers[url]?.value = fraction;
-              return prog;
-            }
+    for (final fname in filenamesToCheck) {
+      try {
+        final tempPath = path.join(mediaDir.path, '$fname.tmp');
+        final tempFile = File(tempPath);
+        if (await tempFile.exists()) {
+          final len = await tempFile.length();
+          if (len > 0) {
+            final tot = totalSize ?? len;
+            final fraction = tot > 0 ? (len / tot).clamp(0.0, 1.0) : 0.0;
+            final prog = DownloadByteProgress(
+              receivedBytes: len,
+              totalBytes: tot,
+              fraction: fraction,
+            );
+            _byteProgressNotifiers[key]?.value = prog;
+            _progressNotifiers[key]?.value = fraction;
+            return prog;
           }
-        } catch (_) {}
-      }
+        }
+      } catch (_) {}
     }
     return null;
   }
@@ -295,13 +644,20 @@ class MediaCacheManager {
       }
     }
     _cancelTokens.clear();
+    _inFlightDownloads.clear();
+    _presignedUrlCache.clear();
     _localPathCache.clear();
+    _videoThumbnailCache.clear();
     _progressNotifiers.clear();
     _byteProgressNotifiers.clear();
     _userCancelledUrls.clear();
+    _pausedUrls.clear();
+    _aliasFilenames.clear();
+    _cachedMediaDirPath = null;
+    _aliasesLoadedForDir = null;
   }
 
-  /// Clears all downloaded media files from disk (both cache and legacy directories)
+  /// Clears all downloaded media files from the app-private cache directory
   Future<void> clearDiskCache() async {
     clearMemoryCache();
     if (kIsWeb) return;
@@ -314,24 +670,15 @@ class MediaCacheManager {
     } catch (e) {
       debugPrint('Error clearing media cache dir: $e');
     }
-
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(path.join(docDir.path, 'theaver_media'));
-      if (await legacyMediaDir.exists()) {
-        await legacyMediaDir.delete(recursive: true);
-      }
-    } catch (e) {
-      debugPrint('Error clearing legacy media dir: $e');
-    }
   }
 
   /// Seeds the local media cache directly from a local file (e.g. just-recorded voice/video note
-  /// or compressed image after upload), avoiding re-downloading our own sent media and cleaning up temp files.
+  /// or compressed/uploaded media), avoiding re-downloading our own sent media and cleaning up temp files.
   Future<File?> seedCacheFromFile(
     String remoteUrl,
     File sourceFile, {
     bool deleteSourceIfTemp = true,
+    bool preserveSourceExtension = false,
   }) async {
     if (kIsWeb || remoteUrl.isEmpty) return null;
     try {
@@ -340,13 +687,33 @@ class MediaCacheManager {
       if (len <= 0) return null;
 
       final mediaDir = await getMediaCacheDirectory();
+      final key = canonicalCacheKey(remoteUrl);
       final resolvedUrl = AppConfig.resolveMediaUrl(remoteUrl) ?? remoteUrl;
-      final targetFilename = getCacheFilename(resolvedUrl);
+      final baseFilename = getCacheFilename(remoteUrl);
+      String targetFilename = baseFilename;
+      bool usedAlias = false;
+      if (preserveSourceExtension) {
+        final srcExt = path.extension(sourceFile.path).toLowerCase();
+        final dstExt = path.extension(baseFilename).toLowerCase();
+        if (srcExt.isNotEmpty && srcExt != dstExt) {
+          targetFilename = '${path.basenameWithoutExtension(baseFilename)}$srcExt';
+          usedAlias = true;
+        }
+      }
       final targetPath = path.join(mediaDir.path, targetFilename);
       final targetFile = File(targetPath);
 
       if (path.canonicalize(sourceFile.path) != path.canonicalize(targetPath)) {
-        await sourceFile.copy(targetPath);
+        final seedTempPath = '$targetPath.seed_tmp';
+        final seedTempFile = File(seedTempPath);
+        if (await seedTempFile.exists()) {
+          await seedTempFile.delete();
+        }
+        await sourceFile.copy(seedTempPath);
+        if (await targetFile.exists()) {
+          await targetFile.delete();
+        }
+        await seedTempFile.rename(targetPath);
 
         if (deleteSourceIfTemp) {
           try {
@@ -368,8 +735,24 @@ class MediaCacheManager {
         }
       }
 
+      if (usedAlias) {
+        _aliasFilenames[key] = targetFilename;
+        await _saveAliases(mediaDir.path);
+      } else if (_aliasFilenames.remove(key) != null) {
+        await _saveAliases(mediaDir.path);
+      }
+
+      if (key.isNotEmpty) _localPathCache[key] = targetPath;
       _localPathCache[remoteUrl] = targetPath;
       _localPathCache[resolvedUrl] = targetPath;
+
+      final existingThumb = getCachedVideoThumbnailSync(sourceFile.path);
+      if (existingThumb != null && existingThumb.isNotEmpty) {
+        _videoThumbnailCache[targetPath] = existingThumb;
+        if (key.isNotEmpty) {
+          _videoThumbnailCache[key] = existingThumb;
+        }
+      }
       return targetFile;
     } catch (e) {
       debugPrint('MediaCacheManager.seedCacheFromFile error: $e');
@@ -379,9 +762,14 @@ class MediaCacheManager {
 
   /// Deletes a specific media file from disk cache and memory, returning freed bytes
   Future<int> deleteMedia(String url) async {
+    final key = canonicalCacheKey(url);
     final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    cancelDownload(url);
-    if (resolvedUrl != url) cancelDownload(resolvedUrl);
+    cancelDownload(url, byUser: false);
+    if (key.isNotEmpty) {
+      _localPathCache.remove(key);
+      _progressNotifiers.remove(key);
+      _byteProgressNotifiers.remove(key);
+    }
     _localPathCache.remove(url);
     _localPathCache.remove(resolvedUrl);
     _progressNotifiers.remove(url);
@@ -391,37 +779,28 @@ class MediaCacheManager {
     if (kIsWeb) return 0;
 
     int freedBytes = 0;
-    final filename = getCacheFilename(url);
-    final resolvedFilename = getCacheFilename(resolvedUrl);
-    final legacySanitized = url.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
-    final filenamesToCheck = {filename, resolvedFilename, legacySanitized};
+    final mediaDir = await getMediaCacheDirectory();
+    final filenamesToCheck = _candidateCacheFilenames(url);
+    if (_aliasFilenames.remove(key) != null) {
+      await _saveAliases(mediaDir.path);
+    }
 
     for (final name in filenamesToCheck) {
       try {
-        final cacheDir = await getApplicationCacheDirectory();
-        final f1 = File(path.join(cacheDir.path, 'theaver_media', name));
+        final f1 = File(path.join(mediaDir.path, name));
         if (await f1.exists()) {
           freedBytes += await f1.length();
           await f1.delete();
         }
-        final tmp1 = File(path.join(cacheDir.path, 'theaver_media', '$name.tmp'));
+        final tmp1 = File(path.join(mediaDir.path, '$name.tmp'));
         if (await tmp1.exists()) {
           freedBytes += await tmp1.length();
           await tmp1.delete();
         }
-      } catch (_) {}
-
-      try {
-        final docDir = await getApplicationDocumentsDirectory();
-        final f2 = File(path.join(docDir.path, 'theaver_media', name));
-        if (await f2.exists()) {
-          freedBytes += await f2.length();
-          await f2.delete();
-        }
-        final tmp2 = File(path.join(docDir.path, 'theaver_media', '$name.tmp'));
-        if (await tmp2.exists()) {
-          freedBytes += await tmp2.length();
-          await tmp2.delete();
+        final seedTmp = File(path.join(mediaDir.path, '$name.seed_tmp'));
+        if (await seedTmp.exists()) {
+          freedBytes += await seedTmp.length();
+          await seedTmp.delete();
         }
       } catch (_) {}
     }
@@ -440,18 +819,6 @@ class MediaCacheManager {
       final mediaCacheDir = Directory(path.join(cacheDir.path, 'theaver_media'));
       if (await mediaCacheDir.exists()) {
         await for (final entity in mediaCacheDir.list(recursive: true)) {
-          if (entity is File) {
-            total += await entity.length();
-          }
-        }
-      }
-    } catch (_) {}
-
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(path.join(docDir.path, 'theaver_media'));
-      if (await legacyMediaDir.exists()) {
-        await for (final entity in legacyMediaDir.list(recursive: true)) {
           if (entity is File) {
             total += await entity.length();
           }
@@ -478,19 +845,9 @@ class MediaCacheManager {
       fraction: fraction,
     );
 
-    final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-
-    final pNotifier = _progressNotifiers[url];
-    if (pNotifier != null) pNotifier.value = fraction;
-    if (resolvedUrl != url) {
-      _progressNotifiers[resolvedUrl]?.value = fraction;
-    }
-
-    final bNotifier = _byteProgressNotifiers[url];
-    if (bNotifier != null) bNotifier.value = prog;
-    if (resolvedUrl != url) {
-      _byteProgressNotifiers[resolvedUrl]?.value = prog;
-    }
+    final key = canonicalCacheKey(url);
+    _progressNotifiers[key]?.value = fraction;
+    _byteProgressNotifiers[key]?.value = prog;
 
     onProgress?.call(fraction);
     onByteProgress?.call(prog);
@@ -509,7 +866,8 @@ class MediaCacheManager {
     expectedTotalSize: expectedTotalSize,
   );
 
-  /// Download a media file to local cache with HTTP Range resume and byte progress tracking
+  /// Download a media file to local cache with HTTP Range resume, deduplicated
+  /// in-flight futures, automatic private-bucket fallback, and byte progress.
   Future<File?> downloadMedia(
     String url, {
     void Function(double progress)? onProgress,
@@ -519,8 +877,9 @@ class MediaCacheManager {
     if (kIsWeb || url.isEmpty) return null;
 
     final resolvedUrl = AppConfig.resolveMediaUrl(url) ?? url;
-    _userCancelledUrls.remove(url);
-    _userCancelledUrls.remove(resolvedUrl);
+    final key = canonicalCacheKey(url);
+    _userCancelledUrls.remove(key);
+    _pausedUrls.remove(key);
 
     final existing = await getCachedFile(url);
     if (existing != null) {
@@ -529,13 +888,53 @@ class MediaCacheManager {
       return existing;
     }
 
-    if (_cancelTokens.containsKey(url) || _cancelTokens.containsKey(resolvedUrl)) {
-      // Already downloading
-      return null;
+    final existingFuture = _inFlightDownloads[key];
+    if (existingFuture != null) {
+      if (onProgress == null && onByteProgress == null) {
+        return existingFuture;
+      }
+      final notifier = getByteProgressNotifier(url);
+      void forwardProgress() {
+        onProgress?.call(notifier.value.fraction);
+        onByteProgress?.call(notifier.value);
+      }
+
+      notifier.addListener(forwardProgress);
+      try {
+        return await existingFuture;
+      } finally {
+        notifier.removeListener(forwardProgress);
+      }
     }
 
+    final Future<File?> downloadFuture = _downloadMediaInternal(
+      key: key,
+      url: url,
+      resolvedUrl: resolvedUrl,
+      onProgress: onProgress,
+      onByteProgress: onByteProgress,
+      expectedTotalSize: expectedTotalSize,
+    );
+    _inFlightDownloads[key] = downloadFuture;
+    try {
+      return await downloadFuture;
+    } finally {
+      if (identical(_inFlightDownloads[key], downloadFuture)) {
+        _inFlightDownloads.remove(key);
+      }
+    }
+  }
+
+  Future<File?> _downloadMediaInternal({
+    required String key,
+    required String url,
+    required String resolvedUrl,
+    void Function(double progress)? onProgress,
+    void Function(DownloadByteProgress progress)? onByteProgress,
+    int? expectedTotalSize,
+  }) async {
     final cancelToken = CancelToken();
-    _cancelTokens[url] = cancelToken;
+    _cancelTokens[key] = cancelToken;
 
     try {
       final mediaDir = await getMediaCacheDirectory();
@@ -551,26 +950,42 @@ class MediaCacheManager {
       }
 
       final parsedUri = Uri.tryParse(resolvedUrl);
+      final protectedObj = extractProtectedObjectName(resolvedUrl);
 
-      // S3/MinIO storage buckets and direct file downloads reject Bearer tokens with HTTP 400 Bad Request.
-      // We only attach Authorization if the URL is an /api/ endpoint and NOT a MinIO/S3 storage endpoint.
+      // Prefer authenticated `/api/files/download/<objectName>` (or `/api/files/avatar/<objectName>`)
+      // when the target is inside a protected S3 bucket so we don't waste a guaranteed 403 round-trip.
+      String requestUrl = resolvedUrl;
       bool shouldAttachAuth = false;
       if (parsedUri != null) {
         final pathLower = parsedUri.path.toLowerCase();
-        final isMinIOStorage = parsedUri.port == 9000 ||
-            parsedUri.host.contains('minio') ||
-            parsedUri.host.startsWith('storage.') ||
-            (AppConfig.storageUrl.isNotEmpty &&
-                parsedUri.host == (Uri.tryParse(AppConfig.storageUrl)?.host ?? ''));
-        if (!isMinIOStorage && pathLower.contains('/api/')) {
+        final isPresigned = parsedUri.queryParameters.containsKey('X-Amz-Signature') ||
+            parsedUri.queryParameters.containsKey('x-amz-signature');
+        if (protectedObj != null && !pathLower.contains('/api/files/download/')) {
+          final token = await AuthService.getToken();
+          if (token != null && token.isNotEmpty) {
+            requestUrl = '${AppConfig.baseUrl}/api/files/download/$protectedObj';
+            shouldAttachAuth = true;
+          }
+        } else if (!isPresigned &&
+            _isStorageUri(parsedUri) &&
+            parsedUri.path.startsWith('/avatars/') &&
+            parsedUri.path.length > '/avatars/'.length) {
+          final avatarObj = parsedUri.path.substring('/avatars/'.length);
+          final apiBase = AppConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
+          requestUrl = '$apiBase/api/files/avatar/$avatarObj';
           shouldAttachAuth = true;
+        } else {
+          final isStorage = _isStorageUri(parsedUri);
+          if (!isStorage && !isPresigned && pathLower.contains('/api/')) {
+            shouldAttachAuth = true;
+          }
         }
       }
 
       final headers = <String, dynamic>{};
       if (shouldAttachAuth) {
         final token = await AuthService.getToken();
-        if (token != null) {
+        if (token != null && token.isNotEmpty) {
           headers['Authorization'] = 'Bearer $token';
         }
       }
@@ -581,7 +996,7 @@ class MediaCacheManager {
       Response<ResponseBody> response;
       try {
         response = await _dio.get<ResponseBody>(
-          resolvedUrl,
+          requestUrl,
           cancelToken: cancelToken,
           options: Options(
             headers: headers,
@@ -589,8 +1004,30 @@ class MediaCacheManager {
           ),
         );
       } on DioException catch (dioErr) {
-        // If server returns 416 (Range Not Satisfiable), delete corrupted .tmp file and retry from offset 0
-        if (dioErr.response?.statusCode == 416 && headers.containsKey('Range')) {
+        final status = dioErr.response?.statusCode;
+        // Private MinIO bucket returns 401/403 (or expired presign returns 403):
+        // fallback to authenticated backend proxy.
+        final fallbackObj = protectedObj ??
+            extractProtectedObjectName(resolvedUrl, ignorePresignQuery: true);
+        if ((status == 401 || status == 403) &&
+            fallbackObj != null &&
+            !requestUrl.contains('/api/files/download/')) {
+          final token = await AuthService.getToken();
+          if (token != null && token.isNotEmpty) {
+            headers['Authorization'] = 'Bearer $token';
+            requestUrl = '${AppConfig.baseUrl}/api/files/download/$fallbackObj';
+            response = await _dio.get<ResponseBody>(
+              requestUrl,
+              cancelToken: cancelToken,
+              options: Options(
+                headers: headers,
+                responseType: ResponseType.stream,
+              ),
+            );
+          } else {
+            rethrow;
+          }
+        } else if (status == 416 && headers.containsKey('Range')) {
           debugPrint('Media download 416 Range Not Satisfiable for $url, resetting .tmp file and retrying from 0');
           try {
             if (await tempFile.exists()) await tempFile.delete();
@@ -598,7 +1035,7 @@ class MediaCacheManager {
           headers.remove('Range');
           existingBytes = 0;
           response = await _dio.get<ResponseBody>(
-            resolvedUrl,
+            requestUrl,
             cancelToken: cancelToken,
             options: Options(
               headers: headers,
@@ -667,10 +1104,24 @@ class MediaCacheManager {
             } catch (_) {}
           }
           final finalFile = await tempFile.rename(targetPath);
+          final oldAlias = _aliasFilenames.remove(key);
+          if (oldAlias != null && oldAlias != filename) {
+            try {
+              final oldAliasFile = File(path.join(mediaDir.path, oldAlias));
+              if (await oldAliasFile.exists()) {
+                await oldAliasFile.delete();
+              }
+            } catch (_) {}
+            await _saveAliases(mediaDir.path);
+          } else if (oldAlias != null) {
+            await _saveAliases(mediaDir.path);
+          }
+          if (key.isNotEmpty) _localPathCache[key] = targetPath;
           _localPathCache[url] = targetPath;
           _localPathCache[resolvedUrl] = targetPath;
-          _cancelTokens.remove(url);
-          _cancelTokens.remove(resolvedUrl);
+          if (identical(_cancelTokens[key], cancelToken)) {
+            _cancelTokens.remove(key);
+          }
           _emitProgress(url, actualLength, actualLength, onProgress, onByteProgress, isFinalized: true);
           _triggerDebouncedCacheCleanup();
           return finalFile;
@@ -697,7 +1148,9 @@ class MediaCacheManager {
         }
       }
     } finally {
-      _cancelTokens.remove(url);
+      if (identical(_cancelTokens[key], cancelToken)) {
+        _cancelTokens.remove(key);
+      }
     }
     return null;
   }
@@ -790,7 +1243,7 @@ class MediaCacheManager {
 
     final bool wifi = netType == 'wifi';
     final bool roaming = netType == 'roaming';
-    final size = fileSize ?? 0;
+    final int size = fileSize ?? 0;
 
     if (messageType == 'photo' || messageType == 'image') {
       final allowed = wifi
@@ -799,7 +1252,7 @@ class MediaCacheManager {
               ? settings.autoDownloadPhotosOnRoaming
               : settings.autoDownloadPhotosOnCellular);
       if (!allowed) return false;
-      return size <= 10 * 1024 * 1024;
+      return fileSize == null || size <= 0 || size <= 10 * 1024 * 1024;
     }
 
     if (messageType == 'video') {
@@ -809,6 +1262,7 @@ class MediaCacheManager {
               ? settings.autoDownloadVideosOnRoaming
               : settings.autoDownloadVideosOnCellular);
       if (!allowed) return false;
+      if (fileSize == null || size <= 0) return false;
       return wifi ? size <= 15 * 1024 * 1024 : size <= 5 * 1024 * 1024;
     }
 
@@ -819,16 +1273,28 @@ class MediaCacheManager {
               ? settings.autoDownloadFilesOnRoaming
               : settings.autoDownloadFilesOnCellular);
       if (!allowed) return false;
+      if (fileSize == null || size <= 0) return false;
       return size <= 3 * 1024 * 1024;
     }
 
-    if (messageType == 'audio' || messageType == 'voice') {
+    if (messageType == 'voice') {
       final allowed = wifi
           ? settings.autoDownloadAudioOnWifi
           : (roaming
               ? settings.autoDownloadAudioOnRoaming
               : settings.autoDownloadAudioOnCellular);
       if (!allowed) return false;
+      return fileSize == null || size <= 0 || size <= 10 * 1024 * 1024;
+    }
+
+    if (messageType == 'audio') {
+      final allowed = wifi
+          ? settings.autoDownloadAudioOnWifi
+          : (roaming
+              ? settings.autoDownloadAudioOnRoaming
+              : settings.autoDownloadAudioOnCellular);
+      if (!allowed) return false;
+      if (fileSize == null || size <= 0) return false;
       return size <= 10 * 1024 * 1024;
     }
 

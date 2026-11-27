@@ -1,9 +1,7 @@
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
@@ -13,15 +11,21 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/theav_theme_service.dart';
 import '../../services/wallpaper_provider.dart';
 import '../../services/emoji_haptic_service.dart';
+import '../../services/browser_data_service.dart';
+import '../../services/glass_toast_service.dart';
 import '../../services/settings_service.dart';
+import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 import '../../theme/theme_provider.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/chat_preview_card.dart';
-import '../../widgets/theme/four_corner_gradient.dart';
+import '../../widgets/theme/theme_carousel_strip.dart';
 import '../../widgets/theme/theme_preview_sheet.dart';
 import '../../l10n/app_localizations.dart';
 import 'advanced_theme_colors_screen.dart';
+import 'browser_vault_and_data_screen.dart';
 import 'theme_editor_screen.dart';
 import 'wallpaper_screen.dart';
 import '../../widgets/settings/chat_swipe_setting_card.dart';
@@ -38,22 +42,38 @@ class ChatSettingsScreen extends StatelessWidget {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
+        withData: kIsWeb,
       );
 
-      if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      if (result == null || result.files.isEmpty) {
         return;
       }
 
-      final file = File(result.files.single.path!);
-      if (!file.path.toLowerCase().endsWith('.theavtheme')) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(l10n.translate('theme_select_theavtheme'))),
-        );
+      final pickedFile = result.files.single;
+      final pickedFileName = pickedFile.name;
+      if (!pickedFileName.toLowerCase().endsWith('.theavtheme')) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(l10n.translate('theme_select_theavtheme'))),
+          );
+        }
         return;
       }
 
-      final bytes = await file.readAsBytes();
-      final pickedFileName = result.files.single.name;
+      final Uint8List bytes;
+      if (kIsWeb) {
+        final pickedBytes = pickedFile.bytes;
+        if (pickedBytes == null) {
+          return;
+        }
+        bytes = pickedBytes;
+      } else {
+        if (pickedFile.path == null) {
+          return;
+        }
+        bytes = await File(pickedFile.path!).readAsBytes();
+      }
+
       final defaultName = pickedFileName.toLowerCase().endsWith('.theavtheme')
           ? pickedFileName.substring(0, pickedFileName.length - '.theavtheme'.length)
           : pickedFileName;
@@ -89,16 +109,31 @@ class ChatSettingsScreen extends StatelessWidget {
 
   Future<void> _exportTheme(BuildContext context, TheavTheme themeToExport) async {
     final l10n = context.l10n;
+    final shareText = context.trOr(
+      'theme_share_file_text',
+      'Тема Theaver: {name}',
+      {'name': themeToExport.name},
+    );
     try {
       final bytes = await TheavThemeService().exportThemePackage(themeToExport);
-      final tempDir = await getTemporaryDirectory();
       final cleanName = TheavThemeService.sanitizeFileName(themeToExport.name);
-      final file = File('${tempDir.path}/$cleanName.theavtheme');
-      await file.writeAsBytes(bytes);
+      final XFile exportFile;
+      if (kIsWeb) {
+        exportFile = XFile.fromData(
+          Uint8List.fromList(bytes),
+          name: '$cleanName.theavtheme',
+          mimeType: 'application/octet-stream',
+        );
+      } else {
+        final tempDir = await getTemporaryDirectory();
+        final file = File('${tempDir.path}/$cleanName.theavtheme');
+        await file.writeAsBytes(bytes);
+        exportFile = XFile(file.path, name: '$cleanName.theavtheme');
+      }
 
       await Share.shareXFiles(
-        [XFile(file.path, name: '$cleanName.theavtheme')],
-        text: 'Тема Theaver: ${themeToExport.name}',
+        [exportFile],
+        text: shareText,
       );
     } catch (e) {
       if (context.mounted) {
@@ -110,91 +145,78 @@ class ChatSettingsScreen extends StatelessWidget {
   }
 
   Future<void> _exportActiveTheme(BuildContext context) async {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final themeProvider = context.read<ThemeProvider>();
-    final isDark = themeProvider.themeMode == ThemeMode.dark;
     final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
     await _exportTheme(context, activeTheme);
   }
 
   void _showThemeOptionsModal(BuildContext context, TheavTheme t) {
     final l10n = context.l10n;
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Theme.of(context).cardColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              child: Text(
-                t.name,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
+      title: t.name,
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const iconoir.EditPencil(width: 22, height: 22),
+            title: Text(l10n.translate('theme_edit')),
+            onTap: () {
+              Navigator.pop(ctx);
+              Navigator.push(
+                context,
+                SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
+              );
+            },
+          ),
+          ListTile(
+            leading: const iconoir.ShareAndroid(width: 22, height: 22),
+            title: Text(l10n.translate('theme_export')),
+            onTap: () {
+              Navigator.pop(ctx);
+              _exportTheme(context, t);
+            },
+          ),
+          ListTile(
+            leading: iconoir.Trash(
+              width: 22,
+              height: 22,
+              color: t.palette.error,
             ),
-            const Divider(height: 1),
-            ListTile(
-              leading: const iconoir.EditPencil(width: 22, height: 22),
-              title: Text(l10n.translate('theme_edit')),
-              onTap: () {
-                Navigator.pop(ctx);
-                Navigator.push(
-                  context,
-                  SwipeBackPageRoute(builder: (_) => ThemeEditorScreen(themeToEdit: t)),
-                );
-              },
+            title: Text(
+              l10n.translate('theme_delete'),
+              style: TextStyle(color: t.palette.error, fontWeight: FontWeight.w600),
             ),
-            ListTile(
-              leading: const iconoir.ShareAndroid(width: 22, height: 22),
-              title: Text(l10n.translate('theme_export')),
-              onTap: () {
-                Navigator.pop(ctx);
-                _exportTheme(context, t);
-              },
-            ),
-            ListTile(
-              leading: iconoir.Trash(
-                width: 22,
-                height: 22,
-                color: t.palette.error,
-              ),
-              title: Text(
-                l10n.translate('theme_delete'),
-                style: TextStyle(color: t.palette.error, fontWeight: FontWeight.w600),
-              ),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (dCtx) => AlertDialog(
-                    title: Text(l10n.translate('theme_delete')),
-                    content: Text(l10n.translate('theme_delete_confirm')),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dCtx, false),
-                        child: Text(l10n.translate('cancel')),
+            onTap: () async {
+              Navigator.pop(ctx);
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (dCtx) => AlertDialog(
+                  title: Text(l10n.translate('theme_delete')),
+                  content: Text(l10n.translate('theme_delete_confirm')),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dCtx, false),
+                      child: Text(l10n.translate('cancel')),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(dCtx, true),
+                      child: Text(
+                        l10n.translate('common_delete'),
+                        style: TextStyle(color: t.palette.error),
                       ),
-                      TextButton(
-                        onPressed: () => Navigator.pop(dCtx, true),
-                        child: Text(
-                          l10n.translate('common_delete'),
-                          style: TextStyle(color: t.palette.error),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirm == true) {
-                  await TheavThemeService().deleteTheme(t.id);
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                await TheavThemeService().deleteTheme(t.id);
+              }
+            },
+          ),
+        ],
       ),
     );
   }
@@ -203,31 +225,28 @@ class ChatSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final themeProvider = context.watch<ThemeProvider>();
-    final isDark = themeProvider.themeMode == ThemeMode.dark;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final activeTheme = isDark ? themeProvider.activeDarkTheme : themeProvider.activeLightTheme;
     final activePrimary = activeTheme.palette.primary;
-    final allThemes = TheavThemeService().getAllThemes();
+    final allThemes = TheavThemeService().getAllThemesForBrightness(isDark);
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final appBarActions = [
-          IconButton(
-            icon: const iconoir.Download(width: 22, height: 22),
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
+        final headerActions = [
+          SettingsHeaderAction(
+            icon: iconoir.Download(width: 21, height: 21, color: headerFg),
             tooltip: l10n.translate('theme_import'),
-            onPressed: () => _importTheme(context),
+            onTap: () => _importTheme(context),
           ),
-          IconButton(
-            icon: const iconoir.ShareAndroid(width: 22, height: 22),
+          SettingsHeaderAction(
+            icon: iconoir.ShareAndroid(width: 20, height: 20, color: headerFg),
             tooltip: l10n.translate('theme_export'),
-            onPressed: () => _exportActiveTheme(context),
+            onTap: () => _exportActiveTheme(context),
           ),
         ];
 
         final listView = ListView(
           padding: EdgeInsets.only(
-            top: glassEnabled ? 12 : 0,
+            top: SettingsFloatingHeader.topClearanceOf(context) + 4,
             bottom: 30,
           ),
           children: [
@@ -266,82 +285,78 @@ class ChatSettingsScreen extends StatelessWidget {
                 ],
               ),
             ),
-            SizedBox(
-              height: 104,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: allThemes.length + 1,
-                separatorBuilder: (_, __) => const SizedBox(width: 12),
-                itemBuilder: (context, index) {
-                  if (index == allThemes.length) {
-                    // "+ Create Theme" Card
-                    return GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          SwipeBackPageRoute(builder: (_) => const ThemeEditorScreen()),
-                        );
-                      },
-                      child: SizedBox(
-                        width: 80,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 78,
-                              height: 68,
-                              decoration: BoxDecoration(
-                                color: Theme.of(context).cardColor,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(
-                                  color: Colors.grey.withValues(alpha: 0.3),
-                                ),
-                              ),
-                              child: Center(
-                                child: iconoir.Plus(color: activePrimary, width: 28, height: 28),
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              l10n.translate('theme_create_button'),
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: activePrimary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }
-
-                  final t = allThemes[index];
-                  final isSelected = t.id == activeTheme.id;
-
-                  return _ThemeItemBubble(
-                    theme: isSelected ? activeTheme : t,
-                    isSelected: isSelected,
-                    activePrimary: activePrimary,
-                    onTap: () {
-                      themeProvider.setActiveTheme(t);
-                      if (t.wallpaper.type != 'image') {
-                        context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
-                      } else if (t.wallpaper.imagePath != null) {
-                        context.read<WallpaperProvider>().setWallpaper(t.wallpaper.imagePath!);
-                      }
-                    },
-                    onLongPress: () {
-                      if (!t.isBuiltIn) {
-                        _showThemeOptionsModal(context, t);
-                      }
-                    },
+            ThemeCarouselStrip(
+              themes: allThemes,
+              activeTheme: activeTheme,
+              activePrimary: activePrimary,
+              onThemeSelected: (t) {
+                themeProvider.setActiveTheme(
+                  t,
+                  syncCounterpart: t.isBuiltIn,
+                  preserveSystemMode: t.isDark == isDark,
+                );
+                if (t.wallpaper.type != 'image') {
+                  context.read<WallpaperProvider>().removeWallpaper(
+                    syncToServer: false,
+                  );
+                } else if (t.wallpaper.imagePath != null) {
+                  context.read<WallpaperProvider>().setWallpaper(
+                    t.wallpaper.imagePath!,
+                  );
+                }
+              },
+              onThemeLongPress: (t) {
+                if (!t.isBuiltIn) {
+                  _showThemeOptionsModal(context, t);
+                }
+              },
+              trailingCard: GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    SwipeBackPageRoute(
+                      builder: (_) => const ThemeEditorScreen(),
+                    ),
                   );
                 },
+                child: SizedBox(
+                  width: 80,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 78,
+                        height: 68,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).cardColor,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: Colors.grey.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Center(
+                          child: iconoir.Plus(
+                            color: activePrimary,
+                            width: 28,
+                            height: 28,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        l10n.translate('theme_create_button'),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: activePrimary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 14),
@@ -395,7 +410,7 @@ class ChatSettingsScreen extends StatelessWidget {
                         Text('${activeTheme.bubbleRadius.round()} px'),
                       ],
                     ),
-                    Slider(
+                    AdaptiveSlider(
                       value: activeTheme.bubbleRadius.clamp(0.0, 24.0),
                       min: 0,
                       max: 24,
@@ -408,6 +423,27 @@ class ChatSettingsScreen extends StatelessWidget {
                           updated,
                           saveToCloud: !activeTheme.isBuiltIn || activeTheme.isCloudSaved,
                         );
+                      },
+                    ),
+                    const Divider(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          l10n.translate('theme_message_font_size'),
+                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                        ),
+                        Text('${themeProvider.messageFontSize.round()} px'),
+                      ],
+                    ),
+                    AdaptiveSlider(
+                      value: themeProvider.messageFontSize.clamp(12.0, 24.0),
+                      min: 12,
+                      max: 24,
+                      divisions: 12,
+                      activeColor: activePrimary,
+                      onChanged: (val) {
+                        themeProvider.setMessageFontSize(val.roundToDouble());
                       },
                     ),
                   ],
@@ -462,26 +498,93 @@ class ChatSettingsScreen extends StatelessWidget {
                       _ThemeButton(
                         icon: const iconoir.SunLight(width: 22, height: 22),
                         label: l10n.translate('theme_light'),
-                        isSelected: themeProvider.themeMode == ThemeMode.light,
+                        isSelected: !themeProvider.scheduleEnabled &&
+                            themeProvider.themeMode == ThemeMode.light,
                         onTap: () => themeProvider.setToLight(),
                       ),
                       const SizedBox(width: 8),
                       _ThemeButton(
                         icon: const iconoir.HalfMoon(width: 22, height: 22),
                         label: l10n.translate('theme_dark'),
-                        isSelected: themeProvider.themeMode == ThemeMode.dark,
+                        isSelected: !themeProvider.scheduleEnabled &&
+                            themeProvider.themeMode == ThemeMode.dark,
                         onTap: () => themeProvider.setToDark(),
                       ),
                       const SizedBox(width: 8),
                       _ThemeButton(
                         icon: const iconoir.Laptop(width: 22, height: 22),
                         label: l10n.translate('theme_system'),
-                        isSelected: themeProvider.themeMode == ThemeMode.system,
+                        isSelected: !themeProvider.scheduleEnabled &&
+                            themeProvider.themeMode == ThemeMode.system,
                         onTap: () => themeProvider.setToSystem(),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: iconoir.Clock(
+                    color: themeProvider.scheduleEnabled
+                        ? activePrimary
+                        : Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(l10n.translate('theme_schedule_title')),
+                  subtitle: Text(
+                    themeProvider.scheduleEnabled
+                        ? '${_formatTod(themeProvider.darkStart)} – ${_formatTod(themeProvider.darkEnd)}'
+                        : l10n.translate('theme_schedule_desc'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: AdaptiveSwitch(
+                    value: themeProvider.scheduleEnabled,
+                    onChanged: (val) => themeProvider.setScheduleEnabled(val),
+                  ),
+                ),
+                if (themeProvider.scheduleEnabled)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const iconoir.HalfMoon(width: 16, height: 16),
+                            label: Text(
+                              '${l10n.translate('theme_schedule_dark_from')}: ${_formatTod(themeProvider.darkStart)}',
+                            ),
+                            onPressed: () async {
+                              final picked = await showTimePicker(
+                                context: context,
+                                initialTime: themeProvider.darkStart,
+                              );
+                              if (picked != null) {
+                                await themeProvider.setDarkSchedule(start: picked);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const iconoir.SunLight(width: 16, height: 16),
+                            label: Text(
+                              '${l10n.translate('theme_schedule_light_from')}: ${_formatTod(themeProvider.darkEnd)}',
+                            ),
+                            onPressed: () async {
+                              final picked = await showTimePicker(
+                                context: context,
+                                initialTime: themeProvider.darkEnd,
+                              );
+                              if (picked != null) {
+                                await themeProvider.setDarkSchedule(end: picked);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
 
@@ -567,6 +670,279 @@ class ChatSettingsScreen extends StatelessWidget {
                 );
               },
             ),
+
+            if (!kIsWeb) ...[
+              const SizedBox(height: 6),
+              if (LinkOpener.isInAppBrowserSupported) ...[
+                ValueListenableBuilder<bool>(
+                  valueListenable: SettingsService().inAppBrowserNotifier,
+                  builder: (context, inAppBrowser, _) {
+                    return ListTile(
+                      key: const ValueKey('settings_in_app_browser_tile'),
+                      leading: iconoir.Internet(
+                        color: inAppBrowser ? activePrimary : Colors.grey,
+                        width: 22,
+                        height: 22,
+                      ),
+                      title: Text(
+                        l10n.translate('settings_in_app_browser_title'),
+                      ),
+                      subtitle: Text(
+                        l10n.translate(
+                          inAppBrowser
+                              ? 'settings_in_app_browser_on'
+                              : 'settings_in_app_browser_off',
+                        ),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                      trailing: AdaptiveSwitch(
+                        value: inAppBrowser,
+                        onChanged: (val) =>
+                            SettingsService().setInAppBrowser(val),
+                      ),
+                      onTap: () async {
+                        HapticUtils.tap();
+                        await showTheavModalSheet<void>(
+                          context: context,
+                          title: l10n.translate(
+                            'settings_in_app_browser_sheet_title',
+                          ),
+                          showCloseButton: true,
+                          builder: (sheetCtx) {
+                            final palette = sheetCtx.theav;
+                            return Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ListTile(
+                                  leading: iconoir.Internet(
+                                    width: 22,
+                                    height: 22,
+                                    color: inAppBrowser
+                                        ? palette.primary
+                                        : palette.subtext,
+                                  ),
+                                  title: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_option_internal',
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_on',
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: palette.subtext,
+                                    ),
+                                  ),
+                                  trailing: inAppBrowser
+                                      ? Icon(
+                                          Icons.check_rounded,
+                                          color: palette.primary,
+                                        )
+                                      : null,
+                                  onTap: () async {
+                                    await SettingsService()
+                                        .setInAppBrowser(true);
+                                    if (sheetCtx.mounted) {
+                                      Navigator.of(sheetCtx).pop();
+                                    }
+                                  },
+                                ),
+                                ListTile(
+                                  leading: iconoir.OpenNewWindow(
+                                    width: 22,
+                                    height: 22,
+                                    color: !inAppBrowser
+                                        ? palette.primary
+                                        : palette.subtext,
+                                  ),
+                                  title: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_option_external',
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    l10n.translate(
+                                      'settings_in_app_browser_off',
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: palette.subtext,
+                                    ),
+                                  ),
+                                  trailing: !inAppBrowser
+                                      ? Icon(
+                                          Icons.check_rounded,
+                                          color: palette.primary,
+                                        )
+                                      : null,
+                                  onTap: () async {
+                                    await SettingsService()
+                                        .setInAppBrowser(false);
+                                    if (sheetCtx.mounted) {
+                                      Navigator.of(sheetCtx).pop();
+                                    }
+                                  },
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+                const SizedBox(height: 6),
+                ListTile(
+                  key: const ValueKey('settings_browser_vault_tile'),
+                  leading: const Icon(
+                    Icons.key_rounded,
+                    color: Colors.grey,
+                    size: 22,
+                  ),
+                  title: Text(l10n.translate('settings_browser_vault_title')),
+                  subtitle: Text(
+                    l10n.translate('settings_browser_vault_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).push(
+                      SwipeBackPageRoute<void>(
+                        builder: (_) =>
+                            const BrowserVaultAndDataScreen(initialSection: 0),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  key: const ValueKey('settings_browser_cookies_tile'),
+                  leading: const Icon(
+                    Icons.cookie_outlined,
+                    color: Colors.grey,
+                    size: 22,
+                  ),
+                  title: Text(
+                    l10n.translate('settings_browser_cookies_sites_title'),
+                  ),
+                  subtitle: Text(
+                    l10n.translate('settings_browser_cookies_sites_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).push(
+                      SwipeBackPageRoute<void>(
+                        builder: (_) =>
+                            const BrowserVaultAndDataScreen(initialSection: 2),
+                      ),
+                    );
+                  },
+                ),
+                ListTile(
+                  key: const ValueKey('settings_clear_browser_data_tile'),
+                  leading: const iconoir.Trash(
+                    color: Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(
+                    l10n.translate('settings_clear_browser_data_title'),
+                  ),
+                  subtitle: Text(
+                    l10n.translate('settings_clear_browser_data_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  onTap: () async {
+                    HapticUtils.tap();
+                    final confirm = await showTheavDialog<bool>(
+                          context: context,
+                          title: l10n.translate(
+                            'settings_clear_browser_data_title',
+                          ),
+                          message: l10n.translate(
+                            'settings_clear_browser_data_confirm',
+                          ),
+                          actions: [
+                            TheavDialogAction<bool>(
+                              label: l10n.translate('storage_cancel'),
+                              result: false,
+                            ),
+                            TheavDialogAction<bool>(
+                              label: l10n.translate('storage_clear'),
+                              result: true,
+                              isDestructive: true,
+                            ),
+                          ],
+                        ) ??
+                        false;
+                    if (!confirm) return;
+                    await BrowserDataService.instance.clearHistoryAndCookies();
+                    if (context.mounted) {
+                      GlassToastService().show(
+                        context,
+                        l10n.translate('settings_clear_browser_data_done'),
+                        icon: Icons.check,
+                      );
+                    }
+                  },
+                ),
+              ] else ...[
+                ListTile(
+                  key: const ValueKey('settings_in_app_browser_tile'),
+                  enabled: false,
+                  leading: const iconoir.Internet(
+                    color: Colors.grey,
+                    width: 22,
+                    height: 22,
+                  ),
+                  title: Text(
+                    l10n.translate('settings_in_app_browser_title'),
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                  subtitle: Text(
+                    context.trOr(
+                      'settings_in_app_browser_unsupported',
+                      l10n.locale.languageCode == 'en'
+                          ? 'In-app WebView browser is unavailable on this platform — links open in your system browser'
+                          : 'Встроенный браузер недоступен на этой платформе — ссылки открываются в системном браузере',
+                    ),
+                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  trailing: const AdaptiveSwitch(
+                    value: false,
+                    onChanged: null,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                ListTile(
+                  key: const ValueKey('settings_browser_vault_tile'),
+                  leading: const Icon(
+                    Icons.key_rounded,
+                    color: Colors.grey,
+                    size: 22,
+                  ),
+                  title: Text(l10n.translate('settings_browser_vault_title')),
+                  subtitle: Text(
+                    l10n.translate('settings_browser_vault_subtitle'),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    HapticUtils.tap();
+                    Navigator.of(context).push(
+                      SwipeBackPageRoute<void>(
+                        builder: (_) =>
+                            const BrowserVaultAndDataScreen(initialSection: 0),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ],
 
             const SizedBox(height: 12),
 
@@ -707,6 +1083,29 @@ class ChatSettingsScreen extends StatelessWidget {
                           );
                         },
                       ),
+                      if (mode == GlassMode.full) ...[
+                        const SizedBox(height: 8),
+                        ListTile(
+                          title: Text(
+                            context.trOr(
+                              'settings_glass_shader_blur',
+                              'Шейдерное размытие (5.2)',
+                            ),
+                          ),
+                          subtitle: Text(
+                            context.trOr(
+                              'settings_glass_shader_blur_desc',
+                              'Однопроходный оптический иней внутри шейдера вместо классического Гаусса',
+                            ),
+                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          ),
+                          trailing: AdaptiveSwitch(
+                            key: const ValueKey('settings_glass_shader_blur_switch'),
+                            value: provider.shaderBlur,
+                            onChanged: (val) => provider.setShaderBlur(val),
+                          ),
+                        ),
+                      ],
                     ],
                   ],
                 );
@@ -715,43 +1114,15 @@ class ChatSettingsScreen extends StatelessWidget {
           ],
         );
 
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: listView,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('settings_chat_settings')),
-                    actions: appBarActions,
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(l10n.translate('settings_chat_settings')),
-            actions: appBarActions,
-          ),
+        return SettingsFloatingScaffold(
+          title: l10n.translate('settings_chat_settings'),
+          actions: headerActions,
           body: listView,
         );
-      },
-    );
   }
+
+  String _formatTod(TimeOfDay tod) =>
+      '${tod.hour.toString().padLeft(2, '0')}:${tod.minute.toString().padLeft(2, '0')}';
 
   String _themeModeLabel(ThemeMode mode, AppLocalizations l10n) {
     switch (mode) {
@@ -870,268 +1241,4 @@ class _GlassModeButton extends StatelessWidget {
 }
 
 /// Theme carousel item: wallpaper background with 2 empty message ovals.
-class _ThemeItemBubble extends StatelessWidget {
-  final TheavTheme theme;
-  final bool isSelected;
-  final Color activePrimary;
-  final VoidCallback onTap;
-  final VoidCallback onLongPress;
 
-  const _ThemeItemBubble({
-    required this.theme,
-    required this.isSelected,
-    required this.activePrimary,
-    required this.onTap,
-    required this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final wp = theme.wallpaper;
-
-    Widget wallpaperBg;
-    if (wp.type == 'image') {
-      final imgProvider = wp.getImageProvider();
-      if (imgProvider != null) {
-        Widget img = Image(
-          image: imgProvider,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-          errorBuilder: (context, error, stackTrace) => Container(color: wp.backgroundColor),
-        );
-        if (wp.blurRadius > 0) {
-          img = ImageFiltered(
-            imageFilter: ui.ImageFilter.blur(
-              sigmaX: (wp.blurRadius / 4).clamp(0.5, 4.0),
-              sigmaY: (wp.blurRadius / 4).clamp(0.5, 4.0),
-            ),
-            child: img,
-          );
-        }
-        if (wp.dimming > 0) {
-          img = Stack(
-            fit: StackFit.expand,
-            children: [
-              img,
-              Container(
-                color: Colors.black.withValues(alpha: wp.dimming.clamp(0.0, 1.0)),
-              ),
-            ],
-          );
-        }
-        wallpaperBg = img;
-      } else {
-        wallpaperBg = Container(color: wp.backgroundColor);
-      }
-    } else if (wp.type == 'color') {
-      wallpaperBg = Container(color: wp.backgroundColor);
-    } else if (wp.fourCornerGradient != null) {
-      wallpaperBg = CustomPaint(
-        painter: FourCornerGradientPainter(
-          topLeft: wp.fourCornerGradient!.topLeft,
-          topRight: wp.fourCornerGradient!.topRight,
-          bottomLeft: wp.fourCornerGradient!.bottomLeft,
-          bottomRight: wp.fourCornerGradient!.bottomRight,
-        ),
-        child: const SizedBox.expand(),
-      );
-    } else {
-      wallpaperBg = Container(color: wp.backgroundColor);
-    }
-
-    Widget? patternOverlay;
-    if (wp.patternOpacity > 0) {
-      final double buttonPatternOpacity = (wp.patternOpacity * 1.6).clamp(0.24, 0.60);
-      Widget? svgWidget;
-      if (!kIsWeb && wp.customSvgPath != null && File(wp.customSvgPath!).existsSync()) {
-        svgWidget = SvgPicture.file(
-          File(wp.customSvgPath!) as dynamic,
-          width: 210.0,
-          height: 210.0,
-          fit: BoxFit.cover,
-          colorFilter: ColorFilter.mode(
-            wp.patternColor.withValues(alpha: buttonPatternOpacity),
-            BlendMode.srcIn,
-          ),
-        );
-      } else if (wp.assetSvgPath != null && wp.assetSvgPath!.isNotEmpty) {
-        svgWidget = SvgPicture.asset(
-          wp.assetSvgPath!,
-          width: 210.0,
-          height: 210.0,
-          fit: BoxFit.cover,
-          colorFilter: ColorFilter.mode(
-            wp.patternColor.withValues(alpha: buttonPatternOpacity),
-            BlendMode.srcIn,
-          ),
-        );
-      }
-      if (svgWidget != null) {
-        patternOverlay = OverflowBox(
-          minWidth: 0.0,
-          maxWidth: 210.0,
-          minHeight: 0.0,
-          maxHeight: 210.0,
-          child: svgWidget,
-        );
-      }
-    }
-
-    return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: SizedBox(
-        width: 80,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Theme button bubble: wallpaper background + 2 empty message ovals
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              width: 78,
-              height: 68,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isSelected ? activePrimary : (Theme.of(context).brightness == Brightness.dark ? Colors.white24 : Colors.black12),
-                  width: isSelected ? 2.5 : 1.0,
-                ),
-                boxShadow: isSelected
-                    ? [
-                        BoxShadow(
-                          color: activePrimary.withValues(alpha: 0.25),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ]
-                    : null,
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(13.5),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    // Wallpaper
-                    wallpaperBg,
-                    if (patternOverlay != null) patternOverlay,
-
-                    // Two empty message ovals showing bubble colors
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Top: Incoming empty oval
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              width: 38,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: theme.palette.chatBubbleIncoming,
-                                borderRadius: BorderRadius.circular(7),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.08),
-                                    blurRadius: 2,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          // Bottom: Outgoing empty oval
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Container(
-                              width: 38,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: (theme.palette.chatBubbleOutgoingGradient != null &&
-                                        theme.palette.chatBubbleOutgoingGradient!.length >= 2)
-                                    ? null
-                                    : theme.palette.chatBubbleOutgoing,
-                                gradient: (theme.palette.chatBubbleOutgoingGradient != null &&
-                                        theme.palette.chatBubbleOutgoingGradient!.length >= 2)
-                                    ? LinearGradient(
-                                        begin: Alignment.topCenter,
-                                        end: Alignment.bottomCenter,
-                                        colors: theme.palette.chatBubbleOutgoingGradient!,
-                                      )
-                                    : null,
-                                borderRadius: BorderRadius.circular(7),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.12),
-                                    blurRadius: 2,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    // Selected checkmark badge
-                    if (isSelected)
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: activePrimary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: iconoir.Check(
-                            width: 11,
-                            height: 11,
-                            color: theme.palette.onPrimary,
-                          ),
-                        ),
-                      ),
-
-                    // Cloud synced indicator
-                    if (theme.isCloudSaved)
-                      Positioned(
-                        bottom: 4,
-                        left: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.5),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const iconoir.CloudCheck(
-                            width: 10,
-                            height: 10,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            // Theme Name
-            Text(
-              theme.name,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? activePrimary : null,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

@@ -8,6 +8,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 class MessageStatusWidget extends StatelessWidget {
   final bool isRead;
   final bool isOutgoing;
+  final int sendStatus;
   final Color? accentColor;
   final Color? colorOverride;
 
@@ -15,6 +16,7 @@ class MessageStatusWidget extends StatelessWidget {
     Key? key,
     required this.isRead,
     required this.isOutgoing,
+    this.sendStatus = 1,
     this.accentColor,
     this.colorOverride,
   }) : super(key: key);
@@ -27,6 +29,21 @@ class MessageStatusWidget extends StatelessWidget {
     final color = colorOverride ?? (isRead
         ? (accentColor ?? theme.colorScheme.primary)
         : Colors.grey);
+
+    if (sendStatus == 0) {
+      return iconoir.Clock(
+        width: 13,
+        height: 13,
+        color: colorOverride ?? Colors.grey,
+      );
+    }
+    if (sendStatus == 2) {
+      return const iconoir.WarningCircle(
+        width: 14,
+        height: 14,
+        color: Colors.redAccent,
+      );
+    }
 
     if (isRead) {
       // ✓✓ — прочитано (две галочки из пака iconoir)

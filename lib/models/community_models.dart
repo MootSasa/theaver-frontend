@@ -1,4 +1,16 @@
+import 'package:flutter/material.dart' show Color;
+
 import 'call_models.dart';
+import 'profile_customization.dart';
+import '../services/contacts_service.dart';
+import '../services/peer_customization_cache.dart';
+
+int _parseCommunityInt(dynamic raw, [int fallback = 0]) {
+  if (raw == null) return fallback;
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  return int.tryParse(raw.toString().trim()) ?? fallback;
+}
 
 /// Bitmask permissions for Community roles and channel overwrites,
 /// matching backend `permissions_community.go` 1-to-1.
@@ -138,20 +150,39 @@ class CommunityCategory {
   final String communityId;
   final String name;
   final int position;
+  final bool isPrivate;
 
   const CommunityCategory({
     required this.id,
     required this.communityId,
     required this.name,
     this.position = 0,
+    this.isPrivate = false,
   });
+
+  CommunityCategory copyWith({
+    String? id,
+    String? communityId,
+    String? name,
+    int? position,
+    bool? isPrivate,
+  }) {
+    return CommunityCategory(
+      id: id ?? this.id,
+      communityId: communityId ?? this.communityId,
+      name: name ?? this.name,
+      position: position ?? this.position,
+      isPrivate: isPrivate ?? this.isPrivate,
+    );
+  }
 
   factory CommunityCategory.fromJson(Map<String, dynamic> json) {
     return CommunityCategory(
       id: (json['id'] ?? '').toString(),
       communityId: (json['community_id'] ?? '').toString(),
       name: (json['name'] ?? 'Категория').toString(),
-      position: (json['position'] as num?)?.toInt() ?? 0,
+      position: _parseCommunityInt(json['position']),
+      isPrivate: json['is_private'] == true,
     );
   }
 
@@ -160,6 +191,7 @@ class CommunityCategory {
         'community_id': communityId,
         'name': name,
         'position': position,
+        'is_private': isPrivate,
       };
 }
 
@@ -169,8 +201,11 @@ class CommunityChannel {
   final String? categoryId;
   final String name;
   final String topic;
-  final String channelType; // 'text' | 'voice' | 'stage' | 'announcement' | 'forum'
+  final String channelType; // 'text' | 'voice' | 'stage' | 'announcement' | 'forum' | 'whiteboard'
   final int position;
+  final int slowModeSeconds;
+  final int voiceBitrateKbps;
+  final int voiceUserLimit;
   final int unreadCount;
   final List<CallParticipant> activeVoiceParticipants;
 
@@ -182,6 +217,9 @@ class CommunityChannel {
     this.topic = '',
     this.channelType = 'text',
     this.position = 0,
+    this.slowModeSeconds = 0,
+    this.voiceBitrateKbps = 64,
+    this.voiceUserLimit = 0,
     this.unreadCount = 0,
     this.activeVoiceParticipants = const [],
   });
@@ -191,26 +229,34 @@ class CommunityChannel {
   bool get isAudioRoom => isVoice || isStage;
   bool get isAnnouncement => channelType == 'announcement';
   bool get isWhiteboard => channelType == 'whiteboard';
+  bool get isForum => channelType == 'forum';
 
   CommunityChannel copyWith({
     String? id,
     String? communityId,
     String? categoryId,
+    bool clearCategory = false,
     String? name,
     String? topic,
     String? channelType,
     int? position,
+    int? slowModeSeconds,
+    int? voiceBitrateKbps,
+    int? voiceUserLimit,
     int? unreadCount,
     List<CallParticipant>? activeVoiceParticipants,
   }) {
     return CommunityChannel(
       id: id ?? this.id,
       communityId: communityId ?? this.communityId,
-      categoryId: categoryId ?? this.categoryId,
+      categoryId: clearCategory ? null : (categoryId ?? this.categoryId),
       name: name ?? this.name,
       topic: topic ?? this.topic,
       channelType: channelType ?? this.channelType,
       position: position ?? this.position,
+      slowModeSeconds: slowModeSeconds ?? this.slowModeSeconds,
+      voiceBitrateKbps: voiceBitrateKbps ?? this.voiceBitrateKbps,
+      voiceUserLimit: voiceUserLimit ?? this.voiceUserLimit,
       unreadCount: unreadCount ?? this.unreadCount,
       activeVoiceParticipants:
           activeVoiceParticipants ?? this.activeVoiceParticipants,
@@ -244,8 +290,11 @@ class CommunityChannel {
               json['type'] ??
               'text')
           .toString(),
-      position: (json['position'] as num?)?.toInt() ?? 0,
-      unreadCount: (json['unread_count'] as num?)?.toInt() ?? 0,
+      position: _parseCommunityInt(json['position']),
+      slowModeSeconds: _parseCommunityInt(json['slow_mode_seconds']),
+      voiceBitrateKbps: _parseCommunityInt(json['voice_bitrate_kbps'], 64),
+      voiceUserLimit: _parseCommunityInt(json['voice_user_limit']),
+      unreadCount: _parseCommunityInt(json['unread_count']),
       activeVoiceParticipants: voiceList,
     );
   }
@@ -260,6 +309,9 @@ class CommunityChannel {
         'channel_type': channelType,
         'channel_kind': channelType,
         'position': position,
+        'slow_mode_seconds': slowModeSeconds,
+        'voice_bitrate_kbps': voiceBitrateKbps,
+        'voice_user_limit': voiceUserLimit,
         'unread_count': unreadCount,
       };
 }
@@ -287,9 +339,20 @@ class CommunityRole {
     this.isEveryone = false,
   });
 
+  Color? get parsedColor {
+    final cleaned = colorHex.trim().replaceFirst('#', '').toLowerCase();
+    if (cleaned.isEmpty || cleaned == '99aab5') return null;
+    final hex = cleaned.length == 6 ? 'ff$cleaned' : cleaned;
+    if (hex.length != 8) return null;
+    final value = int.tryParse(hex, radix: 16);
+    if (value == null) return null;
+    return Color(value);
+  }
+
   CommunityRole copyWith({
     String? name,
     String? colorHex,
+    int? position,
     int? permissions,
     bool? isHoisted,
     bool? isMentionable,
@@ -300,7 +363,7 @@ class CommunityRole {
       communityId: communityId,
       name: name ?? this.name,
       colorHex: colorHex ?? this.colorHex,
-      position: position,
+      position: position ?? this.position,
       permissions: permissions ?? this.permissions,
       isHoisted: isHoisted ?? this.isHoisted,
       isMentionable: isMentionable ?? this.isMentionable,
@@ -315,8 +378,8 @@ class CommunityRole {
       communityId: (json['community_id'] ?? '').toString(),
       name: roleName,
       colorHex: (json['color'] ?? json['color_hex'] ?? '#5C6BC0').toString(),
-      position: (json['position'] as num?)?.toInt() ?? 0,
-      permissions: (json['permissions'] as num?)?.toInt() ?? 0,
+      position: _parseCommunityInt(json['position']),
+      permissions: _parseCommunityInt(json['permissions']),
       isHoisted: json['is_hoisted'] == true,
       isMentionable: json['is_mentionable'] != false,
       isEveryone: json['is_everyone'] == true || roleName == '@everyone',
@@ -340,18 +403,42 @@ class CommunityMember {
   final String userId;
   final String username;
   final String displayName;
+  final String nickname;
+  final String? originalDisplayName;
   final String? avatarUrl;
   final bool isOnline;
+  final bool isBot;
+  final bool isVerified;
   final List<String> roleIds;
+  final PeerCustomization? peerCustomization;
 
   const CommunityMember({
     required this.userId,
     required this.username,
     required this.displayName,
+    this.nickname = '',
+    this.originalDisplayName,
     this.avatarUrl,
     this.isOnline = false,
+    this.isBot = false,
+    this.isVerified = false,
     this.roleIds = const [],
+    this.peerCustomization,
   });
+
+  /// Display name fallback when no local personal contact override applies:
+  /// community nickname -> original display name -> displayName -> @username.
+  String get effectiveDisplayName {
+    final nick = nickname.trim();
+    if (nick.isNotEmpty) return nick;
+    final orig = originalDisplayName?.trim();
+    if (orig != null && orig.isNotEmpty) return orig;
+    final disp = displayName.trim();
+    if (disp.isNotEmpty) return disp;
+    final uname = username.trim();
+    if (uname.isNotEmpty) return '@$uname';
+    return '';
+  }
 
   factory CommunityMember.fromJson(Map<String, dynamic> json) {
     final rawRoles = json['role_ids'];
@@ -362,13 +449,26 @@ class CommunityMember {
       }
     }
     final rawAvatar = json['avatar_url']?.toString().trim();
+    final rawNick = (json['nickname'] ?? '').toString().trim();
+    final rawOrigName = json['original_display_name']?.toString().trim();
+    final userId = (json['user_id'] ?? '').toString();
+    final cust = PeerCustomization.fromJson(json);
+    if (!cust.isEmpty && userId.isNotEmpty) {
+      PeerCustomizationCache.instance.put(userId, cust);
+    }
     return CommunityMember(
-      userId: (json['user_id'] ?? '').toString(),
+      userId: userId,
       username: (json['username'] ?? '').toString(),
       displayName: (json['display_name'] ?? json['username'] ?? 'User').toString(),
+      nickname: rawNick,
+      originalDisplayName:
+          (rawOrigName != null && rawOrigName.isNotEmpty) ? rawOrigName : null,
       avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
       isOnline: json['is_online'] == true,
+      isBot: json['is_bot'] == true,
+      isVerified: json['is_verified'] == true,
       roleIds: parsedRoles,
+      peerCustomization: cust.isEmpty ? null : cust,
     );
   }
 }
@@ -511,12 +611,14 @@ class Community {
       bannerUrl:
           (rawBanner != null && rawBanner.isNotEmpty) ? rawBanner : null,
       ownerId: (json['owner_id'] ?? '').toString(),
-      memberCount: (json['member_count'] as num?)?.toInt() ?? 1,
-      onlineCount: (json['online_count'] as num?)?.toInt() ?? 1,
+      memberCount: _parseCommunityInt(json['member_count'], 1),
+      onlineCount: _parseCommunityInt(json['online_count'], 1),
       isMember: json['is_member'] is bool ? (json['is_member'] as bool) : true,
       isPublic: json['is_public'] is bool ? (json['is_public'] as bool) : true,
-      myPermissions: (json['my_permissions'] as num?)?.toInt() ??
-          CommunityPermissions.defaultEveryone,
+      myPermissions: _parseCommunityInt(
+        json['my_permissions'],
+        CommunityPermissions.defaultEveryone,
+      ),
       categories: cats,
       channels: chans,
       roles: rList,
@@ -544,4 +646,266 @@ class Community {
         'roles': roles.map((r) => r.toJson()).toList(),
         'created_at': createdAt.toIso8601String(),
       };
+}
+
+enum PermissionOverwriteState { deny, inherit, allow }
+
+class CommunityPermissionOverwrite {
+  final String targetType; // 'role' | 'member'
+  final String targetId;
+  final int allowBits;
+  final int denyBits;
+
+  const CommunityPermissionOverwrite({
+    required this.targetType,
+    required this.targetId,
+    this.allowBits = 0,
+    this.denyBits = 0,
+  });
+
+  bool get isEmpty => allowBits == 0 && denyBits == 0;
+
+  PermissionOverwriteState stateForBit(int bit) {
+    if ((allowBits & bit) != 0) return PermissionOverwriteState.allow;
+    if ((denyBits & bit) != 0) return PermissionOverwriteState.deny;
+    return PermissionOverwriteState.inherit;
+  }
+
+  CommunityPermissionOverwrite withBitState(
+    int bit,
+    PermissionOverwriteState state,
+  ) {
+    var nextAllow = allowBits & ~bit;
+    var nextDeny = denyBits & ~bit;
+    if (state == PermissionOverwriteState.allow) {
+      nextAllow |= bit;
+    } else if (state == PermissionOverwriteState.deny) {
+      nextDeny |= bit;
+    }
+    return CommunityPermissionOverwrite(
+      targetType: targetType,
+      targetId: targetId,
+      allowBits: nextAllow,
+      denyBits: nextDeny,
+    );
+  }
+
+  factory CommunityPermissionOverwrite.fromJson(Map<String, dynamic> json) {
+    return CommunityPermissionOverwrite(
+      targetType: (json['target_type'] ?? 'role').toString(),
+      targetId: (json['target_id'] ?? '').toString(),
+      allowBits: _parseCommunityInt(json['allow_bits']),
+      denyBits: _parseCommunityInt(json['deny_bits']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'target_type': targetType,
+        'target_id': int.tryParse(targetId) ?? 0,
+        'allow_bits': allowBits,
+        'deny_bits': denyBits,
+      };
+}
+
+class CommunityBan {
+  final String userId;
+  final String username;
+  final String displayName;
+  final String? avatarUrl;
+  final String reason;
+  final String? bannedBy;
+  final DateTime createdAt;
+
+  const CommunityBan({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    this.avatarUrl,
+    this.reason = '',
+    this.bannedBy,
+    required this.createdAt,
+  });
+
+  factory CommunityBan.fromJson(Map<String, dynamic> json) {
+    final rawAvatar = json['avatar_url']?.toString().trim();
+    return CommunityBan(
+      userId: (json['user_id'] ?? '').toString(),
+      username: (json['username'] ?? '').toString(),
+      displayName:
+          (json['display_name'] ?? json['username'] ?? 'Пользователь').toString(),
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      reason: (json['reason'] ?? '').toString(),
+      bannedBy: json['banned_by']?.toString(),
+      createdAt: json['created_at'] != null
+          ? (DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now())
+          : DateTime.now(),
+    );
+  }
+}
+
+class CommunityInvite {
+  final String id;
+  final String communityId;
+  final String? creatorId;
+  final String code;
+  final int maxUses;
+  final int uses;
+  final DateTime? expiresAt;
+  final DateTime createdAt;
+
+  const CommunityInvite({
+    required this.id,
+    required this.communityId,
+    this.creatorId,
+    required this.code,
+    this.maxUses = 0,
+    this.uses = 0,
+    this.expiresAt,
+    required this.createdAt,
+  });
+
+  bool get isExpired =>
+      expiresAt != null && DateTime.now().isAfter(expiresAt!);
+
+  factory CommunityInvite.fromJson(Map<String, dynamic> json) {
+    return CommunityInvite(
+      id: (json['id'] ?? '').toString(),
+      communityId: (json['community_id'] ?? '').toString(),
+      creatorId: json['creator_id']?.toString(),
+      code: (json['code'] ?? json['invite_code'] ?? '').toString(),
+      maxUses: _parseCommunityInt(json['max_uses']),
+      uses: _parseCommunityInt(json['uses']),
+      expiresAt: json['expires_at'] != null
+          ? DateTime.tryParse(json['expires_at'].toString())
+          : null,
+      createdAt: json['created_at'] != null
+          ? (DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now())
+          : DateTime.now(),
+    );
+  }
+}
+
+class CommunityMemberSection {
+  final String id;
+  final String title;
+  final Color? color;
+  final List<CommunityMember> members;
+
+  const CommunityMemberSection({
+    required this.id,
+    required this.title,
+    this.color,
+    required this.members,
+  });
+}
+
+CommunityRole? highestColoredRoleForMember(
+  CommunityMember member,
+  List<CommunityRole> roles,
+) {
+  final matched = roles
+      .where(
+        (r) =>
+            !r.isEveryone &&
+            member.roleIds.contains(r.id) &&
+            r.parsedColor != null,
+      )
+      .toList()
+    ..sort((a, b) => b.position.compareTo(a.position));
+  return matched.isNotEmpty ? matched.first : null;
+}
+
+CommunityRole? highestHoistedRoleForMember(
+  CommunityMember member,
+  List<CommunityRole> roles,
+) {
+  final matched = roles
+      .where(
+        (r) => !r.isEveryone && r.isHoisted && member.roleIds.contains(r.id),
+      )
+      .toList()
+    ..sort((a, b) => b.position.compareTo(a.position));
+  return matched.isNotEmpty ? matched.first : null;
+}
+
+List<CommunityMemberSection> groupMembersByHoistedRoles(
+  List<CommunityMember> members,
+  List<CommunityRole> roles,
+) {
+  final hoistedRoles = roles
+      .where((r) => !r.isEveryone && r.isHoisted)
+      .toList()
+    ..sort((a, b) => b.position.compareTo(a.position));
+
+  final Map<String, List<CommunityMember>> roleBuckets = {
+    for (final r in hoistedRoles) r.id: <CommunityMember>[],
+  };
+  final List<CommunityMember> onlineGeneral = [];
+  final List<CommunityMember> offline = [];
+
+  final sorted = List<CommunityMember>.from(members)
+    ..sort((a, b) {
+      final aFallback =
+          a.effectiveDisplayName.isNotEmpty ? a.effectiveDisplayName : a.username;
+      final bFallback =
+          b.effectiveDisplayName.isNotEmpty ? b.effectiveDisplayName : b.username;
+      final aName = ContactsService.resolvePeerName(
+        a.userId,
+        aFallback,
+        isBot: a.isBot,
+      );
+      final bName = ContactsService.resolvePeerName(
+        b.userId,
+        bFallback,
+        isBot: b.isBot,
+      );
+      return aName.toLowerCase().compareTo(bName.toLowerCase());
+    });
+
+  for (final member in sorted) {
+    if (!member.isOnline) {
+      offline.add(member);
+      continue;
+    }
+    final topHoisted = highestHoistedRoleForMember(member, hoistedRoles);
+    if (topHoisted != null && roleBuckets.containsKey(topHoisted.id)) {
+      roleBuckets[topHoisted.id]!.add(member);
+    } else {
+      onlineGeneral.add(member);
+    }
+  }
+
+  final sections = <CommunityMemberSection>[];
+  for (final role in hoistedRoles) {
+    final bucket = roleBuckets[role.id];
+    if (bucket != null && bucket.isNotEmpty) {
+      sections.add(
+        CommunityMemberSection(
+          id: 'role_${role.id}',
+          title: role.name,
+          color: role.parsedColor,
+          members: bucket,
+        ),
+      );
+    }
+  }
+  if (onlineGeneral.isNotEmpty) {
+    sections.add(
+      CommunityMemberSection(
+        id: 'online',
+        title: 'В сети',
+        members: onlineGeneral,
+      ),
+    );
+  }
+  if (offline.isNotEmpty) {
+    sections.add(
+      CommunityMemberSection(
+        id: 'offline',
+        title: 'Не в сети',
+        members: offline,
+      ),
+    );
+  }
+  return sections;
 }

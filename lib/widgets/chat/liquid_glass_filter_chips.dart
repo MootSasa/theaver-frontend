@@ -151,7 +151,7 @@ class _LiquidGlassFilterChipsState extends State<LiquidGlassFilterChips> {
         glassColorOnDark: Color(0x33202025),
         contentColorOnDark: Colors.white,
         glassColorOnLight: Color(0x66FFFFFF),
-        contentColorOnLight: Color(0xFF1C1C1E),
+        contentColorOnLight: Colors.black87,
         duration: Duration(milliseconds: 300),
         darkBelow: 0.6,
         lightAbove: 0.6,

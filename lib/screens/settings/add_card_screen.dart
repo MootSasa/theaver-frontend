@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import '../../services/banking_cards_provider.dart';
 import '../../l10n/app_localizations.dart';
@@ -30,13 +31,15 @@ class _AddCardScreenState extends State<AddCardScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Add Banking Card'),
-        centerTitle: true,
-      ),
+    return SettingsFloatingScaffold(
+      title: 'Add Banking Card',
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          SettingsFloatingHeader.topClearanceOf(context) + 12,
+          16,
+          24,
+        ),
         child: Form(
           key: _formKey,
           child: Column(

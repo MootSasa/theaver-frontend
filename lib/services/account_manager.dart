@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:uuid/uuid.dart';
 import 'auth_service.dart';
 
 /// Manages multiple user accounts and device sessions.
@@ -43,15 +43,27 @@ class AccountManager extends ChangeNotifier {
 
   Future<void> _loadAccounts() async {
     final accountsJson = _prefs.getStringList(_accountsKey) ?? [];
-    _accounts = accountsJson.map((json) => Account.fromJson(jsonDecode(json))).toList();
+    final loaded =
+        accountsJson.map((json) => Account.fromJson(jsonDecode(json))).toList();
+    final filtered = loaded
+        .where((acc) =>
+            acc.userId != 'test_user_001' &&
+            acc.token != 'test_token_offline_mode')
+        .toList();
+    final removedLegacyTest = filtered.length != loaded.length;
+    _accounts = filtered;
 
     final currentAccountId = _prefs.getString(_currentAccountIdKey);
     if (currentAccountId != null) {
       try {
-        _currentAccount = _accounts.firstWhere((acc) => acc.userId == currentAccountId);
+        _currentAccount =
+            _accounts.firstWhere((acc) => acc.userId == currentAccountId);
       } catch (_) {
         _currentAccount = null;
       }
+    }
+    if (removedLegacyTest || currentAccountId == 'test_user_001') {
+      await _saveAccounts();
     }
   }
 
@@ -134,10 +146,14 @@ class AccountManager extends ChangeNotifier {
     String? name,
     String? surname,
     String? email,
+    bool? emailVerified,
     String? phone,
     String? bio,
     DateTime? birthday,
     String? localAvatarPath,
+    bool clearBirthday = false,
+    bool clearAvatar = false,
+    bool clearBio = false,
   }) async {
     final index = _accounts.indexWhere((acc) => acc.userId == userId);
     if (index != -1) {
@@ -147,15 +163,17 @@ class AccountManager extends ChangeNotifier {
         token: oldAccount.token,
         username: username ?? oldAccount.username,
         displayName: displayName ?? oldAccount.displayName,
-        avatarUrl: avatarUrl ?? oldAccount.avatarUrl,
+        avatarUrl: clearAvatar ? null : (avatarUrl ?? oldAccount.avatarUrl),
         lastLogin: oldAccount.lastLogin,
         name: name ?? oldAccount.name,
         surname: surname ?? oldAccount.surname,
         email: email ?? oldAccount.email,
+        emailVerified: emailVerified ?? oldAccount.emailVerified,
         phone: phone ?? oldAccount.phone,
-        bio: bio ?? oldAccount.bio,
-        birthday: birthday ?? oldAccount.birthday,
-        localAvatarPath: localAvatarPath ?? oldAccount.localAvatarPath,
+        bio: clearBio ? null : (bio ?? oldAccount.bio),
+        birthday: clearBirthday ? null : (birthday ?? oldAccount.birthday),
+        localAvatarPath:
+            clearAvatar ? null : (localAvatarPath ?? oldAccount.localAvatarPath),
       );
       if (_currentAccount?.userId == userId) {
         _currentAccount = _accounts[index];
@@ -164,14 +182,34 @@ class AccountManager extends ChangeNotifier {
     }
   }
 
+  String _pendingProfileSyncKeyFor(String? userId) {
+    final uid = userId ?? _currentAccount?.userId;
+    if (uid != null && uid.isNotEmpty) {
+      return '${_pendingProfileSyncKey}_$uid';
+    }
+    return _pendingProfileSyncKey;
+  }
+
   /// Сохраняет локально несохраненные параметры профиля для последующей синхронизации
-  Future<void> savePendingProfileSync(Map<String, dynamic> data) async {
-    await _prefs.setString(_pendingProfileSyncKey, jsonEncode(data));
+  Future<void> savePendingProfileSync(
+    Map<String, dynamic> data, {
+    String? userId,
+  }) async {
+    await _prefs.setString(
+      _pendingProfileSyncKeyFor(userId),
+      jsonEncode(data),
+    );
   }
 
   /// Получает несохраненные локальные параметры профиля
-  Map<String, dynamic>? getPendingProfileSync() {
-    final raw = _prefs.getString(_pendingProfileSyncKey);
+  Map<String, dynamic>? getPendingProfileSync({String? userId}) {
+    final uid = userId ?? _currentAccount?.userId;
+    final key = _pendingProfileSyncKeyFor(uid);
+    var raw = _prefs.getString(key);
+    if ((raw == null || raw.isEmpty) && uid != null && uid.isNotEmpty) {
+      // One-time fallback to legacy unprefixed key only if prefixed doesn't exist
+      raw = _prefs.getString(_pendingProfileSyncKey);
+    }
     if (raw == null || raw.isEmpty) return null;
     try {
       return jsonDecode(raw) as Map<String, dynamic>;
@@ -181,13 +219,21 @@ class AccountManager extends ChangeNotifier {
   }
 
   /// Очищает несохраненные параметры после успешной синхронизации
-  Future<void> clearPendingProfileSync() async {
+  Future<void> clearPendingProfileSync({String? userId}) async {
+    final uid = userId ?? _currentAccount?.userId;
+    await _prefs.remove(_pendingProfileSyncKeyFor(uid));
     await _prefs.remove(_pendingProfileSyncKey);
   }
 
   /// Попытка синхронизации несохраненного профиля с сервером при запуске приложения
-  Future<void> trySyncPendingProfile() async {
-    final pendingData = getPendingProfileSync();
+  Future<void> trySyncPendingProfile({String? userId}) async {
+    final targetUserId = userId ?? _currentAccount?.userId;
+    if (targetUserId == null ||
+        targetUserId.isEmpty ||
+        targetUserId != _currentAccount?.userId) {
+      return;
+    }
+    final pendingData = getPendingProfileSync(userId: targetUserId);
     if (pendingData == null) return;
 
     try {
@@ -211,7 +257,7 @@ class AccountManager extends ChangeNotifier {
       );
 
       if (result['synced'] == true) {
-        await clearPendingProfileSync();
+        await clearPendingProfileSync(userId: targetUserId);
       }
     } catch (_) {}
   }
@@ -224,19 +270,15 @@ class AccountManager extends ChangeNotifier {
 
   // ==================== Device Session Management ====================
 
+  static const Uuid _uuid = Uuid();
+
   Future<void> _initCurrentDevice() async {
     _currentDeviceId = _prefs.getString(_currentDeviceIdKey);
-    if (_currentDeviceId == null) {
-      // Generate a unique device ID
-      _currentDeviceId = '${DateTime.now().millisecondsSinceEpoch}_${_generateRandomString(8)}';
+    if (_currentDeviceId == null || _currentDeviceId!.isEmpty) {
+      // Generate a globally unique device ID
+      _currentDeviceId = _uuid.v4();
       await _prefs.setString(_currentDeviceIdKey, _currentDeviceId!);
     }
-  }
-
-  String _generateRandomString(int length) {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    final random = DateTime.now().millisecondsSinceEpoch;
-    return List.generate(length, (i) => chars[(random + i) % chars.length]).join();
   }
 
   Future<void> _loadDeviceSessions() async {
@@ -275,54 +317,55 @@ class AccountManager extends ChangeNotifier {
       );
     }
     
-    if (Platform.isAndroid) {
-      final androidInfo = await deviceInfo.androidInfo;
-      return DeviceInfo(
-        deviceName: '${androidInfo.manufacturer} ${androidInfo.model}',
-        deviceType: DeviceType.android,
-        os: 'Android',
-        osVersion: androidInfo.version.release,
-      );
-    } else if (Platform.isIOS) {
-      final iosInfo = await deviceInfo.iosInfo;
-      return DeviceInfo(
-        deviceName: iosInfo.name,
-        deviceType: DeviceType.ios,
-        os: 'iOS',
-        osVersion: iosInfo.systemVersion,
-      );
-    } else if (Platform.isLinux) {
-      final linuxInfo = await deviceInfo.linuxInfo;
-      return DeviceInfo(
-        deviceName: linuxInfo.name,
-        deviceType: DeviceType.linux,
-        os: 'Linux',
-        osVersion: linuxInfo.version ?? 'Unknown',
-      );
-    } else if (Platform.isWindows) {
-      final windowsInfo = await deviceInfo.windowsInfo;
-      return DeviceInfo(
-        deviceName: 'Windows PC',
-        deviceType: DeviceType.windows,
-        os: 'Windows',
-        osVersion: windowsInfo.displayVersion,
-      );
-    } else if (Platform.isMacOS) {
-      final macInfo = await deviceInfo.macOsInfo;
-      return DeviceInfo(
-        deviceName: macInfo.computerName,
-        deviceType: DeviceType.macos,
-        os: 'macOS',
-        osVersion: macInfo.osRelease,
-      );
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        final androidInfo = await deviceInfo.androidInfo;
+        return DeviceInfo(
+          deviceName: '${androidInfo.manufacturer} ${androidInfo.model}',
+          deviceType: DeviceType.android,
+          os: 'Android',
+          osVersion: androidInfo.version.release,
+        );
+      case TargetPlatform.iOS:
+        final iosInfo = await deviceInfo.iosInfo;
+        return DeviceInfo(
+          deviceName: iosInfo.name,
+          deviceType: DeviceType.ios,
+          os: 'iOS',
+          osVersion: iosInfo.systemVersion,
+        );
+      case TargetPlatform.linux:
+        final linuxInfo = await deviceInfo.linuxInfo;
+        return DeviceInfo(
+          deviceName: linuxInfo.name,
+          deviceType: DeviceType.linux,
+          os: 'Linux',
+          osVersion: linuxInfo.version ?? 'Unknown',
+        );
+      case TargetPlatform.windows:
+        final windowsInfo = await deviceInfo.windowsInfo;
+        return DeviceInfo(
+          deviceName: 'Windows PC',
+          deviceType: DeviceType.windows,
+          os: 'Windows',
+          osVersion: windowsInfo.displayVersion,
+        );
+      case TargetPlatform.macOS:
+        final macInfo = await deviceInfo.macOsInfo;
+        return DeviceInfo(
+          deviceName: macInfo.computerName,
+          deviceType: DeviceType.macos,
+          os: 'macOS',
+          osVersion: macInfo.osRelease,
+        );
+      default:
+        return DeviceInfo(
+          deviceName: 'Unknown Device',
+          deviceType: DeviceType.unknown,
+          os: 'Unknown',
+          osVersion: 'Unknown',
+        );
     }
-    
-    return DeviceInfo(
-      deviceName: 'Unknown Device',
-      deviceType: DeviceType.unknown,
-      os: 'Unknown',
-      osVersion: 'Unknown',
-    );
   }
 
   /// Register current device session for an account.
@@ -352,7 +395,7 @@ class AccountManager extends ChangeNotifier {
     } else {
       // Create new session
       final session = DeviceSession(
-        id: 'session_${now.millisecondsSinceEpoch}',
+        id: 'session_${_uuid.v4()}',
         deviceId: _currentDeviceId!,
         userId: userId,
         deviceName: deviceInfo.deviceName,
@@ -394,9 +437,11 @@ class AccountManager extends ChangeNotifier {
   /// Get all device sessions (for all accounts).
   List<DeviceSession> get allDeviceSessions => List.unmodifiable(_deviceSessions);
 
-  /// Remove a device session.
-  Future<void> removeDeviceSession(String sessionId) async {
-    _deviceSessions.removeWhere((s) => s.id == sessionId);
+  /// Remove a device session by session ID or device ID.
+  Future<void> removeDeviceSession(String sessionOrDeviceId) async {
+    _deviceSessions.removeWhere(
+      (s) => s.id == sessionOrDeviceId || s.deviceId == sessionOrDeviceId,
+    );
     await _saveDeviceSessions();
   }
 
@@ -462,6 +507,7 @@ class Account {
   final String? name;
   final String? surname;
   final String? email;
+  final bool emailVerified;
   final String? phone;
   final String? bio;
   final DateTime? birthday;
@@ -477,6 +523,7 @@ class Account {
     this.name,
     this.surname,
     this.email,
+    this.emailVerified = false,
     this.phone,
     this.bio,
     this.birthday,
@@ -494,6 +541,7 @@ class Account {
       'name': name,
       'surname': surname,
       'email': email,
+      'emailVerified': emailVerified,
       'phone': phone,
       'bio': bio,
       'birthday': birthday?.toIso8601String().split('T').first,
@@ -514,6 +562,9 @@ class Account {
       name: json['name'] as String?,
       surname: json['surname'] as String?,
       email: json['email'] as String?,
+      emailVerified: (json['emailVerified'] as bool?) ??
+          (json['email_verified'] as bool?) ??
+          false,
       phone: json['phone'] as String?,
       bio: json['bio'] as String?,
       birthday: json['birthday'] != null
@@ -533,6 +584,7 @@ class Account {
     String? name,
     String? surname,
     String? email,
+    bool? emailVerified,
     String? phone,
     String? bio,
     DateTime? birthday,
@@ -548,6 +600,7 @@ class Account {
       name: name ?? this.name,
       surname: surname ?? this.surname,
       email: email ?? this.email,
+      emailVerified: emailVerified ?? this.emailVerified,
       phone: phone ?? this.phone,
       bio: bio ?? this.bio,
       birthday: birthday ?? this.birthday,

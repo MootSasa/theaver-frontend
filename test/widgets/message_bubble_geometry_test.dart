@@ -46,6 +46,7 @@ class _TestAppLocalizationsDelegate
 const Map<String, String> _kTranslations = {
   'chat_reply_you': 'Вы',
   'chat_reply_to': '{name}',
+  'chat_forwarded_from': 'Переслано от',
   'chat_message_type_voice': 'Голосовое сообщение',
   'chat_message_type_video': 'Видеосообщение',
   'chat_message_type_file': 'Файл',
@@ -596,6 +597,81 @@ void main() {
       // Metadata must start to the right of the formula content, never overlapping it
       expect(metaRect.left, greaterThanOrEqualTo(contentRect.right));
       expect(contentRect.overlaps(metaRect), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Saved Messages and Forwarded Header Display Tests', () {
+    testWidgets('Plain own note in Saved Messages omits MessageReplyInfo author card',
+        (WidgetTester tester) async {
+      final ownSavedNote = Message(
+        id: 'saved_1',
+        chatId: 'saved_chat',
+        senderId: 'u_me',
+        senderName: 'Алина Лимончик',
+        content: 'мяу',
+        messageType: 'text',
+        isEdited: false,
+        createdAt: '2026-11-27T14:58:00Z',
+        isOwn: true,
+      );
+
+      await tester.pumpWidget(
+        buildTestApp(
+          Center(
+            child: MessageBubble(
+              message: ownSavedNote,
+              isMe: true,
+              currentUserId: 'u_me',
+              chatType: 'saved',
+              formatTime: (_) => '14:58',
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('мяу'), findsOneWidget);
+      expect(find.byType(MessageReplyInfo), findsNothing);
+      expect(find.text('Алина Лимончик'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('Forwarded outgoing message renders bubble-matched header without opaque reply card',
+        (WidgetTester tester) async {
+      final forwardedSavedMsg = Message(
+        id: 'saved_2',
+        chatId: 'saved_chat',
+        senderId: 'u_me',
+        senderName: 'Пользователь',
+        content: 'мяу',
+        messageType: 'text',
+        isEdited: false,
+        createdAt: '2026-11-27T14:58:00Z',
+        isForward: true,
+        forwardFromName: 'Алина Лимончик',
+      );
+
+      await tester.pumpWidget(
+        buildTestApp(
+          Center(
+            child: MessageBubble(
+              message: forwardedSavedMsg,
+              isMe: true,
+              currentUserId: 'u_me',
+              chatType: 'saved',
+              formatTime: (_) => '14:58',
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('мяу'), findsOneWidget);
+      expect(find.byType(MessageReplyInfo), findsOneWidget);
+      expect(find.text('Переслано от'), findsOneWidget);
+      expect(find.text('Алина Лимончик'), findsOneWidget);
+      expect(find.byType(ReplyStripWidget), findsNothing);
       expect(tester.takeException(), isNull);
     });
   });

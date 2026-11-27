@@ -109,7 +109,7 @@ jobs:
             mkdir -p ~/.android
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > android/app/debug.keystore
-            echo "✅ Restored consistent Android debug keystore"
+            echo "[OK] Restored consistent Android debug keystore"
           fi
           if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_STORE_PASSWORD" ]; then
             echo "$RELEASE_KEYSTORE_B64" | base64 -d > android/app/release-keystore.jks
@@ -117,7 +117,7 @@ jobs:
               "$RELEASE_STORE_PASSWORD" \
               "${RELEASE_KEY_PASSWORD:-$RELEASE_STORE_PASSWORD}" \
               "${RELEASE_KEY_ALIAS:-theaver}" > android/key.properties
-            echo "✅ Restored production Android release keystore & key.properties"
+            echo "[OK] Restored production Android release keystore & key.properties"
           fi
 
       - name: Install dependencies

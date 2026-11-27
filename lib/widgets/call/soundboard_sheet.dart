@@ -4,6 +4,7 @@ import '../../models/call_models.dart';
 import '../../services/call_service.dart';
 import '../../services/call_state_provider.dart';
 import '../../services/community_service.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Bottom sheet modal for playing soundboard sounds during a voice/group call.
 class SoundboardSheet extends StatefulWidget {
@@ -21,11 +22,11 @@ class SoundboardSheet extends StatefulWidget {
     required String callId,
     String? communityId,
   }) {
-    return showModalBottomSheet(
+    return showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => SoundboardSheet(
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => SoundboardSheet(
         callId: callId,
         communityId: communityId,
       ),
@@ -153,27 +154,45 @@ class _SoundboardSheetState extends State<SoundboardSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 380,
-      decoration: const BoxDecoration(
-        color: Color(0xFF1E1E24),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: SizedBox(
+        height: 380,
+        child: TheavSheetSurface(
+          cornerRadius: 22.0,
+          matteColor: const Color(0xFF1E1E24),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragEnd: (d) {
+                        if ((d.primaryVelocity ?? 0.0) > 650.0) {
+                          Navigator.of(context).maybePop();
+                        }
+                      },
+                      child: Container(
+                        width: 112,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        alignment: Alignment.center,
+                        child: Container(
+                          width: 36,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
           Row(
             children: [
               const Icon(Icons.music_note_rounded, color: Color(0xFF00E676), size: 22),
@@ -252,6 +271,10 @@ class _SoundboardSheetState extends State<SoundboardSheet> {
                   ),
           ),
         ],
+      ),
+            ),
+          ),
+        ),
       ),
     );
   }

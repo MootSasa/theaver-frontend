@@ -3,16 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
-import '../../screens/settings/theme_preview_screen.dart';
+import '../../screens/settings/profile_screen.dart';
 import '../../services/chat_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/profile_theme_provider.dart';
-import '../../services/theav_theme_service.dart';
+import '../../services/search_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/link_opener.dart';
+import '../../utils/swipe_back_route.dart';
 import 'code_block_widget.dart';
 import 'collapsible_blockquote_widget.dart';
 import 'spoiler_text_widget.dart';
@@ -55,6 +57,10 @@ class TextMessageWidget extends StatelessWidget {
   final List<MessageEntity>? entities;
   final NameColorPreset? nameColorPreset;
   final ReplyStripStyle? replyStripStyle;
+  final ReplyEmojiData? replyEmoji;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const TextMessageWidget({
     Key? key,
@@ -64,6 +70,10 @@ class TextMessageWidget extends StatelessWidget {
     this.entities,
     this.nameColorPreset,
     this.replyStripStyle,
+    this.replyEmoji,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   }) : super(key: key);
 
   /// Preserves consecutive spaces and multiple enters inside message text,
@@ -149,8 +159,9 @@ class TextMessageWidget extends StatelessWidget {
   ) {
     final points = <int>{0, cleanText.length};
     for (final e in entities) {
-      final s = e.offset.clamp(0, cleanText.length);
-      final end = (e.offset + e.length).clamp(s, cleanText.length);
+      final s = EntityParser.snapUtf16Offset(cleanText, e.offset);
+      final end = EntityParser.snapUtf16Offset(cleanText, e.offset + e.length)
+          .clamp(s, cleanText.length);
       if (s < end) {
         points.add(s);
         points.add(end);
@@ -345,6 +356,10 @@ class TextMessageWidget extends StatelessWidget {
           isMe: isMe,
           nameColorPreset: nameColorPreset,
           replyStripStyle: replyStripStyle,
+          replyEmoji: replyEmoji,
+          onMentionTap: onMentionTap,
+          onCommandTap: onCommandTap,
+          onHashtagTap: onHashtagTap,
         ),
       ),
     );
@@ -360,6 +375,10 @@ class _DirectEntityMessageRenderer extends StatefulWidget {
   final bool isMe;
   final NameColorPreset? nameColorPreset;
   final ReplyStripStyle? replyStripStyle;
+  final ReplyEmojiData? replyEmoji;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const _DirectEntityMessageRenderer({
     required this.cleanText,
@@ -370,6 +389,10 @@ class _DirectEntityMessageRenderer extends StatefulWidget {
     required this.isMe,
     this.nameColorPreset,
     this.replyStripStyle,
+    this.replyEmoji,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   });
 
   @override
@@ -411,37 +434,113 @@ class _DirectEntityMessageRendererState
 
   Future<void> _handleLinkTap(String rawHref) async {
     final trimmed = rawHref.trim();
-    if (trimmed.isEmpty) return;
-
-    final normalized = EntityParser.normalizeUrl(trimmed);
-    final themeCode = TheavThemeService.extractThemeCode(normalized);
-    if (themeCode != null) {
-      if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => ThemePreviewScreen(themeCode: themeCode),
-        ),
-      );
-      return;
-    }
-
-    final uri = Uri.tryParse(normalized);
-    if (uri != null) {
-      try {
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        }
-      } catch (e) {
-        debugPrint('Error launching URL $uri: $e');
-      }
-    }
+    if (trimmed.isEmpty || !mounted) return;
+    await LinkOpener.openUrl(context, trimmed);
   }
 
   void _handleCodeCopy(String codeText) {
     Clipboard.setData(ClipboardData(text: codeText));
     if (mounted) {
       GlassToastService().show(context, 'Код скопирован', icon: Icons.check);
+    }
+  }
+
+  Future<void> _handleMentionTap(String rawMention) async {
+    final cleanUsername = rawMention.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (cleanUsername.isEmpty) return;
+    if (widget.onMentionTap != null) {
+      widget.onMentionTap!(cleanUsername);
+      return;
+    }
+
+    try {
+      final result = await SearchService.search(
+        query: cleanUsername,
+        limit: 15,
+      );
+      if (!mounted) return;
+      final candidates = <SearchPeer>[
+        ...result.myPeers,
+        ...result.globalPeers,
+      ];
+      SearchPeer? matched;
+      for (final p in candidates) {
+        if (p.username.toLowerCase() == cleanUsername.toLowerCase()) {
+          matched = p;
+          break;
+        }
+      }
+      if (matched == null) {
+        GlassToastService().show(
+          context,
+          'Пользователь @$cleanUsername не найден',
+        );
+        return;
+      }
+
+      if (matched.isUser) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ProfileScreen(
+              entityType: ProfileEntityType.user,
+              userId: matched!.id,
+              initialName: matched.name,
+              initialAvatarUrl: matched.avatarUrl,
+            ),
+          ),
+        );
+      } else if (matched.isChannel || matched.isGroup) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ProfileScreen(
+              entityType: matched!.isChannel
+                  ? ProfileEntityType.channel
+                  : ProfileEntityType.group,
+              chatId: matched.chatId ?? matched.id,
+              initialName: matched.name,
+              initialAvatarUrl: matched.avatarUrl,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error resolving @$cleanUsername: $e');
+    }
+  }
+
+  void _handleCommandTap(String rawCommand) {
+    final cmd = rawCommand.trim();
+    if (cmd.isEmpty) return;
+    if (widget.onCommandTap != null) {
+      widget.onCommandTap!(cmd);
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: cmd));
+    if (mounted) {
+      GlassToastService().show(
+        context,
+        'Команда $cmd скопирована',
+        icon: Icons.check,
+      );
+    }
+  }
+
+  void _handleHashtagTap(String rawHashtag) {
+    final tag = rawHashtag.trim();
+    if (tag.isEmpty) return;
+    if (widget.onHashtagTap != null) {
+      widget.onHashtagTap!(tag);
+      return;
+    }
+    Clipboard.setData(ClipboardData(text: tag));
+    if (mounted) {
+      GlassToastService().show(
+        context,
+        'Хэштег $tag скопирован',
+        icon: Icons.check,
+      );
     }
   }
 
@@ -524,8 +623,9 @@ class _DirectEntityMessageRendererState
     final blockEntities = <MessageEntity>[];
     for (final e in entities) {
       if (!TextMessageWidget._isBlockType(e.type)) continue;
-      final s = e.offset.clamp(0, text.length);
-      final end = (e.offset + e.length).clamp(s, text.length);
+      final s = EntityParser.snapUtf16Offset(text, e.offset);
+      final end =
+          EntityParser.snapUtf16Offset(text, e.offset + e.length).clamp(s, text.length);
       if (s >= end) continue;
       // Ignore if overlapping a previously accepted outer block
       final overlaps = blockEntities.any((b) {
@@ -661,12 +761,14 @@ class _DirectEntityMessageRendererState
     InlineSpan buildSpanTree(Set<int> hiddenSpoilerIds) {
       final points = <int>{0, segmentText.length};
       for (final e in localEntities) {
-        points.add(e.offset.clamp(0, segmentText.length));
-        points.add((e.offset + e.length).clamp(0, segmentText.length));
+        points.add(EntityParser.snapUtf16Offset(segmentText, e.offset));
+        points.add(
+          EntityParser.snapUtf16Offset(segmentText, e.offset + e.length),
+        );
       }
       for (final sr in spoilerRanges) {
-        points.add(sr.start.clamp(0, segmentText.length));
-        points.add(sr.end.clamp(0, segmentText.length));
+        points.add(EntityParser.snapUtf16Offset(segmentText, sr.start));
+        points.add(EntityParser.snapUtf16Offset(segmentText, sr.end));
       }
       final sortedPoints = points.toList()..sort();
       final children = <InlineSpan>[];
@@ -709,10 +811,14 @@ class _DirectEntityMessageRendererState
         }
 
         if (inlineLatex != null) {
-          final latexEnd = (inlineLatex.offset + inlineLatex.length)
-              .clamp(sliceEnd, segmentText.length);
+          final latexStart =
+              EntityParser.snapUtf16Offset(segmentText, inlineLatex.offset);
+          final latexEnd = EntityParser.snapUtf16Offset(
+            segmentText,
+            inlineLatex.offset + inlineLatex.length,
+          ).clamp(sliceEnd, segmentText.length);
           final formulaRaw = inlineLatex.language ??
-              segmentText.substring(inlineLatex.offset, latexEnd);
+              EntityParser.safeSubstring(segmentText, latexStart, latexEnd);
 
           Widget mathChild = _buildLatexWidget(
             formulaRaw,
@@ -738,10 +844,14 @@ class _DirectEntityMessageRendererState
         }
 
         if (inlineCustomEmoji != null) {
-          final emojiEnd = (inlineCustomEmoji.offset + inlineCustomEmoji.length)
-              .clamp(sliceEnd, segmentText.length);
+          final emojiStart =
+              EntityParser.snapUtf16Offset(segmentText, inlineCustomEmoji.offset);
+          final emojiEnd = EntityParser.snapUtf16Offset(
+            segmentText,
+            inlineCustomEmoji.offset + inlineCustomEmoji.length,
+          ).clamp(sliceEnd, segmentText.length);
           final fallbackChar =
-              segmentText.substring(inlineCustomEmoji.offset, emojiEnd);
+              EntityParser.safeSubstring(segmentText, emojiStart, emojiEnd);
           Widget emojiChild = Padding(
             padding: const EdgeInsets.symmetric(horizontal: 1.0),
             child: InlineCustomEmojiWidget(
@@ -778,6 +888,9 @@ class _DirectEntityMessageRendererState
         bool isStrike = false;
         bool isCode = false;
         String? linkUrl;
+        String? mentionUsername;
+        String? botCommand;
+        String? hashtag;
 
         for (final e in localEntities) {
           if (e.offset <= sliceStart && (e.offset + e.length) >= sliceEnd) {
@@ -802,7 +915,32 @@ class _DirectEntityMessageRendererState
               case 'text_link':
                 linkUrl = (e.url != null && e.url!.isNotEmpty)
                     ? e.url!
-                    : segmentText.substring(e.offset, e.offset + e.length);
+                    : EntityParser.safeSubstring(
+                        segmentText,
+                        e.offset,
+                        e.offset + e.length,
+                      );
+                break;
+              case 'mention':
+                mentionUsername = EntityParser.safeSubstring(
+                  segmentText,
+                  e.offset,
+                  e.offset + e.length,
+                );
+                break;
+              case 'bot_command':
+                botCommand = EntityParser.safeSubstring(
+                  segmentText,
+                  e.offset,
+                  e.offset + e.length,
+                );
+                break;
+              case 'hashtag':
+                hashtag = EntityParser.safeSubstring(
+                  segmentText,
+                  e.offset,
+                  e.offset + e.length,
+                );
                 break;
             }
           }
@@ -816,9 +954,15 @@ class _DirectEntityMessageRendererState
         }
 
         final bool hasLink = linkUrl != null && linkUrl.isNotEmpty;
+        final bool hasInteractiveToken =
+            (mentionUsername != null && mentionUsername.isNotEmpty) ||
+                (botCommand != null && botCommand.isNotEmpty) ||
+                (hashtag != null && hashtag.isNotEmpty);
         if (hasLink) {
           sliceStyle = sliceStyle.copyWith(color: rangeLinkColor);
           isUnderline = true;
+        } else if (hasInteractiveToken) {
+          sliceStyle = sliceStyle.copyWith(color: rangeLinkColor);
         }
 
         if (isUnderline || isStrike) {
@@ -855,6 +999,18 @@ class _DirectEntityMessageRendererState
           if (hasLink) {
             final targetUrl = linkUrl;
             recognizer = _createTapRecognizer(() => _handleLinkTap(targetUrl));
+          } else if (mentionUsername != null && mentionUsername.isNotEmpty) {
+            final targetMention = mentionUsername;
+            recognizer =
+                _createTapRecognizer(() => _handleMentionTap(targetMention));
+          } else if (botCommand != null && botCommand.isNotEmpty) {
+            final targetCmd = botCommand;
+            recognizer =
+                _createTapRecognizer(() => _handleCommandTap(targetCmd));
+          } else if (hashtag != null && hashtag.isNotEmpty) {
+            final targetTag = hashtag;
+            recognizer =
+                _createTapRecognizer(() => _handleHashtagTap(targetTag));
           } else if (isCode) {
             recognizer = _createTapRecognizer(() => _handleCodeCopy(sliceText));
           }
@@ -995,6 +1151,7 @@ class _DirectEntityMessageRendererState
         isMe: widget.isMe,
         preset: widget.nameColorPreset,
         stripStyle: widget.replyStripStyle,
+        replyEmoji: widget.replyEmoji,
         stateKey: 'quote_${bStart}_$bEnd',
         child: formattedChild,
       );

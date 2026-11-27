@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -13,15 +14,26 @@ import 'package:iconoir_flutter/regular/check.dart';
 import 'package:iconoir_flutter/regular/nav_arrow_right.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../services/account_manager.dart';
+import '../../services/app_lock_service.dart';
+import '../../services/auth_service.dart';
+import '../../services/deep_link_service.dart';
 import '../../services/privacy_settings_provider.dart';
 import '../../services/settings_service.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../utils/swipe_back_route.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
-import 'passcode_screen.dart';
+import '../auth/login_screen.dart';
 import 'blocked_users_screen.dart';
+import 'change_email_screen.dart';
 import 'devices_screen.dart';
+import 'passcode_screen.dart';
 
-/// Screen "Security" — 2FA, App Lock, Blocked Users, Active Sessions, and Account Auto-Deletion TTL
+/// Screen "Security" — Email, 2FA & Recovery Codes, App Lock, Blocked Users,
+/// Active Sessions, and Account Auto-Deletion TTL.
 class SecurityScreen extends StatefulWidget {
   const SecurityScreen({super.key});
 
@@ -34,7 +46,11 @@ class _SecurityScreenState extends State<SecurityScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<PrivacySettingsProvider>().loadAccountTTL();
+      final provider = context.read<PrivacySettingsProvider>();
+      provider.load2FA();
+      provider.loadBlockedUsers();
+      provider.loadAccountTTL();
+      provider.loadAppLock();
     });
   }
 
@@ -42,17 +58,71 @@ class _SecurityScreenState extends State<SecurityScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final acc = AccountManager().currentAccount;
+    final cachedEmail = SettingsService().userProfile?.email ?? '';
+    final email = (acc?.email?.isNotEmpty == true ? acc!.email! : cachedEmail);
+    final emailVerified = acc?.emailVerified ?? false;
 
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.translate('security_title'))),
-      body: Consumer<PrivacySettingsProvider>(
-        builder: (context, provider, _) {
+    return SettingsFloatingScaffold(
+      title: l10n.translate('security_title'),
+      body: Consumer2<PrivacySettingsProvider, AppLockService>(
+        builder: (context, provider, appLock, _) {
           final tfa = provider.twoFactor;
-          final lock = provider.appLock;
+          final hasPin = appLock.hasPin;
+          final biometricsEnabled = appLock.biometricsEnabled;
+          final autoLockTimeout = appLock.autoLockTimeout;
 
           return ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: EdgeInsets.only(
+              top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+              bottom: 24,
+            ),
             children: [
+              // Account Email
+              SettingsGroup(
+                title: l10n.translate('email_current_section'),
+                children: [
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: (emailVerified ? Colors.green : Colors.orange)
+                            .withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: Mail(
+                        width: 22,
+                        height: 22,
+                        color: emailVerified ? Colors.green : Colors.orange,
+                      ),
+                    ),
+                    title: Text(l10n.translate('email_screen_title')),
+                    subtitle: Text(
+                      email.isEmpty
+                          ? l10n.translate('security_not_set')
+                          : '$email • ${emailVerified ? l10n.translate('email_status_verified') : l10n.translate('email_status_unverified')}',
+                    ),
+                    trailing: NavArrowRight(
+                      width: 18,
+                      height: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onTap: () async {
+                      HapticFeedback.lightImpact();
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ChangeEmailScreen(),
+                        ),
+                      );
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                ],
+              ),
+
               // Two-Factor Authentication
               SettingsGroup(
                 title: l10n.translate('security_2fa_section'),
@@ -75,22 +145,57 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       ),
                     ),
                     title: Text(l10n.translate('security_2fa')),
-                    subtitle: Text(tfa.enabled
-                        ? l10n.translate('security_2fa_enabled')
-                        : l10n.translate('security_2fa_disabled')),
+                    subtitle: Text(
+                      tfa.enabled
+                          ? l10n.translate('security_2fa_enabled')
+                          : l10n.translate('security_2fa_disabled'),
+                    ),
                     trailing: AdaptiveSwitch(
                       value: tfa.enabled,
                       onChanged: (v) async {
                         HapticFeedback.lightImpact();
                         if (v) {
-                          _show2FADialog(context);
+                          _show2FADialog(
+                            context,
+                            isChanging: false,
+                            initialRecoveryEmail: tfa.recoveryEmail.isNotEmpty
+                                ? tfa.recoveryEmail
+                                : email,
+                          );
                         } else {
-                          await provider.disable2FA();
+                          _showDisable2FADialog(context);
                         }
                       },
                     ),
                   ),
-                  if (tfa.enabled)
+                  if (tfa.enabled) ...[
+                    ListTile(
+                      leading: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        alignment: Alignment.center,
+                        child: Lock(
+                          width: 22,
+                          height: 22,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      title: Text(l10n.translate('security_2fa_change_password')),
+                      trailing: NavArrowRight(
+                        width: 18,
+                        height: 18,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      onTap: () => _show2FADialog(
+                        context,
+                        isChanging: true,
+                        initialRecoveryEmail: tfa.recoveryEmail,
+                      ),
+                    ),
                     ListTile(
                       leading: Container(
                         width: 40,
@@ -107,17 +212,43 @@ class _SecurityScreenState extends State<SecurityScreen> {
                         ),
                       ),
                       title: Text(l10n.translate('security_recovery_email')),
-                      subtitle: Text(tfa.recoveryEmail.isEmpty
-                          ? l10n.translate('security_not_set')
-                          : tfa.recoveryEmail),
+                      subtitle: Text(
+                        tfa.recoveryEmail.isEmpty
+                            ? l10n.translate('security_not_set')
+                            : tfa.recoveryEmail,
+                      ),
                       trailing: NavArrowRight(
                         width: 18,
                         height: 18,
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
-                      onTap: () =>
-                          _showRecoveryEmailDialog(context, tfa.recoveryEmail),
+                      onTap: () => _showRecoveryEmailDialog(context, tfa.recoveryEmail),
                     ),
+                    ListTile(
+                      leading: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        alignment: Alignment.center,
+                        child: Icon(
+                          Icons.vpn_key_outlined,
+                          size: 20,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                      title: Text(l10n.translate('security_2fa_regenerate_codes')),
+                      subtitle: Text(l10n.translate('security_2fa_regenerate_desc')),
+                      trailing: NavArrowRight(
+                        width: 18,
+                        height: 18,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      onTap: () => _showRegenerateCodesDialog(context),
+                    ),
+                  ],
                 ],
               ),
 
@@ -130,7 +261,7 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: lock.hasPin
+                        color: hasPin
                             ? theme.colorScheme.primaryContainer.withOpacity(0.6)
                             : theme.colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(10),
@@ -139,15 +270,15 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       child: SmartphoneDevice(
                         width: 22,
                         height: 22,
-                        color: lock.hasPin
-                            ? theme.colorScheme.primary
-                            : Colors.grey,
+                        color: hasPin ? theme.colorScheme.primary : Colors.grey,
                       ),
                     ),
                     title: Text(l10n.translate('security_pin_code')),
-                    subtitle: Text(lock.hasPin
-                        ? l10n.translate('security_pin_set')
-                        : l10n.translate('security_pin_not_set')),
+                    subtitle: Text(
+                      hasPin
+                          ? l10n.translate('security_pin_set')
+                          : l10n.translate('security_pin_not_set'),
+                    ),
                     trailing: NavArrowRight(
                       width: 18,
                       height: 18,
@@ -163,39 +294,45 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       );
                     },
                   ),
-                  ListTile(
-                    leading: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: lock.biometricsEnabled
-                            ? theme.colorScheme.primaryContainer.withOpacity(0.6)
-                            : theme.colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(10),
+                  if (!kIsWeb)
+                    ListTile(
+                      enabled: hasPin,
+                      leading: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: (hasPin && biometricsEnabled)
+                              ? theme.colorScheme.primaryContainer.withOpacity(0.6)
+                              : theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        alignment: Alignment.center,
+                        child: Fingerprint(
+                          width: 22,
+                          height: 22,
+                          color: (hasPin && biometricsEnabled)
+                              ? theme.colorScheme.primary
+                              : Colors.grey,
+                        ),
                       ),
-                      alignment: Alignment.center,
-                      child: Fingerprint(
-                        width: 22,
-                        height: 22,
-                        color: lock.biometricsEnabled
-                            ? theme.colorScheme.primary
-                            : Colors.grey,
+                      title: Text(l10n.translate('security_biometrics')),
+                      trailing: AdaptiveSwitch(
+                        value: hasPin && biometricsEnabled,
+                        onChanged: hasPin
+                            ? (v) async {
+                                HapticFeedback.lightImpact();
+                                await appLock.setBiometricsEnabled(v);
+                                await provider.saveAppLock(AppLockSettings(
+                                  hasPin: hasPin,
+                                  biometricsEnabled: v,
+                                  autoLockTimeout: autoLockTimeout,
+                                ));
+                              }
+                            : null,
                       ),
                     ),
-                    title: Text(l10n.translate('security_biometrics')),
-                    trailing: AdaptiveSwitch(
-                      value: lock.biometricsEnabled,
-                      onChanged: (v) {
-                        HapticFeedback.lightImpact();
-                        provider.saveAppLock(AppLockSettings(
-                          hasPin: lock.hasPin,
-                          biometricsEnabled: v,
-                          autoLockTimeout: lock.autoLockTimeout,
-                        ));
-                      },
-                    ),
-                  ),
                   ListTile(
+                    enabled: hasPin,
                     leading: Container(
                       width: 40,
                       height: 40,
@@ -207,17 +344,23 @@ class _SecurityScreenState extends State<SecurityScreen> {
                       child: Timer(
                         width: 22,
                         height: 22,
-                        color: theme.colorScheme.onSurfaceVariant,
+                        color: hasPin
+                            ? theme.colorScheme.onSurfaceVariant
+                            : Colors.grey,
                       ),
                     ),
                     title: Text(l10n.translate('security_auto_lock')),
-                    subtitle: Text(_autoLockLabel(l10n, lock.autoLockTimeout)),
+                    subtitle: Text(
+                      hasPin
+                          ? _autoLockLabel(l10n, autoLockTimeout)
+                          : l10n.translate('security_pin_required_hint'),
+                    ),
                     trailing: NavArrowRight(
                       width: 18,
                       height: 18,
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
-                    onTap: () => _showAutoLockPicker(context, lock),
+                    onTap: hasPin ? () => _showAutoLockPicker(context) : null,
                   ),
                 ],
               ),
@@ -328,13 +471,44 @@ class _SecurityScreenState extends State<SecurityScreen> {
                     onTap: () => _showAccountTTLPicker(context, provider),
                   ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                     child: Text(
                       l10n.translate('security_account_ttl_desc'),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Trash(
+                        width: 22,
+                        height: 22,
+                        color: Colors.red,
+                      ),
+                    ),
+                    title: Text(
+                      l10n.translate('security_delete_account_title'),
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: Text(l10n.translate('security_delete_account_subtitle')),
+                    trailing: NavArrowRight(
+                      width: 18,
+                      height: 18,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    onTap: () => _showDeleteAccountDialog(context, provider),
                   ),
                 ],
               ),
@@ -346,13 +520,13 @@ class _SecurityScreenState extends State<SecurityScreen> {
   }
 
   String _autoLockLabel(AppLocalizations l10n, String timeout) => switch (timeout) {
-    'immediately' => l10n.translate('security_auto_lock_immediately'),
-    '1min' => l10n.translate('security_auto_lock_1min'),
-    '5min' => l10n.translate('security_auto_lock_5min'),
-    '15min' => l10n.translate('security_auto_lock_15min'),
-    '1hour' => l10n.translate('security_auto_lock_1hour'),
-    _ => timeout,
-  };
+        'immediately' => l10n.translate('security_auto_lock_immediately'),
+        '1min' => l10n.translate('security_auto_lock_1min'),
+        '5min' => l10n.translate('security_auto_lock_5min'),
+        '15min' => l10n.translate('security_auto_lock_15min'),
+        '1hour' => l10n.translate('security_auto_lock_1hour'),
+        _ => timeout,
+      };
 
   String _formatAccountTTL(AppLocalizations l10n, int months) {
     switch (months) {
@@ -383,95 +557,259 @@ class _SecurityScreenState extends State<SecurityScreen> {
       {'months': 24, 'label': l10n.translate('security_account_ttl_2_years')},
     ];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Text(
-                  l10n.translate('security_account_ttl_title'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-              ),
-              const Divider(),
-              ...options.map((opt) {
-                final months = opt['months'] as int;
-                final label = opt['label'] as String;
-                final isSelected = provider.accountTTLMonths == months;
+      title: l10n.translate('security_account_ttl_title'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ...options.map((opt) {
+            final months = opt['months'] as int;
+            final label = opt['label'] as String;
+            final isSelected = provider.accountTTLMonths == months;
 
-                return ListTile(
-                  title: Text(label),
-                  trailing: isSelected
-                      ? Check(
-                          width: 20,
-                          height: 20,
-                          color: Theme.of(context).primaryColor,
-                        )
-                      : null,
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    HapticFeedback.lightImpact();
-                    final success = await provider.saveAccountTTL(months);
-                    if (context.mounted && success) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(l10n.translate('settings_saved')),
-                        ),
-                      );
-                    }
-                  },
-                );
-              }).toList(),
-            ],
+            return ListTile(
+              title: Text(label),
+              trailing: isSelected
+                  ? Check(
+                      width: 20,
+                      height: 20,
+                      color: Theme.of(context).primaryColor,
+                    )
+                  : null,
+              onTap: () async {
+                Navigator.pop(ctx);
+                HapticFeedback.lightImpact();
+                final success = await provider.saveAccountTTL(months);
+                if (context.mounted && success) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(l10n.translate('settings_saved'))),
+                  );
+                }
+              },
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  void _show2FADialog(
+    BuildContext context, {
+    required bool isChanging,
+    String initialRecoveryEmail = '',
+  }) {
+    final l10n = context.l10n;
+    final provider = context.read<PrivacySettingsProvider>();
+    final currentCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    final confirmCtrl = TextEditingController();
+    final emailCtrl = TextEditingController(text: initialRecoveryEmail);
+    String? errorText;
+    bool saving = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            isChanging
+                ? l10n.translate('security_2fa_change_password')
+                : l10n.translate('security_2fa_setup_title'),
           ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: currentCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: isChanging
+                        ? l10n.translate('security_2fa_current_password_label')
+                        : l10n.translate('security_current_account_password_label'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: passwordCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: l10n.translate('security_2fa_new_password_label'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(
+                    labelText: l10n.translate('security_2fa_confirm_password_label'),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: emailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: InputDecoration(
+                    labelText: l10n.translate('security_recovery_email_label'),
+                  ),
+                ),
+                if (errorText != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: Text(l10n.translate('common_cancel')),
+            ),
+            TextButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final cur = currentCtrl.text.trim();
+                      final np = passwordCtrl.text.trim();
+                      final cp = confirmCtrl.text.trim();
+                      if (cur.isEmpty) {
+                        setDialogState(() {
+                          errorText = l10n.translate('email_enter_current_password');
+                        });
+                        return;
+                      }
+                      if (np.length < 6) {
+                        setDialogState(() {
+                          errorText = l10n.translate('validation_password_length');
+                        });
+                        return;
+                      }
+                      if (np != cp) {
+                        setDialogState(() {
+                          errorText = l10n.translate('security_2fa_passwords_mismatch');
+                        });
+                        return;
+                      }
+                      setDialogState(() {
+                        saving = true;
+                        errorText = null;
+                      });
+                      final res = await provider.enable2FA(
+                        np,
+                        emailCtrl.text.trim(),
+                        currentPassword: isChanging ? null : cur,
+                        current2faPassword: isChanging ? cur : null,
+                      );
+                      if (!ctx.mounted) return;
+                      if (res['success'] == true) {
+                        Navigator.pop(ctx);
+                        final codes = (res['recovery_codes'] as List?)
+                                ?.map((e) => e.toString())
+                                .toList() ??
+                            <String>[];
+                        if (codes.isNotEmpty && context.mounted) {
+                          _showRecoveryCodesDialog(context, codes);
+                        }
+                      } else {
+                        setDialogState(() {
+                          saving = false;
+                          errorText = res['error'] == 'invalid_current_password'
+                              ? l10n.translate('email_error_invalid_password')
+                              : l10n.translate('common_error');
+                        });
+                      }
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(l10n.translate('common_save')),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  void _show2FADialog(BuildContext context) {
+  void _showDisable2FADialog(BuildContext context) {
     final l10n = context.l10n;
     final provider = context.read<PrivacySettingsProvider>();
-    final passwordController = TextEditingController();
-    final emailController = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    String? errorText;
+    bool saving = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l10n.translate('security_2fa_setup_title')),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-            controller: passwordController,
-            obscureText: true,
-            decoration: InputDecoration(labelText: l10n.translate('security_password_label')),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(l10n.translate('security_2fa_disable_title')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(l10n.translate('security_2fa_disable_prompt')),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passwordCtrl,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('security_password_label'),
+                ),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  errorText!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+            ],
           ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: emailController,
-            keyboardType: TextInputType.emailAddress,
-            decoration: InputDecoration(labelText: l10n.translate('security_recovery_email_label')),
-          ),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(l10n.translate('common_cancel'))),
-          TextButton(
-            onPressed: () async {
-              await provider.enable2FA(passwordController.text, emailController.text);
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: Text(l10n.translate('common_save')),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: Text(l10n.translate('common_cancel')),
+            ),
+            TextButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final pwd = passwordCtrl.text;
+                      if (pwd.isEmpty) {
+                        setDialogState(() {
+                          errorText = l10n.translate('validation_enter_password');
+                        });
+                        return;
+                      }
+                      setDialogState(() {
+                        saving = true;
+                        errorText = null;
+                      });
+                      final res = await provider.disable2FA(password: pwd);
+                      if (!ctx.mounted) return;
+                      if (res['success'] == true) {
+                        Navigator.pop(ctx);
+                      } else {
+                        setDialogState(() {
+                          saving = false;
+                          errorText = l10n.translate('email_error_invalid_password');
+                        });
+                      }
+                    },
+              child: Text(
+                l10n.translate('security_2fa_disable_confirm'),
+                style: const TextStyle(color: Colors.red),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -479,61 +817,485 @@ class _SecurityScreenState extends State<SecurityScreen> {
   void _showRecoveryEmailDialog(BuildContext context, String currentEmail) {
     final l10n = context.l10n;
     final provider = context.read<PrivacySettingsProvider>();
-    final controller = TextEditingController(text: currentEmail);
+    final emailCtrl = TextEditingController(text: currentEmail);
+    final twoFaPwdCtrl = TextEditingController();
+    String? errorText;
+    bool saving = false;
+
     showDialog(
       context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(l10n.translate('security_recovery_email')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('security_recovery_email_label'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: twoFaPwdCtrl,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('security_2fa_current_password_label'),
+                ),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  errorText!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: Text(l10n.translate('common_cancel')),
+            ),
+            TextButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final pwd = twoFaPwdCtrl.text.trim();
+                      if (pwd.length < 6) {
+                        setDialogState(() {
+                          errorText = l10n.translate('validation_password_length');
+                        });
+                        return;
+                      }
+                      setDialogState(() {
+                        saving = true;
+                        errorText = null;
+                      });
+                      final res = await provider.enable2FA(
+                        pwd,
+                        emailCtrl.text.trim(),
+                        current2faPassword: pwd,
+                      );
+                      if (!ctx.mounted) return;
+                      if (res['success'] == true) {
+                        Navigator.pop(ctx);
+                        final codes = (res['recovery_codes'] as List?)
+                                ?.map((e) => e.toString())
+                                .toList() ??
+                            <String>[];
+                        if (codes.isNotEmpty && context.mounted) {
+                          _showRecoveryCodesDialog(context, codes);
+                        }
+                      } else {
+                        setDialogState(() {
+                          saving = false;
+                          errorText = l10n.translate('email_error_invalid_2fa');
+                        });
+                      }
+                    },
+              child: Text(l10n.translate('common_save')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRegenerateCodesDialog(BuildContext context) {
+    final l10n = context.l10n;
+    final provider = context.read<PrivacySettingsProvider>();
+    final passwordCtrl = TextEditingController();
+    String? errorText;
+    bool loading = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(l10n.translate('security_2fa_regenerate_codes')),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: passwordCtrl,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('security_2fa_current_password_label'),
+                ),
+              ),
+              if (errorText != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  errorText!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: loading ? null : () => Navigator.pop(ctx),
+              child: Text(l10n.translate('common_cancel')),
+            ),
+            TextButton(
+              onPressed: loading
+                  ? null
+                  : () async {
+                      final pwd = passwordCtrl.text;
+                      if (pwd.isEmpty) {
+                        setDialogState(() {
+                          errorText = l10n.translate('validation_enter_password');
+                        });
+                        return;
+                      }
+                      setDialogState(() {
+                        loading = true;
+                        errorText = null;
+                      });
+                      final res = await provider.regenerateRecoveryCodes(pwd);
+                      if (!ctx.mounted) return;
+                      if (res['success'] == true) {
+                        Navigator.pop(ctx);
+                        final codes = (res['recovery_codes'] as List?)
+                                ?.map((e) => e.toString())
+                                .toList() ??
+                            <String>[];
+                        if (context.mounted) {
+                          _showRecoveryCodesDialog(context, codes);
+                        }
+                      } else {
+                        setDialogState(() {
+                          loading = false;
+                          errorText = l10n.translate('email_error_invalid_2fa');
+                        });
+                      }
+                    },
+              child: Text(l10n.translate('common_confirm')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRecoveryCodesDialog(BuildContext context, List<String> codes) {
+    final l10n = context.l10n;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: Text(l10n.translate('security_recovery_email')),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.emailAddress,
-          decoration: InputDecoration(labelText: l10n.translate('security_recovery_email_label')),
+        title: Text(l10n.translate('security_2fa_codes_title')),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                l10n.translate('security_2fa_codes_warning'),
+                style: TextStyle(color: Colors.orange[800], fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: codes
+                      .map(
+                        (c) => SelectableText(
+                          c,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(l10n.translate('common_cancel'))),
-          TextButton(
-            onPressed: () async {
-              await provider.enable2FA('', controller.text);
-              if (ctx.mounted) Navigator.pop(ctx);
+          TextButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: codes.join('\n')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(l10n.translate('security_2fa_codes_copied'))),
+              );
             },
-            child: Text(l10n.translate('common_save')),
+            icon: const Icon(Icons.copy_all, size: 18),
+            label: Text(l10n.translate('common_copy')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(l10n.translate('common_done')),
           ),
         ],
       ),
     );
   }
 
-  void _showAutoLockPicker(BuildContext context, AppLockSettings lock) {
+  void _showAutoLockPicker(BuildContext context) {
     final l10n = context.l10n;
+    final provider = context.read<PrivacySettingsProvider>();
+    final appLock = AppLockService.instance;
     final options = ['immediately', '1min', '5min', '15min', '1hour'];
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: options.map((opt) {
+          final isSelected = appLock.autoLockTimeout == opt;
+          return ListTile(
+            title: Text(_autoLockLabel(l10n, opt)),
+            trailing: isSelected
+                ? Check(width: 20, height: 20, color: Theme.of(context).primaryColor)
+                : null,
+            onTap: () async {
+              HapticFeedback.lightImpact();
+              await appLock.setAutoLockTimeout(opt);
+              await provider.saveAppLock(AppLockSettings(
+                hasPin: appLock.hasPin,
+                biometricsEnabled: appLock.biometricsEnabled,
+                autoLockTimeout: opt,
+              ));
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+          );
+        }).toList(),
       ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: options.map((opt) {
-            final isSelected = lock.autoLockTimeout == opt;
-            return ListTile(
-              title: Text(_autoLockLabel(l10n, opt)),
-              trailing: isSelected
-                  ? Check(width: 20, height: 20, color: Theme.of(context).primaryColor)
-                  : null,
-              onTap: () {
-                HapticFeedback.lightImpact();
-                context.read<PrivacySettingsProvider>().saveAppLock(AppLockSettings(
-                  hasPin: lock.hasPin,
-                  biometricsEnabled: lock.biometricsEnabled,
-                  autoLockTimeout: opt,
-                ));
-                Navigator.pop(ctx);
-              },
-            );
-          }).toList(),
+    );
+  }
+
+  String _mapDeleteAccountError(AppLocalizations l10n, Map<String, dynamic> res) {
+    final err = res['error']?.toString() ?? '';
+    switch (err) {
+      case 'email_not_configured':
+        return l10n.translate('email_error_not_configured');
+      case 'invalid_password':
+        return l10n.translate('email_error_invalid_password');
+      case '2fa_required':
+      case 'invalid_2fa_password':
+        return l10n.translate('email_error_invalid_2fa');
+      case 'cooldown':
+      case 'rate_limited':
+        final wait = (res['cooldown_seconds'] as num?)?.toInt() ?? 60;
+        return l10n.translate('email_error_cooldown').replaceAll('{seconds}', '$wait');
+      case 'invalid_code':
+      case 'code_expired':
+        return l10n.translate('email_error_invalid_code');
+      case 'too_many_attempts':
+        return l10n.translate('email_error_too_many_attempts');
+      default:
+        final msg = res['message']?.toString() ?? '';
+        return msg.isNotEmpty ? msg : l10n.translate('common_error');
+    }
+  }
+
+  Future<void> _showDeleteAccountDialog(
+    BuildContext context,
+    PrivacySettingsProvider provider,
+  ) async {
+    final l10n = context.l10n;
+    HapticFeedback.lightImpact();
+
+    final codeCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    final twoFactorCtrl = TextEditingController();
+
+    bool requested = false;
+    bool hasEmail = true;
+    bool requires2FA = provider.twoFactor.enabled;
+    String maskedEmail = '';
+    String? errorText;
+    bool loading = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(l10n.translate('security_delete_account_sheet_title')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  l10n.translate('security_delete_account_warning'),
+                  style: Theme.of(ctx).textTheme.bodyMedium,
+                ),
+                if (requested) ...[
+                  const SizedBox(height: 16),
+                  if (hasEmail) ...[
+                    Text(
+                      l10n
+                          .translate('security_delete_account_code_sent')
+                          .replaceAll('{email}', maskedEmail),
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(ctx).colorScheme.primary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: codeCtrl,
+                      keyboardType: TextInputType.number,
+                      maxLength: 6,
+                      decoration: InputDecoration(
+                        labelText: l10n.translate('security_delete_account_code_label'),
+                        counterText: '',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ] else ...[
+                    TextField(
+                      controller: passwordCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: l10n.translate('security_delete_account_password_label'),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                  if (requires2FA) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: twoFactorCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        labelText: l10n.translate('security_delete_account_2fa_label'),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ],
+                if (errorText != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    errorText!,
+                    style: const TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: loading ? null : () => Navigator.pop(ctx),
+              child: Text(l10n.translate('common_cancel')),
+            ),
+            if (!requested)
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: loading
+                    ? null
+                    : () async {
+                        setDialogState(() {
+                          loading = true;
+                          errorText = null;
+                        });
+                        final res = await provider.sendDeleteAccountCode(
+                          locale: l10n.locale.languageCode,
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          setDialogState(() {
+                            loading = false;
+                            requested = true;
+                            hasEmail = res['has_email'] == true;
+                            maskedEmail = res['masked_email']?.toString() ?? '';
+                            if (res['requires_2fa'] == true) {
+                              requires2FA = true;
+                            }
+                          });
+                        } else {
+                          setDialogState(() {
+                            loading = false;
+                            errorText = _mapDeleteAccountError(l10n, res);
+                          });
+                        }
+                      },
+                child: Text(l10n.translate('security_delete_account_send_code')),
+              )
+            else
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: loading
+                    ? null
+                    : () async {
+                        final code = codeCtrl.text.trim();
+                        final pwd = passwordCtrl.text;
+                        if (hasEmail && code.length < 4) {
+                          setDialogState(() {
+                            errorText = l10n.translate('email_error_invalid_code');
+                          });
+                          return;
+                        }
+                        if (!hasEmail && pwd.isEmpty) {
+                          setDialogState(() {
+                            errorText = l10n.translate('email_error_invalid_password');
+                          });
+                          return;
+                        }
+                        setDialogState(() {
+                          loading = true;
+                          errorText = null;
+                        });
+                        final res = await provider.confirmDeleteAccount(
+                          code: hasEmail ? code : null,
+                          password: hasEmail ? null : pwd,
+                          twoFactorPassword: twoFactorCtrl.text,
+                          locale: l10n.locale.languageCode,
+                        );
+                        if (!ctx.mounted) return;
+                        if (res['success'] == true) {
+                          final toastMsg = l10n.translate('security_delete_account_scheduled_toast');
+                          Navigator.pop(ctx);
+                          TilingLayoutController.instance.closeAllChats();
+                          final nav = DeepLinkService().navigatorKey.currentState ??
+                              (context.mounted ? Navigator.of(context, rootNavigator: true) : null);
+                          nav?.pushAndRemoveUntil(
+                            SwipeBackPageRoute(builder: (_) => const LoginScreen()),
+                            (route) => false,
+                          );
+                          await AuthService.logout();
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            final navCtx = DeepLinkService().navigatorKey.currentContext;
+                            if (navCtx != null && navCtx.mounted) {
+                              ScaffoldMessenger.maybeOf(navCtx)?.showSnackBar(
+                                SnackBar(content: Text(toastMsg)),
+                              );
+                            }
+                          });
+                        } else {
+                          setDialogState(() {
+                            loading = false;
+                            if (res['requires_2fa'] == true) {
+                              requires2FA = true;
+                            }
+                            errorText = _mapDeleteAccountError(l10n, res);
+                          });
+                        }
+                      },
+                child: Text(l10n.translate('security_delete_account_confirm_btn')),
+              ),
+          ],
         ),
       ),
     );
+
+    codeCtrl.dispose();
+    passwordCtrl.dispose();
+    twoFactorCtrl.dispose();
   }
 }

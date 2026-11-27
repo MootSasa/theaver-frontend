@@ -1,0 +1,653 @@
+import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:provider/provider.dart';
+
+import '../../l10n/app_localizations.dart';
+import '../../models/community_models.dart';
+import '../../screens/chat/channel_screen.dart';
+import '../../screens/chat/group_chat_screen.dart';
+import '../../screens/chat/private_chat_screen.dart';
+import '../../screens/community/community_screen.dart';
+import '../../services/account_manager.dart';
+import '../../services/archive_preferences_service.dart';
+import '../../services/chat_folder_service.dart';
+import '../../services/chat_service.dart';
+import '../../services/community_service.dart';
+import '../../services/database/app_database.dart';
+import '../../services/glass_toast_service.dart';
+import '../../services/notification_service.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/tiling_layout_controller.dart';
+import '../../services/unread_count_provider.dart';
+import '../../utils/date_time_utils.dart';
+import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
+import '../design_system/theav_design_system.dart';
+
+String _tr(
+  BuildContext context,
+  String key,
+  String fallback, [
+  Map<String, String>? params,
+]) {
+  final translated = AppLocalizations.of(context)?.translate(key, params);
+  if (translated == null || translated.isEmpty || translated == key) {
+    var result = fallback;
+    params?.forEach((k, v) {
+      result = result.replaceAll('{$k}', v);
+    });
+    return result;
+  }
+  return translated;
+}
+
+/// Shared dialogs, bottom sheets, drag payload builders, and chat navigation
+/// helpers used by both `MainScreen` and `ArchivedChatsScreen`.
+class ChatBatchDialogs {
+  const ChatBatchDialogs._();
+
+  static Future<({bool confirmed, bool revoke})> confirmDeleteChatsWithOptions(
+    BuildContext context,
+    List<Chat> chats,
+  ) async {
+    final deletable = chats.where((c) => c.chatType != 'saved').toList();
+    if (deletable.isEmpty) return (confirmed: false, revoke: false);
+
+    final String title;
+    final String body;
+    final String confirmLabel;
+    final bool hasPrivate = deletable.any((c) => c.chatType == 'private');
+    final String? revokeLabel;
+
+    if (deletable.length == 1) {
+      final chat = deletable.first;
+      if (chat.chatType == 'group') {
+        title = _tr(context, 'chats_leave_group_title', 'Покинуть группу?');
+        body = _tr(
+          context,
+          'chats_leave_group_confirm',
+          'Вы покинете группу «${chat.name}» и она исчезнет из списка чатов.',
+          {'name': chat.name},
+        );
+        confirmLabel = _tr(context, 'chats_leave_group_action', 'Покинуть');
+        revokeLabel = null;
+      } else if (chat.chatType == 'channel') {
+        title = _tr(context, 'chats_leave_channel_title', 'Покинуть канал?');
+        body = _tr(
+          context,
+          'chats_leave_channel_confirm',
+          'Вы отпишетесь от канала «${chat.name}».',
+          {'name': chat.name},
+        );
+        confirmLabel = _tr(context, 'chats_leave_group_action', 'Покинуть');
+        revokeLabel = null;
+      } else {
+        title = _tr(context, 'chats_delete_private_title', 'Удалить чат?');
+        body = _tr(
+          context,
+          'chats_delete_private_confirm',
+          'Удалить переписку с «${chat.name}»?',
+          {'name': chat.name},
+        );
+        confirmLabel = _tr(context, 'selection_delete', 'Удалить');
+        revokeLabel = 'Также удалить для ${chat.name}';
+      }
+    } else {
+      final countStr = '${deletable.length}';
+      title = _tr(
+        context,
+        'chats_delete_batch_title',
+        'Удалить выбранные чаты ($countStr)?',
+        {'count': countStr},
+      );
+      body = _tr(
+        context,
+        'chats_delete_batch_confirm',
+        'Личные чаты будут удалены, а из выбранных групп и каналов будет выполнен выход.',
+      );
+      confirmLabel = _tr(context, 'selection_delete', 'Удалить');
+      revokeLabel = hasPrivate
+          ? 'Также удалить личные переписки у собеседников'
+          : null;
+    }
+
+    final cancelLabel = _tr(context, 'common_cancel', 'Отмена');
+    bool revoke = false;
+
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: title,
+      message: body,
+      content: revokeLabel == null
+          ? null
+          : StatefulBuilder(
+              builder: (ctx, setDialogState) {
+                final palette = ctx.theav;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    HapticUtils.selection();
+                    setDialogState(() => revoke = !revoke);
+                  },
+                  child: Row(
+                    children: [
+                      TheavCheckCircle(
+                        selected: revoke,
+                        size: 20,
+                        onTap: () {
+                          HapticUtils.selection();
+                          setDialogState(() => revoke = !revoke);
+                        },
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          revokeLabel!,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: palette.onSurface,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+      actions: [
+        TheavDialogAction<bool>(label: cancelLabel, result: false),
+        TheavDialogAction<bool>(
+          label: confirmLabel,
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+
+    return (confirmed: confirmed == true, revoke: revoke);
+  }
+
+  static Future<bool> confirmDeleteChats(
+    BuildContext context,
+    List<Chat> chats,
+  ) async {
+    final res = await confirmDeleteChatsWithOptions(context, chats);
+    return res.confirmed;
+  }
+
+  static Future<bool> executeClearHistory(
+    BuildContext context,
+    List<Chat> chats, {
+    String? currentUserId,
+    VoidCallback? onBeforeExecute,
+  }) async {
+    final clearable = chats.where((c) => c.chatType != 'community').toList();
+    if (clearable.isEmpty) return false;
+
+    final countStr = '${clearable.length}';
+    final title =
+        _tr(context, 'chats_clear_history_title', 'Очистить историю?');
+    final body = _tr(
+      context,
+      'chats_clear_history_confirm',
+      'Все сообщения в выбранных чатах ($countStr) будут безвозвратно удалены.',
+      {'count': countStr},
+    );
+    final cancelLabel = _tr(context, 'common_cancel', 'Отмена');
+    final confirmLabel =
+        _tr(context, 'selection_clear_history', 'Очистить историю');
+    final clearedToast =
+        _tr(context, 'chats_history_cleared_toast', 'История очищена');
+
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+    } catch (_) {}
+
+    final confirmed = await showTheavDialog<bool>(
+      context: context,
+      title: title,
+      message: body,
+      actions: [
+        TheavDialogAction<bool>(label: cancelLabel, result: false),
+        TheavDialogAction<bool>(
+          label: confirmLabel,
+          result: true,
+          isDestructive: true,
+        ),
+      ],
+    );
+
+    if (confirmed != true) return false;
+    onBeforeExecute?.call();
+
+    final db = AppDatabase(currentUserId);
+    final ids = clearable.map((c) => c.id).toList();
+    for (final chat in clearable) {
+      await ChatService.clearChatHistory(chatId: chat.id);
+      await db.deleteMessagesForChat(chat.id);
+      await db.refreshChatLastMessageFromDb(chat.id, allowClear: true);
+      unreadProvider?.setCount(chat.id, 0);
+    }
+    await db.batchMarkAsRead(ids);
+
+    if (context.mounted) {
+      GlassToastService().show(context, clearedToast);
+    }
+    return true;
+  }
+
+  static Future<bool> showAddToFolderSheet(
+    BuildContext context,
+    List<Chat> chats,
+  ) async {
+    if (chats.isEmpty) return false;
+    final folderService = ChatFolderService();
+    final customFolders = folderService.folders
+        .where((f) => f.id != 'all' && f.id != 'communities')
+        .toList();
+
+    final Set<String> selectedFolderIds = {
+      for (final folder in customFolders)
+        if (chats.every((c) => folder.includedChatIds.contains(c.id))) folder.id,
+    };
+
+    final title = _tr(context, 'chats_add_to_folder_title', 'Добавить в папку');
+    final emptyText = _tr(
+      context,
+      'chats_add_to_folder_empty',
+      'Нет пользовательских папок',
+    );
+    final applyLabel = _tr(context, 'common_apply', 'Готово');
+    final updatedToast =
+        _tr(context, 'chats_folders_updated', 'Папки обновлены');
+
+    final applied = await showTheavModalSheet<bool>(
+      context: context,
+      title: title,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (innerCtx, setSheetState) {
+          if (customFolders.isEmpty) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: Text(
+                emptyText,
+                style: TextStyle(color: innerCtx.theav.subtext),
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 340),
+                child: SingleChildScrollView(
+                  child: TheavInsetGroup(
+                    margin: EdgeInsets.zero,
+                    children: customFolders.map((folder) {
+                      final checked = selectedFolderIds.contains(folder.id);
+                      return TheavListRow(
+                        leading: iconoir.Folder(
+                          width: 20,
+                          height: 20,
+                          color: innerCtx.theav.primary,
+                        ),
+                        title: folder.name,
+                        trailing: TheavCheckCircle(selected: checked),
+                        onTap: () {
+                          HapticUtils.selection();
+                          setSheetState(() {
+                            if (checked) {
+                              selectedFolderIds.remove(folder.id);
+                            } else {
+                              selectedFolderIds.add(folder.id);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              TheavFloatingPillButton(
+                label: applyLabel,
+                isPrimary: true,
+                onTap: () => Navigator.of(sheetCtx).pop(true),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (applied != true) return false;
+
+    final chatIds = chats.map((c) => c.id).toSet();
+    final updated = folderService.folders.map((folder) {
+      if (folder.id == 'all' || folder.id == 'communities') {
+        return folder;
+      }
+      final nextIncluded = folder.includedChatIds.toSet();
+      final nextExcluded = folder.excludedChatIds.toSet();
+      if (selectedFolderIds.contains(folder.id)) {
+        nextIncluded.addAll(chatIds);
+        nextExcluded.removeAll(chatIds);
+      } else {
+        nextIncluded.removeAll(chatIds);
+      }
+      return folder.copyWith(
+        includedChatIds: nextIncluded.toList(),
+        excludedChatIds: nextExcluded.toList(),
+      );
+    }).toList();
+
+    await folderService.saveFolders(updated);
+    if (context.mounted) {
+      GlassToastService().show(context, updatedToast);
+    }
+    return true;
+  }
+
+  static Future<void> showArchiveSettingsSheet(BuildContext context) async {
+    final archivePrefs = ArchivePreferencesService();
+    final sheetTitle = _tr(context, 'archive_settings', 'Настройки архива');
+    final keepUnmutedTitle = _tr(
+      context,
+      'notifications_keep_archived_unmuted',
+      'Не доставать чаты со звуком',
+    );
+    final keepUnmutedDesc = _tr(
+      context,
+      'archive_keep_unmuted_desc',
+      'Чаты с включёнными уведомлениями останутся в архиве при получении новых сообщений.',
+    );
+    final hideAboveTitle = _tr(
+      context,
+      'archive_hide_above_list',
+      'Скрыть над списком',
+    );
+    final hideAboveDesc = _tr(
+      context,
+      'archive_hide_above_list_desc',
+      'Строка архива скроется из списка чатов. Потяните список вниз или откройте меню «⋮», чтобы войти в архив.',
+    );
+
+    await showTheavModalSheet<void>(
+      context: context,
+      title: sheetTitle,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
+      builder: (sheetContext) {
+        return ListenableBuilder(
+          listenable: archivePrefs,
+          builder: (context, _) {
+            NotificationSettingsProvider? notifProvider;
+            try {
+              notifProvider = context.watch<NotificationSettingsProvider>();
+            } catch (_) {}
+
+            final keepUnmuted =
+                notifProvider?.globalSettings.keepArchivedUnmuted ?? false;
+            final palette = context.theav;
+
+            return TheavInsetGroup(
+              children: [
+                TheavListRow(
+                  leading: iconoir.MailIn(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: keepUnmutedTitle,
+                  subtitle: keepUnmutedDesc,
+                  trailing: TheavSwitch(
+                    value: keepUnmuted,
+                    onChanged: notifProvider == null
+                        ? null
+                        : (val) {
+                            notifProvider!.updateGlobalSettings(
+                              keepArchivedUnmuted: val,
+                            );
+                          },
+                  ),
+                  onTap: notifProvider == null
+                      ? null
+                      : () => notifProvider!.updateGlobalSettings(
+                            keepArchivedUnmuted: !keepUnmuted,
+                          ),
+                ),
+                TheavListRow(
+                  leading: iconoir.Archive(
+                    width: 20,
+                    height: 20,
+                    color: palette.primary,
+                  ),
+                  title: hideAboveTitle,
+                  subtitle: hideAboveDesc,
+                  trailing: TheavSwitch(
+                    value: archivePrefs.isHiddenAboveList,
+                    onChanged: (val) {
+                      archivePrefs.setHiddenAboveList(val);
+                    },
+                  ),
+                  onTap: () => archivePrefs.setHiddenAboveList(
+                    !archivePrefs.isHiddenAboveList,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  static DraggingChatPayload createDragPayload(
+    BuildContext context,
+    Chat chat,
+    Rect initialRect,
+    Offset globalPos,
+  ) {
+    final account = AccountManager().currentAccount;
+    final effectiveSavedAvatar =
+        chat.avatarUrl ?? account?.avatarUrl ?? account?.localAvatarPath;
+    final displayName = chat.chatType == 'saved'
+        ? _tr(context, 'chat_saved_messages', 'Избранное')
+        : (chat.chatType == 'system'
+            ? PrivateChatScreen.resolveSystemChatTitle(context, chat.name)
+            : chat.name);
+
+    return DraggingChatPayload(
+      chatId: chat.id,
+      chatType: chat.chatType,
+      chatName: displayName,
+      avatarUrl: chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl,
+      otherUserId: chat.otherUserId,
+      otherUserOnline: chat.isOnline,
+      otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+      initialGlobalRect: initialRect,
+      currentGlobalPos: globalPos,
+    );
+  }
+
+  static void openChat(
+    BuildContext context,
+    Chat chat, {
+    bool inAdjacentTile = false,
+    String? currentUserId,
+    List<Community> communities = const [],
+    VoidCallback? onCommunityChanged,
+    VoidCallback? onReturned,
+  }) {
+    final uid = currentUserId ?? AccountManager().currentAccount?.userId;
+    if (chat.unreadCount == -1) {
+      AppDatabase(uid).updateUnreadCount(chat.id, 0);
+      try {
+        context.read<UnreadCountProvider>().setCount(chat.id, 0);
+      } catch (_) {}
+    }
+
+    final account = AccountManager().currentAccount;
+    final effectiveSavedAvatar =
+        chat.avatarUrl ?? account?.avatarUrl ?? account?.localAvatarPath;
+    final displayName = chat.chatType == 'saved'
+        ? _tr(context, 'chat_saved_messages', 'Избранное')
+        : (chat.chatType == 'system'
+            ? PrivateChatScreen.resolveSystemChatTitle(context, chat.name)
+            : chat.name);
+    final effectiveAvatar =
+        chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
+
+    if (chat.chatType == 'community') {
+      final rawCommId = chat.otherUserId ??
+          (chat.id.startsWith('community_')
+              ? chat.id.substring('community_'.length)
+              : chat.id);
+      final comm = communities.firstWhere(
+        (c) => c.id == rawCommId,
+        orElse: () =>
+            CommunityService.getCachedCommunity(rawCommId) ??
+            Community(
+              id: rawCommId,
+              name: chat.name,
+              description: chat.lastMessage ?? '',
+              avatarUrl: chat.avatarUrl,
+              createdAt: DateTime.now(),
+            ),
+      );
+      if (comm.isMember) {
+        CommunityService.cacheCommunity(comm);
+      }
+      if (!TilingLayoutController.instance.isWorkspaceMounted) {
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => CommunityScreen(
+              community: comm,
+              onCommunityJoined: onCommunityChanged != null
+                  ? (_) => onCommunityChanged()
+                  : null,
+              onCommunityLeft: onCommunityChanged,
+            ),
+          ),
+        ).then((_) {
+          onCommunityChanged?.call();
+          onReturned?.call();
+        });
+        return;
+      }
+    }
+
+    if (TilingLayoutController.instance.isWorkspaceMounted) {
+      if (inAdjacentTile) {
+        TilingLayoutController.instance.openChatInAdjacentTile(
+          chatId: chat.id,
+          chatType: chat.chatType,
+          chatName: displayName,
+          avatarUrl: effectiveAvatar,
+          otherUserId: chat.otherUserId,
+          otherUserOnline: chat.isOnline,
+          otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+        );
+      } else {
+        TilingLayoutController.instance.openChatInActiveTile(
+          chatId: chat.id,
+          chatType: chat.chatType,
+          chatName: displayName,
+          avatarUrl: effectiveAvatar,
+          otherUserId: chat.otherUserId,
+          otherUserOnline: chat.isOnline,
+          otherUserLastSeen: DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+        );
+      }
+      return;
+    }
+
+    UnreadCountProvider? unreadProvider;
+    try {
+      unreadProvider = context.read<UnreadCountProvider>();
+      unreadProvider.openChat(chat.id);
+    } catch (_) {}
+    NotificationService().addActiveChat(chat.id);
+
+    void handleReturn() {
+      unreadProvider?.closeChat(chat.id);
+      NotificationService().removeActiveChat(chat.id);
+      onReturned?.call();
+    }
+
+    switch (chat.chatType) {
+      case 'private':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => PrivateChatScreen(
+              chatId: chat.id,
+              otherUserName: chat.name,
+              otherUserAvatar: chat.avatarUrl,
+              otherUserOnline: chat.isOnline,
+              otherUserLastSeen:
+                  DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+              otherUserId: chat.otherUserId,
+            ),
+          ),
+        ).then((_) => handleReturn());
+        break;
+      case 'saved':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => PrivateChatScreen(
+              chatId: chat.id,
+              otherUserName: displayName,
+              otherUserAvatar: effectiveSavedAvatar,
+            ),
+          ),
+        ).then((_) => handleReturn());
+        break;
+      case 'system':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => PrivateChatScreen(
+              chatId: chat.id,
+              otherUserName: displayName,
+              otherUserAvatar: chat.avatarUrl,
+              otherUserOnline: chat.isOnline,
+              otherUserLastSeen:
+                  DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+              otherUserId: chat.otherUserId,
+              initialChatType: 'system',
+            ),
+          ),
+        ).then((_) => handleReturn());
+        break;
+      case 'group':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => GroupChatScreen(
+              chatId: chat.id,
+              groupName: chat.name,
+              groupAvatar: chat.avatarUrl,
+            ),
+          ),
+        ).then((_) => handleReturn());
+        break;
+      case 'channel':
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(
+            builder: (_) => ChannelScreen(
+              channelId: chat.id,
+              channelName: chat.name,
+              channelAvatar: chat.avatarUrl,
+            ),
+          ),
+        ).then((_) => handleReturn());
+        break;
+    }
+  }
+}

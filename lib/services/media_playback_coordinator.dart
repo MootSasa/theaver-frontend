@@ -15,6 +15,7 @@ import 'deep_link_service.dart';
 import 'media_cache_manager.dart';
 import 'tiling_layout_controller.dart';
 import 'video_note_playback_service.dart';
+import 'video_pip_service.dart';
 import 'voice_playback_service.dart';
 
 /// Single unified track item for voice messages and video notes («кружочки»).
@@ -24,6 +25,7 @@ class PlaybackTrack {
   final String chatType; // 'private', 'group', 'channel'
   final String mediaType; // 'voice', 'video_note'
   final String mediaUrl;
+  final String? senderId;
   final String? senderName;
   final String? chatTitle;
   final Duration? duration;
@@ -36,6 +38,7 @@ class PlaybackTrack {
     required this.chatType,
     required this.mediaType,
     required this.mediaUrl,
+    this.senderId,
     this.senderName,
     this.chatTitle,
     this.duration,
@@ -240,6 +243,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
       await VoicePlaybackService().playVoice(
         messageId: track.messageId,
         audioUrl: resolvedUrl,
+        senderId: track.senderId,
         senderName: track.senderName,
         initialDuration: track.duration,
         chatId: track.chatId,
@@ -264,6 +268,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
           messageId: track.messageId,
           videoUrl: resolvedUrl,
           controller: cached,
+          senderId: track.senderId,
           senderName: track.senderName,
           chatId: track.chatId,
           chatType: track.chatType,
@@ -284,7 +289,14 @@ class MediaPlaybackCoordinator with ChangeNotifier {
         if (cachedDisk != null && await cachedDisk.exists()) {
           ctrl = VideoPlayerController.file(cachedDisk);
         } else if (isNetwork) {
-          ctrl = VideoPlayerController.networkUrl(uri);
+          final target = await MediaCacheManager.instance
+              .resolveStreamableVideoTarget(resolvedUrl);
+          ctrl = target != null
+              ? VideoPlayerController.networkUrl(
+                  target.uri,
+                  httpHeaders: target.headers,
+                )
+              : VideoPlayerController.networkUrl(uri);
         } else {
           ctrl = VideoPlayerController.file(File(
             resolvedUrl.startsWith('file://')
@@ -305,6 +317,7 @@ class MediaPlaybackCoordinator with ChangeNotifier {
             messageId: track.messageId,
             videoUrl: resolvedUrl,
             controller: ctrl,
+            senderId: track.senderId,
             senderName: track.senderName,
             chatId: track.chatId,
             chatType: track.chatType,
@@ -358,11 +371,14 @@ class MediaPlaybackCoordinator with ChangeNotifier {
   }
 
   /// Stops all media notes and clears active session and queue.
-  Future<void> stopAll() async {
+  Future<void> stopAll({bool stopVideoPip = true}) async {
     _activeTrack = null;
     _queue.clear();
     await VoicePlaybackService().stopVoice();
     VideoNotePlaybackService().stopActivePlayback();
+    if (stopVideoPip) {
+      await VideoPipService.instance.pause();
+    }
     notifyListeners();
   }
 

@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -13,10 +12,12 @@ import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../config/app_config.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../services/video_note_playback_service.dart';
 import '../../services/media_playback_coordinator.dart';
 import 'blurred_media_placeholder.dart';
 import 'message_status_widget.dart';
+import 'telegram_upload_progress.dart';
 import '../tiling/tile_viewport_scope.dart';
 
 /// Static LRU pool for caching active video note controllers to avoid re-initialization
@@ -27,7 +28,29 @@ class VideoNoteControllerPool {
   static final Map<String, Set<VoidCallback>> _evictionCallbacks = {};
   static const int _maxControllers = 4;
 
-  static String _normKey(String url) => AppConfig.resolveMediaUrl(url) ?? url;
+  static String _normKey(String url) =>
+      MediaCacheManager.instance.canonicalCacheKey(url);
+
+  static void rekey(
+    String oldUrl,
+    String newUrl,
+    VideoPlayerController controller,
+  ) {
+    final oldKey = _normKey(oldUrl);
+    final newKey = _normKey(newUrl);
+    if (oldKey.isEmpty || newKey.isEmpty || oldKey == newKey) return;
+    _pool.remove(oldKey);
+    _order.remove(oldKey);
+    final cbs = _evictionCallbacks.remove(oldKey);
+    if (cbs != null && cbs.isNotEmpty) {
+      _evictionCallbacks
+          .putIfAbsent(newKey, () => <VoidCallback>{})
+          .addAll(cbs);
+    }
+    _pool[newKey] = controller;
+    _order.remove(newKey);
+    _order.add(newKey);
+  }
 
   static void registerEvictionCallback(String url, VoidCallback cb) {
     final key = _normKey(url);
@@ -90,6 +113,9 @@ class VideoNoteControllerPool {
         }
       }
       if (oldCtrl != null) {
+        try {
+          oldCtrl.pause();
+        } catch (_) {}
         WidgetsBinding.instance.addPostFrameCallback((_) {
           try {
             oldCtrl.dispose();
@@ -113,6 +139,7 @@ class VideoNoteControllerPool {
 class VideoMessageWidget extends StatefulWidget {
   final String videoUrl;
   final String? messageId;
+  final String? localId;
   final double size;
   final String? senderAvatarUrl;
   final Duration? duration;
@@ -124,6 +151,7 @@ class VideoMessageWidget extends StatefulWidget {
   final int sendStatus;
   final String? timeText;
   final String? senderName;
+  final VoidCallback? onCancelUpload;
   final VoidCallback? onRetry;
   final String? chatId;
   final String? chatType;
@@ -133,6 +161,7 @@ class VideoMessageWidget extends StatefulWidget {
     Key? key,
     required this.videoUrl,
     this.messageId,
+    this.localId,
     this.size = 230.0,
     this.senderAvatarUrl,
     this.duration,
@@ -144,6 +173,7 @@ class VideoMessageWidget extends StatefulWidget {
     this.sendStatus = 1,
     this.timeText,
     this.senderName,
+    this.onCancelUpload,
     this.onRetry,
     this.chatId,
     this.chatType,
@@ -201,6 +231,28 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
   void didUpdateWidget(VideoMessageWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoUrl != widget.videoUrl) {
+      final bool wasUploading =
+          oldWidget.sendStatus != 1 && widget.sendStatus == 1;
+      if (wasUploading &&
+          _controller != null &&
+          _controller!.value.isInitialized) {
+        VideoNoteControllerPool.unregisterEvictionCallback(
+          oldWidget.videoUrl,
+          _onControllerEvicted,
+        );
+        VideoNoteControllerPool.rekey(
+          oldWidget.videoUrl,
+          widget.videoUrl,
+          _controller!,
+        );
+        VideoNoteControllerPool.registerEvictionCallback(
+          widget.videoUrl,
+          _onControllerEvicted,
+        );
+        _isCached = true;
+        _isDownloading = false;
+        return;
+      }
       VideoNoteControllerPool.unregisterEvictionCallback(oldWidget.videoUrl, _onControllerEvicted);
       VideoNoteControllerPool.registerEvictionCallback(widget.videoUrl, _onControllerEvicted);
       _initSession++;
@@ -444,7 +496,17 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
 
   Future<void> _initControllerFromNetwork(Uri uri, int session) async {
     try {
-      final controller = VideoPlayerController.networkUrl(uri);
+      final target =
+          await MediaCacheManager.instance.resolveStreamableVideoTarget(
+        widget.videoUrl,
+      );
+      if (!mounted || session != _initSession) return;
+      final controller = target != null
+          ? VideoPlayerController.networkUrl(
+              target.uri,
+              httpHeaders: target.headers,
+            )
+          : VideoPlayerController.networkUrl(uri);
       await controller.initialize();
       await controller.setLooping(true);
       await controller.setVolume(0.0);
@@ -957,7 +1019,7 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                                   ? _buildPlaceholder(effectiveDiameter)
                                    : isFloatingActive
                                        ? Container(
-                                           color: const Color(0xFF1C1C1E),
+                                           color: Theme.of(context).colorScheme.surfaceContainerHighest,
                                            child: const Center(
                                              child: Icon(
                                                Icons.picture_in_picture_alt_rounded,
@@ -991,8 +1053,32 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                         ),
                       ),
 
+                      // Outgoing upload progress overlay (circular ring + cancel/retry)
+                      if (widget.sendStatus != 1 &&
+                          (widget.localId ?? widget.messageId ?? '').isNotEmpty)
+                        ValueListenableBuilder<OutgoingUploadProgress>(
+                          valueListenable: MediaSendCoordinator.instance.progressFor(
+                            widget.localId ?? widget.messageId!,
+                            chatId: widget.chatId,
+                            totalBytes: widget.fileSize,
+                            sendStatus: widget.sendStatus,
+                          ),
+                          builder: (context, progress, _) {
+                            final effId = widget.localId ?? widget.messageId!;
+                            return TelegramRadialUploadIndicator(
+                              progress: progress,
+                              size: 50,
+                              onCancel: widget.onCancelUpload ??
+                                  () => MediaSendCoordinator.instance
+                                      .cancelUpload(effId),
+                              onRetry: widget.onRetry ??
+                                  () => MediaSendCoordinator.instance
+                                      .retryMessage(effId),
+                            );
+                          },
+                        )
                       // Downloading Spinner Overlay
-                      if (!_isCached && isInitialized && !_isScrubbing)
+                      else if (!_isCached && isInitialized && !_isScrubbing)
                         Container(
                           width: 48,
                           height: 48,
@@ -1193,8 +1279,8 @@ class _VideoMessageWidgetState extends State<VideoMessageWidget>
                     imageFilter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
                     child: Transform.scale(
                       scale: 1.15,
-                      child: CachedNetworkImage(
-                        imageUrl: resolvedThumbUrl,
+                      child: RemoteVideoThumbnailImage(
+                        thumbUrl: resolvedThumbUrl,
                         fit: BoxFit.cover,
                         width: diameter,
                         height: diameter,

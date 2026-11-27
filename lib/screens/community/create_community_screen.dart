@@ -1,27 +1,29 @@
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
+import '../../models/avatar_editor_models.dart';
 import '../../models/community_models.dart';
-import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
+import '../../widgets/chat/chat_scaffold.dart';
+import '../../widgets/community/community_channel_icon.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../chat/channel_screen.dart';
 import '../chat/group_chat_screen.dart';
 import 'community_screen.dart';
 
 class _CommunityTemplateChannel {
   final String name;
-  final String type; // 'text' | 'voice' | 'stage' | 'announcement'
+  final String type; // 'text' | 'voice' | 'stage' | 'announcement' | 'forum'
   final String topic;
 
   const _CommunityTemplateChannel({
@@ -45,7 +47,7 @@ class _CommunityTemplate {
   final String id;
   final String title;
   final String subtitle;
-  final IconData icon;
+  final Widget Function(Color color, double size) iconBuilder;
   final Color accent;
   final List<_CommunityTemplateCategory> categories;
 
@@ -53,20 +55,20 @@ class _CommunityTemplate {
     required this.id,
     required this.title,
     required this.subtitle,
-    required this.icon,
+    required this.iconBuilder,
     required this.accent,
     required this.categories,
   });
 }
 
-const List<_CommunityTemplate> _kCommunityTemplates = [
+final List<_CommunityTemplate> _kCommunityTemplates = [
   _CommunityTemplate(
     id: 'standard',
     title: 'Стандартный',
     subtitle: 'Текстовые каналы и голосовая комната до 144 FPS',
-    icon: Icons.hub_rounded,
-    accent: Color(0xFF3B82F6),
-    categories: [
+    iconBuilder: (c, s) => iconoir.Community(color: c, width: s, height: s),
+    accent: const Color(0xFF3B82F6),
+    categories: const [
       _CommunityTemplateCategory(
         name: 'Инфо и общение',
         channels: [
@@ -98,9 +100,9 @@ const List<_CommunityTemplate> _kCommunityTemplates = [
     id: 'gaming',
     title: 'Гейминг & Стримы',
     subtitle: 'Комнаты для 144 FPS стримов, пати и хайлайтов',
-    icon: Icons.sports_esports_rounded,
-    accent: Color(0xFF8B5CF6),
-    categories: [
+    iconBuilder: (c, s) => iconoir.Sparks(color: c, width: s, height: s),
+    accent: const Color(0xFF8B5CF6),
+    categories: const [
       _CommunityTemplateCategory(
         name: 'Текстовые каналы',
         channels: [
@@ -142,9 +144,9 @@ const List<_CommunityTemplate> _kCommunityTemplates = [
     id: 'study',
     title: 'Учёба & Команда',
     subtitle: 'Трибуна для лекций, материалы и рабочие созвоны',
-    icon: Icons.school_rounded,
-    accent: Color(0xFF10B981),
-    categories: [
+    iconBuilder: (c, s) => iconoir.Book(color: c, width: s, height: s),
+    accent: const Color(0xFF10B981),
+    categories: const [
       _CommunityTemplateCategory(
         name: 'Материалы и задачи',
         channels: [
@@ -155,8 +157,8 @@ const List<_CommunityTemplate> _kCommunityTemplates = [
           ),
           _CommunityTemplateChannel(
             name: 'обсуждение',
-            type: 'text',
-            topic: 'Вопросы, ответы и обсуждение задач',
+            type: 'forum',
+            topic: 'Вопросы, ответы и ветки задач',
           ),
           _CommunityTemplateChannel(
             name: 'конспекты-и-код',
@@ -186,14 +188,14 @@ const List<_CommunityTemplate> _kCommunityTemplates = [
     id: 'empty',
     title: 'С нуля',
     subtitle: 'Чистое сообщество для ручной настройки структуры',
-    icon: Icons.grid_view_rounded,
-    accent: Color(0xFFF59E0B),
-    categories: [],
+    iconBuilder: (c, s) => iconoir.ViewGrid(color: c, width: s, height: s),
+    accent: const Color(0xFFF59E0B),
+    categories: const [],
   ),
 ];
 
 /// Полноценный экран создания сообщества или входа по коду/ссылке
-/// с поддержкой Material Matte и Liquid Glass (Full / Lite).
+/// в единой дизайн-системе Theaver (Material 3 Matte и Liquid Glass).
 class CreateCommunityScreen extends StatefulWidget {
   final bool initialJoinMode;
   final ValueChanged<Community>? onCommunityCreated;
@@ -216,6 +218,10 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
   late bool _isJoinMode;
   String _selectedTemplateId = 'standard';
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  Uint8List? _pickedAvatarPreviewBytes;
+  String? _pickedAvatarFileName;
+  String? _pickedAvatarCrop;
   bool _isSubmitting = false;
 
   @override
@@ -240,18 +246,52 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
         orElse: () => _kCommunityTemplates.first,
       );
 
+  bool get _hasPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarPreviewBytes != null &&
+        _pickedAvatarPreviewBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarPreviewBytes!);
+    }
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    return null;
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1024,
-      maxHeight: 1024,
-      imageQuality: 88,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.squircle,
+      ctaMode: AvatarEditorCtaMode.done,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : null,
+      canDeleteCurrent: _pickedAvatarFile != null || _pickedAvatarBytes != null,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarPreviewBytes = null;
+        _pickedAvatarFileName = null;
+        _pickedAvatarCrop = null;
+      });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarPreviewBytes = picked.effectivePreviewBytes;
+        _pickedAvatarFileName = picked.fileName;
+        _pickedAvatarCrop = picked.miniCrop?.toCompactParam();
       });
     }
   }
@@ -291,7 +331,6 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
 
     setState(() => _isSubmitting = true);
     try {
-      // 1. Попробовать войти в сообщество по коду
       final comm = await CommunityService.joinByCode(code);
       if (comm != null && mounted) {
         CommunityService.cacheCommunity(comm);
@@ -316,7 +355,6 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
         return;
       }
 
-      // 2. Если это инвайт в группу или канал — пробуем через ChatService
       final chatJoin = await ChatService.joinByInviteLink(code);
       if (!mounted) return;
       if (chatJoin['success'] == true && chatJoin['chat'] != null) {
@@ -386,12 +424,21 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
     setState(() => _isSubmitting = true);
     try {
       String? uploadedAvatarUrl;
-      if (_pickedAvatarFile != null) {
+      if (_hasPickedAvatar) {
         try {
-          final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-          if (uploadRes.url.isNotEmpty) {
-            uploadedAvatarUrl = uploadRes.url;
-          }
+          final uploadFile = _pickedAvatarFile ??
+              File(
+                (_pickedAvatarFileName != null &&
+                        _pickedAvatarFileName!.trim().isNotEmpty)
+                    ? _pickedAvatarFileName!.trim()
+                    : 'avatar.jpg',
+              );
+          uploadedAvatarUrl = await FileService().uploadPublicAvatar(
+            uploadFile,
+            bytes: _pickedAvatarBytes,
+            fileName: _pickedAvatarFileName,
+            avatarCrop: _pickedAvatarCrop,
+          );
         } catch (e) {
           debugPrint('[CreateCommunityScreen] Avatar upload error: $e');
         }
@@ -407,7 +454,6 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
         skipDefaultChannels: template.categories.isNotEmpty,
       );
 
-      // Если выбран шаблон и сообщество создано на сервере — создадим стартовые категории и каналы
       if (created != null && template.categories.isNotEmpty) {
         for (int cIdx = 0; cIdx < template.categories.length; cIdx++) {
           final catSpec = template.categories[cIdx];
@@ -475,16 +521,10 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final palette = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlass = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
-    final primaryColor = theme.colorScheme.primary;
 
     return Scaffold(
-      backgroundColor: palette.bgBase,
+      backgroundColor: palette.background,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -493,7 +533,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
           icon: iconoir.NavArrowLeft(
             width: 24,
             height: 24,
-            color: palette.textPrimary,
+            color: palette.onSurface,
           ),
         ),
         title: Text(
@@ -501,7 +541,7 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
+            color: palette.onSurface,
             letterSpacing: -0.2,
           ),
         ),
@@ -524,212 +564,95 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
               icon: iconoir.Check(
                 width: 24,
                 height: 24,
-                color: primaryColor,
+                color: palette.primary,
               ),
             ),
         ],
       ),
-      body: Column(
-        children: [
-          // Переключатель режима: Создать / Войти по коду
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-            child: _buildModeSelector(
-              context,
-              isGlass: isGlass,
-              isLite: isLite,
-              isDark: isDark,
-              palette: palette,
-              primaryColor: primaryColor,
-            ),
-          ),
-          Expanded(
-            child: _isJoinMode
-                ? _buildJoinModeBody(
-                    context,
-                    isGlass: isGlass,
-                    isLite: isLite,
-                    isDark: isDark,
-                    palette: palette,
-                    primaryColor: primaryColor,
-                  )
-                : _buildCreateModeBody(
-                    context,
-                    isGlass: isGlass,
-                    isLite: isLite,
-                    isDark: isDark,
-                    palette: palette,
-                    primaryColor: primaryColor,
-                  ),
-          ),
-          // Нижняя кнопка действия
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-              child: SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton.icon(
-                  onPressed: _isSubmitting ? null : _submit,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+      body: Builder(
+        builder: (context) {
+          final safeBottom = MediaQuery.paddingOf(context).bottom;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+                    child: TheavSegmentedControl<bool>(
+                      useGlass: false,
+                      selected: _isJoinMode,
+                      onChanged: (v) => setState(() => _isJoinMode = v),
+                      options: const [
+                        TheavSegmentOption(
+                          value: false,
+                          label: 'Создать',
+                          icon: iconoir.Community(width: 16, height: 16),
+                        ),
+                        TheavSegmentOption(
+                          value: true,
+                          label: 'Войти по коду',
+                          icon: iconoir.Link(width: 16, height: 16),
+                        ),
+                      ],
                     ),
                   ),
-                  icon: _isSubmitting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Icon(
-                          _isJoinMode
-                              ? Icons.login_rounded
-                              : Icons.hub_rounded,
-                          size: 20,
-                        ),
-                  label: Text(
-                    _isJoinMode
+                  Expanded(
+                    child: _isJoinMode
+                        ? _buildJoinModeBody(context, palette, safeBottom)
+                        : _buildCreateModeBody(context, palette, safeBottom),
+                  ),
+                ],
+              ),
+              const ChatBottomScrollEdge(height: 80),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: math.max(14.0, safeBottom + 10.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TheavFloatingPillButton(
+                    height: 50,
+                    isPrimary: true,
+                    enabled: !_isSubmitting,
+                    icon: _isSubmitting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : (_isJoinMode
+                              ? const iconoir.Link(width: 18, height: 18)
+                              : const iconoir.Community(width: 18, height: 18)),
+                    label: _isJoinMode
                         ? 'Присоединиться'
                         : 'Создать сообщество',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    onTap: _submit,
                   ),
                 ),
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildModeSelector(
-    BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
-    required TheavPalette palette,
-    required Color primaryColor,
-  }) {
-    return _buildSurfaceCard(
-      context,
-      isGlass: isGlass,
-      isLite: isLite,
-      isDark: isDark,
-      cornerRadius: 18,
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Row(
-          children: [
-            Expanded(
-              child: _buildModeTab(
-                label: 'Создать сообщество',
-                icon: Icons.hub_rounded,
-                selected: !_isJoinMode,
-                primaryColor: primaryColor,
-                palette: palette,
-                onTap: () {
-                  if (_isJoinMode) {
-                    HapticUtils.selection();
-                    setState(() => _isJoinMode = false);
-                  }
-                },
-              ),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: _buildModeTab(
-                label: 'Войти по коду',
-                icon: Icons.link_rounded,
-                selected: _isJoinMode,
-                primaryColor: primaryColor,
-                palette: palette,
-                onTap: () {
-                  if (!_isJoinMode) {
-                    HapticUtils.selection();
-                    setState(() => _isJoinMode = true);
-                  }
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildModeTab({
-    required String label,
-    required IconData icon,
-    required bool selected,
-    required Color primaryColor,
-    required TheavPalette palette,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
-        height: 40,
-        decoration: BoxDecoration(
-          color: selected ? primaryColor : Colors.transparent,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 17,
-              color: selected ? Colors.white : palette.textSecondary,
-            ),
-            const SizedBox(width: 7),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                  color: selected ? Colors.white : palette.textSecondary,
-                ),
-              ),
-            ),
-          ],
-        ),
+            ],
+          );
+        },
       ),
     );
   }
 
   Widget _buildCreateModeBody(
-    BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
-    required TheavPalette palette,
-    required Color primaryColor,
-  }) {
+    BuildContext context,
+    TheavPalette palette,
+    double safeBottom,
+  ) {
     final trimmedName = _nameController.text.trim();
-    final initialLetter =
-        trimmedName.isNotEmpty ? trimmedName[0].toUpperCase() : 'C';
     final template = _selectedTemplate;
+    final avatarProvider = _pickedAvatarProvider;
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+      padding: EdgeInsets.fromLTRB(0, 6, 0, 104 + safeBottom),
       children: [
-        // 1. Squircle аватар сообщества
         Center(
           child: Column(
             children: [
@@ -738,53 +661,31 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    Container(
-                      width: 96,
-                      height: 96,
-                      decoration: BoxDecoration(
-                        gradient: _pickedAvatarFile == null
-                            ? LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  primaryColor,
-                                  primaryColor.withValues(alpha: 0.72),
-                                ],
-                              )
-                            : null,
-                        borderRadius: BorderRadius.circular(28),
-                        boxShadow: [
-                          BoxShadow(
-                            color: primaryColor.withValues(alpha: 0.28),
-                            blurRadius: 18,
-                            offset: const Offset(0, 6),
+                    if (avatarProvider != null)
+                      Container(
+                        width: 92,
+                        height: 92,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(92 * 0.30),
+                          color: palette.primary.withValues(alpha: 0.14),
+                          image: DecorationImage(
+                            image: avatarProvider,
+                            fit: BoxFit.cover,
                           ),
-                        ],
-                        image: _pickedAvatarFile != null
-                            ? DecorationImage(
-                                image: FileImage(_pickedAvatarFile!),
-                                fit: BoxFit.cover,
-                              )
-                            : null,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.12),
+                            width: 0.5,
+                          ),
+                        ),
+                      )
+                    else
+                      CommunityAvatar(
+                        avatarUrl: null,
+                        name: trimmedName,
+                        size: 92,
+                        accentColor: palette.primary,
+                        fontSize: 36,
                       ),
-                      alignment: Alignment.center,
-                      child: _pickedAvatarFile == null
-                          ? (trimmedName.isNotEmpty
-                              ? Text(
-                                  initialLetter,
-                                  style: const TextStyle(
-                                    fontSize: 38,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.hub_rounded,
-                                  size: 42,
-                                  color: Colors.white,
-                                ))
-                          : null,
-                    ),
                     Positioned(
                       right: -4,
                       bottom: -4,
@@ -792,9 +693,9 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
                         width: 34,
                         height: 34,
                         decoration: BoxDecoration(
-                          color: primaryColor,
+                          color: palette.primary,
                           shape: BoxShape.circle,
-                          border: Border.all(color: palette.bgBase, width: 2.5),
+                          border: Border.all(color: palette.background, width: 2.5),
                         ),
                         alignment: Alignment.center,
                         child: const iconoir.Camera(
@@ -809,372 +710,172 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
               ),
               const SizedBox(height: 10),
               Text(
-                _pickedAvatarFile != null
+                _hasPickedAvatar
                     ? 'Нажмите, чтобы сменить значок'
                     : 'Выбрать значок сообщества',
                 style: TextStyle(
                   fontSize: 12.5,
-                  color: palette.textSecondary,
+                  color: palette.subtext,
                   fontWeight: FontWeight.w500,
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 20),
-
-        // 2. Название и описание
-        _buildSectionHeader('ОСНОВНАЯ ИНФОРМАЦИЯ', palette),
-        const SizedBox(height: 8),
-        _buildSurfaceCard(
-          context,
-          isGlass: isGlass,
-          isLite: isLite,
-          isDark: isDark,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            child: Column(
-              children: [
-                TextField(
-                  controller: _nameController,
-                  autofocus: true,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: palette.textPrimary,
-                  ),
-                  decoration: InputDecoration(
-                    labelText: 'Название сообщества',
-                    hintText: 'Например: MIPT Dev & Gaming',
-                    hintStyle: TextStyle(color: palette.textTertiary),
-                    border: InputBorder.none,
-                  ),
-                ),
-                Divider(height: 1, color: palette.borderSubtle),
-                TextField(
-                  controller: _descController,
-                  maxLines: 3,
-                  minLines: 1,
-                  style: TextStyle(
-                    fontSize: 14.5,
-                    color: palette.textPrimary,
-                  ),
-                  decoration: InputDecoration(
-                    labelText: 'Описание (необязательно)',
-                    hintText:
-                        'Расскажите, чему посвящено сообщество и какие комнаты здесь есть',
-                    hintStyle: TextStyle(color: palette.textTertiary),
-                    border: InputBorder.none,
-                  ),
-                ),
-              ],
+        const SizedBox(height: 14),
+        TheavInsetGroup(
+          header: 'ОСНОВНАЯ ИНФОРМАЦИЯ',
+          children: [
+            TheavInlineTextField(
+              controller: _nameController,
+              autofocus: true,
+              label: 'Название сообщества',
+              placeholder: 'Например: MIPT Dev & Gaming',
             ),
-          ),
+            TheavInlineTextField(
+              controller: _descController,
+              maxLines: 3,
+              minLines: 1,
+              label: 'Описание (необязательно)',
+              placeholder:
+                  'Расскажите, чему посвящено сообщество и какие комнаты здесь есть',
+            ),
+          ],
         ),
-        const SizedBox(height: 20),
-
-        // 3. Выбор шаблона комнат
-        _buildSectionHeader('ШАБЛОН КАНАЛОВ И КОМНАТ', palette),
-        const SizedBox(height: 8),
-        ..._kCommunityTemplates.map((tpl) {
-          final isSelected = tpl.id == _selectedTemplateId;
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _buildSurfaceCard(
-              context,
-              isGlass: isGlass,
-              isLite: isLite,
-              isDark: isDark,
-              borderColorOverride:
-                  isSelected ? tpl.accent.withValues(alpha: 0.75) : null,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(20),
-                onTap: () {
-                  HapticUtils.selection();
-                  setState(() => _selectedTemplateId = tpl.id);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: tpl.accent.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Icon(tpl.icon, color: tpl.accent, size: 24),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              tpl.title,
-                              style: TextStyle(
-                                fontSize: 15.5,
-                                fontWeight: FontWeight.w700,
-                                color: palette.textPrimary,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              tpl.subtitle,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: palette.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Icon(
-                        isSelected
-                            ? Icons.check_circle_rounded
-                            : Icons.radio_button_unchecked_rounded,
-                        color: isSelected ? tpl.accent : palette.textTertiary,
-                        size: 22,
-                      ),
-                    ],
+        TheavInsetGroup(
+          header: 'ШАБЛОН КАНАЛОВ И КОМНАТ',
+          children: _kCommunityTemplates.map((tpl) {
+            final isSelected = tpl.id == _selectedTemplateId;
+            return TheavListRow(
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: tpl.accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                alignment: Alignment.center,
+                child: tpl.iconBuilder(tpl.accent, 21),
+              ),
+              title: tpl.title,
+              subtitle: tpl.subtitle,
+              trailing: TheavCheckCircle(
+                selected: isSelected,
+                activeColor: tpl.accent,
+              ),
+              onTap: () => setState(() => _selectedTemplateId = tpl.id),
+            );
+          }).toList(),
+        ),
+        if (template.categories.isNotEmpty)
+          TheavInsetGroup(
+            header: 'БУДУТ СОЗДАНЫ КОМНАТЫ',
+            dividerIndent: 16,
+            children: template.categories.expand((cat) {
+              return [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                  child: Text(
+                    cat.name.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                      color: palette.primary,
+                    ),
                   ),
                 ),
-              ),
-            ),
-          );
-        }),
-
-        // 4. Предпросмотр стартовой структуры
-        if (template.categories.isNotEmpty) ...[
-          const SizedBox(height: 10),
-          _buildSectionHeader('БУДУТ СОЗДАНЫ КОМНАТЫ', palette),
-          const SizedBox(height: 8),
-          _buildSurfaceCard(
-            context,
-            isGlass: isGlass,
-            isLite: isLite,
-            isDark: isDark,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (int i = 0; i < template.categories.length; i++) ...[
-                    if (i > 0) const SizedBox(height: 12),
-                    Text(
-                      template.categories[i].name.toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.6,
-                        color: palette.textSecondary,
-                      ),
+                ...cat.channels.map(
+                  (ch) => TheavListRow(
+                    minHeight: 42,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 7,
                     ),
-                    const SizedBox(height: 6),
-                    for (final ch in template.categories[i].channels)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(
-                          children: [
-                            Icon(
-                              ch.type == 'voice'
-                                  ? Icons.volume_up_rounded
-                                  : ch.type == 'stage'
-                                      ? Icons.podcasts_rounded
-                                      : ch.type == 'announcement'
-                                          ? Icons.campaign_rounded
-                                          : Icons.tag_rounded,
-                              size: 18,
-                              color: ch.type == 'voice'
-                                  ? const Color(0xFF10B981)
-                                  : ch.type == 'stage'
-                                      ? const Color(0xFFF59E0B)
-                                      : primaryColor,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                ch.name,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: palette.textPrimary,
-                                ),
-                              ),
-                            ),
-                            if (ch.topic.isNotEmpty)
-                              Flexible(
-                                child: Text(
-                                  ch.topic,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: palette.textTertiary,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ],
-              ),
-            ),
+                    leading: CommunityChannelIcon(
+                      channelType: ch.type,
+                      size: 17,
+                    ),
+                    title: ch.name,
+                    subtitle: ch.topic.isNotEmpty ? ch.topic : null,
+                  ),
+                ),
+              ];
+            }).toList(),
           ),
-        ],
       ],
     );
   }
 
   Widget _buildJoinModeBody(
-    BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
-    required TheavPalette palette,
-    required Color primaryColor,
-  }) {
+    BuildContext context,
+    TheavPalette palette,
+    double safeBottom,
+  ) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+      padding: EdgeInsets.fromLTRB(0, 16, 0, 104 + safeBottom),
       children: [
         Center(
           child: Container(
             width: 80,
             height: 80,
             decoration: BoxDecoration(
-              color: primaryColor.withValues(alpha: 0.14),
+              color: palette.primary.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(24),
             ),
-            child: Icon(
-              Icons.link_rounded,
-              size: 40,
-              color: primaryColor,
+            alignment: Alignment.center,
+            child: iconoir.Link(
+              width: 38,
+              height: 38,
+              color: palette.primary,
             ),
           ),
         ),
         const SizedBox(height: 16),
-        Text(
-          'Присоединиться по коду или ссылке',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 19,
-            fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            children: [
+              Text(
+                'Присоединиться по коду или ссылке',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  color: palette.onSurface,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Введите инвайт-код сообщества, закрытой группы или канала, чтобы мгновенно вступить.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  color: palette.subtext,
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Введите инвайт-код сообщества, закрытой группы или канала, чтобы мгновенно вступить.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 13.5,
-            color: palette.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 24),
-        _buildSurfaceCard(
-          context,
-          isGlass: isGlass,
-          isLite: isLite,
-          isDark: isDark,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: TextField(
+        const SizedBox(height: 20),
+        TheavInsetGroup(
+          header: 'ПРИГЛАШЕНИЕ',
+          children: [
+            TheavInlineTextField(
               controller: _inviteCodeController,
               autofocus: true,
+              label: 'Код или ссылка-приглашение',
+              placeholder: 'theav-abc123 или https://.../join/...',
+              prefix: iconoir.Link(
+                width: 19,
+                height: 19,
+                color: palette.primary,
+              ),
               onSubmitted: (_) => _submit(),
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: palette.textPrimary,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Код или ссылка-приглашение',
-                hintText: 'theav-abc123 или https://.../join/...',
-                hintStyle: TextStyle(color: palette.textTertiary),
-                border: InputBorder.none,
-                prefixIcon: Icon(Icons.vpn_key_rounded, color: primaryColor),
-              ),
             ),
-          ),
+          ],
         ),
       ],
-    );
-  }
-
-  Widget _buildSectionHeader(String title, TheavPalette palette) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: palette.textSecondary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
-    required Widget child,
-    double cornerRadius = 20,
-    Color? borderColorOverride,
-  }) {
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
-      final style = glassProvider.createStyle(
-        context: context,
-        isLiteOverride: isLite,
-        shape: LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: cornerRadius,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(cornerRadius),
-            border: Border.all(
-              color: borderColorOverride ??
-                  (isDark
-                      ? Colors.white.withValues(alpha: 0.10)
-                      : Colors.black.withValues(alpha: 0.08)),
-              width: borderColorOverride != null ? 1.4 : 0.6,
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: child,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(cornerRadius),
-        border: Border.all(
-          color: borderColorOverride ??
-              (isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06)),
-          width: borderColorOverride != null ? 1.4 : 0.6,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: child,
-      ),
     );
   }
 }

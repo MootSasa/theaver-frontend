@@ -1,15 +1,21 @@
 import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_cropper/image_cropper.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:video_player/video_player.dart';
+
 import '../../l10n/app_localizations.dart';
 import '../../services/settings_service.dart';
-import '../../widgets/common/adaptive_switch.dart';
+import '../../utils/haptic_utils.dart';
+import '../../widgets/chat/send_options_popup.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/message/media_spoiler_overlay.dart';
 
 enum MediaQuality {
   sd,
@@ -65,7 +71,7 @@ enum MediaQuality {
       case MediaQuality.fhd:
         return 1920;
       case MediaQuality.original:
-        return 0; // No resize
+        return 0;
     }
   }
 
@@ -88,24 +94,44 @@ class MediaSendResult {
   final String? caption;
   final bool asDocument;
   final MediaQuality quality;
+  final bool hasMediaSpoiler;
+  final bool isSilent;
+  final DateTime? scheduleAt;
+  final bool sendWhenOnline;
+  final Map<String, String> captionsByPath;
+  final bool isViewOnce;
+  final int ttlSeconds;
 
   const MediaSendResult({
     required this.files,
     this.caption,
     this.asDocument = false,
     this.quality = MediaQuality.hd,
+    this.hasMediaSpoiler = false,
+    this.isSilent = false,
+    this.scheduleAt,
+    this.sendWhenOnline = false,
+    this.captionsByPath = const {},
+    this.isViewOnce = false,
+    this.ttlSeconds = 0,
   });
 }
 
 class MediaSendScreen extends StatefulWidget {
   final List<File> initialFiles;
   final String? initialCaption;
+  final bool isPrivateChat;
+  final bool isPeerOnline;
+  final bool showSilentOption;
 
   const MediaSendScreen({
-    Key? key,
+    super.key,
     required this.initialFiles,
     this.initialCaption,
-  }) : super(key: key);
+    this.isPrivateChat = false,
+    this.isPeerOnline = true,
+    this.showSilentOption = true,
+  });
 
   @override
   State<MediaSendScreen> createState() => _MediaSendScreenState();
@@ -114,28 +140,53 @@ class MediaSendScreen extends StatefulWidget {
 class _MediaSendScreenState extends State<MediaSendScreen> {
   late List<File> _files;
   late PageController _pageController;
-  late TextEditingController _captionController;
   final FocusNode _captionFocusNode = FocusNode();
   int _currentIndex = 0;
   MediaQuality _selectedQuality = MediaQuality.hd;
   bool _asDocument = false;
+  bool _hasMediaSpoiler = false;
   bool _isCompressing = false;
+  bool _isViewOnce = false;
+  int _ttlSeconds = 0;
 
-  final Map<int, VideoPlayerController> _videoControllers = {};
+  final Map<String, VideoPlayerController> _videoControllers = {};
+  final Map<String, TextEditingController> _captionControllers = {};
+
+  bool get _isDesktop {
+    if (kIsWeb) return true;
+    return !Platform.isAndroid && !Platform.isIOS;
+  }
+
+  TextEditingController _captionControllerFor(File file) {
+    return _captionControllers.putIfAbsent(
+      file.path,
+      () => TextEditingController(),
+    );
+  }
+
+  TextEditingController? get _activeCaptionController {
+    if (_files.isEmpty || _currentIndex < 0 || _currentIndex >= _files.length) {
+      return null;
+    }
+    return _captionControllerFor(_files[_currentIndex]);
+  }
 
   @override
   void initState() {
     super.initState();
     _files = List<File>.from(widget.initialFiles);
     _pageController = PageController(initialPage: 0);
-    _captionController = TextEditingController(text: widget.initialCaption);
-    _initVideoForIndex(0);
-    if (!Platform.isAndroid && !Platform.isIOS) {
+    if (_files.isNotEmpty) {
+      final firstCtrl = TextEditingController(text: widget.initialCaption);
+      _captionControllers[_files.first.path] = firstCtrl;
+      _initVideoForFile(_files.first);
+    }
+    if (_isDesktop) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
+        final ctrl = _activeCaptionController;
+        if (mounted && ctrl != null) {
           _captionFocusNode.requestFocus();
-          final len = _captionController.text.length;
-          _captionController.selection = TextSelection.collapsed(offset: len);
+          ctrl.selection = TextSelection.collapsed(offset: ctrl.text.length);
         }
       });
     }
@@ -146,19 +197,25 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     for (final controller in _videoControllers.values) {
       controller.dispose();
     }
+    _videoControllers.clear();
+    for (final controller in _captionControllers.values) {
+      controller.dispose();
+    }
+    _captionControllers.clear();
     _pageController.dispose();
-    _captionController.dispose();
     _captionFocusNode.dispose();
     super.dispose();
   }
 
   void _insertCaptionNewline() {
-    final value = _captionController.value;
+    final ctrl = _activeCaptionController;
+    if (ctrl == null) return;
+    final value = ctrl.value;
     final sel = value.selection;
     final int start = sel.isValid ? sel.start : value.text.length;
     final int end = sel.isValid ? sel.end : value.text.length;
     final newText = value.text.replaceRange(start, end, '\n');
-    _captionController.value = TextEditingValue(
+    ctrl.value = TextEditingValue(
       text: newText,
       selection: TextSelection.collapsed(offset: start + 1),
     );
@@ -169,7 +226,8 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
       return KeyEventResult.ignored;
     }
     final key = event.logicalKey;
-    if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.numpadEnter) {
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
       final hw = HardwareKeyboard.instance;
       final isCtrlOrMeta = hw.isControlPressed || hw.isMetaPressed;
       final isShift = hw.isShiftPressed;
@@ -200,26 +258,31 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
 
   bool _isVideo(File file) {
     final ext = p.extension(file.path).toLowerCase();
-    return ext == '.mp4' || ext == '.mov' || ext == '.avi' || ext == '.mkv' || ext == '.webm';
+    return ext == '.mp4' ||
+        ext == '.mov' ||
+        ext == '.avi' ||
+        ext == '.mkv' ||
+        ext == '.webm';
   }
 
-  Future<void> _initVideoForIndex(int index) async {
-    if (index < 0 || index >= _files.length) return;
-    final file = _files[index];
+  Future<void> _initVideoForFile(File file) async {
     if (!_isVideo(file)) return;
-    if (_videoControllers.containsKey(index)) return;
+    if (_videoControllers.containsKey(file.path)) return;
 
     final controller = VideoPlayerController.file(file);
     try {
       await controller.initialize();
       await controller.setLooping(true);
-      if (mounted) {
+      if (mounted && _files.any((f) => f.path == file.path)) {
         setState(() {
-          _videoControllers[index] = controller;
+          _videoControllers[file.path] = controller;
         });
+      } else {
+        await controller.dispose();
       }
     } catch (e) {
       debugPrint('[MediaSendScreen] Error initializing video: $e');
+      await controller.dispose();
     }
   }
 
@@ -227,45 +290,64 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     setState(() {
       _currentIndex = index;
     });
-    // Pause inactive video controllers
-    _videoControllers.forEach((idx, ctrl) {
-      if (idx != index && ctrl.value.isPlaying) {
+    final activePath = (index >= 0 && index < _files.length)
+        ? _files[index].path
+        : null;
+    _videoControllers.forEach((path, ctrl) {
+      if (path != activePath && ctrl.value.isPlaying) {
         ctrl.pause();
       }
     });
-    _initVideoForIndex(index);
+    if (index >= 0 && index < _files.length) {
+      _initVideoForFile(_files[index]);
+    }
   }
 
   Future<void> _cropCurrentImage() async {
-    if (_files.isEmpty || _currentIndex >= _files.length) return;
+    if (kIsWeb || _files.isEmpty || _currentIndex >= _files.length) return;
     final file = _files[_currentIndex];
     if (_isVideo(file)) return;
 
     final l10n = AppLocalizations.of(context);
+    final palette = context.theav;
     final cropped = await ImageCropper().cropImage(
       sourcePath: file.path,
       compressQuality: 95,
       uiSettings: [
         AndroidUiSettings(
-          toolbarTitle: l10n?.translate('crop_image') ?? 'Crop & Rotate',
-          toolbarColor: const Color(0xFF1E1E24),
+          toolbarTitle: l10n?.translate('crop_image') ?? 'Обрезка',
+          toolbarColor: Colors.black,
           statusBarLight: false,
           toolbarWidgetColor: Colors.white,
-          activeControlsWidgetColor: const Color(0xFF33A9FF),
+          activeControlsWidgetColor: palette.primary,
           initAspectRatio: CropAspectRatioPreset.original,
           lockAspectRatio: false,
         ),
         IOSUiSettings(
-          title: l10n?.translate('crop_image') ?? 'Crop & Rotate',
+          title: l10n?.translate('crop_image') ?? 'Обрезка',
           aspectRatioLockEnabled: false,
           resetAspectRatioEnabled: true,
         ),
       ],
     );
 
-    if (cropped != null) {
+    if (cropped != null && mounted) {
+      final oldPath = file.path;
+      final newPath = cropped.path;
       setState(() {
-        _files[_currentIndex] = File(cropped.path);
+        if (oldPath != newPath) {
+          final prevCaption = _captionControllers.remove(oldPath);
+          final prevText = prevCaption?.text ?? '';
+          if (prevCaption != null) {
+            Future.delayed(
+              const Duration(milliseconds: 200),
+              prevCaption.dispose,
+            );
+          }
+          _captionControllers[newPath] = TextEditingController(text: prevText);
+          _videoControllers.remove(oldPath)?.dispose();
+        }
+        _files[_currentIndex] = File(newPath);
       });
     }
   }
@@ -277,8 +359,9 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     }
 
     final removedIndex = _currentIndex;
-    _videoControllers[removedIndex]?.dispose();
-    _videoControllers.remove(removedIndex);
+    final removedFile = _files[removedIndex];
+    _videoControllers.remove(removedFile.path)?.dispose();
+    _captionControllers.remove(removedFile.path)?.dispose();
 
     setState(() {
       _files.removeAt(removedIndex);
@@ -288,151 +371,117 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     });
 
     _pageController.jumpToPage(_currentIndex);
-    _initVideoForIndex(_currentIndex);
+    if (_files.isNotEmpty) {
+      _initVideoForFile(_files[_currentIndex]);
+    }
   }
 
   void _showQualityPicker() {
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
+      title: 'Качество отправки',
       builder: (ctx) {
-        final theme = Theme.of(ctx);
-        final isDark = theme.brightness == Brightness.dark;
-
-        return Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E1E24) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-          child: SafeArea(
-            top: false,
+        final palette = ctx.theav;
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) => SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Center(
-                  child: Container(
-                    width: 38,
-                    height: 4.5,
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.white24 : Colors.black26,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Text(
-                    'Качество отправки / Quality',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: theme.textTheme.titleMedium?.color,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ...MediaQuality.values.map((q) {
-                  final isSelected = q == _selectedQuality;
-                  return InkWell(
-                    onTap: () {
-                      setState(() => _selectedQuality = q);
-                      Navigator.pop(ctx);
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? const Color(0xFF33A9FF).withValues(alpha: 0.15)
-                                  : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: isSelected
-                                    ? const Color(0xFF33A9FF)
-                                    : (isDark ? Colors.white24 : Colors.black12),
-                                width: 1.2,
+                TheavInsetGroup(
+                  dividerIndent: 64,
+                  children: [
+                    for (final q in MediaQuality.values)
+                      TheavListRow(
+                        leading: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: q == _selectedQuality
+                                ? palette.primary.withValues(alpha: 0.14)
+                                : palette.onSurface.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                q.badgeIcon,
+                                size: 15,
+                                color: q == _selectedQuality
+                                    ? palette.primary
+                                    : palette.subtext,
                               ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  q.badgeIcon,
-                                  size: 16,
-                                  color: isSelected ? const Color(0xFF33A9FF) : theme.iconTheme.color,
+                              const SizedBox(width: 4),
+                              Text(
+                                q.label,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: q == _selectedQuality
+                                      ? palette.primary
+                                      : palette.onSurface,
                                 ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  q.label,
-                                  style: GoogleFonts.rubik(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                    color: isSelected ? const Color(0xFF33A9FF) : theme.textTheme.bodyMedium?.color,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  q.resolutionText,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: theme.textTheme.bodyLarge?.color,
-                                  ),
-                                ),
-                                Text(
-                                  q == MediaQuality.original
-                                      ? 'Без сжатия / Uncompressed file'
-                                      : 'Сжатие до ${q.resolutionText} / Optimized',
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    color: theme.textTheme.bodySmall?.color,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (isSelected)
-                            const Icon(
-                              Icons.check_circle_rounded,
-                              color: Color(0xFF33A9FF),
-                              size: 22,
-                            ),
-                        ],
+                        ),
+                        title: q.resolutionText,
+                        subtitle: q == MediaQuality.original
+                            ? 'Без сжатия'
+                            : 'Оптимизация до ${q.resolutionText}',
+                        trailing: TheavCheckCircle(
+                          selected: q == _selectedQuality,
+                        ),
+                        onTap: () {
+                          setState(() => _selectedQuality = q);
+                          Navigator.pop(ctx);
+                        },
                       ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TheavInsetGroup(
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Page(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: 'Отправить как файл',
+                      subtitle: 'Без сжатия в виде документа',
+                      trailing: TheavSwitch(
+                        value: _asDocument,
+                        onChanged: (val) {
+                          setState(() {
+                            _asDocument = val;
+                            if (val) {
+                              _hasMediaSpoiler = false;
+                              _isViewOnce = false;
+                              _ttlSeconds = 0;
+                            }
+                          });
+                          setSheetState(() {});
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                      onTap: () {
+                        setState(() {
+                          _asDocument = !_asDocument;
+                          if (_asDocument) {
+                            _hasMediaSpoiler = false;
+                            _isViewOnce = false;
+                            _ttlSeconds = 0;
+                          }
+                        });
+                        setSheetState(() {});
+                        Navigator.pop(ctx);
+                      },
                     ),
-                  );
-                }),
-                const Divider(height: 24),
-                // Send as document switch
-                AdaptiveSwitchListTile.adaptive(
-                  value: _asDocument,
-                  onChanged: (val) {
-                    setState(() => _asDocument = val);
-                    Navigator.pop(ctx);
-                  },
-                  title: const Text(
-                    'Отправить как файл / As File',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-                  ),
-                  subtitle: const Text(
-                    'Без сжатия в виде документа',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  activeTrackColor: const Color(0xFF33A9FF),
+                  ],
                 ),
               ],
             ),
@@ -442,44 +491,150 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
     );
   }
 
-  Future<void> _handleSend() async {
+  void _showViewOnceTimerPicker() {
+    if (!widget.isPrivateChat || _asDocument || _files.length != 1) return;
+    HapticUtils.selection();
+    final palette = context.theav;
+    const ttlChoices = <int>[0, 5, 10, 30, 60];
+    showTheavModalSheet<void>(
+      context: context,
+      title: 'Таймер просмотра',
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TheavInsetGroup(
+                  dividerIndent: 52,
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Timer(
+                        width: 20,
+                        height: 20,
+                        color: palette.primary,
+                      ),
+                      title: '1× Однократный просмотр',
+                      subtitle: 'Медиа удалится сразу после просмотра',
+                      trailing: TheavCheckCircle(selected: _isViewOnce),
+                      onTap: () {
+                        setState(() {
+                          _isViewOnce = !_isViewOnce;
+                          if (_isViewOnce) _ttlSeconds = 0;
+                        });
+                        Navigator.pop(ctx);
+                      },
+                    ),
+                    for (final sec in ttlChoices)
+                      TheavListRow(
+                        leading: iconoir.Clock(
+                          width: 20,
+                          height: 20,
+                          color: sec == 0 ? palette.subtext : palette.primary,
+                        ),
+                        title: sec == 0
+                            ? 'Без таймера'
+                            : 'Исчезнет через $sec сек',
+                        trailing: TheavCheckCircle(
+                          selected: !_isViewOnce && _ttlSeconds == sec,
+                        ),
+                        onTap: () {
+                          setState(() {
+                            _isViewOnce = false;
+                            _ttlSeconds = sec;
+                          });
+                          Navigator.pop(ctx);
+                        },
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _handleSendLongPress() async {
+    if (_files.isEmpty || _isCompressing) return;
+    HapticUtils.selection();
+    final choice = await showSendOptionsPopup(
+      context: context,
+      isPrivateChat: widget.isPrivateChat,
+      isPeerOnline: widget.isPeerOnline,
+      showSilentOption: widget.showSilentOption,
+    );
+    if (!mounted || choice == null) return;
+
+    if (choice == SendOptionChoice.sendSilent) {
+      await _handleSend(isSilent: true);
+    } else if (choice == SendOptionChoice.schedule) {
+      final scheduleAt = await showTheavScheduleSheet(context: context);
+      if (mounted && scheduleAt != null) {
+        await _handleSend(scheduleAt: scheduleAt);
+      }
+    } else if (choice == SendOptionChoice.sendWhenOnline) {
+      await _handleSend(sendWhenOnline: true);
+    }
+  }
+
+  Future<void> _handleSend({
+    bool isSilent = false,
+    DateTime? scheduleAt,
+    bool sendWhenOnline = false,
+  }) async {
     if (_files.isEmpty || _isCompressing) return;
 
     setState(() => _isCompressing = true);
+
+    final Map<String, String> captionsByPath = {};
+    final String activeCaption =
+        _activeCaptionController?.text.trim() ?? '';
+    String? resolvedCaption = activeCaption.isNotEmpty ? activeCaption : null;
 
     try {
       final List<File> readyFiles = [];
 
       if (_asDocument || _selectedQuality == MediaQuality.original) {
-        // Send original files without alteration
-        readyFiles.addAll(_files);
+        for (final file in _files) {
+          readyFiles.add(file);
+          final cap = _captionControllers[file.path]?.text.trim() ?? '';
+          if (cap.isNotEmpty) {
+            captionsByPath[file.path] = cap;
+            resolvedCaption ??= cap;
+          }
+        }
       } else {
         final tempDir = await getTemporaryDirectory();
         for (int i = 0; i < _files.length; i++) {
           final file = _files[i];
-          if (_isVideo(file)) {
-            readyFiles.add(file);
-            continue;
+          final cap = _captionControllers[file.path]?.text.trim() ?? '';
+          File outFile = file;
+          if (!_isVideo(file)) {
+            final targetPath = p.join(
+              tempDir.path,
+              'send_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
+            );
+
+            final compressed = await FlutterImageCompress.compressAndGetFile(
+              file.path,
+              targetPath,
+              minWidth: _selectedQuality.maxEdge,
+              minHeight: _selectedQuality.maxEdge,
+              quality: _selectedQuality.compressionQuality,
+              format: CompressFormat.jpeg,
+            );
+            if (compressed != null) {
+              outFile = File(compressed.path);
+            }
           }
-
-          final targetPath = p.join(
-            tempDir.path,
-            'send_${DateTime.now().millisecondsSinceEpoch}_$i.jpg',
-          );
-
-          final compressed = await FlutterImageCompress.compressAndGetFile(
-            file.path,
-            targetPath,
-            minWidth: _selectedQuality.maxEdge,
-            minHeight: _selectedQuality.maxEdge,
-            quality: _selectedQuality.compressionQuality,
-            format: CompressFormat.jpeg,
-          );
-
-          if (compressed != null) {
-            readyFiles.add(File(compressed.path));
-          } else {
-            readyFiles.add(file);
+          readyFiles.add(outFile);
+          if (cap.isNotEmpty) {
+            captionsByPath[file.path] = cap;
+            captionsByPath[outFile.path] = cap;
+            resolvedCaption ??= cap;
           }
         }
       }
@@ -489,26 +644,43 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
           context,
           MediaSendResult(
             files: readyFiles,
-            caption: _captionController.text.trim().isNotEmpty
-                ? _captionController.text.trim()
-                : null,
+            caption: resolvedCaption,
             asDocument: _asDocument,
             quality: _selectedQuality,
+            hasMediaSpoiler: _hasMediaSpoiler && !_asDocument,
+            isSilent: isSilent,
+            scheduleAt: scheduleAt,
+            sendWhenOnline: sendWhenOnline,
+            captionsByPath: captionsByPath,
+            isViewOnce: _files.length == 1 && !_asDocument && _isViewOnce,
+            ttlSeconds: _files.length == 1 && !_asDocument ? _ttlSeconds : 0,
           ),
         );
       }
     } catch (e) {
       debugPrint('[MediaSendScreen] Error processing media: $e');
+      for (final file in _files) {
+        final cap = _captionControllers[file.path]?.text.trim() ?? '';
+        if (cap.isNotEmpty) {
+          captionsByPath[file.path] = cap;
+          resolvedCaption ??= cap;
+        }
+      }
       if (mounted) {
         Navigator.pop(
           context,
           MediaSendResult(
             files: _files,
-            caption: _captionController.text.trim().isNotEmpty
-                ? _captionController.text.trim()
-                : null,
+            caption: resolvedCaption,
             asDocument: _asDocument,
             quality: _selectedQuality,
+            hasMediaSpoiler: _hasMediaSpoiler && !_asDocument,
+            isSilent: isSilent,
+            scheduleAt: scheduleAt,
+            sendWhenOnline: sendWhenOnline,
+            captionsByPath: captionsByPath,
+            isViewOnce: _files.length == 1 && !_asDocument && _isViewOnce,
+            ttlSeconds: _files.length == 1 && !_asDocument ? _ttlSeconds : 0,
           ),
         );
       }
@@ -521,10 +693,15 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final palette = context.theav;
     final currentFile = _files.isNotEmpty && _currentIndex < _files.length
         ? _files[_currentIndex]
         : null;
     final isVideo = currentFile != null && _isVideo(currentFile);
+    final activeController = currentFile != null
+        ? _captionControllerFor(currentFile)
+        : null;
+    final Color hudDarkFill = Colors.black.withValues(alpha: 0.48);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -541,10 +718,11 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                   final file = _files[index];
                   final isVid = _isVideo(file);
 
+                  Widget preview;
                   if (isVid) {
-                    final ctrl = _videoControllers[index];
+                    final ctrl = _videoControllers[file.path];
                     if (ctrl != null && ctrl.value.isInitialized) {
-                      return Center(
+                      preview = Center(
                         child: AspectRatio(
                           aspectRatio: ctrl.value.aspectRatio,
                           child: Stack(
@@ -554,7 +732,9 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                               GestureDetector(
                                 onTap: () {
                                   setState(() {
-                                    ctrl.value.isPlaying ? ctrl.pause() : ctrl.play();
+                                    ctrl.value.isPlaying
+                                        ? ctrl.pause()
+                                        : ctrl.play();
                                   });
                                 },
                                 child: Container(
@@ -577,126 +757,269 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                           ),
                         ),
                       );
+                    } else {
+                      preview = const Center(
+                        child: CircularProgressIndicator(color: Colors.white70),
+                      );
                     }
-                    return const Center(
-                      child: CircularProgressIndicator(color: Colors.white70),
+                  } else {
+                    preview = GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () {
+                        if (!_isDesktop) {
+                          _captionFocusNode.unfocus();
+                        }
+                      },
+                      child: InteractiveViewer(
+                        minScale: 0.8,
+                        maxScale: 3.5,
+                        child: Center(
+                          child: Image.file(
+                            file,
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                      ),
                     );
                   }
 
-                  return GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: () {
-                      if (Platform.isAndroid || Platform.isIOS) {
-                        _captionFocusNode.unfocus();
-                      }
-                    },
-                    child: InteractiveViewer(
-                      minScale: 0.8,
-                      maxScale: 3.5,
-                      child: Center(
-                        child: Image.file(
-                          file,
-                          fit: BoxFit.contain,
-                        ),
-                      ),
-                    ),
+                  return MediaSpoilerOverlay(
+                    messageId: 'preview_${file.path}',
+                    hasSpoiler: _hasMediaSpoiler && !_asDocument,
+                    borderRadius: 0,
+                    label: 'Скрыто спойлером',
+                    child: preview,
                   );
                 },
               ),
             ),
 
-            // 2. Top Bar (Close, Quality Badge, Crop/Edit, Delete)
+            // 2. 3-Part Floating Top HUD ([X] | [1 из N] | [Spoiler | File | Quality | Crop | Delete])
             Positioned(
               top: 0,
               left: 0,
               right: 0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.black.withValues(alpha: 0.7),
-                      Colors.transparent,
-                    ],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                 child: Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
-                      onPressed: () => Navigator.pop(context),
+                    TheavHeaderIconButton(
+                      icon: const iconoir.Xmark(
+                        width: 20,
+                        height: 20,
+                        color: Colors.white,
+                      ),
+                      foregroundColor: Colors.white,
+                      backgroundColor: hudDarkFill,
+                      tooltip: 'Закрыть',
+                      onTap: () => Navigator.pop(context),
                     ),
-                    const Spacer(),
-
-                    // Resolution Quality Badge with GoogleFonts
-                    GestureDetector(
-                      onTap: _showQualityPicker,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.6),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(
-                            color: const Color(0xFF33A9FF).withValues(alpha: 0.7),
-                            width: 1.2,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _selectedQuality.badgeIcon,
-                              size: 16,
-                              color: const Color(0xFF33A9FF),
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              _selectedQuality.label,
-                              style: GoogleFonts.rubik(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 0.5,
-                                color: Colors.white,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Center(
+                        child: TheavFloatingSurface(
+                          borderRadius: 22,
+                          colorOverride: hudDarkFill,
+                          child: SizedBox(
+                            height: 44,
+                            child: Center(
+                              widthFactor: 1,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                ),
+                                child: Text(
+                                  '${_files.isEmpty ? 0 : _currentIndex + 1} из ${_files.length}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
                     const SizedBox(width: 8),
-
-                    // Crop/Edit Button (only for images)
-                    if (!isVideo)
-                      IconButton(
-                        icon: const Icon(Icons.crop_rotate_rounded, color: Colors.white, size: 24),
-                        onPressed: _cropCurrentImage,
+                    Flexible(
+                      flex: 0,
+                      child: TheavFloatingSurface(
+                        borderRadius: 22,
+                        colorOverride: hudDarkFill,
+                        child: SizedBox(
+                          height: 44,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _HudActionButton(
+                                    tooltip: _asDocument
+                                        ? 'Спойлер недоступен для файлов'
+                                        : (_hasMediaSpoiler
+                                            ? 'Убрать спойлер'
+                                            : 'Скрыть под спойлер'),
+                                    active: _hasMediaSpoiler && !_asDocument,
+                                    enabled: !_asDocument,
+                                    activeColor: palette.primary,
+                                    onTap: () {
+                                      HapticUtils.selection();
+                                      setState(() {
+                                        _hasMediaSpoiler = !_hasMediaSpoiler;
+                                      });
+                                    },
+                                    child: (_hasMediaSpoiler && !_asDocument)
+                                        ? iconoir.EyeClosed(
+                                            width: 19,
+                                            height: 19,
+                                            color: palette.primary,
+                                          )
+                                        : const iconoir.Eye(
+                                            width: 19,
+                                            height: 19,
+                                            color: Colors.white,
+                                          ),
+                                  ),
+                                  _HudActionButton(
+                                    tooltip: _asDocument
+                                        ? 'Отправлять как медиа'
+                                        : 'Отправить как файл',
+                                    active: _asDocument,
+                                    activeColor: palette.primary,
+                                    onTap: () {
+                                      HapticUtils.selection();
+                                      setState(() {
+                                        _asDocument = !_asDocument;
+                                        if (_asDocument) {
+                                          _hasMediaSpoiler = false;
+                                        }
+                                      });
+                                    },
+                                    child: iconoir.Page(
+                                      width: 19,
+                                      height: 19,
+                                      color: _asDocument
+                                          ? palette.primary
+                                          : Colors.white,
+                                    ),
+                                  ),
+                                  if (widget.isPrivateChat &&
+                                      !_asDocument &&
+                                      _files.length == 1)
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: _showViewOnceTimerPicker,
+                                      child: Container(
+                                        height: 32,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                        ),
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: (_isViewOnce || _ttlSeconds > 0)
+                                              ? palette.primary
+                                                  .withValues(alpha: 0.24)
+                                              : Colors.white12,
+                                          borderRadius:
+                                              BorderRadius.circular(16),
+                                        ),
+                                        child: Text(
+                                          _isViewOnce
+                                              ? '1×'
+                                              : (_ttlSeconds > 0
+                                                  ? '$_ttlSeconds с'
+                                                  : '⏱'),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: (_isViewOnce ||
+                                                    _ttlSeconds > 0)
+                                                ? palette.primary
+                                                : Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: _showQualityPicker,
+                                    child: Container(
+                                      height: 32,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                      ),
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: palette.primary
+                                            .withValues(alpha: 0.18),
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      child: Text(
+                                        _selectedQuality.label,
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: palette.primary,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  if (!isVideo && !kIsWeb)
+                                    _HudActionButton(
+                                      tooltip: 'Обрезать',
+                                      onTap: _cropCurrentImage,
+                                      child: const iconoir.Crop(
+                                        width: 19,
+                                        height: 19,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  if (_files.length > 1)
+                                    _HudActionButton(
+                                      tooltip: 'Удалить',
+                                      onTap: _removeCurrentFile,
+                                      child: const iconoir.Trash(
+                                        width: 19,
+                                        height: 19,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-
-                    // Remove current item button (if multiple)
-                    if (_files.length > 1)
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline_rounded, color: Colors.white, size: 24),
-                        onPressed: _removeCurrentFile,
-                      ),
+                    ),
                   ],
                 ),
               ),
             ),
 
-            // 3. Bottom Bar (Thumbnails strip, Caption Input, Send Button)
+            // 3. Bottom Bar (Thumbnails strip, Per-File Caption Input, Send + Long-press)
             Positioned(
               bottom: 0,
               left: 0,
               right: 0,
               child: Container(
-                padding: const EdgeInsets.only(left: 12, right: 12, top: 10, bottom: 12),
+                padding: const EdgeInsets.only(
+                  left: 12,
+                  right: 12,
+                  top: 10,
+                  bottom: 12,
+                ),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
                       Colors.transparent,
-                      Colors.black.withValues(alpha: 0.85),
+                      Colors.black.withValues(alpha: 0.86),
                     ],
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
@@ -705,7 +1028,6 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Multi-item Thumbnail Strip
                     if (_files.length > 1) ...[
                       SizedBox(
                         height: 52,
@@ -717,34 +1039,33 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                             final file = _files[idx];
                             final isSel = idx == _currentIndex;
                             return GestureDetector(
-                              onTap: () {
-                                _pageController.jumpToPage(idx);
-                              },
+                              onTap: () => _pageController.jumpToPage(idx),
                               child: Container(
                                 width: 52,
                                 height: 52,
                                 decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(10),
                                   border: Border.all(
-                                    color: isSel ? const Color(0xFF33A9FF) : Colors.white24,
+                                    color: isSel
+                                        ? palette.primary
+                                        : Colors.white24,
                                     width: isSel ? 2.5 : 1.0,
                                   ),
                                 ),
                                 child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(6),
+                                  borderRadius: BorderRadius.circular(8),
                                   child: _isVideo(file)
                                       ? Container(
-                                          color: const Color(0xFF222226),
-                                          child: const Icon(
-                                            Icons.videocam_rounded,
-                                            color: Colors.white70,
-                                            size: 24,
+                                          color: Colors.black54,
+                                          child: const Center(
+                                            child: iconoir.VideoCamera(
+                                              width: 22,
+                                              height: 22,
+                                              color: Colors.white70,
+                                            ),
                                           ),
                                         )
-                                      : Image.file(
-                                          file,
-                                          fit: BoxFit.cover,
-                                        ),
+                                      : Image.file(file, fit: BoxFit.cover),
                                 ),
                               ),
                             );
@@ -754,63 +1075,68 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                       const SizedBox(height: 10),
                     ],
 
-                    // Caption Input & Send Button Row
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Expanded(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1E1E24).withValues(alpha: 0.9),
-                              borderRadius: BorderRadius.circular(22),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.15),
-                                width: 1.0,
+                          child: TheavFloatingSurface(
+                            borderRadius: 22,
+                            colorOverride: Colors.black.withValues(alpha: 0.56),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
                               ),
-                            ),
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            child: Focus(
-                              canRequestFocus: false,
-                              skipTraversal: true,
-                              onKeyEvent: _handleCaptionKeyEvent,
-                              child: TextField(
-                                controller: _captionController,
-                                focusNode: _captionFocusNode,
-                                maxLines: 4,
-                                minLines: 1,
-                                style: const TextStyle(color: Colors.white, fontSize: 15),
-                                cursorColor: const Color(0xFF33A9FF),
-                                decoration: InputDecoration(
-                                  hintText: AppLocalizations.of(context)
-                                          ?.translate('chat_add_caption') ??
-                                      'Add a caption...',
-                                  hintStyle: const TextStyle(color: Colors.white38, fontSize: 14),
-                                  border: InputBorder.none,
-                                  isDense: true,
-                                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                              child: Focus(
+                                canRequestFocus: false,
+                                skipTraversal: true,
+                                onKeyEvent: _handleCaptionKeyEvent,
+                                child: TextField(
+                                  controller: activeController,
+                                  focusNode: _captionFocusNode,
+                                  maxLines: 4,
+                                  minLines: 1,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                  ),
+                                  cursorColor: palette.primary,
+                                  decoration: InputDecoration(
+                                    hintText: AppLocalizations.of(context)
+                                            ?.translate('chat_add_caption') ??
+                                        'Добавить подпись...',
+                                    hintStyle: const TextStyle(
+                                      color: Colors.white54,
+                                      fontSize: 14,
+                                    ),
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    filled: false,
+                                    fillColor: Colors.transparent,
+                                    isDense: true,
+                                    contentPadding:
+                                        const EdgeInsets.symmetric(vertical: 11),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                         const SizedBox(width: 8),
-
-                        // Send Button
                         GestureDetector(
-                          onTap: _isCompressing ? null : _handleSend,
+                          onTap: _isCompressing ? null : () => _handleSend(),
+                          onLongPress:
+                              _isCompressing ? null : _handleSendLongPress,
                           child: Container(
                             width: 44,
                             height: 44,
                             decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFF33A9FF), Color(0xFF0077E6)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
+                              color: palette.primary,
                               shape: BoxShape.circle,
                               boxShadow: [
                                 BoxShadow(
-                                  color: const Color(0xFF0077E6).withValues(alpha: 0.45),
+                                  color:
+                                      palette.primary.withValues(alpha: 0.42),
                                   blurRadius: 10,
                                   offset: const Offset(0, 3),
                                 ),
@@ -818,18 +1144,18 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
                             ),
                             child: Center(
                               child: _isCompressing
-                                  ? const SizedBox(
+                                  ? SizedBox(
                                       width: 20,
                                       height: 20,
                                       child: CircularProgressIndicator(
-                                        color: Colors.white,
+                                        color: palette.onPrimary,
                                         strokeWidth: 2.0,
                                       ),
                                     )
-                                  : const Icon(
+                                  : Icon(
                                       Icons.arrow_upward_rounded,
-                                      color: Colors.white,
-                                      size: 26,
+                                      color: palette.onPrimary,
+                                      size: 24,
                                     ),
                             ),
                           ),
@@ -844,5 +1170,47 @@ class _MediaSendScreenState extends State<MediaSendScreen> {
         ),
       ),
     );
+  }
+}
+
+class _HudActionButton extends StatelessWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  final String tooltip;
+  final bool active;
+  final bool enabled;
+  final Color? activeColor;
+
+  const _HudActionButton({
+    required this.child,
+    required this.tooltip,
+    this.onTap,
+    this.active = false,
+    this.enabled = true,
+    this.activeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final btn = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: enabled ? onTap : null,
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.35,
+        child: Container(
+          width: 34,
+          height: 36,
+          decoration: active
+              ? BoxDecoration(
+                  color: (activeColor ?? Colors.white).withValues(alpha: 0.16),
+                  shape: BoxShape.circle,
+                )
+              : null,
+          alignment: Alignment.center,
+          child: child,
+        ),
+      ),
+    );
+    return Tooltip(message: tooltip, child: btn);
   }
 }

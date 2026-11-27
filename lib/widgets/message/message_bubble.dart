@@ -6,19 +6,22 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
+import '../../models/theav_media_item.dart';
 import '../../models/theav_theme.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../services/websocket_service.dart';
 import '../../utils/emoji_utils.dart';
 import '../chat/message_reply_info.dart';
 import '../chat/reactions_panel.dart';
+import '../media_viewer/theav_media_viewer.dart';
 import 'message_status_widget.dart';
 import '../../utils/entity_parser.dart';
 import 'text_message_widget.dart';
-import 'fullscreen_photo_viewer.dart';
-import 'inline_video_player.dart';
 import 'document_message_widget.dart';
 import 'dart:io';
 import 'video_message_widget.dart';
@@ -28,12 +31,19 @@ import 'theme_link_preview_card.dart';
 import '../../services/theav_theme_service.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
+import 'media_spoiler_overlay.dart';
 import '../../services/media_cache_manager.dart';
+import '../../services/media_send_coordinator.dart';
 import '../../l10n/app_localizations.dart';
 import '../theme/viewport_gradient_box.dart';
 import 'poll_message_widget.dart';
 import 'call_message_widget.dart';
+import 'telegram_upload_progress.dart';
 import 'unsupported_message_widget.dart';
+import 'contact_message_widget.dart';
+import 'location_message_widget.dart';
+import 'view_once_media_widget.dart';
+import '../../services/dm_parity_service.dart' show TranslationResult;
 import 'dice_message_widget.dart';
 import 'sticker_message_widget.dart';
 import '../chat/sticker_item_widget.dart';
@@ -41,9 +51,11 @@ import 'message_interactive_state.dart';
 import 'inline_keyboard_widget.dart';
 import '../tiling/tile_viewport_scope.dart';
 import '../../utils/date_time_utils.dart';
+import 'bubble_tail_painter.dart';
+import 'group_message_avatar_row.dart' show GroupMessageAvatarRow;
 
 /// Радиус скругления "облачка" сообщения.
-const double kMessageBorderRadius = 18.0;
+const double kMessageBorderRadius = 16.0;
 
 /// Максимальная ширина "облачка" сообщения в пикселях (для широких экранов и планшетов).
 const double kMaxMessageBubbleWidth = 460.0;
@@ -460,7 +472,12 @@ class RenderBubbleLayout extends RenderBox
     if (senderName != null) {
       senderName.layout(BoxConstraints(maxWidth: constraints.maxWidth), parentUsesSize: true);
       senderNameHeight = senderName.size.height + senderSpacing;
-      measuredSenderWidth = senderName.size.width;
+      final double intrinsicSenderWidth =
+          senderName.getMaxIntrinsicWidth(double.infinity);
+      measuredSenderWidth = math.min(
+        constraints.maxWidth,
+        intrinsicSenderWidth.isFinite ? intrinsicSenderWidth : senderName.size.width,
+      );
     }
 
     // 1b. Measure reply natural width with loose constraints if present
@@ -566,7 +583,11 @@ class RenderBubbleLayout extends RenderBox
       bubbleHeight = contentHeight + rowGap + metaHeight;
     }
 
-    // 6. Layout reply with exact bubble width if present
+    // 6. Stretch senderName and reply to exact bubble width if present
+    if (senderName != null) {
+      senderName.layout(BoxConstraints.tightFor(width: bubbleWidth), parentUsesSize: true);
+      senderNameHeight = senderName.size.height + senderSpacing;
+    }
     double replyHeight = 0.0;
     if (reply != null) {
       reply.layout(BoxConstraints.tightFor(width: bubbleWidth), parentUsesSize: true);
@@ -689,6 +710,8 @@ class MessageBubble extends StatelessWidget {
   final bool isMe;
   final String currentUserId;
   final String? senderName;
+  final Widget? senderHeaderWidget;
+  final bool hasAvatarGutter;
   final String? chatType;
   final String? chatTitle;
   final bool isHighlighted;
@@ -701,7 +724,24 @@ class MessageBubble extends StatelessWidget {
   final Function(Message message)? onRetry;
   final Function(String replyToId, String? chatId)? onReplyTap;
   final Function(String url, String name, String type)? onFileTap;
+  final void Function(Message message, {String? localFilePath})? onMediaTap;
   final String Function(String timestamp) formatTime;
+  final bool isFirstInCluster;
+  final bool isLastInCluster;
+  final VoidCallback? onThreadRootTap;
+  final bool hasProtectedContent;
+  final TranslationResult? translation;
+  final bool isTranslating;
+  final VoidCallback? onHideTranslation;
+  final Future<Map<String, dynamic>> Function()? onConsumeViewOnce;
+  final VoidCallback? onStopLiveLocation;
+  final void Function(String userId)? onOpenContactUser;
+  final void Function(String tag)? onSavedTagTap;
+  final VoidCallback? onEffectTap;
+  final ValueChanged<String>? onInsertInlineQuery;
+  final ValueChanged<String>? onMentionTap;
+  final ValueChanged<String>? onCommandTap;
+  final ValueChanged<String>? onHashtagTap;
 
   const MessageBubble({
     Key? key,
@@ -709,6 +749,8 @@ class MessageBubble extends StatelessWidget {
     required this.isMe,
     required this.currentUserId,
     this.senderName,
+    this.senderHeaderWidget,
+    this.hasAvatarGutter = false,
     this.chatType,
     this.chatTitle,
     this.isHighlighted = false,
@@ -721,7 +763,24 @@ class MessageBubble extends StatelessWidget {
     this.onRetry,
     this.onReplyTap,
     this.onFileTap,
+    this.onMediaTap,
     required this.formatTime,
+    this.isFirstInCluster = true,
+    this.isLastInCluster = true,
+    this.onThreadRootTap,
+    this.hasProtectedContent = false,
+    this.translation,
+    this.isTranslating = false,
+    this.onHideTranslation,
+    this.onConsumeViewOnce,
+    this.onStopLiveLocation,
+    this.onOpenContactUser,
+    this.onSavedTagTap,
+    this.onEffectTap,
+    this.onInsertInlineQuery,
+    this.onMentionTap,
+    this.onCommandTap,
+    this.onHashtagTap,
   }) : super(key: key);
 
   MessageBubble copyWithKey(Key? newKey) {
@@ -731,6 +790,8 @@ class MessageBubble extends StatelessWidget {
       isMe: isMe,
       currentUserId: currentUserId,
       senderName: senderName,
+      senderHeaderWidget: senderHeaderWidget,
+      hasAvatarGutter: hasAvatarGutter,
       chatType: chatType,
       chatTitle: chatTitle,
       isHighlighted: false,
@@ -743,7 +804,24 @@ class MessageBubble extends StatelessWidget {
       onRetry: onRetry,
       onReplyTap: onReplyTap,
       onFileTap: onFileTap,
+      onMediaTap: onMediaTap,
       formatTime: formatTime,
+      isFirstInCluster: isFirstInCluster,
+      isLastInCluster: isLastInCluster,
+      onThreadRootTap: onThreadRootTap,
+      hasProtectedContent: hasProtectedContent,
+      translation: translation,
+      isTranslating: isTranslating,
+      onHideTranslation: onHideTranslation,
+      onConsumeViewOnce: onConsumeViewOnce,
+      onStopLiveLocation: onStopLiveLocation,
+      onOpenContactUser: onOpenContactUser,
+      onSavedTagTap: onSavedTagTap,
+      onEffectTap: onEffectTap,
+      onInsertInlineQuery: onInsertInlineQuery,
+      onMentionTap: onMentionTap,
+      onCommandTap: onCommandTap,
+      onHashtagTap: onHashtagTap,
     );
   }
 
@@ -930,10 +1008,14 @@ class MessageBubble extends StatelessWidget {
     final bool isUnsupported = message.isUnsupported;
     final String? resolvedFileUrl = AppConfig.resolveMediaUrl(message.fileUrl);
     final bool hasMedia = !isUnsupported && _hasMedia && resolvedFileUrl != null && resolvedFileUrl.isNotEmpty;
+    final bool isViewOnceOrTtlMedia =
+        (message.isViewOnce || message.ttlSeconds > 0) && !isUnsupported;
     final bool hasCaption = !isUnsupported && _hasCaption;
-    final bool isDice = _isDice;
+    final bool isDice = !message.hasWebAppData && _isDice;
     final int emojiCount =
-        (!isUnsupported && !hasMedia && !isDice) ? _emojiOnlyCount : 0;
+        (!isUnsupported && !hasMedia && !isDice && !message.hasWebAppData)
+            ? _emojiOnlyCount
+            : 0;
     final bool isBigEmoji = (emojiCount > 0) || isDice;
     final Alignment alignment = isMe ? Alignment.centerRight : Alignment.centerLeft;
 
@@ -965,13 +1047,8 @@ class MessageBubble extends StatelessWidget {
         ? (themeExt?.palette.chatBubbleOutgoingSubtext ?? bubbleTextColor.withValues(alpha: 0.7))
         : (themeExt?.palette.chatBubbleIncomingSubtext ?? bubbleTextColor.withValues(alpha: 0.7));
 
-    final bool isPureMedia = hasMedia && !hasCaption && !_isAudio && !_isVoice;
-    final Color backgroundColor = (isBigEmoji || _isRoundVideo || isPureMedia)
-        ? Colors.transparent
-        : bubbleColor;
-
     final TextStyle textStyle = TextStyle(
-      fontSize: 16.0,
+      fontSize: themeExt?.messageFontSize ?? 16.0,
       height: 1.12,
       leadingDistribution: TextLeadingDistribution.even,
       color: isBigEmoji
@@ -1018,6 +1095,36 @@ class MessageBubble extends StatelessWidget {
       effectiveStripStyle = ReplyStripStyle.solid;
     }
 
+    final ReplyEmojiData? quoteReplyEmoji;
+    if (message.hasReply &&
+        message.replyInfo != null &&
+        message.replyInfo!.senderId.isNotEmpty) {
+      final replyAuthorId = message.replyInfo!.senderId;
+      if (replyAuthorId == currentUserId ||
+          (isMe && replyAuthorId == message.senderId)) {
+        quoteReplyEmoji =
+            context.select<ProfileThemeProvider?, ReplyEmojiData?>(
+          (p) => p?.currentReplyEmoji,
+        );
+      } else {
+        final cached = PeerCustomizationCache.instance.getSync(replyAuthorId);
+        quoteReplyEmoji = cached?.replyEmoji ?? message.replyInfo!.replyEmoji;
+      }
+    } else {
+      if (isMe) {
+        quoteReplyEmoji =
+            context.select<ProfileThemeProvider?, ReplyEmojiData?>(
+          (p) => p?.currentReplyEmoji,
+        );
+      } else {
+        final cached = message.senderId.isNotEmpty
+            ? PeerCustomizationCache.instance.getSync(message.senderId)
+            : null;
+        quoteReplyEmoji =
+            cached?.replyEmoji ?? message.senderCustomization?.replyEmoji;
+      }
+    }
+
     final previewOpts = message.linkPreviewOptions;
     final bool previewDisabled = previewOpts?.isDisabled ?? false;
     String? previewUrl = previewOpts?.url;
@@ -1059,6 +1166,14 @@ class MessageBubble extends StatelessWidget {
     final bool endsWithBlock =
         message.messageType == 'poll' ||
         message.messageType == 'call' ||
+        message.messageType == 'location' ||
+        message.messageType == 'live_location' ||
+        message.messageType == 'venue' ||
+        message.messageType == 'contact' ||
+        message.hasWebAppData ||
+        (isViewOnceOrTtlMedia && !hasMedia) ||
+        isTranslating ||
+        translation != null ||
         trimmedContent.endsWith('```') ||
         trimmedContent.endsWith(r'$$') ||
         trimmedContent.endsWith(r'\]') ||
@@ -1067,6 +1182,9 @@ class MessageBubble extends StatelessWidget {
         entityEndsWithPre ||
         previewAtBottom ||
         hasMedia;
+
+    final String? effectId = message.effectId?.trim();
+    final bool hasEffect = effectId != null && effectId.isNotEmpty;
 
     // Build Metadata Widget
     final Widget metadataWidget = isBigEmoji
@@ -1079,6 +1197,10 @@ class MessageBubble extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (hasEffect) ...[
+                  _buildEffectBadge(effectId, Colors.white),
+                  const SizedBox(width: 4),
+                ],
                 if (message.isEdited) ...[
                   Text(
                     context.l10n.translate('chat_edited'),
@@ -1123,6 +1245,10 @@ class MessageBubble extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                if (hasEffect) ...[
+                  _buildEffectBadge(effectId, bubbleSubtextColor),
+                  const SizedBox(width: 4),
+                ],
                 if (message.isEdited) ...[
                   Text(
                     context.l10n.translate('chat_edited'),
@@ -1166,8 +1292,95 @@ class MessageBubble extends StatelessWidget {
             ),
           );
 
+    Widget? translationWidget;
+    if (isTranslating || translation != null) {
+      translationWidget = Container(
+        margin: const EdgeInsets.only(top: 6.0),
+        padding: const EdgeInsets.only(top: 6.0),
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(
+              color: bubbleSubtextColor.withValues(alpha: 0.24),
+              width: 0.75,
+            ),
+          ),
+        ),
+        child: isTranslating
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: bubbleSubtextColor,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Перевод...',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: bubbleSubtextColor,
+                    ),
+                  ),
+                ],
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    translation!.translatedText,
+                    style: textStyle,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      iconoir.Translate(
+                        width: 12,
+                        height: 12,
+                        color: bubbleSubtextColor,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        translation!.targetLang.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: bubbleSubtextColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (onHideTranslation != null) ...[
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: onHideTranslation,
+                          child: Text(
+                            'Скрыть перевод',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isMe
+                                  ? bubbleSubtextColor
+                                  : effectivePreset.primaryColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+      );
+    }
+
+    final double effectiveViewportWidth =
+        TileViewportScope.widthOf(context) -
+            (hasAvatarGutter ? GroupMessageAvatarRow.gutterWidth : 0.0);
     final double maxOuterBubbleWidth = math.min(
-      TileViewportScope.widthOf(context) * 0.76,
+      math.max(180.0, effectiveViewportWidth * 0.76),
       kMaxMessageBubbleWidth,
     );
     final double maxBubbleWidth = maxOuterBubbleWidth - 24.0; // 24 = horizontal padding
@@ -1178,7 +1391,7 @@ class MessageBubble extends StatelessWidget {
     const double replyWidthEstimate = 0.0;
 
     if (message.hasReply) {
-      replyWidget = MessageReplyInfo(
+      final Widget baseReply = MessageReplyInfo(
         replyInfo: message.replyInfo,
         isQuote: message.isQuote,
         quoteText: message.quoteText,
@@ -1186,40 +1399,167 @@ class MessageBubble extends StatelessWidget {
         quoteLength: message.quoteLength,
         isMe: isMe,
         currentUserId: currentUserId,
+        replySenderChatId: message.replyInfo?.senderChatId ??
+            (message.replyToChatType == 'channel'
+                ? message.replyToChatId
+                : null),
+        replyIsFromAnonymousAdmin:
+            message.replyInfo?.isFromAnonymousAdmin ?? false,
         onTap: () => onReplyTap?.call(
           message.replyToMessageId!,
           message.replyInfo?.chatId,
         ),
       );
-    } else if ((message.forwardFromName != null &&
-            message.forwardFromName!.isNotEmpty) ||
-        (chatType == 'saved' && message.senderName.isNotEmpty)) {
-      replyWidget = MessageReplyInfo.forwarded(
-        authorName: (message.forwardFromName != null &&
-                message.forwardFromName!.isNotEmpty)
-            ? message.forwardFromName!
-            : message.senderName,
-        isMe: isMe,
+      final String? originChatName = message.replyToChatName?.trim();
+      if (originChatName != null && originChatName.isNotEmpty) {
+        replyWidget = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2.0),
+              child: Text(
+                'из «$originChatName»',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: bubbleSubtextColor,
+                ),
+              ),
+            ),
+            baseReply,
+          ],
+        );
+      } else {
+        replyWidget = baseReply;
+      }
+    } else {
+      final bool hasForwardName =
+          message.forwardFromName != null &&
+          message.forwardFromName!.trim().isNotEmpty;
+      final bool isSavedForeignAuthor = chatType == 'saved' &&
+          message.senderName.trim().isNotEmpty &&
+          currentUserId.isNotEmpty &&
+          message.senderId.isNotEmpty &&
+          message.senderId != '0' &&
+          message.senderId != currentUserId;
+      if (hasForwardName || isSavedForeignAuthor) {
+        replyWidget = MessageReplyInfo.forwarded(
+          authorName: hasForwardName
+              ? message.forwardFromName!
+              : message.senderName,
+          authorAvatarUrl: hasForwardName
+              ? message.forwardFromAvatarUrl
+              : message.senderAvatarUrl,
+          authorUserId: hasForwardName
+              ? message.forwardedFromUserId
+              : (!message.isChannelOrPersonaAuthored &&
+                      !message.isMirroredChannelPost
+                  ? message.senderId
+                  : null),
+          isMe: isMe,
+        );
+      }
+    }
+
+    if (message.isViaBot &&
+        message.viaBotUsername != null &&
+        message.viaBotUsername!.isNotEmpty) {
+      final Color viaColor = isMe
+          ? bubbleSubtextColor
+          : effectivePreset.primaryColor;
+      final Widget viaTag = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onInsertInlineQuery != null
+            ? () => onInsertInlineQuery!('@${message.viaBotUsername} ')
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 3.0),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'через @${message.viaBotUsername}',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: viaColor,
+                ),
+              ),
+            ],
+          ),
+        ),
       );
+      replyWidget = replyWidget == null
+          ? viaTag
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                viaTag,
+                replyWidget,
+              ],
+            );
     }
 
     Widget? senderNameWidget;
     const double senderNameWidthEstimate = 0.0;
-    if (!isMe && senderName != null && senderName!.isNotEmpty) {
+    final bool hasSenderInBubble = (senderHeaderWidget != null) ||
+        (!isMe && senderName != null && senderName!.isNotEmpty);
+    if (senderHeaderWidget != null) {
+      senderNameWidget = Padding(
+        padding: const EdgeInsets.only(bottom: 4.0),
+        child: senderHeaderWidget!,
+      );
+    } else if (!isMe && senderName != null && senderName!.isNotEmpty) {
       final style = TextStyle(
         fontSize: 13,
         fontWeight: FontWeight.bold,
         color: effectivePreset.primaryColor,
       );
+      final bool canResolveSender = !message.isChannelOrPersonaAuthored &&
+          !message.isMirroredChannelPost &&
+          ContactsService.shouldResolveUserIdentity(
+            message.senderId,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isMirroredChannelPost: message.isMirroredChannelPost,
+          );
 
       senderNameWidget = Padding(
         padding: const EdgeInsets.only(bottom: 4.0),
-        child: Text(
-          senderName!,
-          style: style,
-        ),
+        child: canResolveSender
+            ? ValueListenableBuilder<int>(
+                valueListenable: ContactsService.revisionNotifier,
+                builder: (_, __, ___) => Text(
+                  ContactsService.resolvePeerName(
+                    message.senderId,
+                    senderName!,
+                    senderChatId: message.senderChatId,
+                    isAnonymousAdmin: message.isFromAnonymousAdmin,
+                    isMirroredChannelPost: message.isMirroredChannelPost,
+                  ),
+                  style: style,
+                ),
+              )
+            : Text(
+                senderName!,
+                style: style,
+              ),
       );
     }
+
+    final bool isPureMedia = hasMedia &&
+        !isViewOnceOrTtlMedia &&
+        !hasCaption &&
+        !_isAudio &&
+        !_isVoice &&
+        ((_isSticker || _isGif) || (!hasSenderInBubble && replyWidget == null));
+    final Color backgroundColor = (isBigEmoji || _isRoundVideo || isPureMedia)
+        ? Colors.transparent
+        : bubbleColor;
 
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -1228,6 +1568,37 @@ class MessageBubble extends StatelessWidget {
       textBodyWidget = CallMessageWidget(
         message: message,
         isMine: isMe,
+      );
+    } else if (message.messageType == 'location' ||
+        message.messageType == 'live_location' ||
+        message.messageType == 'venue') {
+      textBodyWidget = LocationMessageWidget(
+        message: message,
+        isMe: isMe,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+        onStopLiveLocation: onStopLiveLocation,
+      );
+    } else if (message.messageType == 'contact') {
+      textBodyWidget = ContactMessageWidget(
+        message: message,
+        isMe: isMe,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+        onOpenUserProfile: onOpenContactUser,
+      );
+    } else if (isViewOnceOrTtlMedia && !hasMedia) {
+      textBodyWidget = ViewOnceMediaWidget(
+        key: ValueKey('view_once_${message.id}'),
+        message: message,
+        isMe: isMe,
+        isSavedChat: chatType == 'saved',
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
+        onConsumeViewOnce: onConsumeViewOnce,
       );
     } else if (message.messageType == 'poll') {
       textBodyWidget = PollMessageWidget(
@@ -1331,6 +1702,65 @@ class MessageBubble extends StatelessWidget {
           ),
         );
       }
+    } else if (message.hasWebAppData) {
+      final waData = message.webAppData!;
+      final buttonText = (waData['button_text'] ?? '').toString().trim();
+      final rawData = (waData['data'] ?? message.content).toString().trim();
+      final summary =
+          rawData.length > 120 ? '${rawData.substring(0, 120)}…' : rawData;
+      final badgeTitle = buttonText.isNotEmpty
+          ? 'Данные Mini App: $buttonText'
+          : 'Данные Mini App';
+      textBodyWidget = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: bubbleTextColor.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: bubbleTextColor.withValues(alpha: 0.18),
+            width: 0.7,
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                iconoir.AppWindow(
+                  width: 14,
+                  height: 14,
+                  color: bubbleTextColor,
+                ),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    badgeTitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: bubbleTextColor,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (summary.isNotEmpty) ...[
+              const SizedBox(height: 3),
+              Text(
+                summary,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: bubbleSubtextColor,
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
     } else {
       textBodyWidget = MetaData(
         metaData: 'message_selectable_content',
@@ -1341,6 +1771,10 @@ class MessageBubble extends StatelessWidget {
           entities: message.entities,
           nameColorPreset: effectivePreset,
           replyStripStyle: effectiveStripStyle,
+          replyEmoji: quoteReplyEmoji,
+          onMentionTap: onMentionTap,
+          onCommandTap: onCommandTap,
+          onHashtagTap: onHashtagTap,
         ),
       );
 
@@ -1381,6 +1815,17 @@ class MessageBubble extends StatelessWidget {
       }
     }
 
+    if (!hasMedia && translationWidget != null) {
+      textBodyWidget = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          textBodyWidget,
+          translationWidget,
+        ],
+      );
+    }
+
     Widget? mediaContentWidget;
     if (hasMedia) {
       final double maxMediaWidth = math.min(maxBubbleWidth, 340.0);
@@ -1395,6 +1840,9 @@ class MessageBubble extends StatelessWidget {
         mediaWidth,
         resolvedFileUrl,
         mediaHeight: singleMediaSize.height,
+        textColor: bubbleTextColor,
+        subtextColor: bubbleSubtextColor,
+        accentColor: effectivePreset.primaryColor,
       );
 
       Widget innerContent;
@@ -1410,6 +1858,10 @@ class MessageBubble extends StatelessWidget {
             entities: message.entities,
             nameColorPreset: effectivePreset,
             replyStripStyle: effectiveStripStyle,
+            replyEmoji: quoteReplyEmoji,
+            onMentionTap: onMentionTap,
+            onCommandTap: onCommandTap,
+            onHashtagTap: onHashtagTap,
           ),
         );
         if (_isImage || _isVideo) {
@@ -1426,6 +1878,7 @@ class MessageBubble extends StatelessWidget {
           children: invertMedia
               ? [
                   captionWidget,
+                  if (translationWidget != null) translationWidget,
                   const SizedBox(height: 6.0),
                   mediaWidget,
                   const SizedBox(height: 3.0),
@@ -1435,11 +1888,12 @@ class MessageBubble extends StatelessWidget {
                   mediaWidget,
                   const SizedBox(height: 6.0),
                   captionWidget,
+                  if (translationWidget != null) translationWidget,
                   const SizedBox(height: 3.0),
                   metadataWidget,
                 ],
         );
-      } else if (_isImage || _isVideo) {
+      } else if ((_isImage || _isVideo) && !isViewOnceOrTtlMedia) {
         innerContent = Stack(
           alignment: Alignment.bottomRight,
           children: [
@@ -1470,33 +1924,36 @@ class MessageBubble extends StatelessWidget {
         );
       }
 
-      if (replyWidget != null || (!isMe && senderName != null && senderName!.isNotEmpty)) {
+      if (replyWidget != null || hasSenderInBubble) {
         mediaContentWidget = Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            if (!isMe && senderName != null && senderName!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4.0),
-                child: Text(
-                  senderName!,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: effectivePreset.primaryColor,
+            if (hasSenderInBubble)
+              if (_isRoundVideo || _isSticker || _isGif)
+                Container(
+                  constraints: BoxConstraints(maxWidth: math.min(mediaWidth, 230.0)),
+                  margin: const EdgeInsets.only(bottom: 4.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 5.0),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(14.0),
                   ),
+                  child: senderNameWidget,
+                )
+              else
+                SizedBox(
+                  width: _isVoice ? 240.0 : mediaWidth,
+                  child: senderNameWidget,
                 ),
-              ),
             if (replyWidget != null) ...[
-              if (_isRoundVideo)
+              if (_isRoundVideo || _isSticker || _isGif)
                 Container(
                   width: math.min(mediaWidth, 230.0),
                   margin: const EdgeInsets.only(bottom: 6.0),
                   padding: const EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
                   decoration: BoxDecoration(
-                    color: isMe
-                        ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.9)
-                        : Theme.of(context).colorScheme.secondaryContainer.withValues(alpha: 0.9),
+                    color: bubbleColor.withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(14.0),
                   ),
                   child: replyWidget,
@@ -1518,7 +1975,11 @@ class MessageBubble extends StatelessWidget {
         ? EdgeInsets.zero
         : _isVoice
             ? const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4.0)
-            : (hasMedia && !hasCaption && replyWidget == null && (senderName == null || senderName!.isEmpty || isMe))
+            : (hasMedia &&
+                    !hasCaption &&
+                    !isViewOnceOrTtlMedia &&
+                    replyWidget == null &&
+                    !hasSenderInBubble)
                 ? const EdgeInsets.all(4.0)
                 : const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0);
 
@@ -1572,28 +2033,71 @@ class MessageBubble extends StatelessWidget {
       child: bubbleContent,
     );
 
-    final Widget decoratedBubble = MetaData(
+    final bool hasBubbleBackground = backgroundColor != Colors.transparent;
+    final bool showTail = isLastInCluster && hasBubbleBackground;
+    final BorderRadius clusterBorderRadius = computeClusterBubbleBorderRadius(
+      isMe: isMe,
+      isFirstInCluster: isFirstInCluster,
+      isLastInCluster: isLastInCluster,
+      outerRadius: effectiveBubbleRadius,
+      innerRadius: 6.0,
+      tailCornerRadius: 4.0,
+      hasTail: showTail,
+    );
+    final Color tailColor =
+        useBubbleGradient ? activeGradientColors.last : backgroundColor;
+
+    final Widget bubbleBox = MetaData(
       metaData: 'message_bubble_box',
       child: useBubbleGradient
           ? ViewportGradientBox(
-              borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+              borderRadius: clusterBorderRadius,
               gradientColors: activeGradientColors,
               solidColor: backgroundColor,
               child: paddedContent,
             )
-          : (backgroundColor == Colors.transparent
+          : (!hasBubbleBackground
               ? paddedContent
               : DecoratedBox(
                   decoration: BoxDecoration(
                     color: backgroundColor,
-                    borderRadius: BorderRadius.circular(effectiveBubbleRadius),
+                    borderRadius: clusterBorderRadius,
                   ),
                   child: paddedContent,
                 )),
     );
 
+    final Widget decoratedBubble = showTail
+        ? Stack(
+            clipBehavior: Clip.none,
+            children: [
+              bubbleBox,
+              Positioned(
+                right: isMe ? -BubbleTailPainter.horizontalOutset : null,
+                left: isMe ? null : -BubbleTailPainter.horizontalOutset,
+                bottom: 0.0,
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    size: BubbleTailPainter.defaultSize,
+                    painter: BubbleTailPainter(
+                      color: tailColor,
+                      isMe: isMe,
+                      cornerRadius: math.min(effectiveBubbleRadius, 4.0),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          )
+        : bubbleBox;
+
     Widget bubbleCore = Container(
-      margin: const EdgeInsets.symmetric(vertical: 3.0, horizontal: 8.0),
+      margin: EdgeInsets.only(
+        top: isFirstInCluster ? 4.0 : 2.0,
+        bottom: isLastInCluster ? 4.0 : 2.0,
+        left: hasAvatarGutter ? 0.0 : 8.0,
+        right: 8.0,
+      ),
       constraints: BoxConstraints(
         maxWidth: maxOuterBubbleWidth,
       ),
@@ -1605,16 +2109,55 @@ class MessageBubble extends StatelessWidget {
       child: bubbleCore,
     );
 
-    // Reactions row and/or Inline Keyboard below message bubble if present
+    // Reactions row, Saved Tags, and/or Inline Keyboard below message bubble if present
     final effectiveReactions = reactions ?? (message.reactions.isNotEmpty ? message.reactions : null);
     final hasReactions = effectiveReactions != null && effectiveReactions.isNotEmpty;
+    final hasSavedTags = message.savedTags.isNotEmpty;
     final hasInlineKeyboard = message.inlineKeyboard.isNotEmpty && message.id.isNotEmpty;
-    if (hasReactions || hasInlineKeyboard) {
+    if (hasReactions || hasSavedTags || hasInlineKeyboard) {
       final effectiveMyReactions = myReactions ?? (myReaction != null && myReaction!.isNotEmpty ? {myReaction!} : message.myReactions);
       alignedBubble = Column(
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
           alignedBubble,
+          if (hasSavedTags)
+            Padding(
+              padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final tag in message.savedTags)
+                    GestureDetector(
+                      onTap: onSavedTagTap != null
+                          ? () => onSavedTagTap!(tag)
+                          : null,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: effectivePreset.primaryColor.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: effectivePreset.primaryColor.withValues(alpha: 0.35),
+                            width: 0.7,
+                          ),
+                        ),
+                        child: Text(
+                          tag,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: effectivePreset.primaryColor,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           if (hasReactions)
             Padding(
               padding: const EdgeInsets.only(top: 4.0, left: 12, right: 12),
@@ -1633,6 +2176,15 @@ class MessageBubble extends StatelessWidget {
                 messageId: message.id,
                 rows: message.inlineKeyboard,
                 maxWidth: maxOuterBubbleWidth,
+                botId: message.viaBotId ??
+                    message.mediaPayload?['bot_id']?.toString() ??
+                    message.senderId,
+                botUsername: message.viaBotUsername ??
+                    message.mediaPayload?['bot_username']?.toString(),
+                viaBotId: message.viaBotId,
+                viaBotUsername: message.viaBotUsername,
+                onInsertText: onInsertInlineQuery,
+                onSwitchInlineQuery: onInsertInlineQuery,
               ),
             ),
         ],
@@ -1643,7 +2195,7 @@ class MessageBubble extends StatelessWidget {
         Theme.of(context).colorScheme.primary.withValues(alpha: 0.18);
 
     Widget rowContent = alignedBubble;
-    if (isSelectionMode) {
+    if (isSelectionMode && !hasAvatarGutter) {
       rowContent = Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -1657,6 +2209,10 @@ class MessageBubble extends StatelessWidget {
             ),
           ),
         ],
+      );
+    } else if (isSelectionMode) {
+      rowContent = IgnorePointer(
+        child: alignedBubble,
       );
     }
 
@@ -1673,7 +2229,9 @@ class MessageBubble extends StatelessWidget {
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
         width: double.infinity,
-        color: useSelectedBubbleStyle ? rowHighlightColor : Colors.transparent,
+        color: (!hasAvatarGutter && useSelectedBubbleStyle)
+            ? rowHighlightColor
+            : Colors.transparent,
         child: rowContent,
       ),
     );
@@ -1699,12 +2257,66 @@ class MessageBubble extends StatelessWidget {
     return Size(maxAllowedWidth, 220.0);
   }
 
+  Widget _buildEffectBadge(String effectId, Color color) {
+    final emoji = switch (effectId) {
+      'heart' => '❤️',
+      'fire' => '🔥',
+      'confetti' => '🎉',
+      'thumbs_up' => '👍',
+      'thumbs_down' => '👎',
+      'lightning' => '⚡',
+      'party' => '🥳',
+      'poop' => '💩',
+      _ => '✨',
+    };
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onEffectTap,
+      child: TweenAnimationBuilder<double>(
+        key: ValueKey('eff_${message.id}_$effectId'),
+        tween: Tween<double>(begin: 1.25, end: 1.0),
+        duration: const Duration(milliseconds: 360),
+        curve: Curves.easeOutBack,
+        builder: (context, scale, child) => Transform.scale(
+          scale: scale,
+          child: child,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 1),
+          child: Text(
+            emoji,
+            style: TextStyle(fontSize: 11, color: color),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildMediaWidget(
     BuildContext context,
     double maxWidth,
     String resolvedUrl, {
     double mediaHeight = 220.0,
+    Color? textColor,
+    Color? subtextColor,
+    Color? accentColor,
   }) {
+    if ((message.isViewOnce || message.ttlSeconds > 0) &&
+        !message.isUnsupported) {
+      final theme = Theme.of(context);
+      return ViewOnceMediaWidget(
+        key: ValueKey('view_once_${message.id}'),
+        message: message,
+        isMe: isMe,
+        isSavedChat: chatType == 'saved',
+        textColor: textColor ?? theme.colorScheme.onSurface,
+        subtextColor:
+            subtextColor ?? theme.colorScheme.onSurface.withValues(alpha: 0.7),
+        accentColor: accentColor ?? theme.colorScheme.primary,
+        onConsumeViewOnce: onConsumeViewOnce,
+      );
+    }
+
     if (_isSticker) {
       final meta = message.mediaPayload ?? const <String, dynamic>{};
       final stickerId = meta['sticker_id']?.toString();
@@ -1750,6 +2362,27 @@ class MessageBubble extends StatelessWidget {
         previewUrl: previewUrl,
         width: message.mediaWidth,
         height: message.mediaHeight,
+        heroTag: TheavMediaItem.heroTagForMessage(
+          messageId: message.id,
+          rawOrResolvedUrl: resolvedUrl,
+        ),
+        onTap: isSelectionMode
+            ? null
+            : () {
+                if (onMediaTap != null) {
+                  onMediaTap!(message);
+                } else {
+                  TheavMediaViewer.open<void>(
+                    context,
+                    items: <TheavMediaItem>[
+                      TheavMediaItem.fromMessage(
+                        message,
+                        hasProtectedContent: hasProtectedContent,
+                      ),
+                    ],
+                  );
+                }
+              },
         floatingTimestampBadge: Container(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           decoration: BoxDecoration(
@@ -1761,11 +2394,44 @@ class MessageBubble extends StatelessWidget {
       );
     }
 
+    String? resolvePlaybackSenderName() {
+      if (isMe) return null;
+      final raw = (senderName != null && senderName!.isNotEmpty)
+          ? senderName!
+          : message.senderName.trim();
+      if (raw.isEmpty) return null;
+      if (message.isChannelOrPersonaAuthored || message.isMirroredChannelPost) {
+        return message.resolveEffectiveAuthorTitle(
+          chatName: chatTitle,
+          chatType: chatType,
+        );
+      }
+      return ContactsService.resolvePeerName(
+        message.senderId,
+        raw,
+        senderChatId: message.senderChatId,
+        isAnonymousAdmin: message.isFromAnonymousAdmin,
+        isMirroredChannelPost: message.isMirroredChannelPost,
+      );
+    }
+
+    final bool canResolvePlaybackSender = !isMe &&
+        !message.isChannelOrPersonaAuthored &&
+        !message.isMirroredChannelPost &&
+        ContactsService.shouldResolveUserIdentity(
+          message.senderId,
+          senderChatId: message.senderChatId,
+          isAnonymousAdmin: message.isFromAnonymousAdmin,
+          isMirroredChannelPost: message.isMirroredChannelPost,
+        );
+
     if (_isRoundVideo) {
       final double circleSize = math.min(240.0, TileViewportScope.widthOf(context) * 0.68);
-      return VideoMessageWidget(
-        key: ValueKey('vmsg_${message.id}'),
+      final String itemLocalId = message.localId ?? message.id;
+      Widget buildRoundWidget(String? effectiveSender) => VideoMessageWidget(
+        key: ValueKey('vmsg_$itemLocalId'),
         messageId: message.id,
+        localId: itemLocalId,
         videoUrl: resolvedUrl,
         size: circleSize,
         duration: message.duration != null && message.duration! > 0
@@ -1778,18 +2444,29 @@ class MessageBubble extends StatelessWidget {
         isRead: message.isRead,
         sendStatus: message.sendStatus,
         timeText: formatTime(message.createdAt),
-        senderName: isMe ? null : senderName,
+        senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        onCancelUpload: () =>
+            MediaSendCoordinator.instance.cancelUpload(itemLocalId),
         chatId: message.chatId,
         chatType: chatType,
-        chatTitle: chatTitle ?? (isMe ? null : senderName),
+        chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
       );
+      if (canResolvePlaybackSender) {
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => buildRoundWidget(resolvePlaybackSenderName()),
+        );
+      }
+      return buildRoundWidget(resolvePlaybackSenderName());
     }
 
     if (_isVoice) {
-      return VoiceMessageWidget(
-        key: ValueKey('voice_${message.id}'),
+      final String itemLocalId = message.localId ?? message.id;
+      Widget buildVoiceWidget(String? effectiveSender) => VoiceMessageWidget(
+        key: ValueKey('voice_$itemLocalId'),
         messageId: message.id,
+        localId: itemLocalId,
         audioUrl: resolvedUrl,
         duration: message.duration != null && message.duration! > 0
             ? Duration(seconds: message.duration!)
@@ -1801,76 +2478,143 @@ class MessageBubble extends StatelessWidget {
         isListened: message.isListened,
         sendStatus: message.sendStatus,
         timeText: formatTime(message.createdAt),
-        senderName: isMe ? null : senderName,
+        senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        onCancelUpload: () =>
+            MediaSendCoordinator.instance.cancelUpload(itemLocalId),
         chatId: message.chatId,
         chatType: chatType,
-        chatTitle: chatTitle ?? (isMe ? null : senderName),
+        chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
       );
+      if (canResolvePlaybackSender) {
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => buildVoiceWidget(resolvePlaybackSenderName()),
+        );
+      }
+      return buildVoiceWidget(resolvePlaybackSenderName());
     }
 
     if (_isImage) {
-      final heroTag = 'msg_photo_${message.id}_$resolvedUrl';
+      final String itemLocalId = message.localId ?? message.id;
+      final heroTag = TheavMediaItem.heroTagForMessage(
+        messageId: message.id,
+        rawOrResolvedUrl: resolvedUrl,
+      );
       final thumbBase64 = message.thumbBase64;
       final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
         messageType: 'image',
         fileSize: message.mediaFileSize,
       );
+      final double effectiveRadius = math.max(
+        4.0,
+        (Theme.of(context).extension<TheavThemeExtension>()?.bubbleRadius ?? 16.0) - 2.0,
+      );
 
-      return _SingleMediaBubbleWidget(
-        key: ValueKey('single_img_${message.id}_$resolvedUrl'),
-        url: resolvedUrl,
-        thumbBase64: thumbBase64,
-        fileSize: message.mediaFileSize,
-        isVideo: false,
-        maxWidth: maxWidth,
-        height: mediaHeight,
-        autoDownload: autoDownload,
-        heroTag: heroTag,
-        onTap: ([localPath]) {
-          FullscreenPhotoViewer.open(
-            context,
-            resolvedUrl,
-            tag: heroTag,
-            localFilePath: localPath,
-          );
-        },
+      return MediaSpoilerOverlay(
+        messageId: message.id,
+        hasSpoiler: message.hasMediaSpoiler,
+        borderRadius: effectiveRadius,
+        child: _SingleMediaBubbleWidget(
+          key: ValueKey('single_img_$itemLocalId'),
+          localId: itemLocalId,
+          chatId: message.chatId,
+          sendStatus: message.sendStatus,
+          url: resolvedUrl,
+          thumbBase64: thumbBase64,
+          fileSize: message.mediaFileSize,
+          isVideo: false,
+          maxWidth: maxWidth,
+          height: mediaHeight,
+          autoDownload: autoDownload,
+          heroTag: heroTag,
+          onCancelUpload: () =>
+              MediaSendCoordinator.instance.cancelUpload(itemLocalId),
+          onRetry: onRetry != null ? () => onRetry!(message) : null,
+          onTap: ([localPath]) {
+            if (onMediaTap != null) {
+              onMediaTap!(message, localFilePath: localPath);
+            } else {
+              TheavMediaViewer.open<void>(
+                context,
+                items: <TheavMediaItem>[
+                  TheavMediaItem.fromMessage(
+                    message,
+                    localFilePathOverride: localPath,
+                    hasProtectedContent: hasProtectedContent,
+                  ),
+                ],
+              );
+            }
+          },
+        ),
       );
     }
 
     if (_isVideo) {
+      final String itemLocalId = message.localId ?? message.id;
+      final heroTag = TheavMediaItem.heroTagForMessage(
+        messageId: message.id,
+        rawOrResolvedUrl: resolvedUrl,
+      );
       final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
         messageType: 'video',
         fileSize: message.mediaFileSize,
       );
+      final double effectiveRadius = math.max(
+        4.0,
+        (Theme.of(context).extension<TheavThemeExtension>()?.bubbleRadius ?? 16.0) - 2.0,
+      );
 
-      return _SingleMediaBubbleWidget(
-        key: ValueKey('single_vid_${message.id}_$resolvedUrl'),
-        url: resolvedUrl,
-        thumbBase64: message.thumbBase64,
-        thumbUrl: message.thumbUrl,
-        fileSize: message.mediaFileSize,
-        duration: message.mediaDuration ?? message.duration,
-        isVideo: true,
-        maxWidth: maxWidth,
-        height: mediaHeight,
-        autoDownload: autoDownload,
-        heroTag: 'msg_video_${message.id}_$resolvedUrl',
-        onTap: ([localPath]) {
-          onFileTap?.call(
-            localPath ?? resolvedUrl,
-            message.fileName ?? 'video.mp4',
-            'video',
-          );
-        },
+      return MediaSpoilerOverlay(
+        messageId: message.id,
+        hasSpoiler: message.hasMediaSpoiler,
+        borderRadius: effectiveRadius,
+        child: _SingleMediaBubbleWidget(
+          key: ValueKey('single_vid_$itemLocalId'),
+          localId: itemLocalId,
+          chatId: message.chatId,
+          sendStatus: message.sendStatus,
+          url: resolvedUrl,
+          thumbBase64: message.thumbBase64,
+          thumbUrl: message.thumbUrl,
+          fileSize: message.mediaFileSize,
+          duration: message.mediaDuration ?? message.duration,
+          isVideo: true,
+          maxWidth: maxWidth,
+          height: mediaHeight,
+          autoDownload: autoDownload,
+          heroTag: heroTag,
+          onCancelUpload: () =>
+              MediaSendCoordinator.instance.cancelUpload(itemLocalId),
+          onRetry: onRetry != null ? () => onRetry!(message) : null,
+          onTap: ([localPath]) {
+            if (onMediaTap != null) {
+              onMediaTap!(message, localFilePath: localPath);
+            } else {
+              TheavMediaViewer.open<void>(
+                context,
+                items: <TheavMediaItem>[
+                  TheavMediaItem.fromMessage(
+                    message,
+                    localFilePathOverride: localPath,
+                    hasProtectedContent: hasProtectedContent,
+                  ),
+                ],
+              );
+            }
+          },
+        ),
       );
     }
 
     if (_isAudio) {
       final effectiveDurSec = message.duration ?? message.mediaDuration;
-      return VoiceMessageWidget(
-        key: ValueKey('audio_${message.id}'),
+      final String itemLocalId = message.localId ?? message.id;
+      Widget buildAudioWidget(String? effectiveSender) => VoiceMessageWidget(
+        key: ValueKey('audio_$itemLocalId'),
         messageId: message.id,
+        localId: itemLocalId,
         audioUrl: resolvedUrl,
         title: message.fileName ?? 'Audio',
         duration: effectiveDurSec != null && effectiveDurSec > 0
@@ -1883,28 +2627,49 @@ class MessageBubble extends StatelessWidget {
         isListened: true,
         sendStatus: message.sendStatus,
         timeText: _hasCaption ? null : formatTime(message.createdAt),
-        senderName: isMe ? null : senderName,
+        senderName: isMe ? null : effectiveSender,
         onRetry: onRetry != null ? () => onRetry!(message) : null,
+        onCancelUpload: () =>
+            MediaSendCoordinator.instance.cancelUpload(itemLocalId),
         chatId: message.chatId,
         chatType: chatType,
-        chatTitle: chatTitle ?? (isMe ? null : senderName),
+        chatTitle: chatTitle ?? (isMe ? null : effectiveSender),
       );
+      if (canResolvePlaybackSender) {
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) => buildAudioWidget(resolvePlaybackSenderName()),
+        );
+      }
+      return buildAudioWidget(resolvePlaybackSenderName());
     }
 
     // Default: Document / File
+    final String docLocalId = message.localId ?? message.id;
     return DocumentMessageWidget(
+      key: ValueKey('doc_$docLocalId'),
       fileUrl: resolvedUrl,
       fileName: message.fileName ??
           (message.content.trim().isNotEmpty ? message.content.trim() : 'file'),
       fileSize: (message.mediaFileSize ?? 0).toDouble(),
+      localId: docLocalId,
+      sendStatus: message.sendStatus,
+      onCancelUpload: () =>
+          MediaSendCoordinator.instance.cancelUpload(docLocalId),
+      onRetry: onRetry != null ? () => onRetry!(message) : null,
     );
   }
 
   Widget _buildFloatingMetadata(BuildContext context) {
+    final effectId = message.effectId?.trim();
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
+        if (effectId != null && effectId.isNotEmpty) ...[
+          _buildEffectBadge(effectId, Colors.white),
+          const SizedBox(width: 4),
+        ],
         if (message.isEdited) ...[
           Text(
             context.l10n.translate('chat_edited'),
@@ -1984,6 +2749,9 @@ class MessageBubble extends StatelessWidget {
 
 class _SingleMediaBubbleWidget extends StatefulWidget {
   final String url;
+  final String? localId;
+  final String? chatId;
+  final int sendStatus;
   final String? thumbBase64;
   final String? thumbUrl;
   final int? fileSize;
@@ -1993,11 +2761,16 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
   final double height;
   final bool autoDownload;
   final String heroTag;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onRetry;
   final void Function([String? localPath]) onTap;
 
   const _SingleMediaBubbleWidget({
     Key? key,
     required this.url,
+    this.localId,
+    this.chatId,
+    this.sendStatus = 1,
     this.thumbBase64,
     this.thumbUrl,
     this.fileSize,
@@ -2007,6 +2780,8 @@ class _SingleMediaBubbleWidget extends StatefulWidget {
     this.height = 220.0,
     required this.autoDownload,
     required this.heroTag,
+    this.onCancelUpload,
+    this.onRetry,
     required this.onTap,
   }) : super(key: key);
 
@@ -2020,7 +2795,6 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
       GlobalKey<MediaDownloadButtonState>();
   File? _cachedFile;
   Uint8List? _cachedFirstFrame;
-  bool _isPlayingInline = false;
 
   @override
   void initState() {
@@ -2033,10 +2807,25 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
   void didUpdateWidget(covariant _SingleMediaBubbleWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
-      _cachedFile = null;
-      _cachedFirstFrame = null;
-      _isPlayingInline = false;
+      final bool wasUploading =
+          oldWidget.sendStatus != 1 && widget.sendStatus == 1;
+      final prevFile = _cachedFile;
+      final prevThumb = _cachedFirstFrame;
+      if (!wasUploading) {
+        _cachedFile = null;
+        _cachedFirstFrame = null;
+      }
       _syncCacheImmediate();
+      if (wasUploading) {
+        if (_cachedFile == null &&
+            prevFile != null &&
+            prevFile.existsSync()) {
+          _cachedFile = prevFile;
+        }
+        if (_cachedFirstFrame == null && prevThumb != null) {
+          _cachedFirstFrame = prevThumb;
+        }
+      }
       _checkCache();
     }
   }
@@ -2109,40 +2898,20 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
     final themeExt = Theme.of(context).extension<TheavThemeExtension>();
     final double effectiveRadius = math.max(4.0, (themeExt?.bubbleRadius ?? 16.0) - 2.0);
 
-    // If video is cached and user tapped play inline:
-    if (widget.isVideo && isCached && _isPlayingInline) {
-      return ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: widget.maxWidth,
-          maxHeight: math.max(widget.height, 240.0),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(effectiveRadius),
-          child: InlineVideoPlayer(
-            url: _cachedFile!.path,
-            autoplay: true,
-          ),
-        ),
-      );
-    }
-
+    final bool isUploadingOrFailed = widget.sendStatus != 1;
     final bool hasOpaqueMedia = (!widget.isVideo && _cachedFile != null) ||
-        (widget.isVideo && isCached && _cachedFirstFrame != null);
+        (widget.isVideo && _cachedFirstFrame != null);
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     final int targetCacheWidth = (widget.maxWidth * dpr).round().clamp(240, 1080);
 
     return GestureDetector(
       onTap: () {
-        if (!isCached) {
-          // While not downloaded, tapping anywhere on the bubble starts/cancels download
+        if (!isUploadingOrFailed && !isCached && !widget.isVideo) {
+          // While not downloaded, tapping anywhere on the photo bubble starts/cancels download
           _downloadButtonKey.currentState?.handleTap();
           return;
         }
-        if (!widget.isVideo) {
-          widget.onTap(_cachedFile?.path);
-        } else {
-          setState(() => _isPlayingInline = true);
-        }
+        widget.onTap(_cachedFile?.path);
       },
       child: ClipRRect(
         borderRadius: BorderRadius.circular(effectiveRadius),
@@ -2160,34 +2929,28 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                   fit: BoxFit.cover,
                 ),
 
-              // 2. Real first frame for video ONLY after the video file is cached
-              if (widget.isVideo && isCached) ...[
-                if (_cachedFirstFrame != null)
-                  Image.memory(
-                    _cachedFirstFrame!,
-                    width: widget.maxWidth,
-                    height: widget.height,
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.low,
-                    gaplessPlayback: true,
-                  )
-                else if (resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
-                  Image.network(
-                    resolvedThumbUrl,
-                    width: widget.maxWidth,
-                    height: widget.height,
-                    fit: BoxFit.cover,
-                    cacheWidth: targetCacheWidth,
-                    filterQuality: FilterQuality.low,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return const SizedBox.shrink();
-                    },
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                  ),
-              ],
+              // 2. Real video thumbnail rendered immediately (cached frame or authenticated remote thumbnail)
+              if (widget.isVideo)
+                Hero(
+                  tag: widget.heroTag,
+                  child: _cachedFirstFrame != null
+                      ? Image.memory(
+                          _cachedFirstFrame!,
+                          width: widget.maxWidth,
+                          height: widget.height,
+                          fit: BoxFit.cover,
+                          filterQuality: FilterQuality.low,
+                          gaplessPlayback: true,
+                        )
+                      : RemoteVideoThumbnailImage(
+                          thumbUrl: resolvedThumbUrl,
+                          width: widget.maxWidth,
+                          height: widget.height,
+                          cacheWidth: targetCacheWidth,
+                        ),
+                ),
 
-              // 3. Full image ONLY after the photo file is cached on disk
+              // 3. Full image when cached or local file exists
               if (!widget.isVideo && _cachedFile != null)
                 Hero(
                   tag: widget.heroTag,
@@ -2202,8 +2965,22 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                   ),
                 ),
 
-              // 4. Download button / progress / size pill overlay
-              if (widget.url.isNotEmpty && (!isCached || widget.isVideo))
+              // 4a. Inline Telegram upload progress overlay when sending or failed
+              if (isUploadingOrFailed &&
+                  widget.localId != null &&
+                  widget.localId!.isNotEmpty)
+                TelegramMediaUploadOverlay(
+                  localId: widget.localId!,
+                  chatId: widget.chatId,
+                  fileSize: widget.fileSize,
+                  sendStatus: widget.sendStatus,
+                  onCancel: widget.onCancelUpload,
+                  onRetry: widget.onRetry,
+                )
+              // 4b. Download button / progress / size pill overlay for settled messages
+              else if (!isUploadingOrFailed &&
+                  widget.url.isNotEmpty &&
+                  (!isCached || widget.isVideo))
                 MediaDownloadButton(
                   key: _downloadButtonKey,
                   url: widget.url,
@@ -2211,15 +2988,12 @@ class _SingleMediaBubbleWidgetState extends State<_SingleMediaBubbleWidget> {
                   isVideo: widget.isVideo,
                   autoDownload: widget.autoDownload,
                   onDownloaded: _checkCache,
-                  onPlayVideo: () {
-                    if (_cachedFile != null) {
-                      setState(() => _isPlayingInline = true);
-                    }
-                  },
+                  onPlayVideo: () => widget.onTap(_cachedFile?.path),
                 ),
 
               // 5. Video duration badge
-              if (widget.isVideo &&
+              if (!isUploadingOrFailed &&
+                  widget.isVideo &&
                   widget.duration != null &&
                   widget.duration! > 0)
                 Positioned(

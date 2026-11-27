@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:lottie/lottie.dart';
 import 'package:visibility_detector/visibility_detector.dart';
+import '../../config/app_config.dart';
 import '../../services/emoji_effect_cache_service.dart';
 import '../../services/sticker_service.dart';
 import '../../theme/theav_theme.dart';
@@ -15,21 +17,23 @@ import '../../utils/emoji_utils.dart';
 /// disk caching via [StickerService], and native multi-frame playback timing.
 ///
 /// Key performance guarantees:
-/// 1. NEVER wraps `animated_webp` or `.gif` in [ResizeImage], avoiding Flutter's C++ `SkWebpCodec`
-///    `O(N²)` software frame re-decoding bug when `targetWidth != nativeWidth`.
-/// 2. Resolves from local disk (`FileImage`) via [StickerService] so scrolling never re-downloads over HTTP.
-/// 3. Renders multi-frame GIF/WebP animations at their exact native encoded frame durations
-///    without dropping frames, and detaches the stream completer immediately when paused or off-screen.
+/// 1. Decouples GIF and animated WebP playback from monitor refresh rate (VSync) using a dedicated
+///    wall-clock frame timer, preventing fast-forward / frame skipping on 120Hz/144Hz/240Hz monitors.
+/// 2. Clamps sub-10ms / 0ms frame delays to 100ms in accordance with standard browser / GIF89a specifications.
+/// 3. Resolves from local disk via [StickerService] so scrolling never re-downloads over HTTP.
+/// 4. Disposes decoded frame bitmaps immediately to prevent GPU/CPU memory bloat.
 class ControlledAnimatedNetworkImage extends StatefulWidget {
   final String url;
   final double? width;
   final double? height;
   final int? cacheWidth;
   final BoxFit fit;
+  final AlignmentGeometry alignment;
   final FilterQuality filterQuality;
   final bool animate;
   final bool isAnimatedWebpOrGif;
   final WidgetBuilder? errorBuilder;
+  final VoidCallback? onFirstFrameLoaded;
 
   const ControlledAnimatedNetworkImage({
     super.key,
@@ -38,10 +42,12 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
     this.height,
     this.cacheWidth,
     this.fit = BoxFit.contain,
+    this.alignment = Alignment.center,
     this.filterQuality = FilterQuality.low,
     this.animate = true,
     this.isAnimatedWebpOrGif = false,
     this.errorBuilder,
+    this.onFirstFrameLoaded,
   });
 
   @override
@@ -51,10 +57,12 @@ class ControlledAnimatedNetworkImage extends StatefulWidget {
 
 class _ControlledAnimatedNetworkImageState
     extends State<ControlledAnimatedNetworkImage> {
+  // Static and animated image stream managed natively by Flutter engine
   ImageStream? _imageStream;
   ImageStreamListener? _listener;
   ImageInfo? _imageInfo;
   bool _isListening = false;
+
   bool _hasError = false;
   int _resolveToken = 0;
   String _resolvedUrl = '';
@@ -81,8 +89,7 @@ class _ControlledAnimatedNetworkImageState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url ||
         oldWidget.isAnimatedWebpOrGif != widget.isAnimatedWebpOrGif ||
-        (!widget.isAnimatedWebpOrGif &&
-            oldWidget.cacheWidth != widget.cacheWidth)) {
+        oldWidget.cacheWidth != widget.cacheWidth) {
       _prepareAndResolve();
     } else if (oldWidget.animate != widget.animate) {
       _updateSubscription();
@@ -118,26 +125,34 @@ class _ControlledAnimatedNetworkImageState
         if (file != null) {
           _resolveProvider(FileImage(file));
         } else {
-          _resolveProvider(NetworkImage(widget.url));
+          final netUrl = StickerService.resolveUrl(widget.url);
+          _resolveProvider(
+            NetworkImage(
+              netUrl,
+              headers: AppConfig.authHeadersForUrl(netUrl),
+            ),
+          );
         }
       });
       return;
     }
 
-    _resolveProvider(NetworkImage(widget.url));
+    final netUrl = StickerService.resolveUrl(widget.url);
+    _resolveProvider(
+      NetworkImage(
+        netUrl,
+        headers: AppConfig.authHeadersForUrl(netUrl),
+      ),
+    );
   }
 
   void _resolveProvider(ImageProvider baseProvider) {
     if (!mounted) return;
-    // CRITICAL: Never wrap multi-frame animated WebP or GIF in ResizeImage!
-    // ResizeImage forces SkWebpCodec to re-decode all prior frames 0..N on every tick (O(N²)).
-    final ImageProvider provider = widget.isAnimatedWebpOrGif
-        ? baseProvider
-        : ResizeImage.resizeIfNeeded(
-            widget.cacheWidth,
-            null,
-            baseProvider,
-          );
+    final ImageProvider provider = ResizeImage.resizeIfNeeded(
+      widget.cacheWidth,
+      null,
+      baseProvider,
+    );
     final ImageStream newStream =
         provider.resolve(createLocalImageConfiguration(context));
     if (newStream.key != _imageStream?.key) {
@@ -165,11 +180,8 @@ class _ControlledAnimatedNetworkImageState
     if (_isAllowedToAnimate) {
       _startListening();
     } else if (_imageInfo != null) {
-      // We already have a frame to display statically; detach listener so
-      // MultiFrameImageStreamCompleter stops decoding frames immediately.
       _stopListening();
     } else {
-      // Need at least the first frame before we can detach.
       _startListening();
     }
   }
@@ -178,6 +190,7 @@ class _ControlledAnimatedNetworkImageState
     if (!mounted) {
       return;
     }
+    final bool isFirstFrame = _imageInfo == null;
     if (!_isAllowedToAnimate && _imageInfo != null) {
       _stopListening();
       return;
@@ -191,13 +204,27 @@ class _ControlledAnimatedNetworkImageState
       });
     }
     if (!_isAllowedToAnimate) {
-      // Detach immediately after capturing the first frame so animation timer stops.
       _stopListening();
     }
     if (mounted) {
       setState(() {
         _hasError = false;
       });
+    }
+    if (isFirstFrame && widget.onFirstFrameLoaded != null) {
+      final phase = SchedulerBinding.instance.schedulerPhase;
+      final bool inBuildOrMicrotask = synchronousCall ||
+          phase == SchedulerPhase.persistentCallbacks ||
+          phase == SchedulerPhase.midFrameMicrotasks;
+      if (inBuildOrMicrotask) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            widget.onFirstFrameLoaded?.call();
+          }
+        });
+      } else {
+        widget.onFirstFrameLoaded?.call();
+      }
     }
   }
 
@@ -231,9 +258,11 @@ class _ControlledAnimatedNetworkImageState
     if (_hasError && widget.errorBuilder != null) {
       return widget.errorBuilder!(context);
     }
+
     final ui.Image? raw = _imageInfo?.image;
     if (raw == null) {
-      return SizedBox(width: widget.width, height: widget.height);
+      return widget.errorBuilder?.call(context) ??
+          SizedBox(width: widget.width, height: widget.height);
     }
     return RawImage(
       image: raw,
@@ -241,6 +270,7 @@ class _ControlledAnimatedNetworkImageState
       width: widget.width,
       height: widget.height,
       fit: widget.fit,
+      alignment: widget.alignment,
       filterQuality: widget.filterQuality,
     );
   }
@@ -259,6 +289,7 @@ class StickerMediaView extends StatefulWidget {
   final bool repeat;
   final BoxFit fit;
   final Color? adaptiveTintColor;
+  final bool? isAdaptiveOverride;
 
   const StickerMediaView({
     super.key,
@@ -272,17 +303,37 @@ class StickerMediaView extends StatefulWidget {
     this.repeat = true,
     this.fit = BoxFit.contain,
     this.adaptiveTintColor,
+    this.isAdaptiveOverride,
   });
 
-  bool get isLottie {
-    final fmt = format.toLowerCase();
-    final lowerUrl = fileUrl.toLowerCase();
-    return fmt == 'tgs' ||
-        fmt == 'lottie' ||
-        fmt == 'json' ||
-        lowerUrl.endsWith('.tgs') ||
-        lowerUrl.endsWith('.json');
+  /// Determines whether [url] should be rendered via Lottie rather than raster image codecs.
+  ///
+  /// Explicitly structured raster extensions (`.webp`, `.png`, `.jpg`, `.jpeg`, `.gif`) always
+  /// classify as raster even if [format] is `'tgs'` (such as static thumbnail URLs on `.tgs` packs).
+  static bool isLottieUrlOrFormat(String url, String format) {
+    String cleanUrl = url.trim().toLowerCase();
+    final qIdx = cleanUrl.indexOf('?');
+    if (qIdx != -1) cleanUrl = cleanUrl.substring(0, qIdx);
+    final hIdx = cleanUrl.indexOf('#');
+    if (hIdx != -1) cleanUrl = cleanUrl.substring(0, hIdx);
+
+    if (cleanUrl.endsWith('.tgs') ||
+        cleanUrl.endsWith('.json') ||
+        cleanUrl.endsWith('.lottie')) {
+      return true;
+    }
+    if (cleanUrl.endsWith('.webp') ||
+        cleanUrl.endsWith('.png') ||
+        cleanUrl.endsWith('.jpg') ||
+        cleanUrl.endsWith('.jpeg') ||
+        cleanUrl.endsWith('.gif')) {
+      return false;
+    }
+    final fmt = format.trim().toLowerCase();
+    return fmt == 'tgs' || fmt == 'lottie' || fmt == 'json';
   }
+
+  bool get isLottie => isLottieUrlOrFormat(fileUrl, format);
 
   bool get isAnimatedRaster {
     final fmt = format.toLowerCase();
@@ -303,6 +354,15 @@ class _StickerMediaViewState extends State<StickerMediaView> {
   LottieComposition? _composition;
   ui.Image? _bakedFirstFrame;
   int _loadToken = 0;
+  String? _overrideUrl;
+  bool _forceLottie = false;
+  bool _didAttemptRasterFallback = false;
+
+  String get _activeUrl => _overrideUrl ?? widget.fileUrl;
+
+  bool get _effectiveIsLottie =>
+      _forceLottie ||
+      StickerMediaView.isLottieUrlOrFormat(_activeUrl, widget.format);
 
   @override
   void initState() {
@@ -313,21 +373,26 @@ class _StickerMediaViewState extends State<StickerMediaView> {
   @override
   void didUpdateWidget(covariant StickerMediaView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.fileUrl != widget.fileUrl ||
+    final urlChanged = oldWidget.fileUrl != widget.fileUrl ||
+        oldWidget.thumbnailUrl != widget.thumbnailUrl;
+    if (urlChanged) {
+      _overrideUrl = null;
+      _forceLottie = false;
+      _didAttemptRasterFallback = false;
+      _composition = null;
+      _bakedFirstFrame = null;
+    }
+    if (urlChanged ||
         oldWidget.format != widget.format ||
         oldWidget.animate != widget.animate) {
-      if (oldWidget.fileUrl != widget.fileUrl) {
-        _composition = null;
-        _bakedFirstFrame = null;
-      }
       _loadIfNeeded();
     }
   }
 
   Future<void> _loadIfNeeded() async {
-    if (!widget.isLottie || widget.fileUrl.isEmpty) return;
+    final String targetUrl = _activeUrl;
+    if (!_effectiveIsLottie || targetUrl.isEmpty) return;
     final int token = ++_loadToken;
-    final String targetUrl = widget.fileUrl;
     final cached = StickerService.instance.getCachedComposition(targetUrl);
     if (cached != null) {
       if (mounted && token == _loadToken && _composition != cached) {
@@ -362,12 +427,13 @@ class _StickerMediaViewState extends State<StickerMediaView> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.fileUrl.isEmpty) {
+    final activeUrl = _activeUrl;
+    if (activeUrl.isEmpty) {
       return SizedBox(width: widget.width, height: widget.height);
     }
 
     Widget content;
-    if (widget.isLottie) {
+    if (_effectiveIsLottie) {
       if (!widget.animate && _bakedFirstFrame != null) {
         content = RawImage(
           image: _bakedFirstFrame,
@@ -399,7 +465,7 @@ class _StickerMediaViewState extends State<StickerMediaView> {
       final bool isAnimRaster = widget.isAnimatedRaster;
       final String? staticThumbUrl = !widget.animate
           ? StickerService.instance.resolveStaticThumbnailUrl(
-              widget.fileUrl,
+              activeUrl,
               explicitThumbnailUrl: widget.thumbnailUrl,
               stickerId: widget.stickerId,
             )
@@ -408,7 +474,7 @@ class _StickerMediaViewState extends State<StickerMediaView> {
       final bool useStaticThumb = !widget.animate && staticThumbUrl != null;
       final String effectiveUrl = useStaticThumb
           ? staticThumbUrl
-          : StickerService.resolveUrl(widget.fileUrl);
+          : StickerService.resolveUrl(activeUrl);
       final bool effectiveIsAnimated = isAnimRaster && !useStaticThumb;
 
       final int? targetCacheWidth = (!effectiveIsAnimated && widget.width.isFinite)
@@ -424,17 +490,69 @@ class _StickerMediaViewState extends State<StickerMediaView> {
         animate: widget.animate && effectiveIsAnimated,
         isAnimatedWebpOrGif: effectiveIsAnimated,
         filterQuality: FilterQuality.low,
-        errorBuilder: (_) => SizedBox(
-          width: widget.width,
-          height: widget.height,
-        ),
+        errorBuilder: (_) {
+          // Recover when a `.webp` thumbnail URL actually stores `.tgs` gzipped Lottie bytes
+          // or fails raster decoding while a full `.tgs` fileUrl is cached for the sticker.
+          if (!_didAttemptRasterFallback) {
+            _didAttemptRasterFallback = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              final synced =
+                  StickerService.instance.getStickerByIdSync(widget.stickerId) ??
+                      StickerService.instance.getStickerByUrlSync(widget.fileUrl);
+              if (synced != null &&
+                  synced.fileUrl.isNotEmpty &&
+                  StickerService.resolveUrl(synced.fileUrl) != effectiveUrl) {
+                setState(() {
+                  _overrideUrl = synced.fileUrl;
+                  _forceLottie = StickerMediaView.isLottieUrlOrFormat(
+                    synced.fileUrl,
+                    synced.format,
+                  );
+                });
+                _loadIfNeeded();
+              } else {
+                setState(() {
+                  _forceLottie = true;
+                });
+                _loadIfNeeded();
+              }
+            });
+          }
+          return SizedBox(
+            width: widget.width,
+            height: widget.height,
+          );
+        },
       );
     }
 
-    if (widget.adaptiveTintColor != null) {
+    Color? effectiveTint = widget.adaptiveTintColor;
+    if (effectiveTint == null) {
+      final bool isAdaptive = widget.isAdaptiveOverride ??
+          (StickerService.instance
+                  .getStickerByIdSync(widget.stickerId)
+                  ?.isAdaptiveTextColor ??
+              StickerService.instance
+                  .getStickerByUrlSync(activeUrl)
+                  ?.isAdaptiveTextColor ??
+              false);
+      if (isAdaptive) {
+        final theme = Theme.of(context);
+        final isDark = theme.brightness == Brightness.dark;
+        final onSurface = theme.colorScheme.onSurface;
+        effectiveTint = isDark
+            ? (onSurface.computeLuminance() > 0.5 ? onSurface : Colors.white)
+            : (onSurface.computeLuminance() < 0.5
+                ? onSurface
+                : const Color(0xFF141619));
+      }
+    }
+
+    if (effectiveTint != null) {
       content = ColorFiltered(
         colorFilter: ColorFilter.mode(
-          widget.adaptiveTintColor!,
+          effectiveTint,
           BlendMode.srcIn,
         ),
         child: content,
@@ -583,6 +701,7 @@ class _InlineCustomEmojiWidgetState extends State<InlineCustomEmojiWidget> {
       height: widget.size,
       animate: _isVisible,
       adaptiveTintColor: tint,
+      isAdaptiveOverride: _sticker?.isAdaptiveTextColor,
     );
 
     if (widget.enableTapEffect) {
@@ -639,10 +758,18 @@ class StickerPeekPopOverlay extends StatefulWidget {
     HapticFeedback.mediumImpact();
 
     late OverlayEntry entry;
+    LocalHistoryEntry? historyEntry;
     bool removed = false;
     void close() {
       if (!removed) {
         removed = true;
+        final h = historyEntry;
+        historyEntry = null;
+        if (h != null) {
+          try {
+            h.remove();
+          } catch (_) {}
+        }
         try {
           entry.remove();
         } catch (_) {}
@@ -666,6 +793,16 @@ class StickerPeekPopOverlay extends StatefulWidget {
       ),
     );
     overlay.insert(entry);
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      historyEntry = LocalHistoryEntry(
+        onRemove: () {
+          historyEntry = null;
+          close();
+        },
+      );
+      route.addLocalHistoryEntry(historyEntry!);
+    }
   }
 
   @override
@@ -789,6 +926,10 @@ class _StickerPeekPopOverlayState extends State<StickerPeekPopOverlay>
                           width: 220,
                           height: 220,
                           animate: true,
+                          isAdaptiveOverride: widget.sticker.isAdaptiveTextColor,
+                          adaptiveTintColor: widget.sticker.isAdaptiveTextColor
+                              ? theme.textPrimary
+                              : null,
                         ),
                       ),
                     ),
@@ -967,10 +1108,18 @@ class GifPeekPopOverlay extends StatefulWidget {
     HapticFeedback.mediumImpact();
 
     late OverlayEntry entry;
+    LocalHistoryEntry? historyEntry;
     bool removed = false;
     void close() {
       if (!removed) {
         removed = true;
+        final h = historyEntry;
+        historyEntry = null;
+        if (h != null) {
+          try {
+            h.remove();
+          } catch (_) {}
+        }
         try {
           entry.remove();
         } catch (_) {}
@@ -988,6 +1137,16 @@ class GifPeekPopOverlay extends StatefulWidget {
       ),
     );
     overlay.insert(entry);
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      historyEntry = LocalHistoryEntry(
+        onRemove: () {
+          historyEntry = null;
+          close();
+        },
+      );
+      route.addLocalHistoryEntry(historyEntry!);
+    }
   }
 
   @override

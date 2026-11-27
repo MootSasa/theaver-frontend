@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File;
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/call_models.dart';
@@ -234,13 +237,14 @@ class CommunityService {
           ? '🔊 $activeVoice в голосовом • ${c.memberCount} участн.'
           : (c.description.isNotEmpty
               ? c.description
-              : '${c.memberCount} участн. • Сообщество');
+              : '${c.memberCount} участн. • ${c.channels.length} кан.');
       await db.saveChats([
         ChatsCompanion(
           chatId: Value('community_${c.id}'),
           chatType: const Value('community'),
           name: Value(c.name),
           avatarUrl: Value(c.avatarUrl),
+          hasActiveCall: Value(activeVoice > 0),
           lastMessage: Value(subtitle),
           lastMessageTime: Value(c.createdAt.toIso8601String()),
           lastMessageType: const Value('text'),
@@ -446,6 +450,151 @@ class CommunityService {
       return updated;
     }
     return null;
+  }
+
+  static MediaType _imageMediaType(String fileName) {
+    final ext = path.extension(fileName).toLowerCase();
+    switch (ext) {
+      case '.png':
+        return MediaType('image', 'png');
+      case '.gif':
+        return MediaType('image', 'gif');
+      case '.webp':
+        return MediaType('image', 'webp');
+      default:
+        return MediaType('image', 'jpeg');
+    }
+  }
+
+  /// Uploads a new avatar image for a community (`POST /api/communities/:communityId/avatar`).
+  static Future<Community?> uploadCommunityAvatar(
+    String communityId,
+    File file, {
+    Uint8List? bytes,
+    String? fileName,
+    String? avatarCrop,
+  }) async {
+    final cleanId = communityId.startsWith('community_')
+        ? communityId.substring('community_'.length)
+        : communityId;
+    if (cleanId.isEmpty) return null;
+
+    try {
+      final token = await AuthService.getToken();
+      if (token == null || token.isEmpty) return null;
+
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$cleanId/avatar'),
+      );
+      request.headers['Authorization'] = 'Bearer $token';
+      if (avatarCrop != null && avatarCrop.trim().isNotEmpty) {
+        request.fields['avatar_crop'] = avatarCrop.trim();
+      }
+
+      if (bytes != null) {
+        final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : (file.path.isNotEmpty
+                ? path.basename(file.path)
+                : 'avatar.jpg');
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'avatar',
+            bytes,
+            filename: resolvedName,
+            contentType: _imageMediaType(resolvedName),
+          ),
+        );
+      } else {
+        if (!await file.exists()) return null;
+        final resolvedName = (fileName != null && fileName.trim().isNotEmpty)
+            ? path.basename(fileName.trim())
+            : path.basename(file.path);
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'avatar',
+            file.path,
+            filename: resolvedName,
+            contentType: _imageMediaType(resolvedName),
+          ),
+        );
+      }
+
+      final streamed = await request.send().timeout(
+        const Duration(seconds: 60),
+        onTimeout: () => throw TimeoutException('Upload timed out'),
+      );
+      final response = await http.Response.fromStream(streamed)
+          .timeout(const Duration(seconds: 30));
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          if (decoded['community'] is Map) {
+            final comm = Community.fromJson(
+              Map<String, dynamic>.from(decoded['community'] as Map),
+            );
+            cacheCommunity(comm);
+            return comm;
+          }
+          final avatarUrl =
+              (decoded['avatar_url'] ?? decoded['icon_url'])?.toString().trim();
+          if (avatarUrl != null && avatarUrl.isNotEmpty) {
+            final existing = _cache[cleanId];
+            if (existing != null) {
+              final updated = existing.copyWith(avatarUrl: avatarUrl);
+              cacheCommunity(updated);
+              return updated;
+            }
+            return await getCommunity(cleanId);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] uploadCommunityAvatar error: $e');
+    }
+    return null;
+  }
+
+  /// Deletes the avatar of a community (`DELETE /api/communities/:communityId/avatar`).
+  static Future<bool> deleteCommunityAvatar(String communityId) async {
+    final cleanId = communityId.startsWith('community_')
+        ? communityId.substring('community_'.length)
+        : communityId;
+    if (cleanId.isEmpty) return false;
+
+    try {
+      final response = await http.delete(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$cleanId/avatar'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final decoded = response.body.trim().isNotEmpty
+            ? jsonDecode(response.body)
+            : null;
+        if (decoded is Map<String, dynamic> && decoded['community'] is Map) {
+          final comm = Community.fromJson(
+            Map<String, dynamic>.from(decoded['community'] as Map),
+          );
+          cacheCommunity(comm);
+        } else if (_cache.containsKey(cleanId)) {
+          final prev = _cache[cleanId]!;
+          final clearedMap = prev.toJson()
+            ..remove('avatar_url')
+            ..remove('icon_url');
+          final updated = Community.fromJson(clearedMap);
+          cacheCommunity(updated);
+        } else {
+          try {
+            await AppDatabase().updateChatAvatar('community_$cleanId', null);
+          } catch (_) {}
+        }
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] deleteCommunityAvatar error: $e');
+    }
+    return false;
   }
 
   /// Deletes a community (`DELETE /api/communities/:communityId`).
@@ -680,7 +829,10 @@ class CommunityService {
     String? name,
     String? topic,
     String? categoryId,
+    bool clearCategory = false,
+    String? channelType,
     int? position,
+    int? slowModeSeconds,
     int? voiceBitrateKbps,
     int? voiceUserLimit,
   }) async {
@@ -696,8 +848,13 @@ class CommunityService {
             'topic': topic,
             'description': topic,
           },
-          if (parsedCatId != null) 'category_id': parsedCatId,
+          if (clearCategory)
+            'category_id': 0
+          else if (parsedCatId != null)
+            'category_id': parsedCatId,
+          if (channelType != null) 'channel_kind': channelType,
           if (position != null) 'position': position,
+          if (slowModeSeconds != null) 'slow_mode_seconds': slowModeSeconds,
           if (voiceBitrateKbps != null) 'voice_bitrate_kbps': voiceBitrateKbps,
           if (voiceUserLimit != null) 'voice_user_limit': voiceUserLimit,
         }),
@@ -715,6 +872,37 @@ class CommunityService {
       debugPrint('[CommunityService] updateChannel error: $e');
     }
     return null;
+  }
+
+  /// Reorders channels inside a community (`PATCH /api/communities/:communityId/channels/reorder`).
+  static Future<bool> reorderChannels(
+    String communityId,
+    List<({String chatId, String? categoryId, int position})> items,
+  ) async {
+    try {
+      final payload = items
+          .map(
+            (e) => {
+              'chat_id': int.tryParse(e.chatId) ?? 0,
+              'category_id':
+                  e.categoryId != null ? int.tryParse(e.categoryId!) : null,
+              'position': e.position,
+            },
+          )
+          .where((e) => (e['chat_id'] as int) > 0)
+          .toList();
+      final response = await http.patch(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/channels/reorder',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({'channels': payload}),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] reorderChannels error: $e');
+      return false;
+    }
   }
 
   /// Deletes a channel inside a community (`DELETE /api/communities/:communityId/channels/:chatId`).
@@ -758,7 +946,10 @@ class CommunityService {
     String communityId, {
     required String name,
     String colorHex = '#5C6BC0',
+    int position = 1,
     int permissions = 0,
+    bool isHoisted = false,
+    bool isMentionable = true,
   }) async {
     try {
       final response = await http.post(
@@ -767,7 +958,10 @@ class CommunityService {
         body: jsonEncode({
           'name': name,
           'color': colorHex,
+          'position': position,
           'permissions': permissions,
+          'is_hoisted': isHoisted,
+          'is_mentionable': isMentionable,
         }),
       );
       if (response.statusCode == 200 || response.statusCode == 201) {
@@ -791,7 +985,10 @@ class CommunityService {
     String roleId, {
     String? name,
     String? colorHex,
+    int? position,
     int? permissions,
+    bool? isHoisted,
+    bool? isMentionable,
   }) async {
     try {
       final response = await http.patch(
@@ -802,7 +999,10 @@ class CommunityService {
         body: jsonEncode({
           if (name != null) 'name': name,
           if (colorHex != null) 'color': colorHex,
+          if (position != null) 'position': position,
           if (permissions != null) 'permissions': permissions,
+          if (isHoisted != null) 'is_hoisted': isHoisted,
+          if (isMentionable != null) 'is_mentionable': isMentionable,
         }),
       );
       if (response.statusCode == 200) {
@@ -966,5 +1166,248 @@ class CommunityService {
       debugPrint('[CommunityService] getSoundboardSounds error: $e');
     }
     return [];
+  }
+
+  /// Creates a custom soundboard clip (`POST /api/communities/:communityId/soundboard`).
+  static Future<SoundboardItem?> createSoundboardSound(
+    String communityId, {
+    required String name,
+    required String fileUrl,
+    String emoji = '🔊',
+    int durationMs = 2000,
+    double volume = 1.0,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/soundboard'),
+        headers: await _headers(),
+        body: jsonEncode({
+          'name': name,
+          'emoji': emoji,
+          'file_url': fileUrl,
+          'duration_ms': durationMs,
+          'volume': volume,
+        }),
+      );
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic>) {
+          final map = data['sound'] is Map
+              ? Map<String, dynamic>.from(data['sound'] as Map)
+              : data;
+          return SoundboardItem.fromJson(map);
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] createSoundboardSound error: $e');
+    }
+    return null;
+  }
+
+  /// Deletes a custom soundboard clip (`DELETE /api/communities/:communityId/soundboard/:soundId`).
+  static Future<bool> deleteSoundboardSound(
+    String communityId,
+    String soundId,
+  ) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/soundboard/$soundId',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] deleteSoundboardSound error: $e');
+      return false;
+    }
+  }
+
+  /// Fetches channel permission overwrites (`GET /api/communities/:communityId/channels/:chatId/overwrites`).
+  static Future<List<CommunityPermissionOverwrite>> getChannelOverwrites(
+    String communityId,
+    String chatId,
+  ) async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/channels/$chatId/overwrites',
+        ),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['overwrites'] is List) {
+          return (data['overwrites'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityPermissionOverwrite.fromJson(
+                  Map<String, dynamic>.from(m),
+                ),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getChannelOverwrites error: $e');
+    }
+    return const [];
+  }
+
+  /// Replaces channel permission overwrites (`PUT /api/communities/:communityId/channels/:chatId/overwrites`).
+  static Future<bool> setChannelOverwrites(
+    String communityId,
+    String chatId,
+    List<CommunityPermissionOverwrite> overwrites,
+  ) async {
+    try {
+      final response = await http.put(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/channels/$chatId/overwrites',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({
+          'overwrites': overwrites.map((o) => o.toJson()).toList(),
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] setChannelOverwrites error: $e');
+      return false;
+    }
+  }
+
+  /// Fetches category permission overwrites (`GET /api/communities/:communityId/categories/:categoryId/overwrites`).
+  static Future<List<CommunityPermissionOverwrite>> getCategoryOverwrites(
+    String communityId,
+    String categoryId,
+  ) async {
+    try {
+      final response = await http.get(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/categories/$categoryId/overwrites',
+        ),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['overwrites'] is List) {
+          return (data['overwrites'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityPermissionOverwrite.fromJson(
+                  Map<String, dynamic>.from(m),
+                ),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getCategoryOverwrites error: $e');
+    }
+    return const [];
+  }
+
+  /// Replaces category permission overwrites (`PUT /api/communities/:communityId/categories/:categoryId/overwrites`).
+  static Future<bool> setCategoryOverwrites(
+    String communityId,
+    String categoryId,
+    List<CommunityPermissionOverwrite> overwrites,
+  ) async {
+    try {
+      final response = await http.put(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/categories/$categoryId/overwrites',
+        ),
+        headers: await _headers(),
+        body: jsonEncode({
+          'overwrites': overwrites.map((o) => o.toJson()).toList(),
+        }),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] setCategoryOverwrites error: $e');
+      return false;
+    }
+  }
+
+  /// Lists banned community members (`GET /api/communities/:communityId/bans`).
+  static Future<List<CommunityBan>> getBans(String communityId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/bans'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['bans'] is List) {
+          return (data['bans'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityBan.fromJson(Map<String, dynamic>.from(m)),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] getBans error: $e');
+    }
+    return const [];
+  }
+
+  /// Unbans a user from the community (`DELETE /api/communities/:communityId/members/:userId/ban`).
+  static Future<bool> unbanMember(String communityId, String userId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/members/$userId/ban',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] unbanMember error: $e');
+      return false;
+    }
+  }
+
+  /// Lists invites for a community (`GET /api/communities/:communityId/invites`).
+  static Future<List<CommunityInvite>> listInvites(String communityId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/communities/$communityId/invites'),
+        headers: await _headers(),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map<String, dynamic> && data['invites'] is List) {
+          return (data['invites'] as List)
+              .whereType<Map>()
+              .map(
+                (m) => CommunityInvite.fromJson(Map<String, dynamic>.from(m)),
+              )
+              .toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('[CommunityService] listInvites error: $e');
+    }
+    return const [];
+  }
+
+  /// Revokes an invite (`DELETE /api/communities/:communityId/invites/:inviteId`).
+  static Future<bool> deleteInvite(String communityId, String inviteId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse(
+          '${AppConfig.baseUrl}/api/communities/$communityId/invites/$inviteId',
+        ),
+        headers: await _headers(),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint('[CommunityService] deleteInvite error: $e');
+      return false;
+    }
   }
 }

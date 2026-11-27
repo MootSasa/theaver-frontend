@@ -32,5 +32,12 @@
 	<string>Theaver needs camera access to record video messages and take photos</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Theaver needs microphone access for voice messages, video messages, and calls</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Theaver needs your location when you share your location or allow a website to access it</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

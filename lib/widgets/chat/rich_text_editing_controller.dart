@@ -136,9 +136,12 @@ class RichTextEditingController extends TextEditingController {
       final nonOverlappingCustom = <MessageEntity>[];
       int lastCustomEnd = 0;
       for (final ce in customEntities) {
-        if (ce.offset >= lastCustomEnd) {
-          nonOverlappingCustom.add(ce);
-          lastCustomEnd = ce.offset + ce.length;
+        final ceStart = EntityParser.snapUtf16Offset(content, ce.offset);
+        final ceEnd = EntityParser.snapUtf16Offset(content, ce.offset + ce.length);
+        if (ceStart >= lastCustomEnd && ceEnd > ceStart) {
+          nonOverlappingCustom
+              .add(ce.copyWith(offset: ceStart, length: ceEnd - ceStart));
+          lastCustomEnd = ceEnd;
         }
       }
 
@@ -152,8 +155,8 @@ class RichTextEditingController extends TextEditingController {
         if (ceIdx < nonOverlappingCustom.length &&
             nonOverlappingCustom[ceIdx].offset == cursor) {
           final ce = nonOverlappingCustom[ceIdx];
-          final int ceEnd = ce.offset + ce.length;
-          final String fallback = content.substring(ce.offset, ceEnd);
+          final int ceEnd = (ce.offset + ce.length).clamp(cursor, content.length);
+          final String fallback = EntityParser.safeSubstring(content, ce.offset, ceEnd);
           final int intPos = internalSb.length;
           for (int k = ce.offset; k < ceEnd; k++) {
             extToInt[k] = intPos;
@@ -850,7 +853,8 @@ class RichTextEditingController extends TextEditingController {
         _activeFormats.contains('blockquote') ||
         _activeFormats.contains('collapse');
     if (insertedCount > 0 && hasActiveQuote) {
-      final insertedStr = newText.substring(start, start + insertedCount);
+      final insertedStr =
+          EntityParser.safeSubstring(newText, start, start + insertedCount);
       final bool isDoubleNewline = insertedStr.contains('\n\n') ||
           (insertedStr.startsWith('\n') && start > 0 && newText[start - 1] == '\n');
       if (isDoubleNewline) {
@@ -956,8 +960,8 @@ class RichTextEditingController extends TextEditingController {
     // Collect all boundary points
     final points = <int>{0, text.length};
     for (final s in _spans) {
-      if (s.start >= 0 && s.start <= text.length) points.add(s.start);
-      if (s.end >= 0 && s.end <= text.length) points.add(s.end);
+      points.add(EntityParser.snapUtf16Offset(text, s.start));
+      points.add(EntityParser.snapUtf16Offset(text, s.end));
     }
 
     final sortedPoints = points.toList()..sort();

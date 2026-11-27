@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb, Uint8List;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:ios_color_picker/show_ios_color_picker.dart';
@@ -7,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter/services.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/theme/theme_editor_floating_app_bar.dart';
 import '../../models/theav_theme.dart';
 import '../../services/theav_theme_service.dart';
@@ -102,13 +104,23 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     final l10n = context.l10n;
     try {
       final bytes = await TheavThemeService().exportThemePackage(_currentTheme);
-      final tempDir = await getTemporaryDirectory();
       final cleanName = TheavThemeService.sanitizeFileName(_currentTheme.name);
-      final file = File('${tempDir.path}/$cleanName.theavtheme');
-      await file.writeAsBytes(bytes);
+      final XFile exportFile;
+      if (kIsWeb) {
+        exportFile = XFile.fromData(
+          Uint8List.fromList(bytes),
+          name: '$cleanName.theavtheme',
+          mimeType: 'application/octet-stream',
+        );
+      } else {
+        final tempDir = await getTemporaryDirectory();
+        final file = File('${tempDir.path}/$cleanName.theavtheme');
+        await file.writeAsBytes(bytes);
+        exportFile = XFile(file.path, name: '$cleanName.theavtheme');
+      }
 
       await Share.shareXFiles(
-        [XFile(file.path, name: '$cleanName.theavtheme')],
+        [exportFile],
         text: 'Тема Theaver: ${_currentTheme.name}',
       );
     } catch (e) {
@@ -185,8 +197,8 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
     final topPadding = statusBarHeight + kThemeEditorAppBarTotalHeight;
 
     final listView = ListView(
-      padding: const EdgeInsets.only(
-        top: 12,
+      padding: EdgeInsets.only(
+        top: topPadding + 4,
         bottom: 40,
       ),
       children: [
@@ -229,7 +241,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 ),
                 child: Material(
                   type: MaterialType.transparency,
-                  child: SwitchListTile(
+                  child: AdaptiveSwitchListTile(
                     title: Text(
                       _currentTheme.isDark ? l10n.translate('theme_dark') : l10n.translate('theme_light'),
                       style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -281,7 +293,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                         Text('${_currentTheme.bubbleRadius.round()} px'),
                       ],
                     ),
-                    Slider(
+                    AdaptiveSlider(
                       value: _currentTheme.bubbleRadius.clamp(0.0, 24.0),
                       min: 0,
                       max: 24,
@@ -633,10 +645,7 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: Padding(
-              padding: EdgeInsets.only(top: topPadding),
-              child: listView,
-            ),
+            child: listView,
           ),
           Positioned(
             top: 0,
@@ -967,22 +976,16 @@ class _ThemeEditorScreenState extends State<ThemeEditorScreen> {
                 children: [
                   const iconoir.ColorWheel(width: 16, height: 16, color: Colors.grey),
                   Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 2,
-                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                      ),
-                      child: Slider(
-                        value: stopColor.a.clamp(0.1, 1.0),
-                        min: 0.1,
-                        max: 1.0,
-                        divisions: 18,
-                        onChanged: (val) {
-                          final newColors = List<Color>.from(allColors);
-                          newColors[index] = stopColor.withValues(alpha: val);
-                          onGradientChanged(newColors);
-                        },
-                      ),
+                    child: AdaptiveSlider(
+                      value: stopColor.a.clamp(0.1, 1.0),
+                      min: 0.1,
+                      max: 1.0,
+                      divisions: 18,
+                      onChanged: (val) {
+                        final newColors = List<Color>.from(allColors);
+                        newColors[index] = stopColor.withValues(alpha: val);
+                        onGradientChanged(newColors);
+                      },
                     ),
                   ),
                   Text(

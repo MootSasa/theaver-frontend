@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/notification_settings_provider.dart';
-import '../../services/liquid_glass_provider.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
 import '../../utils/haptic_utils.dart';
@@ -53,14 +53,6 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
     }
   }
 
-  String _soundLabel(String? uri) {
-    if (uri == null || uri.isEmpty) return 'По умолчанию';
-    for (final opt in kAvailableNotificationSounds) {
-      if (opt.id == uri) return opt.title;
-    }
-    return uri;
-  }
-
   void _showVibrationPicker(
     BuildContext context,
     VibrationPattern current,
@@ -69,24 +61,15 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
     final l10n = context.l10n;
     HapticUtils.tap();
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: l10n.translate('notifications_vibration'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (context) {
-        return SafeArea(
+        return SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  l10n.translate('notifications_vibration'),
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-              const Divider(height: 1),
               ...VibrationPattern.values.map(
                 (pattern) => ListTile(
                   title: Text(_vibrationLabel(pattern, l10n)),
@@ -112,11 +95,9 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
     final l10n = context.l10n;
     final title = _getTitle(l10n);
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final body = Consumer<NotificationSettingsProvider>(
+    return SettingsFloatingScaffold(
+      title: title,
+      body: Consumer<NotificationSettingsProvider>(
           builder: (context, provider, _) {
             final s = provider.globalSettings;
 
@@ -160,7 +141,10 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
 
             return ListView(
               physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: EdgeInsets.only(
+                top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+                bottom: 24,
+              ),
               children: [
                 SettingsGroup(
                   title: 'Основные',
@@ -204,7 +188,11 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       ),
                       ListTile(
                         title: Text(l10n.translate('notifications_sound')),
-                        subtitle: Text(_soundLabel(soundUri)),
+                        subtitle: Text(
+                          soundOptionLabel(
+                            isSound ? soundUri : kSilentSoundId,
+                          ),
+                        ),
                         trailing: AdaptiveSwitch(
                           value: isSound,
                           onChanged: (val) {
@@ -221,22 +209,26 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                         onTap: () {
                           SoundPickerSheet.show(
                             context,
-                            currentSoundId: soundUri,
+                            currentSoundId: isSound
+                                ? normalizeSoundId(soundUri)
+                                : kSilentSoundId,
                             onSelected: (newSound) {
+                              final enabled = newSound != kSilentSoundId;
+                              final savedUri = enabled ? newSound : (soundUri ?? '');
                               if (category == ChatCategory.privateChats) {
                                 provider.updateGlobalSettings(
-                                  privateChatSoundUri: newSound,
-                                  privateChatSound: newSound != 'none',
+                                  privateChatSoundUri: savedUri,
+                                  privateChatSound: enabled,
                                 );
                               } else if (category == ChatCategory.groupChats) {
                                 provider.updateGlobalSettings(
-                                  groupChatSoundUri: newSound,
-                                  groupChatSound: newSound != 'none',
+                                  groupChatSoundUri: savedUri,
+                                  groupChatSound: enabled,
                                 );
                               } else {
                                 provider.updateGlobalSettings(
-                                  channelSoundUri: newSound,
-                                  channelSound: newSound != 'none',
+                                  channelSoundUri: savedUri,
+                                  channelSound: enabled,
                                 );
                               }
                             },
@@ -290,8 +282,8 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                       ...categoryExceptions.map((ex) {
                         final isMuted = ex.settings.muteState == MuteState.muted;
                         String statusDesc = isMuted ? 'Без звука' : 'Включены';
-                        if (ex.settings.soundUri != null && ex.settings.soundUri!.isNotEmpty) {
-                          statusDesc += ' • ${_soundLabel(ex.settings.soundUri)}';
+                        if (!isMuted && ex.settings.soundEnabled == false) {
+                          statusDesc += ' • Звук выключен';
                         }
 
                         return ListTile(
@@ -328,6 +320,8 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
                                 builder: (_) => ChatNotificationSettingsScreen(
                                   chatId: ex.settings.chatId,
                                   chatName: ex.chatTitle,
+                                  isGroup: ex.chatType != 'private',
+                                  isChannel: ex.chatType == 'channel',
                                 ),
                               ),
                             );
@@ -339,42 +333,7 @@ class ChatTypeNotificationsScreen extends StatelessWidget {
               ],
             );
           },
-        );
-
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: body,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(title),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(title),
-            centerTitle: true,
-          ),
-          body: body,
-        );
-      },
-    );
+        ),
+      );
   }
 }

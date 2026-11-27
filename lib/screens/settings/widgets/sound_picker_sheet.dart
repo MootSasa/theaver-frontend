@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../../../services/sound_preview_service.dart';
 import '../../../utils/haptic_utils.dart';
+import '../../../widgets/design_system/theav_design_system.dart';
 
 class SoundOption {
   final String id;
@@ -8,32 +10,60 @@ class SoundOption {
   const SoundOption({required this.id, required this.title});
 }
 
+/// Id «без звука». Пустой id ('') — звук по умолчанию.
+const String kSilentSoundId = 'none';
+
+const Set<String> kValidSoundIds = {
+  '',
+  'crystal',
+  'aurora',
+  'pulse',
+  'bamboo',
+  'chime',
+  'ringtone_classic',
+  kSilentSoundId,
+};
+
 const List<SoundOption> kAvailableNotificationSounds = [
-  SoundOption(id: '', title: 'По умолчанию (Theaver)'),
-  SoundOption(id: 'ding', title: 'Ding'),
-  SoundOption(id: 'chime', title: 'Chime'),
-  SoundOption(id: 'chord', title: 'Chord'),
-  SoundOption(id: 'pop', title: 'Pop'),
-  SoundOption(id: 'pulse', title: 'Pulse'),
-  SoundOption(id: 'note', title: 'Note'),
-  SoundOption(id: 'whistle', title: 'Whistle'),
-  SoundOption(id: 'none', title: 'Без звука'),
+  SoundOption(id: '', title: 'По умолчанию'),
+  SoundOption(id: 'crystal', title: 'Кристалл (Crystal)'),
+  SoundOption(id: 'aurora', title: 'Аврора (Aurora)'),
+  SoundOption(id: 'pulse', title: 'Импульс (Pulse)'),
+  SoundOption(id: 'bamboo', title: 'Бамбук (Bamboo)'),
+  SoundOption(id: 'chime', title: 'Перезвон (Chime)'),
+  SoundOption(id: kSilentSoundId, title: 'Без звука'),
 ];
 
 const List<SoundOption> kAvailableRingtones = [
   SoundOption(id: '', title: 'По умолчанию'),
-  SoundOption(id: 'ring_classic', title: 'Классический'),
-  SoundOption(id: 'ring_digital', title: 'Цифровой'),
-  SoundOption(id: 'ring_soft', title: 'Мягкий звонок'),
-  SoundOption(id: 'ring_pulse', title: 'Импульс'),
-  SoundOption(id: 'none', title: 'Без мелодии'),
+  SoundOption(id: 'ringtone_classic', title: 'Классический рингтон'),
+  SoundOption(id: 'crystal', title: 'Кристалл (Crystal)'),
+  SoundOption(id: 'aurora', title: 'Аврора (Aurora)'),
+  SoundOption(id: 'pulse', title: 'Импульс (Pulse)'),
+  SoundOption(id: 'bamboo', title: 'Бамбук (Bamboo)'),
+  SoundOption(id: 'chime', title: 'Перезвон (Chime)'),
+  SoundOption(id: kSilentSoundId, title: 'Без мелодии'),
 ];
+
+/// Нормализует сохранённый id звука: неизвестные id сбрасываются на «По умолчанию».
+String normalizeSoundId(String? id) {
+  if (id == null || id.isEmpty || id == 'default') return '';
+  return kValidSoundIds.contains(id) ? id : '';
+}
+
+/// Человекочитаемое название сохранённого звука.
+String soundOptionLabel(String? id, {bool isRingtone = false}) {
+  final normalized = normalizeSoundId(id);
+  final options = isRingtone ? kAvailableRingtones : kAvailableNotificationSounds;
+  return options.firstWhere((o) => o.id == normalized, orElse: () => options.first).title;
+}
 
 class SoundPickerSheet extends StatelessWidget {
   final String? currentSoundId;
   final List<SoundOption> options;
   final String title;
   final ValueChanged<String> onSelected;
+  final bool isRingtone;
 
   const SoundPickerSheet({
     Key? key,
@@ -41,6 +71,7 @@ class SoundPickerSheet extends StatelessWidget {
     required this.options,
     required this.title,
     required this.onSelected,
+    this.isRingtone = false,
   }) : super(key: key);
 
   static Future<void> show(
@@ -51,73 +82,63 @@ class SoundPickerSheet extends StatelessWidget {
     bool isRingtone = false,
   }) {
     HapticUtils.tap();
-    return showModalBottomSheet(
+    return showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: title,
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
       builder: (ctx) => SoundPickerSheet(
-        currentSoundId: currentSoundId ?? '',
+        currentSoundId: normalizeSoundId(currentSoundId),
         options: isRingtone ? kAvailableRingtones : kAvailableNotificationSounds,
         title: title,
         onSelected: onSelected,
+        isRingtone: isRingtone,
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final selectedId = currentSoundId ?? '';
 
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 40,
-            height: 4,
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.grey[400],
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text(
-              title,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const Divider(height: 1),
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: options.length,
-              itemBuilder: (context, index) {
-                final opt = options[index];
-                final isSelected = opt.id == selectedId;
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: options.length,
+      itemBuilder: (context, index) {
+        final opt = options[index];
+        final isSelected = opt.id == selectedId;
 
-                return ListTile(
-                  title: Text(opt.title),
-                  trailing: isSelected
-                      ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                      : null,
-                  onTap: () {
+        return ListTile(
+          title: Text(opt.title),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (opt.id != kSilentSoundId)
+                IconButton(
+                  icon: const Icon(Icons.volume_up_outlined, size: 20),
+                  tooltip: 'Прослушать',
+                  onPressed: () {
                     HapticUtils.selection();
-                    onSelected(opt.id);
-                    Navigator.pop(context);
+                    SoundPreviewService.instance.preview(
+                      opt.id,
+                      isRingtone: isRingtone,
+                    );
                   },
-                );
-              },
-            ),
+                ),
+              if (isSelected)
+                const Icon(Icons.check, color: Color(0xFF0088CC)),
+            ],
           ),
-          const SizedBox(height: 8),
-        ],
-      ),
+          onTap: () {
+            HapticUtils.selection();
+            SoundPreviewService.instance.preview(
+              opt.id,
+              isRingtone: isRingtone,
+            );
+            onSelected(opt.id);
+            Navigator.pop(context);
+          },
+        );
+      },
     );
   }
 }

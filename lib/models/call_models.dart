@@ -556,7 +556,10 @@ class CallSession {
         (commIdRaw != null && commIdRaw.isNotEmpty && commIdRaw != '0' && commIdRaw != 'null')
             ? commIdRaw
             : null;
-    final maxParts = (json['max_participants'] as num?)?.toInt() ??
+    final rawMaxParts = json['max_participants'];
+    final int maxParts = (rawMaxParts is num
+            ? rawMaxParts.toInt()
+            : int.tryParse(rawMaxParts?.toString() ?? '')) ??
         (commId != null ? 50 : 2);
 
     var cType = (json['call_type'] ?? json['type'] ?? 'voice').toString();

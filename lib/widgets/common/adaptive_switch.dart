@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
+import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/swipe_back_route.dart';
+import '../design_system/theav_controls.dart';
 
 /// Адаптивный переключатель (Switch), использующий [LiquidGlassSwitch]
-/// из библиотеки liquid_glass_easy при включённом Liquid Glass дизайне,
-/// и стандартный Material [Switch] при выключенном.
+/// при включённом Liquid Glass дизайне и [TheavSwitch] при выключенном.
 class AdaptiveSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool>? onChanged;
@@ -24,29 +25,20 @@ class AdaptiveSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isGlass = context.watch<LiquidGlassProvider>().enabled;
-    if (isGlass && onChanged != null) {
-      final theme = Theme.of(context);
-      final isDark = theme.brightness == Brightness.dark;
-      return LiquidGlassSwitch(
+    return SwipeBackBlocker(
+      child: TheavSwitch(
         value: value,
-        onChanged: onChanged!,
-        activeColor: activeColor ?? (isDark ? const Color(0xFF0088CC) : const Color(0xFF34C759)),
-        inactiveColor: inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
-        thumbColor: thumbColor ?? Colors.white,
-      );
-    }
-    return Switch(
-      value: value,
-      onChanged: onChanged,
-      activeThumbColor: activeColor,
+        onChanged: onChanged,
+        activeColor: activeColor,
+        inactiveColor: inactiveColor,
+        thumbColor: thumbColor,
+      ),
     );
   }
 }
 
 /// Адаптивный ползунок (Slider), использующий [LiquidGlassSlider]
-/// из библиотеки liquid_glass_easy при включённом Liquid Glass дизайне,
-/// и стандартный Material [Slider] при выключенном.
+/// при включённом Liquid Glass дизайне и стилизованный [Slider] при выключенном.
 class AdaptiveSlider extends StatelessWidget {
   final double value;
   final ValueChanged<double>? onChanged;
@@ -75,46 +67,83 @@ class AdaptiveSlider extends StatelessWidget {
     this.label,
   });
 
+  double _snapValue(double raw) {
+    final double clamped = raw.clamp(min, max).toDouble();
+    if (divisions == null || divisions! <= 0 || max <= min) {
+      return clamped;
+    }
+    final double step = (max - min) / divisions!;
+    final double snapped = min + ((clamped - min) / step).round() * step;
+    return snapped.clamp(min, max).toDouble();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isGlass = context.watch<LiquidGlassProvider>().enabled;
-    if (isGlass && onChanged != null) {
-      final theme = Theme.of(context);
-      final isDark = theme.brightness == Brightness.dark;
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.hasBoundedWidth ? constraints.maxWidth : 280.0;
-          return LiquidGlassSlider(
-            value: value.clamp(min, max),
-            onChanged: onChanged!,
-            onChangeStart: onChangeStart,
-            onChangeEnd: onChangeEnd,
-            minimumValue: min,
-            maximumValue: max,
-            width: width,
-            activeColor: activeColor ?? (isDark ? const Color(0xFF0088CC) : theme.colorScheme.primary),
-            inactiveColor: inactiveColor ?? (isDark ? Colors.white24 : Colors.black12),
-            thumbColor: thumbColor ?? Colors.white,
-          );
-        },
+    final glassMode = LiquidGlassProvider.glassModeOf(context);
+    final palette = context.theav;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool enabled = onChanged != null;
+    if (glassMode != GlassMode.disabled) {
+      final Color resolvedActive = activeColor ?? palette.primary;
+      final Color resolvedInactive =
+          inactiveColor ?? (isDark ? Colors.white24 : Colors.black12);
+      final Color resolvedThumb = thumbColor ?? Colors.white;
+
+      return SwipeBackBlocker(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.hasBoundedWidth ? constraints.maxWidth : 280.0;
+            Widget slider = LiquidGlassSlider(
+              value: value.clamp(min, max).toDouble(),
+              onChanged: enabled ? (v) => onChanged!(_snapValue(v)) : (_) {},
+              onChangeStart: enabled ? onChangeStart : null,
+              onChangeEnd: enabled
+                  ? (v) {
+                      onChangeEnd?.call(_snapValue(v));
+                    }
+                  : null,
+              minimumValue: min,
+              maximumValue: max,
+              width: width,
+              activeColor: enabled
+                  ? resolvedActive
+                  : resolvedActive.withValues(alpha: 0.38),
+              inactiveColor: enabled
+                  ? resolvedInactive
+                  : (isDark ? Colors.white : Colors.black)
+                      .withValues(alpha: isDark ? 0.10 : 0.06),
+              thumbColor: enabled
+                  ? resolvedThumb
+                  : resolvedThumb.withValues(alpha: isDark ? 0.45 : 0.70),
+            );
+            if (!enabled) {
+              slider = IgnorePointer(
+                ignoring: true,
+                child: slider,
+              );
+            }
+            return slider;
+          },
+        ),
       );
     }
-    return Slider(
-      value: value,
-      onChanged: onChanged,
-      onChangeStart: onChangeStart,
-      onChangeEnd: onChangeEnd,
-      min: min,
-      max: max,
-      divisions: divisions,
-      activeColor: activeColor,
-      label: label,
+    return SwipeBackBlocker(
+      child: Slider(
+        value: value.clamp(min, max),
+        onChanged: onChanged,
+        onChangeStart: onChangeStart,
+        onChangeEnd: onChangeEnd,
+        min: min,
+        max: max,
+        divisions: divisions,
+        activeColor: activeColor ?? palette.primary,
+        label: label,
+      ),
     );
   }
 }
 
-/// Адаптивный SwitchListTile, использующий [AdaptiveSwitch] (с [LiquidGlassSwitch])
-/// при включённом Liquid Glass дизайне, и стандартный Material [SwitchListTile] при выключенном.
+/// Адаптивный SwitchListTile, использующий [AdaptiveSwitch].
 class AdaptiveSwitchListTile extends StatelessWidget {
   final Widget? title;
   final Widget? subtitle;
@@ -157,34 +186,20 @@ class AdaptiveSwitchListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isGlass = context.watch<LiquidGlassProvider>().enabled;
-    if (isGlass) {
-      return ListTile(
-        title: title,
-        subtitle: subtitle,
-        leading: secondary,
-        contentPadding: contentPadding,
-        dense: dense,
-        isThreeLine: isThreeLine,
-        trailing: AdaptiveSwitch(
-          value: value,
-          onChanged: onChanged,
-          activeColor: activeColor ?? activeTrackColor,
-        ),
-        onTap: onChanged != null ? () => onChanged!(!value) : null,
-      );
-    }
-    return SwitchListTile(
+    return ListTile(
+      enabled: onChanged != null,
       title: title,
       subtitle: subtitle,
-      secondary: secondary,
-      value: value,
-      onChanged: onChanged,
+      leading: secondary,
       contentPadding: contentPadding,
       dense: dense,
       isThreeLine: isThreeLine,
-      activeThumbColor: activeColor,
-      activeTrackColor: activeTrackColor,
+      trailing: AdaptiveSwitch(
+        value: value,
+        onChanged: onChanged,
+        activeColor: activeColor ?? activeTrackColor,
+      ),
+      onTap: onChanged != null ? () => onChanged!(!value) : null,
     );
   }
 }

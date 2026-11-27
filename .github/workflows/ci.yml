@@ -1,0 +1,129 @@
+name: Client CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - beta
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Analyze, Validate Changelog & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate localization JSON and changelog fragments
+        run: |
+          python3 - <<'EOF'
+          import glob
+          import json
+          import sys
+
+          paths = sorted(glob.glob("assets/l10n/*.json"))
+          if not paths:
+              print("No localization files found under assets/l10n/*.json", file=sys.stderr)
+              sys.exit(1)
+          for p in paths:
+              with open(p, "r", encoding="utf-8") as fh:
+                  data = json.load(fh)
+              if not isinstance(data, dict) or not data:
+                  print(f"Invalid localization dictionary: {p}", file=sys.stderr)
+                  sys.exit(1)
+          print(f"Validated {len(paths)} localization dictionaries.")
+          EOF
+          python3 scripts/calculate_release.py --validate-fragments
+          python3 -m unittest discover -s scripts -p "test_*.py"
+
+      - name: Check PR changelog fragment requirement
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags origin "${PR_BASE_REF}"
+          python3 - <<'EOF'
+          import os
+          import subprocess
+          import sys
+
+          head = os.environ.get("PR_HEAD_REF", "").strip()
+          base = os.environ.get("PR_BASE_REF", "beta").strip() or "beta"
+          title = os.environ.get("PR_TITLE", "")
+          body = os.environ.get("PR_BODY", "")
+
+          if "[no-changelog]" in title.lower() or "[no-changelog]" in body.lower():
+              print("Skipping changelog requirement ([no-changelog] marker present).")
+              sys.exit(0)
+
+          if not (head.startswith("feat/") or head.startswith("fix/")):
+              print(f"Branch '{head}' is outside feat/* and fix/*; fragment optional.")
+              sys.exit(0)
+
+          out = subprocess.check_output(
+              [
+                  "git",
+                  "diff",
+                  "--diff-filter=AM",
+                  "--name-only",
+                  f"origin/{base}...HEAD",
+                  "--",
+                  "changelogs/fragments",
+                  "changelogs/unreleased",
+              ],
+              text=True,
+          )
+          fragments = [
+              line.strip()
+              for line in out.splitlines()
+              if line.strip().endswith(".md")
+              and os.path.basename(line.strip()) not in {"README.md", "TEMPLATE.md"}
+          ]
+          if not fragments:
+              print(
+                  f"::error::PR branch '{head}' introduces user-facing work under feat/* or fix/* "
+                  "without a changelog fragment in changelogs/fragments/<topic>.md. "
+                  "Add a bilingual fragment (see changelogs/README.md) or add [no-changelog] to the PR description.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("Found PR changelog fragment(s):", ", ".join(fragments))
+          EOF
+
+      - name: Prepare example push configs for analysis
+        run: |
+          if [ ! -f android/app/google-services.json ] && [ -f android/app/google-services.json.example ]; then
+            cp android/app/google-services.json.example android/app/google-services.json
+          fi
+          if [ ! -f android/app/agconnect-services.json ] && [ -f android/app/agconnect-services.json.example ]; then
+            cp android/app/agconnect-services.json.example android/app/agconnect-services.json
+          fi
+
+      - name: Install Linux SQLite dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          cache: true
+
+      - name: Install packages & run static analysis and tests
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test --no-pub test/update_notes_test.dart

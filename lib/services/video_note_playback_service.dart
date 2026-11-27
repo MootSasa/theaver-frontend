@@ -15,6 +15,7 @@ class VideoNotePlaybackService with ChangeNotifier {
 
   String? _activeMessageId;
   String? _activeVideoUrl;
+  String? _activeSenderId;
   String? _activeSenderName;
   String? _activeChatId;
   String? _activeChatType;
@@ -33,6 +34,7 @@ class VideoNotePlaybackService with ChangeNotifier {
 
   String? get activeMessageId => _activeMessageId;
   String? get activeVideoUrl => _activeVideoUrl;
+  String? get activeSenderId => _activeSenderId;
   String? get activeSenderName => _activeSenderName;
   String? get activeChatId => _activeChatId;
   String? get activeChatType => _activeChatType;
@@ -54,6 +56,7 @@ class VideoNotePlaybackService with ChangeNotifier {
     required String messageId,
     required String videoUrl,
     required VideoPlayerController controller,
+    String? senderId,
     String? senderName,
     String? chatId,
     String? chatType,
@@ -73,7 +76,8 @@ class VideoNotePlaybackService with ChangeNotifier {
     _activeVideoUrl = videoUrl;
     _activeController = controller;
     _activeController!.addListener(_onControllerTick);
-    if (senderName != null) _activeSenderName = senderName;
+    _activeSenderId = senderId;
+    _activeSenderName = senderName;
     if (chatId != null) _activeChatId = chatId;
     if (chatType != null) _activeChatType = chatType;
     if (chatTitle != null) _activeChatTitle = chatTitle;
@@ -158,6 +162,7 @@ class VideoNotePlaybackService with ChangeNotifier {
     }
     _activeMessageId = null;
     _activeVideoUrl = null;
+    _activeSenderId = null;
     _activeSenderName = null;
     _activeChatId = null;
     _activeChatType = null;

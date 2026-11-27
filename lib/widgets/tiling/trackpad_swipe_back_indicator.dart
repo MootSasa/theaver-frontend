@@ -4,8 +4,10 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../chat/swipe_to_reply_wrapper.dart';
 import 'tile_viewport_scope.dart';
 
@@ -30,6 +32,22 @@ class TrackpadBackGestureWrapper extends StatefulWidget {
   final Widget child;
   final VoidCallback onTriggerBack;
   final bool Function()? canTriggerBack;
+
+  static int _modalBlockersCount = 0;
+
+  /// Suppresses workspace trackpad back gestures while a modal fullscreen
+  /// overlay (such as the media viewer) is active.
+  static void pushModalBlocker() {
+    _modalBlockersCount++;
+  }
+
+  static void popModalBlocker() {
+    if (_modalBlockersCount > 0) {
+      _modalBlockersCount--;
+    }
+  }
+
+  static bool get isBlockedByModal => _modalBlockersCount > 0;
 
   const TrackpadBackGestureWrapper({
     super.key,
@@ -57,6 +75,8 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
   TrackpadReplyTarget? _activeReplyWrapper;
   bool _thresholdReached = false;
   String? _tileId;
+  Offset? _lastPointerPosition;
+  int? _lastPointerViewId;
 
   @override
   void initState() {
@@ -96,7 +116,39 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
     super.dispose();
   }
 
+  void _recordPointerLocation(PointerEvent event) {
+    _lastPointerPosition = event.position;
+    _lastPointerViewId = event.viewId;
+  }
+
+  bool _hasHorizontalBlockerUnderCursor() {
+    final pos = _lastPointerPosition;
+    final viewId = _lastPointerViewId;
+    if (pos == null || viewId == null || !mounted) return false;
+
+    final result = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(result, pos, viewId);
+
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (target is RenderSwipeBackBlocker && target.enabled) {
+        return true;
+      }
+      if (target is RenderViewportBase && target.axis == Axis.horizontal) {
+        final offset = target.offset;
+        if (offset is ScrollPosition &&
+            offset.hasContentDimensions &&
+            offset.pixels > offset.minScrollExtent + 1.0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   bool _canTriggerBackNow() {
+    if (TrackpadBackGestureWrapper.isBlockedByModal) return false;
+    if (_hasHorizontalBlockerUnderCursor()) return false;
     return widget.canTriggerBack == null || widget.canTriggerBack!();
   }
 
@@ -246,6 +298,7 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
   }
 
   void _onPanZoomStart(PointerPanZoomStartEvent event) {
+    _recordPointerLocation(event);
     _WslTouchpadBridge.instance.markHovered(this);
     if (_WslTouchpadBridge.instance.isHandlingActiveGesture) return;
     _startGesture();
@@ -275,13 +328,28 @@ class _TrackpadBackGestureWrapperState extends State<TrackpadBackGestureWrapper>
 
     return MouseRegion(
       opaque: false,
-      onEnter: (_) => _WslTouchpadBridge.instance.markHovered(this),
-      onHover: (_) => _WslTouchpadBridge.instance.markHovered(this),
+      onEnter: (event) {
+        _recordPointerLocation(event);
+        _WslTouchpadBridge.instance.markHovered(this);
+      },
+      onHover: (event) {
+        _recordPointerLocation(event);
+        _WslTouchpadBridge.instance.markHovered(this);
+      },
       onExit: (_) => _WslTouchpadBridge.instance.unmarkHovered(this),
       child: Listener(
-        onPointerHover: (_) => _WslTouchpadBridge.instance.markHovered(this),
-        onPointerMove: (_) => _WslTouchpadBridge.instance.markHovered(this),
-        onPointerDown: (_) => _WslTouchpadBridge.instance.markHovered(this),
+        onPointerHover: (event) {
+          _recordPointerLocation(event);
+          _WslTouchpadBridge.instance.markHovered(this);
+        },
+        onPointerMove: (event) {
+          _recordPointerLocation(event);
+          _WslTouchpadBridge.instance.markHovered(this);
+        },
+        onPointerDown: (event) {
+          _recordPointerLocation(event);
+          _WslTouchpadBridge.instance.markHovered(this);
+        },
         onPointerSignal: _onPointerSignal,
         onPointerPanZoomStart: _onPanZoomStart,
         onPointerPanZoomUpdate: _onPanZoomUpdate,

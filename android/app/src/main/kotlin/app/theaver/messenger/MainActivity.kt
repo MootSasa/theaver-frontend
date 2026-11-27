@@ -4,11 +4,17 @@ import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.hardware.display.DisplayManager
+import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
 import android.view.Display
 import android.view.MotionEvent
 import android.view.Surface
@@ -17,23 +23,33 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.WebView
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugins.webviewflutter.WebViewFlutterAndroidExternalApi
+import app.theaver.messenger.notifications.NativeNotificationsChannel
+import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
 import java.util.Collections
 import java.util.WeakHashMap
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 class MainActivity : FlutterFragmentActivity() {
 
     companion object {
         private var currentActivityRef: WeakReference<MainActivity>? = null
+        private const val REQUEST_PICK_SOUND = 47021
 
         fun getCurrentActivity(): MainActivity? = currentActivityRef?.get()
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val snapshotExecutor = Executors.newSingleThreadExecutor()
     private val hookedSurfaceHolders: MutableSet<SurfaceHolder> =
+        Collections.newSetFromMap(WeakHashMap())
+    private val lockedWebViews: MutableSet<WebView> =
         Collections.newSetFromMap(WeakHashMap())
     private var cachedFlutterSurfaceViewRef: WeakReference<SurfaceView>? = null
     private var targetRefreshRateHz: Float = 0f
@@ -51,6 +67,7 @@ class MainActivity : FlutterFragmentActivity() {
         super.onCreate(savedInstanceState)
         currentActivityRef = WeakReference(this)
         applyLockScreenFlagsIfNeeded(intent)
+        NativeNotificationsChannel.handleIntent(intent)
         applyHighRefreshRate()
         window?.decorView?.post { applyHighRefreshRate() }
     }
@@ -59,11 +76,13 @@ class MainActivity : FlutterFragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         applyLockScreenFlagsIfNeeded(intent)
+        NativeNotificationsChannel.handleIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
         currentActivityRef = WeakReference(this)
+        ApkInstallerHandler.onActivityResume(applicationContext)
         val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
         dm?.registerDisplayListener(displayListener, mainHandler)
         applyHighRefreshRate()
@@ -71,6 +90,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onPause() {
+        try {
+            android.webkit.CookieManager.getInstance().flush()
+        } catch (_: Throwable) {}
         val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
         dm?.unregisterDisplayListener(displayListener)
         super.onPause()
@@ -98,12 +120,199 @@ class MainActivity : FlutterFragmentActivity() {
         if (currentActivityRef?.get() === this) {
             currentActivityRef = null
         }
+        BrowserOtpChannel.dispose()
+        snapshotExecutor.shutdown()
         super.onDestroy()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         PushDetectorHandler.register(flutterEngine, applicationContext)
+        NativeNotificationsChannel.register(flutterEngine, applicationContext)
+        ApkInstallerHandler.register(flutterEngine, applicationContext)
+        BrowserStorageChannel.register(flutterEngine, applicationContext) { targetUrl, webViewId ->
+            resolveTargetWebView(flutterEngine, targetUrl, webViewId)
+        }
+        BrowserOtpChannel.register(flutterEngine, this)
+        DisplayCutoutChannel.register(flutterEngine, this)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.theaver.messenger/screen_security"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setSecureFlag" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    runOnUiThread {
+                        try {
+                            if (enabled) {
+                                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                            } else {
+                                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("screen_security_error", e.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.theaver.messenger/webview_snapshot"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "captureWebView" -> {
+                    val urlArg = call.argument<String>("url")
+                    val webViewId = call.argument<Number>("webViewId")?.toLong()
+                    val maxWidth = (call.argument<Int>("maxWidth") ?: 960).coerceIn(120, 1080)
+                    val quality = (call.argument<Int>("quality") ?: 86).coerceIn(20, 95)
+                    val topCropDp = (call.argument<Number>("topCropDp")?.toDouble() ?: 0.0).coerceAtLeast(0.0)
+                    runOnUiThread {
+                        var bitmap: Bitmap? = null
+                        try {
+                            val webView = resolveTargetWebView(flutterEngine, urlArg, webViewId)
+                            if (webView == null || webView.width <= 0 || webView.height <= 0) {
+                                result.success(null)
+                                return@runOnUiThread
+                            }
+                            val scale = (maxWidth.toFloat() / webView.width.toFloat()).coerceIn(0.15f, 1.0f)
+                            val rawTopCropPx = (topCropDp * resources.displayMetrics.density).toInt()
+                            val effectiveTopCropPx = (rawTopCropPx - webView.scrollY).coerceIn(0, (webView.height * 0.35f).toInt())
+                            val visibleHeight = (webView.height - effectiveTopCropPx).coerceAtLeast(1)
+                            val outW = (webView.width * scale).toInt().coerceAtLeast(1)
+                            val outH = (visibleHeight * scale).toInt().coerceAtLeast(1)
+                            val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+                            bitmap = bmp
+                            val canvas = Canvas(bmp)
+                            canvas.scale(scale, scale)
+                            canvas.translate(-webView.scrollX.toFloat(), -(webView.scrollY + effectiveTopCropPx).toFloat())
+                            webView.draw(canvas)
+                            snapshotExecutor.execute {
+                                val bytes = try {
+                                    val out = ByteArrayOutputStream()
+                                    bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
+                                    out.toByteArray()
+                                } catch (_: Throwable) {
+                                    null
+                                } finally {
+                                    if (!bmp.isRecycled) {
+                                        bmp.recycle()
+                                    }
+                                }
+                                mainHandler.post { result.success(bytes) }
+                            }
+                        } catch (_: Throwable) {
+                            bitmap?.let {
+                                if (!it.isRecycled) {
+                                    it.recycle()
+                                }
+                            }
+                            result.success(null)
+                        }
+                    }
+                }
+                "setWebViewInteractionLocked" -> {
+                    val urlArg = call.argument<String>("url")
+                    val webViewId = call.argument<Number>("webViewId")?.toLong()
+                    val locked = call.argument<Boolean>("locked") ?: false
+                    runOnUiThread {
+                        try {
+                            val targetWv = resolveTargetWebView(flutterEngine, urlArg, webViewId)
+                            if (locked) {
+                                if (targetWv != null) {
+                                    // Halts active kinetic fling scrolling and cancels in-flight touches.
+                                    targetWv.flingScroll(0, 0)
+                                    targetWv.scrollTo(targetWv.scrollX, targetWv.scrollY)
+                                    val now = SystemClock.uptimeMillis()
+                                    val cancelEvt = MotionEvent.obtain(
+                                        now,
+                                        now,
+                                        MotionEvent.ACTION_CANCEL,
+                                        0f,
+                                        0f,
+                                        0
+                                    )
+                                    targetWv.dispatchTouchEvent(cancelEvt)
+                                    cancelEvt.recycle()
+                                    lockedWebViews.add(targetWv)
+                                    targetWv.setOnTouchListener { _, _ -> true }
+                                }
+                            } else {
+                                targetWv?.let { wv ->
+                                    wv.setOnTouchListener(null)
+                                    lockedWebViews.remove(wv)
+                                }
+                            }
+                            result.success(true)
+                        } catch (_: Throwable) {
+                            result.success(false)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun resolveTargetWebView(
+        flutterEngine: FlutterEngine,
+        targetUrl: String?,
+        webViewId: Long?,
+    ): WebView? {
+        if (webViewId != null) {
+            val byId = try {
+                @Suppress("DEPRECATION")
+                WebViewFlutterAndroidExternalApi.getWebView(flutterEngine, webViewId)
+            } catch (_: Throwable) {
+                null
+            }
+            if (byId != null) return byId
+        }
+        return findTargetWebView(window?.decorView, targetUrl)
+    }
+
+    private fun findTargetWebView(root: View?, targetUrl: String?): WebView? {
+        if (root == null) return null
+        val candidates = ArrayList<WebView>()
+        collectVisibleWebViews(root, candidates)
+        if (candidates.isEmpty()) return null
+        val query = targetUrl?.trim().orEmpty()
+        if (query.isNotEmpty()) {
+            val exact = candidates.firstOrNull { (it.url ?: "") == query }
+            if (exact != null) return exact
+            val queryHost = try {
+                Uri.parse(query).host.orEmpty()
+            } catch (_: Exception) {
+                ""
+            }
+            if (queryHost.isNotEmpty()) {
+                val hostMatch = candidates.firstOrNull {
+                    val host = try {
+                        Uri.parse(it.url ?: "").host.orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    host.equals(queryHost, ignoreCase = true)
+                }
+                if (hostMatch != null) return hostMatch
+            }
+        }
+        return candidates.maxByOrNull { it.width.toLong() * it.height.toLong() }
+    }
+
+    private fun collectVisibleWebViews(view: View, out: MutableList<WebView>) {
+        if (!view.isShown || view.width <= 0 || view.height <= 0) return
+        if (view is WebView) {
+            out.add(view)
+            return
+        }
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                collectVisibleWebViews(view.getChildAt(i), out)
+            }
+        }
     }
 
     /**
@@ -253,10 +462,78 @@ class MainActivity : FlutterFragmentActivity() {
      * с типом FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION.
      */
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == REQUEST_PICK_SOUND) {
+            deliverPickedSound(resultCode, data)
+            return
+        }
+        if (BrowserOtpChannel.handleActivityResult(requestCode, resultCode, data)) {
+            return
+        }
         if (resultCode == Activity.RESULT_OK && data != null) {
             CallForegroundService.promoteToMediaProjection(applicationContext)
         }
         super.onActivityResult(requestCode, resultCode, data)
+    }
+
+    // ===================== System notification sound picker =====================
+
+    private var pendingSoundResult: MethodChannel.Result? = null
+
+    /**
+     * Opens the system ringtone picker (TYPE_NOTIFICATION), like Telegram does for
+     * per-chat notification sounds. Result map: {cancelled, uri, title} where
+     * uri == null means "system default" and uri == "" means "silent".
+     */
+    fun pickNotificationSound(currentUri: String?, result: MethodChannel.Result) {
+        pendingSoundResult?.success(mapOf("cancelled" to true))
+        pendingSoundResult = result
+        try {
+            val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, Settings.System.DEFAULT_NOTIFICATION_URI)
+                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Звук уведомлений")
+                val existing: Uri? = when {
+                    currentUri == null -> Settings.System.DEFAULT_NOTIFICATION_URI
+                    currentUri.isEmpty() -> null
+                    else -> Uri.parse(currentUri)
+                }
+                putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, existing)
+            }
+            startActivityForResult(intent, REQUEST_PICK_SOUND)
+        } catch (e: Exception) {
+            pendingSoundResult = null
+            result.error("picker_unavailable", e.message, null)
+        }
+    }
+
+    private fun deliverPickedSound(resultCode: Int, data: Intent?) {
+        val result = pendingSoundResult ?: return
+        pendingSoundResult = null
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            result.success(mapOf("cancelled" to true))
+            return
+        }
+        val picked: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        }
+        when {
+            picked == null -> result.success(mapOf("cancelled" to false, "uri" to "", "title" to "Без звука"))
+            picked == Settings.System.DEFAULT_NOTIFICATION_URI ->
+                result.success(mapOf("cancelled" to false, "uri" to null, "title" to "По умолчанию"))
+            else -> {
+                val title = try {
+                    RingtoneManager.getRingtone(this, picked)?.getTitle(this)
+                } catch (_: Exception) {
+                    null
+                }
+                result.success(mapOf("cancelled" to false, "uri" to picked.toString(), "title" to (title ?: "Мелодия")))
+            }
+        }
     }
 
     fun enableCallLockScreenWakeup(enable: Boolean) {

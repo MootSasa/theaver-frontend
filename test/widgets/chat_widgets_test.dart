@@ -181,7 +181,10 @@ void main() {
       );
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('chat_shimmer_loading')),
+        findsOneWidget,
+      );
     });
 
     testWidgets('Renders empty state when itemCount is 0',
@@ -2138,11 +2141,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Locate the outer action panel Container (width == 215)
+      // Locate the outer action panel Container (width == 225)
       final actionPanelFinder = find.descendant(
         of: find.byType(MessageContextMenu),
         matching: find.byWidgetPredicate(
-          (w) => w is Container && w.constraints?.maxWidth == 215.0,
+          (w) => w is Container && w.constraints?.maxWidth == 225.0,
         ),
       );
       expect(actionPanelFinder, findsOneWidget);
@@ -2483,7 +2486,7 @@ void main() {
       final actionPanelFinder = find.descendant(
         of: find.byType(MessageContextMenu),
         matching: find.byWidgetPredicate(
-          (w) => w is Container && w.constraints?.maxWidth == 215.0,
+          (w) => w is Container && w.constraints?.maxWidth == 225.0,
         ),
       );
 
@@ -2522,8 +2525,8 @@ void main() {
 
       final Rect outgoingEmojiRect = tester.getRect(emojiPanelFinder);
       final Rect outgoingActionRect = tester.getRect(actionPanelFinder);
-      // Total menu width is 267 (44 + 8 + 215), placed 8px to the left of 440 -> left = 440 - 267 - 8 = 165
-      expect(outgoingEmojiRect.left, closeTo(165.0, 0.5));
+      // Total menu width is 277 (44 + 8 + 225), placed 8px to the left of 440 -> left = 440 - 277 - 8 = 155
+      expect(outgoingEmojiRect.left, closeTo(155.0, 0.5));
       expect(outgoingActionRect.right, closeTo(440.0 - 8.0, 0.5));
       // Order remains [Reactions] -> [Actions] left-to-right
       expect(outgoingEmojiRect.left, lessThan(outgoingActionRect.left));

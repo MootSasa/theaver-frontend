@@ -1,80 +1,90 @@
 import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:image_cropper/image_cropper.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:image_cropper/image_cropper.dart' show CroppedFile;
 import 'package:path/path.dart' as path;
-import '../l10n/app_localizations.dart';
+import 'package:path_provider/path_provider.dart';
 
-/// Утилита для обрезки и сжатия аватаров
+import '../models/avatar_editor_models.dart';
+import '../utils/avatar_studio_renderer.dart';
+import '../widgets/avatar_editor/theav_avatar_editor_screen.dart';
+
+/// Утилита для редактирования, обрезки и сжатия аватаров через встроенную
+/// студию [TheavAvatarEditorScreen] (кроссплатформенно: mobile, desktop, web).
 class AvatarCropUtils {
-  /// Максимальный размер аватара в пикселях
-  static const int maxAvatarSize = 1024;
+  /// Максимальный размер стороны аватара в пикселях.
+  static const int maxAvatarSize = 1600;
 
-  /// Качество сжатия (0-100)
+  /// Качество сжатия (0-100).
   static const int compressionQuality = 90;
 
-  /// Максимальный размер файла в байтах (2 MB)
-  static const int maxFileSizeBytes = 2 * 1024 * 1024;
+  /// Максимальный размер файла в байтах (3 MB).
+  static const int maxFileSizeBytes = 3 * 1024 * 1024;
 
-  /// Обрезает изображение до квадратной формы
-  /// 
-  /// [imagePath] - путь к исходному изображению
-  /// Возвращает путь к обрезанному изображению или null если обрезка отменена
+  /// Открывает встроенный кроссплатформенный редактор аватара [TheavAvatarEditorScreen].
   static Future<CroppedFile?> cropAvatar({
     required String imagePath,
     required BuildContext context,
+    AvatarShapeMask maskShape = AvatarShapeMask.circle,
+    AvatarEditorCtaMode ctaMode = AvatarEditorCtaMode.done,
+    String? subjectName,
+    AvatarCropAspectMode? initialAspectMode,
   }) async {
-    debugPrint('[cropAvatar] Step 1: Starting crop for $imagePath');
-    final l10n = AppLocalizations.of(context);
+    debugPrint('[cropAvatar] Step 1: Opening studio editor for $imagePath');
 
-    debugPrint('[cropAvatar] Step 2: Calling ImageCropper().cropImage()...');
-    final croppedFile = await ImageCropper().cropImage(
-      sourcePath: imagePath,
-      maxWidth: maxAvatarSize,
-      maxHeight: maxAvatarSize,
-      aspectRatio: const CropAspectRatio(ratioX: 1, ratioY: 1),
-      compressQuality: compressionQuality,
-      compressFormat: ImageCompressFormat.jpg,
-      uiSettings: [
-        AndroidUiSettings(
-          toolbarTitle: l10n?.translate('avatar_crop_title') ?? 'Обрезка аватара',
-          toolbarColor: const Color(0xFF0088CC),
-          statusBarColor: const Color(0xFF006699),
-          toolbarWidgetColor: Colors.white,
-          activeControlsWidgetColor: const Color(0xFF0088CC),
-          initAspectRatio: CropAspectRatioPreset.square,
-          lockAspectRatio: true,
-          showCropGrid: true,
-          cropGridColor: Colors.white.withValues(alpha: 0.5),
-          cropFrameColor: Colors.white,
-          hideBottomControls: false,
-          aspectRatioPresets: [
-            CropAspectRatioPreset.square,
-          ],
-        ),
-        IOSUiSettings(
-          title: l10n?.translate('avatar_crop_title') ?? 'Обрезка аватара',
-          aspectRatioLockEnabled: true,
-          // Добавляем настройки для iOS
-          showActivitySheetOnDone: true,
-          showCancelConfirmationDialog: true,
-          rotateButtonsHidden: false,
-          rotateClockwiseButtonHidden: false,
-          aspectRatioPickerButtonHidden: true,
-          resetAspectRatioEnabled: false,
-        ),
-      ],
+    Uint8List? webBytes;
+    if (kIsWeb) {
+      try {
+        webBytes = await XFile(imagePath).readAsBytes();
+      } catch (e) {
+        debugPrint('[cropAvatar] Web readAsBytes failed: $e');
+        return null;
+      }
+    }
+
+    if (!context.mounted) return null;
+
+    final String fileName = kIsWeb
+        ? 'avatar.jpg'
+        : (path.basename(imagePath).isNotEmpty
+            ? path.basename(imagePath)
+            : 'avatar.jpg');
+
+    final AvatarPickResult? result = await TheavAvatarEditorScreen.open(
+      context: context,
+      initialBytes: webBytes,
+      initialFilePath: kIsWeb ? null : imagePath,
+      fileName: fileName,
+      maskShape: maskShape,
+      ctaMode: ctaMode,
+      subjectName: subjectName,
+      initialAspectMode: initialAspectMode,
     );
 
-    debugPrint('[cropAvatar] Step 3: cropImage() returned - croppedFile=${croppedFile?.path}');
-    return croppedFile;
+    if (result == null) {
+      debugPrint('[cropAvatar] Step 2: Cancelled by user');
+      return null;
+    }
+
+    if (result.file != null) {
+      debugPrint('[cropAvatar] Step 2: Studio returned ${result.file!.path}');
+      return CroppedFile(result.file!.path);
+    }
+
+    if (result.bytes != null && result.bytes!.isNotEmpty && !kIsWeb) {
+      final dir = await getTemporaryDirectory();
+      final outPath = path.join(dir.path, result.fileName);
+      await File(outPath).writeAsBytes(result.bytes!, flush: true);
+      return CroppedFile(outPath);
+    }
+
+    return null;
   }
 
-  /// Сжимает изображение до оптимального размера
-  /// 
-  /// [imagePath] - путь к исходному изображению
-  /// Возвращает путь к сжатому изображению
+  /// Сжимает изображение до оптимального размера с сохранением пропорций исходного кадра.
   static Future<String> compressAvatar(String imagePath) async {
     debugPrint('[compressAvatar] Step 1: Starting compression for $imagePath');
     final dir = await getTemporaryDirectory();
@@ -83,47 +93,64 @@ class AvatarCropUtils {
       'avatar_${DateTime.now().millisecondsSinceEpoch}.jpg',
     );
 
-    // Первичное сжатие
     debugPrint('[compressAvatar] Step 2: First compression pass...');
-    final XFile? firstCompressed = await FlutterImageCompress.compressAndGetFile(
-      imagePath,
-      targetPath,
-      quality: compressionQuality,
-      minWidth: maxAvatarSize,
-      minHeight: maxAvatarSize,
-      format: CompressFormat.jpeg,
-    );
+    XFile? firstCompressed;
+    try {
+      firstCompressed = await FlutterImageCompress.compressAndGetFile(
+        imagePath,
+        targetPath,
+        quality: compressionQuality,
+        minWidth: 1280,
+        minHeight: 1280,
+        keepExif: false,
+        format: CompressFormat.jpeg,
+      );
+    } catch (e) {
+      debugPrint(
+        '[compressAvatar] Step 2-fallback (platform compress unavailable): $e',
+      );
+      return imagePath;
+    }
 
     if (firstCompressed == null) {
-      debugPrint('[compressAvatar] Step 2-warn: First compression returned null, using original');
+      debugPrint(
+        '[compressAvatar] Step 2-warn: First compression returned null, using original',
+      );
       return imagePath;
     }
 
     String compressedPath = firstCompressed.path;
     File file = File(compressedPath);
     int fileSize = await file.length();
-    debugPrint('[compressAvatar] Step 2-ok: First compression done, size=$fileSize bytes');
+    debugPrint(
+      '[compressAvatar] Step 2-ok: First compression done, size=$fileSize bytes',
+    );
 
     int quality = compressionQuality;
     while (fileSize > maxFileSizeBytes && quality > 10) {
       quality -= 10;
-      
+
       final newTargetPath = path.join(
         dir.path,
         'avatar_${DateTime.now().millisecondsSinceEpoch}_q$quality.jpg',
       );
 
-      final XFile? newCompressedFile = await FlutterImageCompress.compressAndGetFile(
-        compressedPath,
-        newTargetPath,
-        quality: quality,
-        minWidth: maxAvatarSize,
-        minHeight: maxAvatarSize,
-        format: CompressFormat.jpeg,
-      );
+      XFile? newCompressedFile;
+      try {
+        newCompressedFile = await FlutterImageCompress.compressAndGetFile(
+          compressedPath,
+          newTargetPath,
+          quality: quality,
+          minWidth: 1280,
+          minHeight: 1280,
+          keepExif: false,
+          format: CompressFormat.jpeg,
+        );
+      } catch (_) {
+        break;
+      }
 
       if (newCompressedFile != null) {
-        // Удаляем старый сжатый файл
         await file.delete();
         compressedPath = newCompressedFile.path;
         file = File(compressedPath);
@@ -136,36 +163,58 @@ class AvatarCropUtils {
     return compressedPath;
   }
 
-  /// Полный пайплайн обработки аватара: обрезка + сжатие
-  /// 
-  /// [imagePath] - путь к исходному изображению
-  /// [context] - контекст для локализации
-  /// Возвращает путь к обработанному изображению или null если отменено
+  /// Полный пайплайн обработки аватара: студийный редактор + (при необходимости) сжатие.
   static Future<String?> processAvatar({
     required String imagePath,
     required BuildContext context,
+    AvatarShapeMask maskShape = AvatarShapeMask.circle,
+    AvatarEditorCtaMode ctaMode = AvatarEditorCtaMode.done,
+    String? subjectName,
+    AvatarCropAspectMode? initialAspectMode,
   }) async {
-    debugPrint('[processAvatar] Step 1: Starting full pipeline for $imagePath');
-    // Шаг 1: Обрезка изображения
+    debugPrint('[processAvatar] Step 1: Starting studio pipeline for $imagePath');
     final croppedFile = await cropAvatar(
       imagePath: imagePath,
       context: context,
+      maskShape: maskShape,
+      ctaMode: ctaMode,
+      subjectName: subjectName,
+      initialAspectMode: initialAspectMode,
     );
 
     if (croppedFile == null) {
-      debugPrint('[processAvatar] Step 1-cancel: cropAvatar returned null (user cancelled?)');
+      debugPrint(
+        '[processAvatar] Step 1-cancel: cropAvatar returned null (user cancelled)',
+      );
       return null;
     }
 
-    debugPrint('[processAvatar] Step 2: Crop done, starting compression for ${croppedFile.path}');
-    // Шаг 2: Сжатие изображения
-    final compressedPath = await compressAvatar(croppedFile.path);
+    if (!kIsWeb) {
+      final File outFile = File(croppedFile.path);
+      if (await outFile.exists()) {
+        final Uint8List bytes = await outFile.readAsBytes();
+        if (AvatarStudioRenderer.isAnimatedMediaBytes(bytes, croppedFile.path)) {
+          debugPrint('[processAvatar] Preserved animated avatar: ${croppedFile.path}');
+          return croppedFile.path;
+        }
+        if (bytes.length <= maxFileSizeBytes) {
+          debugPrint(
+            '[processAvatar] Studio output already within limit (${bytes.length} bytes)',
+          );
+          return croppedFile.path;
+        }
+      }
+    }
 
+    debugPrint(
+      '[processAvatar] Step 2: Running fallback compression for ${croppedFile.path}',
+    );
+    final compressedPath = await compressAvatar(croppedFile.path);
     debugPrint('[processAvatar] Step 3: Pipeline complete, result=$compressedPath');
     return compressedPath;
   }
 
-  /// Получает размер файла в человекочитаемом формате
+  /// Получает размер файла в человекочитаемом формате.
   static String getFileSizeString(int bytes) {
     if (bytes < 1024) {
       return '$bytes B';

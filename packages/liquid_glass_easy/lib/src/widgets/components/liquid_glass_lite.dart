@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
+import '../lens/liquid_glass_batch.dart';
 import '../utils/liquid_glass_light.dart';
 import '../utils/liquid_glass_shape.dart';
 
@@ -200,9 +201,14 @@ class LiquidGlassLite extends StatelessWidget {
     );
   }
 
+  /// The body's clip: always the exact outline, the curve the rim is cut to,
+  /// so the two meet at the corners.
+  LiquidGlassShape get _bodyClip =>
+      _lit.copyWith(clipQuality: LiquidGlassClipQuality.exact);
+
   /// A flat fill of [tint], cut to the outline like the frost is.
   Widget _fill(Color tint) => liquidGlassClip(
-        shape: _lit,
+        shape: _bodyClip,
         shapeScale: shapeScale,
         child: ColoredBox(color: tint),
       );
@@ -210,7 +216,7 @@ class LiquidGlassLite extends StatelessWidget {
   /// The glass itself: the backdrop, magnified and blurred, cut to the
   /// outline. Both go through one filter, so they share one read.
   Widget _frost() => liquidGlassClip(
-        shape: _lit,
+        shape: _bodyClip,
         shapeScale: shapeScale,
         child: _GlassBackdrop(
           blur: blur,
@@ -254,11 +260,19 @@ class _GlassBackdrop extends SingleChildRenderObjectWidget {
   final double blur;
   final double magnification;
 
+  /// The enclosing batch's key on Impeller, where a shared key exists; Skia
+  /// has none and takes its own read.
+  static int? _backdropIdFor(BuildContext context) =>
+      ui.ImageFilter.isShaderFilterSupported
+          ? LiquidGlassBatch.backdropIdOf(context)
+          : null;
+
   @override
   _RenderGlassBackdrop createRenderObject(BuildContext context) =>
       _RenderGlassBackdrop(
         blur: blur,
         magnification: magnification,
+        backdropId: _backdropIdFor(context),
       );
 
   @override
@@ -268,7 +282,8 @@ class _GlassBackdrop extends SingleChildRenderObjectWidget {
   ) {
     renderObject
       ..blur = blur
-      ..magnification = magnification;
+      ..magnification = magnification
+      ..backdropId = _backdropIdFor(context);
   }
 }
 
@@ -276,8 +291,10 @@ class _RenderGlassBackdrop extends RenderProxyBox {
   _RenderGlassBackdrop({
     required double blur,
     required double magnification,
+    required int? backdropId,
   })  : _blur = blur,
-        _magnification = magnification;
+        _magnification = magnification,
+        _backdropId = backdropId;
 
   double _blur;
   set blur(double value) {
@@ -293,8 +310,16 @@ class _RenderGlassBackdrop extends RenderProxyBox {
     markNeedsPaint();
   }
 
-  final LayerHandle<BackdropFilterLayer> _handle =
-      LayerHandle<BackdropFilterLayer>();
+  /// Inside a batch the frost reads the batch's copy instead of its own.
+  int? _backdropId;
+  set backdropId(int? value) {
+    if (_backdropId == value) return;
+    _backdropId = value;
+    markNeedsPaint();
+  }
+
+  final LayerHandle<LiquidGlassBatchBackdropLayer> _handle =
+      LayerHandle<LiquidGlassBatchBackdropLayer>();
 
   @override
   bool get alwaysNeedsCompositing => true;
@@ -307,8 +332,11 @@ class _RenderGlassBackdrop extends RenderProxyBox {
       super.paint(context, offset);
       return;
     }
-    final BackdropFilterLayer layer = _handle.layer ??= BackdropFilterLayer();
-    layer.filter = filter;
+    final LiquidGlassBatchBackdropLayer layer =
+        _handle.layer ??= LiquidGlassBatchBackdropLayer();
+    layer
+      ..filter = filter
+      ..backdropId = _backdropId;
     context.pushLayer(layer, super.paint, offset);
   }
 

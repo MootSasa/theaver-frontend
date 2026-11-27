@@ -10,6 +10,15 @@ class SettingsService {
   factory SettingsService() => _instance;
 
   late SharedPreferences _prefs;
+  String? _currentUserId;
+
+  String _k(String baseKey) {
+    final uid = _currentUserId;
+    if (uid != null && uid.isNotEmpty) {
+      return 'u_${uid}_$baseKey';
+    }
+    return baseKey;
+  }
 
   // Ключи для хранения настроек
   static const String _profileKey = 'user_profile';
@@ -20,10 +29,12 @@ class SettingsService {
   static const String _glassModeKey = 'glass_mode';
   static const String _manualLightAngleKey = 'manual_light_angle';
   static const String _glassBlurKey = 'glass_blur';
+  static const String _glassShaderBlurKey = 'glass_shader_blur';
   static const String _notificationSettingsKey = 'notification_settings';
   static const String _chatNotificationSettingsKey = 'chat_notification_settings';
   static const String _sendByEnterKey = 'chat_send_by_enter';
   static const String _raiseToListenKey = 'chat_raise_to_listen';
+  static const String _inAppBrowserKey = 'chat_in_app_browser';
 
   // Кэшированные данные
   UserProfile? _cachedProfile;
@@ -34,26 +45,127 @@ class SettingsService {
   GlassMode? _cachedGlassMode;
   double? _cachedManualLightAngle;
   double? _cachedGlassBlur;
+  bool? _cachedGlassShaderBlur;
   GlobalNotificationSettings? _cachedNotificationSettings;
   Map<String, ChatNotificationSettings>? _cachedChatNotificationSettings;
   final ValueNotifier<bool> sendByEnterNotifier = ValueNotifier<bool>(true);
   final ValueNotifier<bool> raiseToListenNotifier = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> inAppBrowserNotifier = ValueNotifier<bool>(true);
 
   /// Инициализация сервиса
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+    _currentUserId = _prefs.getString('current_account_id');
     await _loadSettings();
   }
 
+  /// Перезагрузить все настройки для указанного аккаунта
+  Future<void> reloadForUser(String? userId) async {
+    _currentUserId = userId;
+    _cachedProfile = null;
+    _cachedFolders = null;
+    _cachedStorageSettings = null;
+    _cachedPowerSavingSettings = null;
+    _cachedLiquidGlassDesign = null;
+    _cachedGlassMode = null;
+    _cachedManualLightAngle = null;
+    _cachedGlassBlur = null;
+    _cachedGlassShaderBlur = null;
+    _cachedGlassShaderBlur = null;
+    _cachedNotificationSettings = null;
+    _cachedChatNotificationSettings = null;
+    await _loadSettings();
+  }
+
+  /// Copies pre-login device onboarding glass & shader appearance settings into
+  /// the authenticated user's namespace if that user has no saved overrides yet.
+  Future<void> adoptDeviceOnboardingAppearanceIfUnset(String userId) async {
+    if (userId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    _prefs = prefs;
+    String userKey(String base) => 'u_${userId}_$base';
+
+    if (!prefs.containsKey(userKey(_glassModeKey)) &&
+        prefs.containsKey(_glassModeKey)) {
+      final modeIdx = prefs.getInt(_glassModeKey);
+      if (modeIdx != null) {
+        await prefs.setInt(userKey(_glassModeKey), modeIdx);
+      }
+    }
+    for (final boolKey in [_liquidGlassDesignKey, _glassShaderBlurKey]) {
+      if (!prefs.containsKey(userKey(boolKey)) && prefs.containsKey(boolKey)) {
+        final v = prefs.getBool(boolKey);
+        if (v != null) {
+          await prefs.setBool(userKey(boolKey), v);
+        }
+      }
+    }
+    for (final dblKey in [_glassBlurKey, _manualLightAngleKey]) {
+      if (!prefs.containsKey(userKey(dblKey)) && prefs.containsKey(dblKey)) {
+        final v = prefs.getDouble(dblKey);
+        if (v != null) {
+          await prefs.setDouble(userKey(dblKey), v);
+        }
+      }
+    }
+  }
+
+  Future<void> _migrateLegacyKeysIfNeeded() async {
+    final uid = _currentUserId;
+    if (uid == null || uid.isEmpty) return;
+    final claimedBy = _prefs.getString('legacy_settings_claimed_by');
+    if (claimedBy != null && claimedBy.isNotEmpty) return;
+
+    const legacyStringKeys = [
+      _profileKey,
+      _foldersKey,
+      _storageSettingsKey,
+      _powerSavingKey,
+      _notificationSettingsKey,
+      _chatNotificationSettingsKey,
+    ];
+    for (final k in legacyStringKeys) {
+      if (!_prefs.containsKey(_k(k)) && _prefs.containsKey(k)) {
+        final v = _prefs.getString(k);
+        if (v != null) await _prefs.setString(_k(k), v);
+      }
+    }
+    const legacyBoolKeys = [
+      _liquidGlassDesignKey,
+      _sendByEnterKey,
+      _raiseToListenKey,
+      'storage_settings_v2_manual_default',
+    ];
+    for (final k in legacyBoolKeys) {
+      if (!_prefs.containsKey(_k(k)) && _prefs.containsKey(k)) {
+        final v = _prefs.getBool(k);
+        if (v != null) await _prefs.setBool(_k(k), v);
+      }
+    }
+    if (!_prefs.containsKey(_k(_glassModeKey)) && _prefs.containsKey(_glassModeKey)) {
+      final v = _prefs.getInt(_glassModeKey);
+      if (v != null) await _prefs.setInt(_k(_glassModeKey), v);
+    }
+    for (final k in [_manualLightAngleKey, _glassBlurKey]) {
+      if (!_prefs.containsKey(_k(k)) && _prefs.containsKey(k)) {
+        final v = _prefs.getDouble(k);
+        if (v != null) await _prefs.setDouble(_k(k), v);
+      }
+    }
+    await _prefs.setString('legacy_settings_claimed_by', uid);
+  }
+
   Future<void> _loadSettings() async {
+    await _migrateLegacyKeysIfNeeded();
+
     // Загрузка профиля
-    final profileJson = _prefs.getString(_profileKey);
+    final profileJson = _prefs.getString(_k(_profileKey));
     if (profileJson != null) {
       _cachedProfile = UserProfile.fromJson(jsonDecode(profileJson));
     }
 
     // Загрузка папок
-    final foldersJson = _prefs.getString(_foldersKey);
+    final foldersJson = _prefs.getString(_k(_foldersKey));
     if (foldersJson != null) {
       _cachedFolders = List<String>.from(jsonDecode(foldersJson));
     } else {
@@ -61,9 +173,9 @@ class SettingsService {
     }
 
     // Загрузка настроек хранилища
-    const storageV2Key = 'storage_settings_v2_manual_default';
+    final storageV2Key = _k('storage_settings_v2_manual_default');
     final migratedToManualDefault = _prefs.getBool(storageV2Key) ?? false;
-    final storageJson = _prefs.getString(_storageSettingsKey);
+    final storageJson = _prefs.getString(_k(_storageSettingsKey));
     if (storageJson != null && migratedToManualDefault) {
       _cachedStorageSettings = StorageSettings.fromJson(jsonDecode(storageJson));
     } else {
@@ -72,7 +184,7 @@ class SettingsService {
         await _prefs.setBool(storageV2Key, true);
         if (storageJson != null) {
           await _prefs.setString(
-            _storageSettingsKey,
+            _k(_storageSettingsKey),
             jsonEncode(_cachedStorageSettings!.toJson()),
           );
         }
@@ -80,7 +192,7 @@ class SettingsService {
     }
 
     // Загрузка настроек энергосбережения
-    final powerSavingJson = _prefs.getString(_powerSavingKey);
+    final powerSavingJson = _prefs.getString(_k(_powerSavingKey));
     if (powerSavingJson != null) {
       _cachedPowerSavingSettings = PowerSavingSettings.fromJson(jsonDecode(powerSavingJson));
     } else {
@@ -88,10 +200,10 @@ class SettingsService {
     }
 
     // Загрузка настройки Liquid Glass дизайна
-    _cachedLiquidGlassDesign = _prefs.getBool(_liquidGlassDesignKey) ?? false;
+    _cachedLiquidGlassDesign = _prefs.getBool(_k(_liquidGlassDesignKey)) ?? false;
 
     // Загрузка режима стекла (новый формат)
-    final glassModeIndex = _prefs.getInt(_glassModeKey);
+    final glassModeIndex = _prefs.getInt(_k(_glassModeKey));
     if (glassModeIndex != null && glassModeIndex >= 0 && glassModeIndex < GlassMode.values.length) {
       _cachedGlassMode = GlassMode.values[glassModeIndex];
     } else if (_cachedLiquidGlassDesign == true) {
@@ -101,11 +213,12 @@ class SettingsService {
       _cachedGlassMode = GlassMode.disabled;
     }
 
-    _cachedManualLightAngle = _prefs.getDouble(_manualLightAngleKey) ?? 62.0;
-    _cachedGlassBlur = _prefs.getDouble(_glassBlurKey) ?? 8.0;
+    _cachedManualLightAngle = _prefs.getDouble(_k(_manualLightAngleKey)) ?? 62.0;
+    _cachedGlassBlur = _prefs.getDouble(_k(_glassBlurKey)) ?? 8.0;
+    _cachedGlassShaderBlur = _prefs.getBool(_k(_glassShaderBlurKey)) ?? true;
 
     // Загрузка глобальных настроек уведомлений
-    final notifJson = _prefs.getString(_notificationSettingsKey);
+    final notifJson = _prefs.getString(_k(_notificationSettingsKey));
     if (notifJson != null) {
       _cachedNotificationSettings = GlobalNotificationSettings.fromJson(jsonDecode(notifJson));
     } else {
@@ -113,7 +226,7 @@ class SettingsService {
     }
 
     // Загрузка per-chat настроек уведомлений
-    final chatNotifJson = _prefs.getString(_chatNotificationSettingsKey);
+    final chatNotifJson = _prefs.getString(_k(_chatNotificationSettingsKey));
     if (chatNotifJson != null) {
       final Map<String, dynamic> decoded = jsonDecode(chatNotifJson);
       _cachedChatNotificationSettings = decoded.map(
@@ -123,8 +236,9 @@ class SettingsService {
       _cachedChatNotificationSettings = {};
     }
 
-    sendByEnterNotifier.value = _prefs.getBool(_sendByEnterKey) ?? true;
-    raiseToListenNotifier.value = _prefs.getBool(_raiseToListenKey) ?? true;
+    sendByEnterNotifier.value = _prefs.getBool(_k(_sendByEnterKey)) ?? true;
+    raiseToListenNotifier.value = _prefs.getBool(_k(_raiseToListenKey)) ?? true;
+    inAppBrowserNotifier.value = _prefs.getBool(_k(_inAppBrowserKey)) ?? true;
   }
 
   // ============ Профиль ============
@@ -135,7 +249,7 @@ class SettingsService {
   /// Сохранить профиль пользователя
   Future<void> saveUserProfile(UserProfile profile) async {
     _cachedProfile = profile;
-    await _prefs.setString(_profileKey, jsonEncode(profile.toJson()));
+    await _prefs.setString(_k(_profileKey), jsonEncode(profile.toJson()));
   }
 
   /// Обновить профиль с сервера
@@ -152,7 +266,7 @@ class SettingsService {
   /// Сохранить список папок
   Future<void> saveFolders(List<String> folders) async {
     _cachedFolders = folders;
-    await _prefs.setString(_foldersKey, jsonEncode(folders));
+    await _prefs.setString(_k(_foldersKey), jsonEncode(folders));
   }
 
   /// Добавить папку
@@ -160,7 +274,7 @@ class SettingsService {
     _cachedFolders ??= [];
     if (!_cachedFolders!.contains(folderName)) {
       _cachedFolders!.add(folderName);
-      await _prefs.setString(_foldersKey, jsonEncode(_cachedFolders));
+      await _prefs.setString(_k(_foldersKey), jsonEncode(_cachedFolders));
     }
   }
 
@@ -170,7 +284,7 @@ class SettingsService {
     final index = _cachedFolders!.indexOf(oldName);
     if (index != -1) {
       _cachedFolders![index] = newName;
-      await _prefs.setString(_foldersKey, jsonEncode(_cachedFolders));
+      await _prefs.setString(_k(_foldersKey), jsonEncode(_cachedFolders));
     }
   }
 
@@ -178,7 +292,7 @@ class SettingsService {
   Future<void> removeFolder(String folderName) async {
     if (_cachedFolders == null) return;
     _cachedFolders!.remove(folderName);
-    await _prefs.setString(_foldersKey, jsonEncode(_cachedFolders));
+    await _prefs.setString(_k(_foldersKey), jsonEncode(_cachedFolders));
   }
 
   // ============ Настройки хранилища ============
@@ -189,7 +303,7 @@ class SettingsService {
   /// Сохранить настройки хранилища
   Future<void> saveStorageSettings(StorageSettings settings) async {
     _cachedStorageSettings = settings;
-    await _prefs.setString(_storageSettingsKey, jsonEncode(settings.toJson()));
+    await _prefs.setString(_k(_storageSettingsKey), jsonEncode(settings.toJson()));
   }
 
   /// Обновить отдельные настройки автозагрузки
@@ -240,7 +354,7 @@ class SettingsService {
   /// Сохранить настройки энергосбережения
   Future<void> savePowerSavingSettings(PowerSavingSettings settings) async {
     _cachedPowerSavingSettings = settings;
-    await _prefs.setString(_powerSavingKey, jsonEncode(settings.toJson()));
+    await _prefs.setString(_k(_powerSavingKey), jsonEncode(settings.toJson()));
   }
 
   /// Обновить настройки энергосбережения
@@ -282,16 +396,16 @@ class SettingsService {
   Future<void> saveGlassMode(GlassMode mode) async {
     _cachedGlassMode = mode;
     _cachedLiquidGlassDesign = mode != GlassMode.disabled;
-    await _prefs.setInt(_glassModeKey, mode.index);
-    await _prefs.setBool(_liquidGlassDesignKey, mode != GlassMode.disabled);
+    await _prefs.setInt(_k(_glassModeKey), mode.index);
+    await _prefs.setBool(_k(_liquidGlassDesignKey), mode != GlassMode.disabled);
   }
 
   /// Сохранить настройку Liquid Glass дизайна (устаревший, для совместимости)
   Future<void> saveLiquidGlassDesign(bool enabled) async {
     _cachedLiquidGlassDesign = enabled;
     _cachedGlassMode = enabled ? GlassMode.full : GlassMode.disabled;
-    await _prefs.setBool(_liquidGlassDesignKey, enabled);
-    await _prefs.setInt(_glassModeKey, _cachedGlassMode!.index);
+    await _prefs.setBool(_k(_liquidGlassDesignKey), enabled);
+    await _prefs.setInt(_k(_glassModeKey), _cachedGlassMode!.index);
   }
 
   /// Получить значение угла освещения при ручной настройке (в градусах)
@@ -300,7 +414,7 @@ class SettingsService {
   /// Сохранить значение угла освещения при ручной настройке (в градусах)
   Future<void> saveManualLightAngle(double angle) async {
     _cachedManualLightAngle = angle;
-    await _prefs.setDouble(_manualLightAngleKey, angle);
+    await _prefs.setDouble(_k(_manualLightAngleKey), angle);
   }
 
   /// Получить степень размытия стекла (блюр)
@@ -309,7 +423,16 @@ class SettingsService {
   /// Сохранить степень размытия стекла (блюр)
   Future<void> saveGlassBlur(double blur) async {
     _cachedGlassBlur = blur;
-    await _prefs.setDouble(_glassBlurKey, blur);
+    await _prefs.setDouble(_k(_glassBlurKey), blur);
+  }
+
+  /// Использовать ли однопроходное шейдерное размытие (5.2.0) вместо Гаусса движка
+  bool get glassShaderBlur => _cachedGlassShaderBlur ?? true;
+
+  /// Сохранить выбор метода размытия стекла (шейдер / классический Гаусс)
+  Future<void> saveGlassShaderBlur(bool enabled) async {
+    _cachedGlassShaderBlur = enabled;
+    await _prefs.setBool(_k(_glassShaderBlurKey), enabled);
   }
 
   // ============ Глобальные настройки уведомлений ============
@@ -321,7 +444,7 @@ class SettingsService {
   /// Сохранить глобальные настройки уведомлений
   Future<void> saveNotificationSettings(GlobalNotificationSettings settings) async {
     _cachedNotificationSettings = settings;
-    await _prefs.setString(_notificationSettingsKey, jsonEncode(settings.toJson()));
+    await _prefs.setString(_k(_notificationSettingsKey), jsonEncode(settings.toJson()));
   }
 
   // ============ Per-chat настройки уведомлений ============
@@ -340,7 +463,7 @@ class SettingsService {
     _cachedChatNotificationSettings ??= {};
     _cachedChatNotificationSettings![chatId] = settings;
     await _prefs.setString(
-      _chatNotificationSettingsKey,
+      _k(_chatNotificationSettingsKey),
       jsonEncode(_cachedChatNotificationSettings!.map((k, v) => MapEntry(k, v.toJson()))),
     );
   }
@@ -350,7 +473,7 @@ class SettingsService {
     _cachedChatNotificationSettings?.remove(chatId);
     final data = _cachedChatNotificationSettings ?? {};
     await _prefs.setString(
-      _chatNotificationSettingsKey,
+      _k(_chatNotificationSettingsKey),
       jsonEncode(data.map((k, v) => MapEntry(k, v.toJson()))),
     );
   }
@@ -358,34 +481,92 @@ class SettingsService {
   /// Сбросить все per-chat настройки уведомлений
   Future<void> resetAllChatNotificationSettings() async {
     _cachedChatNotificationSettings = {};
-    await _prefs.remove(_chatNotificationSettingsKey);
+    await _prefs.remove(_k(_chatNotificationSettingsKey));
   }
 
   /// Получить эффективные настройки для чата (per-chat или глобальные)
-  EffectiveChatSettings getEffectiveChatSettings(String chatId) {
+  EffectiveChatSettings getEffectiveChatSettings(
+    String chatId, {
+    String? chatType,
+  }) {
     final global = notificationSettings;
     final chat = getChatNotificationSettings(chatId);
 
+    final bool catNotifications;
+    final bool catPreview;
+    final bool catSound;
+    final String? catSoundUri;
+    final VibrationPattern catVibration;
+
+    switch (chatType) {
+      case 'private':
+        catNotifications = global.privateChatNotifications;
+        catPreview = global.privateChatPreview && global.contentPreview;
+        catSound = global.privateChatSound;
+        catSoundUri = global.privateChatSoundUri;
+        catVibration = global.privateChatVibration;
+        break;
+      case 'group':
+      case 'supergroup':
+        catNotifications = global.groupChatNotifications;
+        catPreview = global.groupChatPreview && global.contentPreview;
+        catSound = global.groupChatSound;
+        catSoundUri = global.groupChatSoundUri;
+        catVibration = global.groupChatVibration;
+        break;
+      case 'channel':
+        catNotifications = global.channelNotifications;
+        catPreview = global.channelPreview && global.contentPreview;
+        catSound = global.channelSound;
+        catSoundUri = global.channelSoundUri;
+        catVibration = global.channelVibration;
+        break;
+      default:
+        catNotifications = true;
+        catPreview = global.contentPreview;
+        catSound = true;
+        catSoundUri = null;
+        catVibration = VibrationPattern.default_;
+        break;
+    }
+
+    final globalKws =
+        global.keywordsNotifications ? global.globalKeywords : const <String>[];
+
     if (chat == null) {
       return EffectiveChatSettings(
-        muteState: MuteState.notMuted,
-        previewEnabled: global.contentPreview,
-        soundEnabled: true,
-        soundUri: null,
-        vibration: VibrationPattern.default_,
+        muteState: catNotifications ? MuteState.notMuted : MuteState.muted,
+        previewEnabled: catPreview,
+        soundEnabled: catSound,
+        soundUri: catSoundUri,
+        vibration: catVibration,
         mentionsOnly: false,
-        keywords: [],
+        keywords: globalKws,
       );
     }
 
+    var effectiveMute = chat.muteState;
+    if (effectiveMute == MuteState.mutedUntil &&
+        chat.muteUntil != null &&
+        chat.muteUntil!.isBefore(DateTime.now())) {
+      effectiveMute = MuteState.notMuted;
+    }
+
+    final mergedKeywords = <String>{
+      ...globalKws,
+      ...chat.keywords,
+    }.toList();
+
     return EffectiveChatSettings(
-      muteState: chat.muteState,
+      muteState: effectiveMute,
       previewEnabled: chat.previewEnabled,
-      soundEnabled: chat.soundEnabled ?? true,
-      soundUri: chat.soundUri,
-      vibration: chat.vibration ?? VibrationPattern.default_,
+      soundEnabled: chat.soundEnabled ?? catSound,
+      soundUri: (chat.soundUri != null && chat.soundUri!.isNotEmpty)
+          ? chat.soundUri
+          : catSoundUri,
+      vibration: chat.vibration ?? catVibration,
       mentionsOnly: chat.mentionsOnly,
-      keywords: chat.keywords,
+      keywords: mergedKeywords,
     );
   }
 
@@ -398,7 +579,7 @@ class SettingsService {
   Future<void> setSendByEnter(bool value) async {
     sendByEnterNotifier.value = value;
     try {
-      await _prefs.setBool(_sendByEnterKey, value);
+      await _prefs.setBool(_k(_sendByEnterKey), value);
     } catch (_) {}
   }
 
@@ -409,7 +590,18 @@ class SettingsService {
   Future<void> setRaiseToListen(bool value) async {
     raiseToListenNotifier.value = value;
     try {
-      await _prefs.setBool(_raiseToListenKey, value);
+      await _prefs.setBool(_k(_raiseToListenKey), value);
+    } catch (_) {}
+  }
+
+  /// Открывать ли внешние веб-ссылки во встроенном браузере Theaver по умолчанию
+  bool get inAppBrowser => inAppBrowserNotifier.value;
+
+  /// Сохранить настройку способа открытия ссылок
+  Future<void> setInAppBrowser(bool value) async {
+    inAppBrowserNotifier.value = value;
+    try {
+      await _prefs.setBool(_k(_inAppBrowserKey), value);
     } catch (_) {}
   }
 
@@ -423,22 +615,27 @@ class SettingsService {
     _cachedGlassMode = null;
     _cachedManualLightAngle = null;
     _cachedGlassBlur = null;
+    _cachedGlassShaderBlur = null;
+    _cachedGlassShaderBlur = null;
     _cachedNotificationSettings = null;
     _cachedChatNotificationSettings = null;
     sendByEnterNotifier.value = true;
     raiseToListenNotifier.value = true;
-    await _prefs.remove(_profileKey);
-    await _prefs.remove(_foldersKey);
-    await _prefs.remove(_storageSettingsKey);
-    await _prefs.remove(_powerSavingKey);
-    await _prefs.remove(_liquidGlassDesignKey);
-    await _prefs.remove(_glassModeKey);
-    await _prefs.remove(_manualLightAngleKey);
-    await _prefs.remove(_glassBlurKey);
-    await _prefs.remove(_notificationSettingsKey);
-    await _prefs.remove(_chatNotificationSettingsKey);
-    await _prefs.remove(_sendByEnterKey);
-    await _prefs.remove(_raiseToListenKey);
+    inAppBrowserNotifier.value = true;
+    await _prefs.remove(_k(_profileKey));
+    await _prefs.remove(_k(_foldersKey));
+    await _prefs.remove(_k(_storageSettingsKey));
+    await _prefs.remove(_k(_powerSavingKey));
+    await _prefs.remove(_k(_liquidGlassDesignKey));
+    await _prefs.remove(_k(_glassModeKey));
+    await _prefs.remove(_k(_manualLightAngleKey));
+    await _prefs.remove(_k(_glassBlurKey));
+    await _prefs.remove(_k(_glassShaderBlurKey));
+    await _prefs.remove(_k(_notificationSettingsKey));
+    await _prefs.remove(_k(_chatNotificationSettingsKey));
+    await _prefs.remove(_k(_sendByEnterKey));
+    await _prefs.remove(_k(_raiseToListenKey));
+    await _prefs.remove(_k(_inAppBrowserKey));
   }
 }
 
@@ -770,15 +967,19 @@ class GlobalNotificationSettings {
   final bool includeMutedChats;
   final bool accountNotifications;
 
-  // In-App уведомления
-  final bool inAppSounds;
-  final bool inAppVibrate;
-  final bool inAppPreview;
-  final bool inAppChatSounds;
-  final bool disableInAppNotifications;
+  // Показывать системные уведомления, когда приложение открыто (foreground).
+  // Заменяет старые in-app настройки (inAppSounds, inAppVibrate, inAppPreview,
+  // inAppChatSounds, disableInAppNotifications).
+  final bool foregroundNotifications;
 
   // Повтор уведомлений (в минутах, 0 = выкл)
   final int repeatNotifications;
+
+  // Оставлять звук/уведомления у архивных чатов
+  final bool keepArchivedUnmuted;
+
+  // Глобальные ключевые слова для уведомлений
+  final List<String> globalKeywords;
 
   GlobalNotificationSettings({
     this.notificationsEnabled = true,
@@ -809,12 +1010,10 @@ class GlobalNotificationSettings {
     this.contentPreview = true,
     this.includeMutedChats = false,
     this.accountNotifications = true,
-    this.inAppSounds = true,
-    this.inAppVibrate = true,
-    this.inAppPreview = true,
-    this.inAppChatSounds = true,
-    this.disableInAppNotifications = false,
+    this.foregroundNotifications = true,
     this.repeatNotifications = 0,
+    this.keepArchivedUnmuted = false,
+    this.globalKeywords = const [],
   });
 
   factory GlobalNotificationSettings.defaults() => GlobalNotificationSettings();
@@ -848,12 +1047,10 @@ class GlobalNotificationSettings {
     'contentPreview': contentPreview,
     'includeMutedChats': includeMutedChats,
     'accountNotifications': accountNotifications,
-    'inAppSounds': inAppSounds,
-    'inAppVibrate': inAppVibrate,
-    'inAppPreview': inAppPreview,
-    'inAppChatSounds': inAppChatSounds,
-    'disableInAppNotifications': disableInAppNotifications,
+    'foregroundNotifications': foregroundNotifications,
     'repeatNotifications': repeatNotifications,
+    'keepArchivedUnmuted': keepArchivedUnmuted,
+    'globalKeywords': globalKeywords,
   };
 
   Map<String, dynamic> toServerJson() => {
@@ -885,15 +1082,16 @@ class GlobalNotificationSettings {
     'content_preview': contentPreview,
     'include_muted_chats': includeMutedChats,
     'account_notifications': accountNotifications,
-    'in_app_sounds': inAppSounds,
-    'in_app_vibrate': inAppVibrate,
-    'in_app_preview': inAppPreview,
-    'in_app_chat_sounds': inAppChatSounds,
-    'disable_in_app_notifications': disableInAppNotifications,
+    'foreground_notifications': foregroundNotifications,
+    // Обратная совместимость со старыми версиями приложения
+    'disable_in_app_notifications': !foregroundNotifications,
     'repeat_notifications': repeatNotifications,
+    'keep_archived_unmuted': keepArchivedUnmuted,
+    'global_keywords': globalKeywords,
   };
 
   factory GlobalNotificationSettings.fromJson(Map<String, dynamic> json) {
+    final rawKeywords = json['globalKeywords'] ?? json['global_keywords'];
     return GlobalNotificationSettings(
       notificationsEnabled: json['notificationsEnabled'] ?? json['notifications_enabled'] ?? true,
       privateChatNotifications: json['privateChatNotifications'] ?? json['private_chat_notifications'] ?? true,
@@ -923,13 +1121,24 @@ class GlobalNotificationSettings {
       contentPreview: json['contentPreview'] ?? json['content_preview'] ?? true,
       includeMutedChats: json['includeMutedChats'] ?? json['include_muted_chats'] ?? false,
       accountNotifications: json['accountNotifications'] ?? json['account_notifications'] ?? true,
-      inAppSounds: json['inAppSounds'] ?? json['in_app_sounds'] ?? true,
-      inAppVibrate: json['inAppVibrate'] ?? json['in_app_vibrate'] ?? true,
-      inAppPreview: json['inAppPreview'] ?? json['in_app_preview'] ?? true,
-      inAppChatSounds: json['inAppChatSounds'] ?? json['in_app_chat_sounds'] ?? true,
-      disableInAppNotifications: json['disableInAppNotifications'] ?? json['disable_in_app_notifications'] ?? false,
+      foregroundNotifications: _parseForegroundNotifications(json),
       repeatNotifications: json['repeatNotifications'] ?? json['repeat_notifications'] ?? 0,
+      keepArchivedUnmuted:
+          json['keepArchivedUnmuted'] ?? json['keep_archived_unmuted'] ?? false,
+      globalKeywords: rawKeywords is List
+          ? rawKeywords.map((e) => e.toString()).toList()
+          : const [],
     );
+  }
+
+  /// Читает foregroundNotifications; если ключа нет — мигрирует со старого
+  /// `disableInAppNotifications` / `disable_in_app_notifications`.
+  static bool _parseForegroundNotifications(Map<String, dynamic> json) {
+    final value = json['foregroundNotifications'] ?? json['foreground_notifications'];
+    if (value is bool) return value;
+    final legacyDisabled =
+        json['disableInAppNotifications'] ?? json['disable_in_app_notifications'];
+    return !(legacyDisabled is bool ? legacyDisabled : false);
   }
 
   static VibrationPattern _parseVibration(dynamic value) {
@@ -1006,12 +1215,10 @@ class GlobalNotificationSettings {
     bool? contentPreview,
     bool? includeMutedChats,
     bool? accountNotifications,
-    bool? inAppSounds,
-    bool? inAppVibrate,
-    bool? inAppPreview,
-    bool? inAppChatSounds,
-    bool? disableInAppNotifications,
+    bool? foregroundNotifications,
     int? repeatNotifications,
+    bool? keepArchivedUnmuted,
+    List<String>? globalKeywords,
   }) {
     return GlobalNotificationSettings(
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
@@ -1042,12 +1249,10 @@ class GlobalNotificationSettings {
       contentPreview: contentPreview ?? this.contentPreview,
       includeMutedChats: includeMutedChats ?? this.includeMutedChats,
       accountNotifications: accountNotifications ?? this.accountNotifications,
-      inAppSounds: inAppSounds ?? this.inAppSounds,
-      inAppVibrate: inAppVibrate ?? this.inAppVibrate,
-      inAppPreview: inAppPreview ?? this.inAppPreview,
-      inAppChatSounds: inAppChatSounds ?? this.inAppChatSounds,
-      disableInAppNotifications: disableInAppNotifications ?? this.disableInAppNotifications,
+      foregroundNotifications: foregroundNotifications ?? this.foregroundNotifications,
       repeatNotifications: repeatNotifications ?? this.repeatNotifications,
+      keepArchivedUnmuted: keepArchivedUnmuted ?? this.keepArchivedUnmuted,
+      globalKeywords: globalKeywords ?? this.globalKeywords,
     );
   }
 }
@@ -1141,15 +1346,19 @@ class ChatNotificationSettings {
     VibrationPattern? vibration,
     bool? mentionsOnly,
     List<String>? keywords,
+    // Явный сброс nullable-полей к null («как в общих настройках»).
+    bool clearSoundEnabled = false,
+    bool clearSoundUri = false,
+    bool clearVibration = false,
   }) {
     return ChatNotificationSettings(
       chatId: chatId ?? this.chatId,
       muteState: muteState ?? this.muteState,
       muteUntil: muteUntil ?? this.muteUntil,
       previewEnabled: previewEnabled ?? this.previewEnabled,
-      soundEnabled: soundEnabled ?? this.soundEnabled,
-      soundUri: soundUri ?? this.soundUri,
-      vibration: vibration ?? this.vibration,
+      soundEnabled: clearSoundEnabled ? null : (soundEnabled ?? this.soundEnabled),
+      soundUri: clearSoundUri ? null : (soundUri ?? this.soundUri),
+      vibration: clearVibration ? null : (vibration ?? this.vibration),
       mentionsOnly: mentionsOnly ?? this.mentionsOnly,
       keywords: keywords ?? this.keywords,
     );
@@ -1162,20 +1371,26 @@ class ChatNotificationException {
   final String chatType;
   final String chatTitle;
   final String? avatarUrl;
+  final String? otherUserId;
 
   const ChatNotificationException({
     required this.settings,
     required this.chatType,
     required this.chatTitle,
     this.avatarUrl,
+    this.otherUserId,
   });
 
   factory ChatNotificationException.fromJson(Map<String, dynamic> json) {
+    final rawOtherUserId = json['other_user_id']?.toString().trim();
     return ChatNotificationException(
       settings: ChatNotificationSettings.fromJson(json),
       chatType: json['chat_type'] ?? 'private',
       chatTitle: json['chat_title'] ?? 'Chat',
       avatarUrl: json['avatar_url'],
+      otherUserId: (rawOtherUserId != null && rawOtherUserId.isNotEmpty)
+          ? rawOtherUserId
+          : null,
     );
   }
 }
@@ -1226,7 +1441,10 @@ class PrivacySettings {
   final PrivacyVisibility callPrivacy;
   final PrivacyVisibility groupsChannelsPrivacy;
   final PrivacyVisibility bioVisibility;
+  final PrivacyVisibility birthdayVisibility;
   final PrivacyVisibility forwardedMessages; // everybody=show sender, nobody=anonymous
+  final PrivacyVisibility voiceMessagesPrivacy;
+  final PrivacyVisibility messagesPrivacy; // everybody / contacts
   final bool showOnlineStatus;
   final bool showReadReceipts;
 
@@ -1238,7 +1456,10 @@ class PrivacySettings {
     this.callPrivacy = PrivacyVisibility.everybody,
     this.groupsChannelsPrivacy = PrivacyVisibility.everybody,
     this.bioVisibility = PrivacyVisibility.everybody,
+    this.birthdayVisibility = PrivacyVisibility.contacts,
     this.forwardedMessages = PrivacyVisibility.everybody,
+    this.voiceMessagesPrivacy = PrivacyVisibility.everybody,
+    this.messagesPrivacy = PrivacyVisibility.everybody,
     this.showOnlineStatus = true,
     this.showReadReceipts = true,
   });
@@ -1251,7 +1472,10 @@ class PrivacySettings {
     PrivacyVisibility? callPrivacy,
     PrivacyVisibility? groupsChannelsPrivacy,
     PrivacyVisibility? bioVisibility,
+    PrivacyVisibility? birthdayVisibility,
     PrivacyVisibility? forwardedMessages,
+    PrivacyVisibility? voiceMessagesPrivacy,
+    PrivacyVisibility? messagesPrivacy,
     bool? showOnlineStatus,
     bool? showReadReceipts,
   }) =>
@@ -1263,7 +1487,10 @@ class PrivacySettings {
         callPrivacy: callPrivacy ?? this.callPrivacy,
         groupsChannelsPrivacy: groupsChannelsPrivacy ?? this.groupsChannelsPrivacy,
         bioVisibility: bioVisibility ?? this.bioVisibility,
+        birthdayVisibility: birthdayVisibility ?? this.birthdayVisibility,
         forwardedMessages: forwardedMessages ?? this.forwardedMessages,
+        voiceMessagesPrivacy: voiceMessagesPrivacy ?? this.voiceMessagesPrivacy,
+        messagesPrivacy: messagesPrivacy ?? this.messagesPrivacy,
         showOnlineStatus: showOnlineStatus ?? this.showOnlineStatus,
         showReadReceipts: showReadReceipts ?? this.showReadReceipts,
       );
@@ -1276,7 +1503,10 @@ class PrivacySettings {
         callPrivacy: PrivacyVisibility.fromJson(json['call_privacy'] ?? 'everybody'),
         groupsChannelsPrivacy: PrivacyVisibility.fromJson(json['groups_channels_privacy'] ?? 'everybody'),
         bioVisibility: PrivacyVisibility.fromJson(json['bio_visibility'] ?? 'everybody'),
+        birthdayVisibility: PrivacyVisibility.fromJson(json['birthday_visibility'] ?? 'contacts'),
         forwardedMessages: PrivacyVisibility.fromJson(json['forwarded_messages'] ?? 'everybody'),
+        voiceMessagesPrivacy: PrivacyVisibility.fromJson(json['voice_messages_privacy'] ?? 'everybody'),
+        messagesPrivacy: PrivacyVisibility.fromJson(json['messages_privacy'] ?? 'everybody'),
         showOnlineStatus: json['show_online_status'] ?? true,
         showReadReceipts: json['show_read_receipts'] ?? true,
       );
@@ -1289,7 +1519,10 @@ class PrivacySettings {
         'call_privacy': callPrivacy.toJson(),
         'groups_channels_privacy': groupsChannelsPrivacy.toJson(),
         'bio_visibility': bioVisibility.toJson(),
+        'birthday_visibility': birthdayVisibility.toJson(),
         'forwarded_messages': forwardedMessages.toJson(),
+        'voice_messages_privacy': voiceMessagesPrivacy.toJson(),
+        'messages_privacy': messagesPrivacy.toJson(),
         'show_online_status': showOnlineStatus,
         'show_read_receipts': showReadReceipts,
       };
@@ -1301,6 +1534,7 @@ class PrivacyException {
   final String ruleType;
   final String targetUserId;
   final String targetUserName;
+  final String? targetUserAvatarUrl;
   final String exceptionType; // always / never
 
   const PrivacyException({
@@ -1308,16 +1542,23 @@ class PrivacyException {
     required this.ruleType,
     required this.targetUserId,
     required this.targetUserName,
+    this.targetUserAvatarUrl,
     required this.exceptionType,
   });
 
-  factory PrivacyException.fromJson(Map<String, dynamic> json) => PrivacyException(
-        id: json['id'] ?? '',
-        ruleType: json['rule_type'] ?? '',
-        targetUserId: json['target_user_id'] ?? '',
-        targetUserName: json['target_user_name'] ?? '',
-        exceptionType: json['exception_type'] ?? 'always',
-      );
+  factory PrivacyException.fromJson(Map<String, dynamic> json) {
+    final rawAvatar =
+        (json['target_user_avatar'] ?? json['avatar_url'])?.toString().trim();
+    return PrivacyException(
+      id: json['id'] ?? '',
+      ruleType: json['rule_type'] ?? '',
+      targetUserId: json['target_user_id'] ?? '',
+      targetUserName: json['target_user_name'] ?? '',
+      targetUserAvatarUrl:
+          (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
+      exceptionType: json['exception_type'] ?? 'always',
+    );
+  }
 }
 
 /// Настройки двухэтапной аутентификации

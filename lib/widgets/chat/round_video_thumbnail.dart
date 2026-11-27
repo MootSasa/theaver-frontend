@@ -65,7 +65,7 @@ class _RoundVideoThumbnailState extends State<RoundVideoThumbnail> {
       final uri = Uri.tryParse(rawUrl);
       final fileName = uri != null && uri.pathSegments.isNotEmpty
           ? uri.pathSegments.last
-          : rawUrl.split(Platform.pathSeparator).last;
+          : rawUrl.split(!kIsWeb ? Platform.pathSeparator : '/').last;
 
       if (fileName.isNotEmpty) {
         final tempDir = await getTemporaryDirectory();

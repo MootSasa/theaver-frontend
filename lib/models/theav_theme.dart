@@ -293,7 +293,11 @@ class TheavWallpaper {
       final validUrl = AppConfig.resolveMediaUrl(imageUrl);
       if (validUrl != null && validUrl.isNotEmpty) {
         if (validUrl.startsWith('http://') || validUrl.startsWith('https://')) {
-          return CachedNetworkImageProvider(validUrl);
+          return CachedNetworkImageProvider(
+            validUrl,
+            cacheKey: AppConfig.cacheKeyForUrl(validUrl),
+            headers: AppConfig.authHeadersForUrl(validUrl),
+          );
         } else if (!kIsWeb && File(validUrl).existsSync()) {
           return FileImage(File(validUrl));
         }
@@ -790,11 +794,13 @@ class TheavThemeExtension extends ThemeExtension<TheavThemeExtension> {
   final TheavPalette palette;
   final TheavWallpaper wallpaper;
   final double bubbleRadius;
+  final double messageFontSize;
 
   const TheavThemeExtension({
     required this.palette,
     required this.wallpaper,
     required this.bubbleRadius,
+    this.messageFontSize = 16.0,
   });
 
   Color get glassSurfaceColor => palette.surface.withValues(alpha: 0.86);
@@ -805,11 +811,13 @@ class TheavThemeExtension extends ThemeExtension<TheavThemeExtension> {
     TheavPalette? palette,
     TheavWallpaper? wallpaper,
     double? bubbleRadius,
+    double? messageFontSize,
   }) {
     return TheavThemeExtension(
       palette: palette ?? this.palette,
       wallpaper: wallpaper ?? this.wallpaper,
       bubbleRadius: bubbleRadius ?? this.bubbleRadius,
+      messageFontSize: messageFontSize ?? this.messageFontSize,
     );
   }
 
@@ -823,6 +831,8 @@ class TheavThemeExtension extends ThemeExtension<TheavThemeExtension> {
       palette: t < 0.5 ? palette : other.palette,
       wallpaper: t < 0.5 ? wallpaper : other.wallpaper,
       bubbleRadius: bubbleRadius + (other.bubbleRadius - bubbleRadius) * t,
+      messageFontSize:
+          messageFontSize + (other.messageFontSize - messageFontSize) * t,
     );
   }
 }

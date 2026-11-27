@@ -83,42 +83,46 @@ class LiquidGlassMorphSegmentedShell extends StatelessWidget {
           height: layout.height,
           child: Padding(
             padding: EdgeInsets.all(layout.padding),
-            child: Row(
-              children: [
-                for (int i = 0; i < segments.length; i++)
-                  Expanded(
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        // Suppress the Material ripple/splash so
-                        // tapping a segment doesn't draw a circle
-                        // expanding from the tap point — the
-                        // morphing glass pill is the only
-                        // selection feedback we want here, exactly
-                        // like the bottom nav's hand-off pattern.
-                        splashColor: Colors.transparent,
-                        highlightColor: Colors.transparent,
-                        hoverColor: Colors.transparent,
-                        focusColor: Colors.transparent,
-                        borderRadius:
-                            BorderRadius.circular(layout.cellHeight / 2),
-                        onTap: () => onChanged(i),
-                        child: Center(
-                          child: Text(
-                            segments[i],
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: i == selectedIndex
-                                  ? FontWeight.w600
-                                  : FontWeight.w500,
+            child: MetaData(
+              metaData: 'liquid_glass_horizontal_gesture',
+              behavior: HitTestBehavior.deferToChild,
+              child: Row(
+                children: [
+                  for (int i = 0; i < segments.length; i++)
+                    Expanded(
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          // Suppress the Material ripple/splash so
+                          // tapping a segment doesn't draw a circle
+                          // expanding from the tap point — the
+                          // morphing glass pill is the only
+                          // selection feedback we want here, exactly
+                          // like the bottom nav's hand-off pattern.
+                          splashColor: Colors.transparent,
+                          highlightColor: Colors.transparent,
+                          hoverColor: Colors.transparent,
+                          focusColor: Colors.transparent,
+                          borderRadius:
+                              BorderRadius.circular(layout.cellHeight / 2),
+                          onTap: () => onChanged(i),
+                          child: Center(
+                            child: Text(
+                              segments[i],
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: i == selectedIndex
+                                    ? FontWeight.w600
+                                    : FontWeight.w500,
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

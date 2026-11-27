@@ -3,6 +3,7 @@ import 'package:flutter/animation.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/haptic_utils.dart';
+import 'power_saving_provider.dart';
 
 /// Semantic haptic impact levels supported by the service.
 enum HapticType {
@@ -121,6 +122,7 @@ class EmojiHapticService extends ChangeNotifier {
 
   /// Emits a haptic pulse according to the current [isUniformHaptics] setting.
   void _pulse(HapticType type) {
+    if (!PowerSavingProvider.instance.allowHaptics) return;
     if (_isUniformHaptics) {
       HapticUtils.tap();
       return;
@@ -143,6 +145,7 @@ class EmojiHapticService extends ChangeNotifier {
 
   /// Emits a celebratory or explosion climax.
   void _pulseClimax({bool withSecondaryEcho = false}) {
+    if (!PowerSavingProvider.instance.allowHaptics) return;
     if (_isUniformHaptics) {
       HapticUtils.tap();
       if (withSecondaryEcho) {

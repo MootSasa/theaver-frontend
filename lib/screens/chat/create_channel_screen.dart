@@ -1,24 +1,20 @@
 import 'dart:io';
-import 'package:dio/dio.dart';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
-import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/theav_theme.dart';
-import '../../services/auth_service.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../services/chat_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/common/adaptive_switch.dart';
 import 'channel_screen.dart';
 
 class CreateChannelScreen extends StatefulWidget {
@@ -29,22 +25,57 @@ class CreateChannelScreen extends StatefulWidget {
 }
 
 class _CreateChannelScreenState extends State<CreateChannelScreen> {
+  static final RegExp _usernameRegex = RegExp(r'^[a-zA-Z][a-zA-Z0-9_]{2,63}$');
+
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
 
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  Uint8List? _pickedAvatarPreviewBytes;
+  String? _pickedAvatarFileName;
+  String? _pickedAvatarCrop;
   bool _isPublic = true;
   bool _enableSignatures = false;
   bool _enableComments = true;
   bool _enableHistory = true;
   bool _isLoading = false;
+  String? _usernameServerError;
+
+  String get _cleanUsername =>
+      _usernameController.text.trim().replaceAll('@', '');
+
+  bool get _isUsernameValid {
+    if (!_isPublic) return true;
+    final clean = _cleanUsername;
+    return clean.isEmpty || _usernameRegex.hasMatch(clean);
+  }
+
+  String? get _usernameValidationMessage {
+    if (!_isPublic) return null;
+    if (_usernameServerError != null) return _usernameServerError;
+    final clean = _cleanUsername;
+    if (clean.isEmpty) return null;
+    if (!_usernameRegex.hasMatch(clean)) {
+      return 'От 3 до 64 символов: латинские буквы, цифры и _, начинается с буквы';
+    }
+    return null;
+  }
 
   @override
   void initState() {
     super.initState();
     _nameController.addListener(() {
       if (mounted) setState(() {});
+    });
+    _usernameController.addListener(() {
+      if (!mounted) return;
+      if (_usernameServerError != null) {
+        setState(() => _usernameServerError = null);
+      } else {
+        setState(() {});
+      }
     });
   }
 
@@ -64,18 +95,52 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
     return fallback;
   }
 
+  bool get _hasPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarPreviewBytes != null &&
+        _pickedAvatarPreviewBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarPreviewBytes!);
+    }
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    return null;
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1024,
-      maxHeight: 1024,
-      imageQuality: 88,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.done,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : null,
+      canDeleteCurrent: _pickedAvatarFile != null || _pickedAvatarBytes != null,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarPreviewBytes = null;
+        _pickedAvatarFileName = null;
+        _pickedAvatarCrop = null;
+      });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarPreviewBytes = picked.effectivePreviewBytes;
+        _pickedAvatarFileName = picked.fileName;
+        _pickedAvatarCrop = picked.miniCrop?.toCompactParam();
       });
     }
   }
@@ -91,31 +156,52 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       return;
     }
 
+    final rawUsername = _cleanUsername;
+    if (_isPublic && !_isUsernameValid) {
+      GlassToastService().showError(
+        context,
+        _usernameValidationMessage ?? 'Некорректный формат @username',
+      );
+      return;
+    }
+
     HapticUtils.tap();
     setState(() => _isLoading = true);
 
     try {
       String? uploadedAvatarUrl;
-      if (_pickedAvatarFile != null) {
+      if (_hasPickedAvatar) {
         try {
-          final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-          if (uploadRes.url.isNotEmpty) {
-            uploadedAvatarUrl = uploadRes.url;
-          }
+          final uploadFile = _pickedAvatarFile ??
+              File(
+                (_pickedAvatarFileName != null &&
+                        _pickedAvatarFileName!.trim().isNotEmpty)
+                    ? _pickedAvatarFileName!.trim()
+                    : 'avatar.jpg',
+              );
+          uploadedAvatarUrl = await FileService().uploadPublicAvatar(
+            uploadFile,
+            bytes: _pickedAvatarBytes,
+            fileName: _pickedAvatarFileName,
+            avatarCrop: _pickedAvatarCrop,
+          );
         } catch (e) {
           debugPrint('[CreateChannelScreen] Avatar upload error: $e');
         }
       }
 
-      final rawUsername = _usernameController.text.trim().replaceAll('@', '');
       final desc = _descriptionController.text.trim();
 
       final result = await ChatService.createChat(
         chatType: 'channel',
         name: name,
         description: desc,
+        avatarUrl: uploadedAvatarUrl,
         isPublic: _isPublic,
         username: _isPublic && rawUsername.isNotEmpty ? rawUsername : null,
+        signMessages: _enableSignatures,
+        historyForNewMembers: _enableHistory,
+        createDiscussionGroup: _enableComments,
         participantIds: const [],
       );
 
@@ -123,27 +209,34 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
       if (result['success'] == true) {
         Chat chat = result['chat'] as Chat;
 
-        // Если выбран аватар — сохраняем в настройки канала и локальную БД
+        // Если выбран аватар — обновляем локальную БД и при необходимости делаем fallback через ChatService
         if (uploadedAvatarUrl != null && uploadedAvatarUrl.isNotEmpty) {
-          try {
-            final token = await AuthService.getToken();
-            final dio = Dio();
-            await dio.put(
-              '${AppConfig.baseUrl}/api/chats/${chat.id}/group-settings',
-              data: {
-                'name': name,
-                'description': desc,
-                'avatar_url': uploadedAvatarUrl,
-                'is_public': _isPublic,
-                'username': _isPublic ? rawUsername : '',
-                'history_for_new': _enableHistory,
-              },
-              options: Options(headers: {'Authorization': 'Bearer $token'}),
-            );
-            await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
-            chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
-          } catch (e) {
-            debugPrint('[CreateChannelScreen] Set avatar error: $e');
+          final needsAvatarFallback =
+              chat.avatarUrl == null || chat.avatarUrl!.isEmpty;
+          if (needsAvatarFallback) {
+            final settingsRes = await ChatService.updateGroupSettings(chat.id, {
+              'name': name,
+              'description': desc,
+              'avatar_url': uploadedAvatarUrl,
+              'is_public': _isPublic,
+              'username': _isPublic ? rawUsername : '',
+              'history_for_new': _enableHistory,
+              'sign_messages': _enableSignatures,
+            });
+            if (settingsRes['success'] == true) {
+              await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+              chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
+            } else if (mounted) {
+              GlassToastService().showError(
+                context,
+                settingsRes['message']?.toString() ??
+                    'Не удалось сохранить аватар канала',
+              );
+            }
+          } else {
+            try {
+              await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+            } catch (_) {}
           }
         }
 
@@ -169,15 +262,23 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
           ),
         );
       } else {
-        GlassToastService().show(
-          context,
-          result['message']?.toString() ?? 'Не удалось создать канал',
-        );
-        setState(() => _isLoading = false);
+        final errMsg =
+            result['message']?.toString() ?? 'Не удалось создать канал';
+        final errCode = result['error_code']?.toString().toLowerCase() ?? '';
+        if (errMsg.toLowerCase().contains('username') ||
+            errCode.contains('username')) {
+          setState(() {
+            _usernameServerError = errMsg;
+            _isLoading = false;
+          });
+        } else {
+          setState(() => _isLoading = false);
+        }
+        GlassToastService().showError(context, errMsg);
       }
     } catch (e) {
       if (mounted) {
-        GlassToastService().show(context, 'Ошибка: $e');
+        GlassToastService().showError(context, 'Ошибка: $e');
         setState(() => _isLoading = false);
       }
     }
@@ -185,66 +286,41 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final palette = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlass = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
-    final primaryColor = theme.colorScheme.primary;
+    final primaryColor = palette.primary;
     final trimmedName = _nameController.text.trim();
+    final avatarProvider = _pickedAvatarProvider;
 
-    return Scaffold(
+    return SettingsFloatingScaffold(
+      title: _tr('chat_new_channel', 'Новый канал'),
       backgroundColor: palette.bgBase,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: iconoir.NavArrowLeft(
-            width: 24,
-            height: 24,
-            color: palette.textPrimary,
-          ),
-        ),
-        title: Text(
-          _tr('chat_new_channel', 'Новый канал'),
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
-            letterSpacing: -0.2,
-          ),
-        ),
-        actions: [
-          if (_isLoading)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            )
-          else
-            IconButton(
-              onPressed: _createChannel,
-              tooltip: _tr('create', 'Создать'),
-              icon: iconoir.Check(
-                width: 24,
-                height: 24,
+      actions: [
+        if (_isLoading)
+          SettingsHeaderAction(
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
                 color: primaryColor,
               ),
             ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          )
+        else
+          SettingsHeaderAction(
+            tooltip: _tr('create', 'Создать'),
+            foregroundColor: primaryColor,
+            icon: iconoir.Check(width: 22, height: 22, color: primaryColor),
+            onTap: _createChannel,
+          ),
+      ],
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          SettingsFloatingHeader.topClearanceOf(context) + 12,
+          16,
+          MediaQuery.paddingOf(context).bottom + 28,
+        ),
               children: [
                 // 1. Герой-блок выбора аватара канала
                 Center(
@@ -260,7 +336,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                               height: 96,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: _pickedAvatarFile == null
+                                gradient: avatarProvider == null
                                     ? LinearGradient(
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
@@ -277,15 +353,15 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                                     offset: const Offset(0, 6),
                                   ),
                                 ],
-                                image: _pickedAvatarFile != null
+                                image: avatarProvider != null
                                     ? DecorationImage(
-                                        image: FileImage(_pickedAvatarFile!),
+                                        image: avatarProvider,
                                         fit: BoxFit.cover,
                                       )
                                     : null,
                               ),
                               alignment: Alignment.center,
-                              child: _pickedAvatarFile == null
+                              child: avatarProvider == null
                                   ? (trimmedName.isNotEmpty
                                       ? Text(
                                           trimmedName[0].toUpperCase(),
@@ -329,7 +405,7 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        _pickedAvatarFile != null
+                        _hasPickedAvatar
                             ? 'Нажмите, чтобы изменить фотографию'
                             : _tr('channel_add_photo', 'Выбрать фото канала'),
                         style: TextStyle(
@@ -344,487 +420,176 @@ class _CreateChannelScreenState extends State<CreateChannelScreen> {
                 const SizedBox(height: 20),
 
                 // 2. Название и описание канала
-                _buildSectionHeader('О КАНАЛЕ', palette),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 6,
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: 'О КАНАЛЕ',
+                  dividerIndent: 16,
+                  children: [
+                    TheavInlineTextField(
+                      controller: _nameController,
+                      autofocus: true,
+                      label: _tr('channel_name', 'Название канала'),
+                      placeholder: _tr(
+                        'channel_name_hint',
+                        'Например: Новости проекта',
+                      ),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: palette.onSurface,
+                      ),
                     ),
-                    child: Column(
-                      children: [
-                        TextField(
-                          controller: _nameController,
-                          autofocus: true,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: palette.textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            labelText: _tr('channel_name', 'Название канала'),
-                            hintText: _tr(
-                              'channel_name_hint',
-                              'Например: Новости проекта',
-                            ),
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                        Divider(height: 1, color: palette.borderSubtle),
-                        TextField(
-                          controller: _descriptionController,
-                          maxLines: 3,
-                          minLines: 1,
-                          style: TextStyle(
-                            fontSize: 14.5,
-                            color: palette.textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            labelText: _tr(
-                              'channel_description',
-                              'Описание (необязательно)',
-                            ),
-                            hintText: _tr(
-                              'channel_description_hint',
-                              'Расскажите подписчикам о тематике канала',
-                            ),
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                      ],
+                    TheavInlineTextField(
+                      controller: _descriptionController,
+                      maxLines: 3,
+                      minLines: 1,
+                      label: _tr(
+                        'channel_description',
+                        'Описание (необязательно)',
+                      ),
+                      placeholder: _tr(
+                        'channel_description_hint',
+                        'Расскажите подписчикам о тематике канала',
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // 3. Тип канала (Публичный / Частный) + @username
-                _buildSectionHeader(
-                  _tr('channel_type', 'ТИП КАНАЛА').toUpperCase(),
-                  palette,
-                ),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
-                  child: Column(
-                    children: [
-                      _buildTypeOptionTile(
-                        title: _tr('channel_public', 'Публичный канал'),
-                        subtitle: _tr(
-                          'channel_public_desc',
-                          'Канал можно найти в поиске, подписаться может любой',
-                        ),
-                        icon: Icons.public_rounded,
-                        selected: _isPublic,
-                        primaryColor: primaryColor,
-                        palette: palette,
-                        onTap: () {
-                          HapticUtils.selection();
-                          setState(() => _isPublic = true);
-                        },
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      _buildTypeOptionTile(
-                        title: _tr('channel_private', 'Частный канал'),
-                        subtitle: _tr(
-                          'channel_private_desc',
-                          'Подписаться можно только по пригласительной ссылке',
-                        ),
-                        icon: Icons.lock_outline_rounded,
-                        selected: !_isPublic,
-                        primaryColor: primaryColor,
-                        palette: palette,
-                        onTap: () {
-                          HapticUtils.selection();
-                          setState(() => _isPublic = false);
-                        },
-                      ),
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        child: _isPublic
-                            ? Column(
-                                children: [
-                                  Divider(
-                                    height: 1,
-                                    color: palette.borderSubtle,
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 6,
-                                    ),
-                                    child: TextField(
-                                      controller: _usernameController,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w500,
-                                        color: palette.textPrimary,
-                                      ),
-                                      decoration: InputDecoration(
-                                        labelText: 'Публичная ссылка (@username)',
-                                        hintText: 'channel_username',
-                                        hintStyle: TextStyle(
-                                          color: palette.textTertiary,
-                                        ),
-                                        prefixText: '@',
-                                        prefixIcon: Icon(
-                                          Icons.alternate_email_rounded,
-                                          size: 20,
-                                          color: primaryColor,
-                                        ),
-                                        border: InputBorder.none,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // 4. Настройки вещания канала
-                _buildSectionHeader(
-                  _tr('channel_settings', 'НАСТРОЙКИ ВЕЩАНИЯ').toUpperCase(),
-                  palette,
-                ),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
-                  child: Column(
-                    children: [
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.edit_outlined,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('channel_signatures', 'Подписи авторов'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'channel_signatures_desc',
-                            'Указывать имя администратора под публикациями',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        value: _enableSignatures,
-                        onChanged: (v) => setState(() => _enableSignatures = v),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.forum_outlined,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('channel_comments', 'Комментарии к постам'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'channel_comments_desc',
-                            'Разрешить подписчикам обсуждать публикации',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        value: _enableComments,
-                        onChanged: (v) => setState(() => _enableComments = v),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.history_rounded,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('channel_history', 'История публикаций'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'channel_history_desc',
-                            'Новые подписчики увидят предыдущие посты',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        value: _enableHistory,
-                        onChanged: (v) => setState(() => _enableHistory = v),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
                 const SizedBox(height: 16),
 
-                // 5. Адаптивная инфо-подсказка
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: primaryColor.withValues(alpha: isDark ? 0.12 : 0.08),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: primaryColor.withValues(alpha: 0.25),
+                // 3. Тип канала (Публичный / Частный) + @username
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: _tr('channel_type', 'ТИП КАНАЛА').toUpperCase(),
+                  footer: _usernameValidationMessage,
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Globe(
+                        width: 20,
+                        height: 20,
+                        color: _isPublic ? primaryColor : palette.subtext,
+                      ),
+                      title: _tr('channel_public', 'Публичный канал'),
+                      subtitle: _tr(
+                        'channel_public_desc',
+                        'Канал можно найти в поиске, подписаться может любой',
+                      ),
+                      trailing: TheavCheckCircle(
+                        selected: _isPublic,
+                        onTap: () => setState(() => _isPublic = true),
+                      ),
+                      onTap: () => setState(() => _isPublic = true),
                     ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.info_outline_rounded,
-                        color: primaryColor,
-                        size: 20,
+                    TheavListRow(
+                      leading: iconoir.Lock(
+                        width: 20,
+                        height: 20,
+                        color: !_isPublic ? primaryColor : palette.subtext,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _tr(
-                            'channel_info_box',
-                            'Каналы предназначены для вещания сообщений неограниченной аудитории. Публиковать посты могут только администраторы.',
-                          ),
-                          style: TextStyle(
-                            fontSize: 13,
-                            height: 1.35,
-                            color: palette.textSecondary,
-                          ),
+                      title: _tr('channel_private', 'Частный канал'),
+                      subtitle: _tr(
+                        'channel_private_desc',
+                        'Подписаться можно только по пригласительной ссылке',
+                      ),
+                      trailing: TheavCheckCircle(
+                        selected: !_isPublic,
+                        onTap: () => setState(() => _isPublic = false),
+                      ),
+                      onTap: () => setState(() => _isPublic = false),
+                    ),
+                    if (_isPublic)
+                      TheavInlineTextField(
+                        controller: _usernameController,
+                        label: 'Публичная ссылка (@username)',
+                        placeholder: 'channel_username',
+                        prefix: iconoir.AtSign(
+                          width: 19,
+                          height: 19,
+                          color: primaryColor,
                         ),
+                        suffix: _cleanUsername.isNotEmpty
+                            ? (_isUsernameValid && _usernameServerError == null
+                                ? const iconoir.CheckCircle(
+                                    width: 18,
+                                    height: 18,
+                                    color: Color(0xFF34C759),
+                                  )
+                                : iconoir.WarningCircle(
+                                    width: 18,
+                                    height: 18,
+                                    color: palette.error,
+                                  ))
+                            : null,
                       ),
-                    ],
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // 4. Настройки вещания канала
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: _tr('channel_settings', 'НАСТРОЙКИ ВЕЩАНИЯ').toUpperCase(),
+                  footer: _tr(
+                    'channel_info_box',
+                    'Каналы предназначены для вещания сообщений неограниченной аудитории. Публиковать посты могут только администраторы.',
                   ),
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.EditPencil(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('channel_signatures', 'Подписи авторов'),
+                      subtitle: _tr(
+                        'channel_signatures_desc',
+                        'Указывать имя администратора под публикациями',
+                      ),
+                      trailing: TheavSwitch(
+                        value: _enableSignatures,
+                        onChanged: (v) => setState(() => _enableSignatures = v),
+                      ),
+                      onTap: () =>
+                          setState(() => _enableSignatures = !_enableSignatures),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.ChatBubble(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('channel_comments', 'Комментарии к постам'),
+                      subtitle: _tr(
+                        'channel_comments_desc',
+                        'Разрешить подписчикам обсуждать публикации',
+                      ),
+                      trailing: TheavSwitch(
+                        value: _enableComments,
+                        onChanged: (v) => setState(() => _enableComments = v),
+                      ),
+                      onTap: () =>
+                          setState(() => _enableComments = !_enableComments),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.Clock(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('channel_history', 'История публикаций'),
+                      subtitle: _tr(
+                        'channel_history_desc',
+                        'Новые подписчики увидят предыдущие посты',
+                      ),
+                      trailing: TheavSwitch(
+                        value: _enableHistory,
+                        onChanged: (v) => setState(() => _enableHistory = v),
+                      ),
+                      onTap: () =>
+                          setState(() => _enableHistory = !_enableHistory),
+                    ),
+                  ],
                 ),
               ],
-            ),
-          ),
-
-          // Нижняя кнопка создания
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-              child: SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton.icon(
-                  onPressed: _isLoading ? null : _createChannel,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  icon: _isLoading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const iconoir.Megaphone(
-                          width: 20,
-                          height: 20,
-                          color: Colors.white,
-                        ),
-                  label: Text(
-                    _tr('chat_new_channel', 'Создать канал'),
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTypeOptionTile({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required bool selected,
-    required Color primaryColor,
-    required TheavPalette palette,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: selected
-                    ? primaryColor.withValues(alpha: 0.16)
-                    : palette.surfaceSecondary,
-                borderRadius: BorderRadius.circular(11),
-              ),
-              child: Icon(
-                icon,
-                size: 20,
-                color: selected ? primaryColor : palette.textSecondary,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: palette.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: palette.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              selected
-                  ? Icons.check_circle_rounded
-                  : Icons.radio_button_unchecked_rounded,
-              color: selected ? primaryColor : palette.textTertiary,
-              size: 22,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, TheavPalette palette) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: palette.textSecondary,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSurfaceCard(
-    BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
-    required Widget child,
-    double cornerRadius = 20,
-  }) {
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
-      final style = glassProvider.createStyle(
-        context: context,
-        isLiteOverride: isLite,
-        shape: LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: cornerRadius,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(cornerRadius),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.6,
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: child,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(cornerRadius),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.06),
-          width: 0.6,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: child,
       ),
     );
   }

@@ -1,15 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/community_models.dart';
-import '../../models/theav_theme.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../community/create_community_screen.dart';
+import '../contacts/contacts_screen.dart';
 import 'create_channel_screen.dart';
 import 'create_group_screen.dart';
 import 'create_private_chat_screen.dart';
@@ -21,6 +20,7 @@ enum CreateChatOptionType {
   channel,
   community,
   joinByCode,
+  contacts,
 }
 
 class CreateChatOptionSpec {
@@ -78,14 +78,21 @@ List<CreateChatOptionSpec> buildCreateChatOptions(BuildContext context) {
       subtitle: 'Категории, комнаты и стримы до 144 FPS',
       accentColor: const Color(0xFFF59E0B),
       isSquircleBadge: true,
-      iconBuilder: (c, s) => Icon(Icons.hub_rounded, color: c, size: s),
+      iconBuilder: (c, s) => iconoir.Community(color: c, width: s, height: s),
     ),
     CreateChatOptionSpec(
       type: CreateChatOptionType.joinByCode,
       title: 'Войти по коду / ссылке',
       subtitle: 'Присоединиться к сообществу, группе или каналу',
       accentColor: const Color(0xFFEC4899),
-      iconBuilder: (c, s) => Icon(Icons.link_rounded, color: c, size: s),
+      iconBuilder: (c, s) => iconoir.Link(color: c, width: s, height: s),
+    ),
+    CreateChatOptionSpec(
+      type: CreateChatOptionType.contacts,
+      title: 'Контакты',
+      subtitle: 'Список контактов и добавление по @username',
+      accentColor: const Color(0xFF06B6D4),
+      iconBuilder: (c, s) => iconoir.Book(color: c, width: s, height: s),
     ),
   ];
 }
@@ -94,7 +101,7 @@ List<CreateChatOptionSpec> buildCreateChatOptions(BuildContext context) {
 /// на главном экране (в режимах Liquid Glass и Material Matte).
 class CreateChatSelectorPanel extends StatelessWidget {
   static const double kPanelWidth = 304.0;
-  static const double kPanelHeight = 342.0;
+  static const double kPanelHeight = 404.0;
 
   final double width;
   final double height;
@@ -112,10 +119,11 @@ class CreateChatSelectorPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final titleColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
+    final palette = context.theav;
+    final titleColor = isDark ? Colors.white : palette.onSurface;
     final subColor = isDark
         ? Colors.white.withValues(alpha: 0.62)
-        : const Color(0xFF1C1C1E).withValues(alpha: 0.58);
+        : palette.subtext;
     final dividerColor = isDark
         ? Colors.white.withValues(alpha: 0.08)
         : Colors.black.withValues(alpha: 0.06);
@@ -333,170 +341,70 @@ class CreateChatScreen extends StatelessWidget {
           ),
         );
         break;
+      case CreateChatOptionType.contacts:
+        Navigator.push(
+          context,
+          SwipeBackPageRoute(builder: (_) => const ContactsScreen()),
+        );
+        break;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final palette = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlass = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
     final options = buildCreateChatOptions(context);
 
-    return Scaffold(
+    return SettingsFloatingScaffold(
+      title: 'Создать чат',
       backgroundColor: palette.bgBase,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: iconoir.NavArrowLeft(
-            width: 24,
-            height: 24,
-            color: palette.textPrimary,
-          ),
-        ),
-        title: Text(
-          'Создать чат',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
-            letterSpacing: -0.2,
-          ),
-        ),
-      ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          SettingsFloatingHeader.topClearanceOf(context) + 12,
+          16,
+          MediaQuery.paddingOf(context).bottom + 24,
+        ),
         children: [
-          for (final opt in options)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _buildOptionCard(
-                context,
-                spec: opt,
-                isGlass: isGlass,
-                isLite: isLite,
-                isDark: isDark,
-                palette: palette,
-                onTap: () => _navigateToOption(context, opt.type),
-              ),
-            ),
+          TheavInsetGroup(
+            margin: EdgeInsets.zero,
+            dividerIndent: 76,
+            children: [
+              for (final opt in options)
+                _buildOptionRow(
+                  context,
+                  spec: opt,
+                  palette: palette,
+                  onTap: () => _navigateToOption(context, opt.type),
+                ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildOptionCard(
+  Widget _buildOptionRow(
     BuildContext context, {
     required CreateChatOptionSpec spec,
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
     required TheavPalette palette,
     required VoidCallback onTap,
   }) {
-    final content = InkWell(
+    return TheavListRow(
+      leading: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: spec.accentColor.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(spec.isSquircleBadge ? 14 : 22),
+        ),
+        alignment: Alignment.center,
+        child: spec.iconBuilder(spec.accentColor, 22),
+      ),
+      title: spec.title,
+      subtitle: spec.subtitle,
+      showChevron: true,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: spec.accentColor.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(
-                  spec.isSquircleBadge ? 16 : 24,
-                ),
-              ),
-              alignment: Alignment.center,
-              child: spec.iconBuilder(spec.accentColor, 24),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    spec.title,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: palette.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    spec.subtitle,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: palette.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            iconoir.NavArrowRight(
-              width: 20,
-              height: 20,
-              color: palette.textTertiary,
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
-      final style = glassProvider.createStyle(
-        context: context,
-        isLiteOverride: isLite,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 20,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.6,
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: content,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.06),
-          width: 0.6,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: content,
-      ),
     );
   }
 }

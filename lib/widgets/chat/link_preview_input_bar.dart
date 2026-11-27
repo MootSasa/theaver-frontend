@@ -2,7 +2,6 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/link_metadata_service.dart';
@@ -93,7 +92,7 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
   Widget build(BuildContext context) {
     final content = _buildInnerContent(context);
     if (widget.enabled) {
-      final glassProvider = context.watch<LiquidGlassProvider?>();
+      final glassProvider = LiquidGlassProvider.maybeOf(context);
       if (glassProvider != null) {
         final style = glassProvider.createStyle(
           context: context,
@@ -114,27 +113,35 @@ class _LinkPreviewInputBarState extends State<LinkPreviewInputBar> {
 
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final bg = BlurUtils.resolveMaterialHudColor(
+      theme.colorScheme.surface,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: content,
+    );
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.65)
-                  : Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: content,
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: container,
+              )
+            : container,
       ),
     );
   }

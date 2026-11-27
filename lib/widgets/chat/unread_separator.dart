@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
@@ -24,7 +24,7 @@ class UnreadSeparator extends StatelessWidget {
     final l10n = context.l10n;
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+    final glassEnabled = LiquidGlassProvider.maybeOf(context)?.enabled ?? false;
 
     final rawLabel = l10n.translate('chat_unread_messages_banner');
     final label = rawLabel == 'chat_unread_messages_banner'
@@ -87,8 +87,8 @@ class DateSeparator extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final themeExt = theme.extension<TheavThemeExtension>();
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final glassEnabled = glassProvider.enabled;
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final glassEnabled = glassProvider?.enabled ?? false;
 
     final badgeBg = themeExt?.palette.chatDateBadge ??
         (isDark
@@ -648,18 +648,23 @@ class _ScrollDownFabState extends State<ScrollDownFab>
         if (_controller.isDismissed && !widget.visible) {
           return const SizedBox.shrink();
         }
-        final glassEnabled = context.watch<LiquidGlassProvider>().enabled;
+        final glassProvider = LiquidGlassProvider.maybeOf(context);
+        final glassEnabled = glassProvider?.enabled ?? false;
         final theme = Theme.of(context);
-        final themeExt = theme.extension<TheavThemeExtension>();
+        final palette = context.theav;
         final isDark = theme.brightness == Brightness.dark;
-        final unreadBg = themeExt?.palette.unreadBadge ?? theme.colorScheme.primary;
-        final unreadText = themeExt?.palette.unreadBadgeText ?? Colors.white;
+        final unreadBg = palette.unreadBadge;
+        final unreadText = palette.unreadBadgeText;
 
         final child = Stack(
           alignment: Alignment.center,
           clipBehavior: Clip.none,
           children: [
-            const Icon(Icons.keyboard_arrow_down, size: 28),
+            iconoir.NavArrowDown(
+              width: 24,
+              height: 24,
+              color: palette.onSurface,
+            ),
             Positioned(
               top: -4,
               right: -4,
@@ -726,7 +731,10 @@ class _ScrollDownFabState extends State<ScrollDownFab>
   }
 
   Widget _buildGlassButton(BuildContext context, bool isDark, Widget child) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    if (glassProvider == null || !glassProvider.enabled) {
+      return _buildMatteButton(context, isDark, child);
+    }
 
     final style = glassProvider.createStyle(
       context: context,
@@ -748,23 +756,36 @@ class _ScrollDownFabState extends State<ScrollDownFab>
   }
 
   Widget _buildMatteButton(BuildContext context, bool isDark, Widget child) {
-    return ClipOval(
-      child: BackdropFilter.grouped(
-        filter: BlurUtils.createDownsampledBlur(15),
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isDark
-                ? Colors.black.withValues(alpha: 0.65)
-                : Colors.white.withValues(alpha: 0.65),
-            border: Border.all(
-              color: isDark ? Colors.white10 : Colors.black12,
-              width: 0.5,
-            ),
-          ),
-          child: Center(child: child),
+    final theme = Theme.of(context);
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final rawBg = themeExt?.palette.surface ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final bg = BlurUtils.resolveMaterialHudColor(
+      rawBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget circle = Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: bg,
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
         ),
       ),
+      child: Center(child: child),
+    );
+
+    return ClipOval(
+      child: blurEnabled
+          ? BackdropFilter.grouped(
+              filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+              child: circle,
+            )
+          : circle,
     );
   }
 }

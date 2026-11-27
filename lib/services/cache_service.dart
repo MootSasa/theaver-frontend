@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -6,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
+import 'account_manager.dart';
+import 'contacts_service.dart';
 import 'database/app_database.dart';
 import 'emoji_effect_cache_service.dart';
 import 'media_cache_manager.dart';
@@ -126,7 +129,8 @@ class CacheService {
     return '${d.toStringAsFixed(d < 10 && i > 0 ? 1 : 0)} ${suffixes[i]}';
   }
 
-  /// Get directories that contain temporary / cache data
+  /// Get directories that contain temporary / app-private cache data.
+  /// Never touches user Documents or Downloads folders on desktop OSes.
   Future<List<Directory>> _getCacheDirectories() async {
     if (kIsWeb) return <Directory>[];
     final dirs = <Directory>[];
@@ -153,20 +157,6 @@ class CacheService {
       debugPrint('CacheService: getApplicationCacheDirectory error: $e');
     }
 
-    try {
-      final docDir = await getApplicationDocumentsDirectory();
-      final legacyMediaDir = Directory(p.join(docDir.path, 'theaver_media'));
-      if (await legacyMediaDir.exists()) {
-        addUniqueDir(legacyMediaDir);
-      }
-      final internalDownloadsDir = Directory(p.join(docDir.path, 'Downloads'));
-      if (await internalDownloadsDir.exists()) {
-        addUniqueDir(internalDownloadsDir);
-      }
-    } catch (e) {
-      debugPrint('CacheService: legacy documents media dir error: $e');
-    }
-
     if (!kIsWeb && Platform.isAndroid) {
       try {
         final extCacheDirs = await getExternalCacheDirectories();
@@ -185,13 +175,12 @@ class CacheService {
     return dirs;
   }
 
-  /// Recursively collect all unique regular files from cache directories
-  Future<List<File>> _collectCacheFiles() async {
-    final dirs = await _getCacheDirectories();
-    final files = <File>[];
+  static List<String> _collectCacheFilePathsSync(List<String> dirPaths) {
+    final paths = <String>[];
     final seenFilePaths = <String>{};
 
-    for (final dir in dirs) {
+    for (final dirPath in dirPaths) {
+      final dir = Directory(dirPath);
       if (!dir.existsSync()) continue;
       try {
         final entities = dir.listSync(recursive: true, followLinks: false);
@@ -208,20 +197,17 @@ class CacheService {
             }
             final canonicalPath = p.canonicalize(entity.path);
             if (seenFilePaths.add(canonicalPath)) {
-              files.add(entity);
+              paths.add(canonicalPath);
             }
           }
         }
-      } catch (e) {
-        debugPrint('CacheService: listSync error in ${dir.path}: $e');
-      }
+      } catch (_) {}
     }
 
-    return files;
+    return paths;
   }
 
-  /// Calculate live device cache breakdown
-  Future<CacheBreakdown> getCacheStats() async {
+  static Map<String, int> _computeCacheStatsSync(List<String> dirPaths) {
     var photosBytes = 0;
     var photosCount = 0;
     var videosBytes = 0;
@@ -233,12 +219,11 @@ class CacheService {
     var otherBytes = 0;
     var otherCount = 0;
 
-    final files = await _collectCacheFiles();
-
-    for (final file in files) {
+    final filePaths = _collectCacheFilePathsSync(dirPaths);
+    for (final filePath in filePaths) {
       try {
-        final len = file.lengthSync();
-        final category = categorizeFile(file.path);
+        final len = File(filePath).lengthSync();
+        final category = categorizeFile(filePath);
         switch (category) {
           case 'photos':
             photosBytes += len;
@@ -261,20 +246,78 @@ class CacheService {
             otherCount++;
             break;
         }
-      } catch (_) {
-        // Skip inaccessible files
-      }
+      } catch (_) {}
     }
 
-    final total = photosBytes + videosBytes + audioBytes + filesBytes + otherBytes;
+    return {
+      'photosBytes': photosBytes,
+      'photosCount': photosCount,
+      'videosBytes': videosBytes,
+      'videosCount': videosCount,
+      'audioBytes': audioBytes,
+      'audioCount': audioCount,
+      'filesBytes': filesBytes,
+      'filesCount': filesCount,
+      'otherBytes': otherBytes,
+      'otherCount': otherCount,
+    };
+  }
+
+  /// Recursively collect all unique regular files from cache directories
+  Future<List<File>> _collectCacheFiles() async {
+    if (kIsWeb) return <File>[];
+    final dirs = await _getCacheDirectories();
+    final dirPaths = dirs.map((d) => d.path).toList();
+    if (dirPaths.isEmpty) return <File>[];
+
+    final paths = await Isolate.run(() => _collectCacheFilePathsSync(dirPaths));
+    return paths.map(File.new).toList();
+  }
+
+  /// Calculate live device cache breakdown inside a background isolate.
+  Future<CacheBreakdown> getCacheStats() async {
+    if (kIsWeb) return CacheBreakdown.empty();
+
+    final dirs = await _getCacheDirectories();
+    final dirPaths = dirs.map((d) => d.path).toList();
+    if (dirPaths.isEmpty) return CacheBreakdown.empty();
+
+    final raw = await Isolate.run(() => _computeCacheStatsSync(dirPaths));
+    final photosBytes = raw['photosBytes'] ?? 0;
+    final videosBytes = raw['videosBytes'] ?? 0;
+    final audioBytes = raw['audioBytes'] ?? 0;
+    final filesBytes = raw['filesBytes'] ?? 0;
+    final otherBytes = raw['otherBytes'] ?? 0;
+    final total =
+        photosBytes + videosBytes + audioBytes + filesBytes + otherBytes;
 
     return CacheBreakdown(
       totalBytes: total,
-      photos: CacheCategoryInfo(key: 'photos', sizeBytes: photosBytes, fileCount: photosCount),
-      videos: CacheCategoryInfo(key: 'videos', sizeBytes: videosBytes, fileCount: videosCount),
-      audio: CacheCategoryInfo(key: 'audio', sizeBytes: audioBytes, fileCount: audioCount),
-      files: CacheCategoryInfo(key: 'files', sizeBytes: filesBytes, fileCount: filesCount),
-      other: CacheCategoryInfo(key: 'other', sizeBytes: otherBytes, fileCount: otherCount),
+      photos: CacheCategoryInfo(
+        key: 'photos',
+        sizeBytes: photosBytes,
+        fileCount: raw['photosCount'] ?? 0,
+      ),
+      videos: CacheCategoryInfo(
+        key: 'videos',
+        sizeBytes: videosBytes,
+        fileCount: raw['videosCount'] ?? 0,
+      ),
+      audio: CacheCategoryInfo(
+        key: 'audio',
+        sizeBytes: audioBytes,
+        fileCount: raw['audioCount'] ?? 0,
+      ),
+      files: CacheCategoryInfo(
+        key: 'files',
+        sizeBytes: filesBytes,
+        fileCount: raw['filesCount'] ?? 0,
+      ),
+      other: CacheCategoryInfo(
+        key: 'other',
+        sizeBytes: otherBytes,
+        fileCount: raw['otherCount'] ?? 0,
+      ),
     );
   }
 
@@ -458,6 +501,8 @@ class CacheService {
       await prefs.remove('${userId}_chat_wallpaper_url');
       await prefs.remove('${userId}_cached_custom_themes');
       await prefs.remove('${userId}_theme_overrides');
+      await prefs.remove('chat_drafts_v2_$userId');
+      await ContactsService.clearCache(clearDisk: true, userId: userId);
 
       if (!kIsWeb) {
         if (localWallpaperPath != null &&
@@ -602,11 +647,21 @@ class CacheService {
   static const String keyKeepMedia = 'storage_keep_media';
   static const String keyMaxCacheSize = 'storage_max_cache_size';
 
+  static String _scopedPrefKey(String baseKey) {
+    final uid = AccountManager().currentAccount?.userId;
+    if (uid != null && uid.isNotEmpty) {
+      return 'user_${uid}_$baseKey';
+    }
+    return baseKey;
+  }
+
   /// Get configured keep media period ('3days', '1week', '1month', 'forever')
   Future<String> getKeepMediaPeriod() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getString(keyKeepMedia) ?? 'forever';
+      return prefs.getString(_scopedPrefKey(keyKeepMedia)) ??
+          prefs.getString(keyKeepMedia) ??
+          'forever';
     } catch (_) {
       return 'forever';
     }
@@ -616,7 +671,7 @@ class CacheService {
   Future<void> setKeepMediaPeriod(String value) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(keyKeepMedia, value);
+      await prefs.setString(_scopedPrefKey(keyKeepMedia), value);
       final maxSizeBytes = await getMaxCacheSize();
       await runAutoCleanup(keepMediaPeriod: value, maxCacheSizeBytes: maxSizeBytes);
     } catch (e) {
@@ -628,7 +683,9 @@ class CacheService {
   Future<int> getMaxCacheSize() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getInt(keyMaxCacheSize) ?? 0;
+      return prefs.getInt(_scopedPrefKey(keyMaxCacheSize)) ??
+          prefs.getInt(keyMaxCacheSize) ??
+          0;
     } catch (_) {
       return 0;
     }
@@ -638,7 +695,7 @@ class CacheService {
   Future<void> setMaxCacheSize(int bytes) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(keyMaxCacheSize, bytes);
+      await prefs.setInt(_scopedPrefKey(keyMaxCacheSize), bytes);
       final period = await getKeepMediaPeriod();
       await runAutoCleanup(keepMediaPeriod: period, maxCacheSizeBytes: bytes);
     } catch (e) {

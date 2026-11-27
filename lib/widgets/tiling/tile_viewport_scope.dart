@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -7,6 +8,7 @@ class _TileViewportInherited extends InheritedWidget {
   final String tileId;
   final bool isChatTile;
   final Size tileSize;
+  final EdgeInsets tileViewInsets;
   final bool hasTopNeighbor;
   final bool hasBottomNeighbor;
 
@@ -14,6 +16,7 @@ class _TileViewportInherited extends InheritedWidget {
     required this.tileId,
     required this.isChatTile,
     required this.tileSize,
+    required this.tileViewInsets,
     required this.hasTopNeighbor,
     required this.hasBottomNeighbor,
     required super.child,
@@ -24,6 +27,7 @@ class _TileViewportInherited extends InheritedWidget {
     return oldWidget.tileId != tileId ||
         oldWidget.isChatTile != isChatTile ||
         oldWidget.tileSize != tileSize ||
+        oldWidget.tileViewInsets != tileViewInsets ||
         oldWidget.hasTopNeighbor != hasTopNeighbor ||
         oldWidget.hasBottomNeighbor != hasBottomNeighbor;
   }
@@ -43,6 +47,7 @@ class TileViewportScope extends StatelessWidget {
   final bool isChatTile;
   final bool hasTopNeighbor;
   final bool hasBottomNeighbor;
+  final double? bottomDistanceFromWindow;
   final Widget child;
 
   const TileViewportScope({
@@ -51,6 +56,7 @@ class TileViewportScope extends StatelessWidget {
     required this.isChatTile,
     this.hasTopNeighbor = false,
     this.hasBottomNeighbor = false,
+    this.bottomDistanceFromWindow,
     required this.child,
   });
 
@@ -97,8 +103,14 @@ class TileViewportScope extends StatelessWidget {
 
   static double heightOf(BuildContext context) => sizeOf(context).height;
 
-  static EdgeInsets viewInsetsOf(BuildContext context) =>
-      MediaQuery.viewInsetsOf(context);
+  static EdgeInsets viewInsetsOf(BuildContext context) {
+    final inherited =
+        context.dependOnInheritedWidgetOfExactType<_TileViewportInherited>();
+    if (inherited != null) {
+      return inherited.tileViewInsets;
+    }
+    return MediaQuery.viewInsetsOf(context);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -114,8 +126,21 @@ class TileViewportScope extends StatelessWidget {
             : parentMediaQuery.size.height;
         final tileSize = Size(effectiveWidth, effectiveHeight);
 
+        final double distanceFromBottomOfWindow = bottomDistanceFromWindow ??
+            (hasBottomNeighbor
+                ? math.max(0.0, parentMediaQuery.size.height - effectiveHeight)
+                : 0.0);
+        final globalViewInsets = parentMediaQuery.viewInsets;
+        final effectiveBottomViewInset = math.max(
+          0.0,
+          globalViewInsets.bottom - distanceFromBottomOfWindow,
+        );
+        final effectiveViewInsets = globalViewInsets.copyWith(
+          bottom: effectiveBottomViewInset,
+        );
+
         Widget scopedChild = child;
-        if (hasTopNeighbor || hasBottomNeighbor) {
+        if (hasTopNeighbor || hasBottomNeighbor || distanceFromBottomOfWindow > 0) {
           final strippedMediaQuery = parentMediaQuery
               .removePadding(
                 removeTop: hasTopNeighbor,
@@ -126,6 +151,7 @@ class TileViewportScope extends StatelessWidget {
                   top: hasTopNeighbor ? 0.0 : null,
                   bottom: hasBottomNeighbor ? 0.0 : null,
                 ),
+                viewInsets: effectiveViewInsets,
               );
           scopedChild = MediaQuery(
             data: strippedMediaQuery,
@@ -137,6 +163,7 @@ class TileViewportScope extends StatelessWidget {
           tileId: tileId,
           isChatTile: isChatTile,
           tileSize: tileSize,
+          tileViewInsets: effectiveViewInsets,
           hasTopNeighbor: hasTopNeighbor,
           hasBottomNeighbor: hasBottomNeighbor,
           child: Listener(

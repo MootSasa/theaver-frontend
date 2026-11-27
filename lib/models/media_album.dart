@@ -1,4 +1,5 @@
 import '../services/chat_service.dart';
+import '../services/peer_customization_cache.dart';
 
 /// Single item within a media album
 class MediaAlbumItem {
@@ -63,8 +64,14 @@ class MediaAlbum {
   String get chatId => primaryMessage.chatId;
   String get createdAt => primaryMessage.createdAt;
   bool get isRead => primaryMessage.isRead;
-  int get sendStatus => primaryMessage.sendStatus;
+  int get sendStatus {
+    if (items.any((item) => item.message.sendStatus == 2)) return 2;
+    if (items.any((item) => item.message.sendStatus == 0)) return 0;
+    return primaryMessage.sendStatus;
+  }
   bool get hasCaption => caption != null && caption!.trim().isNotEmpty;
+  bool get hasMediaSpoiler =>
+      items.any((item) => item.message.hasMediaSpoiler);
 }
 
 /// Abstract representation of an item in the chat feed
@@ -143,6 +150,10 @@ List<FeedItem> groupMessagesIntoFeedItems(
                     messageType: orig.messageType,
                     nameColorPresetId: orig.senderNameColorId,
                     replyStripStyle: orig.senderReplyStripStyle,
+                    replyEmoji: orig.senderCustomization?.replyEmoji ??
+                        PeerCustomizationCache.instance
+                            .getSync(orig.senderId)
+                            ?.replyEmoji,
                     entities: orig.entities,
                   ),
           );

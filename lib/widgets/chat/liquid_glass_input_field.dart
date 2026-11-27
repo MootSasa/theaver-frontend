@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +17,8 @@ import '../../services/settings_service.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/haptic_utils.dart';
+import '../design_system/theav_design_system.dart';
 import '../message/spoiler_text_widget.dart';
 import 'rich_text_editing_controller.dart';
 export 'rich_text_editing_controller.dart';
@@ -80,10 +81,18 @@ class LiquidGlassInputField extends StatefulWidget {
   final bool showBotCommandsButton;
   final bool isBotCommandsOpen;
   final VoidCallback? onToggleBotCommands;
+  final String? botMenuWebAppLabel;
+  final VoidCallback? onOpenBotMenuWebApp;
   final bool hasReplyKeyboard;
   final bool isReplyKeyboardOpen;
   final VoidCallback? onToggleReplyKeyboard;
   final int slowmodeRemainingSeconds;
+  final VoidCallback? onSendLongPress;
+  final Widget? leadingIdentityWidget;
+  final bool showSilentBroadcastToggle;
+  final bool isSilentBroadcast;
+  final VoidCallback? onToggleSilentBroadcast;
+  final bool isEditing;
 
   const LiquidGlassInputField({
     Key? key,
@@ -115,10 +124,18 @@ class LiquidGlassInputField extends StatefulWidget {
     this.showBotCommandsButton = false,
     this.isBotCommandsOpen = false,
     this.onToggleBotCommands,
+    this.botMenuWebAppLabel,
+    this.onOpenBotMenuWebApp,
     this.hasReplyKeyboard = false,
     this.isReplyKeyboardOpen = false,
     this.onToggleReplyKeyboard,
     this.slowmodeRemainingSeconds = 0,
+    this.onSendLongPress,
+    this.leadingIdentityWidget,
+    this.showSilentBroadcastToggle = false,
+    this.isSilentBroadcast = false,
+    this.onToggleSilentBroadcast,
+    this.isEditing = false,
   }) : super(key: key);
 
   @override
@@ -145,7 +162,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
   FocusNode get _effectiveFocusNode => widget.focusNode ?? _internalFocusNode;
 
   static bool get _isMobilePlatform =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   bool _computeShowItalic() {
     final richCtrl = widget.controller is RichTextEditingController
@@ -261,6 +280,11 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       _effectiveFocusNode.addListener(_onFocusChanged);
     }
     if (oldWidget.isEmojiPanelOpen != widget.isEmojiPanelOpen) {
+      if (!oldWidget.isEmojiPanelOpen &&
+          widget.isEmojiPanelOpen &&
+          _isMobilePlatform) {
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
       _onFocusChanged();
     }
   }
@@ -511,10 +535,32 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final theme = Theme.of(context);
     final themeExt = theme.extension<TheavThemeExtension>();
     final isDark = theme.brightness == Brightness.dark;
-    final defaultBg = isDark
-        ? Colors.black.withValues(alpha: 0.65)
-        : Colors.white.withValues(alpha: 0.65);
-    final inputBg = themeExt?.palette.explicitChatInputBackground ?? defaultBg;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = themeExt?.palette.explicitChatInputBackground ??
+        themeExt?.palette.surface ??
+        (isDark ? const Color(0xFF1C1C1E) : Colors.white);
+    final inputBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: inputBg,
+        borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        alignment: Alignment.bottomCenter,
+        child: _buildInputRow(context),
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -523,31 +569,21 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: inputBg,
-              borderRadius: BorderRadius.circular(_kInputFillBorderRadius),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: AnimatedSize(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.bottomCenter,
-              child: _buildInputRow(context),
-            ),
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: container,
+              )
+            : container,
       ),
     );
   }
 
   Widget _buildGlassInput(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    if (glassProvider == null || !glassProvider.enabled) {
+      return _buildClassicInput(context);
+    }
 
     final style = glassProvider.createStyle(
       context: context,
@@ -581,12 +617,30 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
     final themeExt = theme.extension<TheavThemeExtension>();
     final rightButtonBg = themeExt?.palette.chatSendButton ?? theme.colorScheme.primary;
     final iconColor = themeExt?.palette.chatInputButtons ?? theme.colorScheme.onSurface.withValues(alpha: 0.5);
+    final bool showLeadingIdentity =
+        widget.leadingIdentityWidget != null && !widget.isEditing;
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
+        AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerLeft,
+          child: showLeadingIdentity
+              ? Padding(
+                  key: const ValueKey('input_pill_leading_identity'),
+                  padding: const EdgeInsets.only(left: 6, top: 6, bottom: 6),
+                  child: widget.leadingIdentityWidget!,
+                )
+              : const SizedBox.shrink(),
+        ),
         Padding(
-          padding: const EdgeInsets.only(left: 6, bottom: 6, top: 6),
+          padding: EdgeInsets.only(
+            left: showLeadingIdentity ? 2 : 6,
+            bottom: 6,
+            top: 6,
+          ),
           child: widget.onEmoji != null
               ? GestureDetector(
                   onTap: widget.onEmoji,
@@ -608,6 +662,54 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         width: _kEmojiIconSize,
                         height: _kEmojiIconSize,
                         color: widget.isEmojiPanelOpen ? rightButtonBg : iconColor,
+                      ),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.centerLeft,
+          child: (widget.botMenuWebAppLabel != null &&
+                  widget.botMenuWebAppLabel!.isNotEmpty &&
+                  widget.onOpenBotMenuWebApp != null)
+              ? Padding(
+                  padding: const EdgeInsets.only(left: 2, right: 4, bottom: 8, top: 8),
+                  child: GestureDetector(
+                    onTap: widget.onOpenBotMenuWebApp,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      height: 30,
+                      constraints: const BoxConstraints(maxWidth: 108),
+                      padding: const EdgeInsets.symmetric(horizontal: 9),
+                      decoration: BoxDecoration(
+                        color: rightButtonBg,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const iconoir.AppWindow(
+                            width: 14,
+                            height: 14,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 5),
+                          Flexible(
+                            child: Text(
+                              widget.botMenuWebAppLabel!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -680,7 +782,11 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 : const SizedBox.shrink(key: ValueKey('bot_cmd_empty')),
           ),
         ),
-        if (widget.onEmoji != null || widget.showBotCommandsButton)
+        if (showLeadingIdentity ||
+            widget.onEmoji != null ||
+            widget.showBotCommandsButton ||
+            (widget.botMenuWebAppLabel != null &&
+                widget.botMenuWebAppLabel!.isNotEmpty))
           const SizedBox(width: 4),
         Expanded(
           child: _buildTextField(context),
@@ -728,7 +834,80 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                 : const SizedBox.shrink(key: ValueKey('reply_kb_empty')),
           ),
         ),
-        if (widget.onAttach != null) const SizedBox(width: 4),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: widget.controller,
+          builder: (context, value, _) {
+            final bool showSilentBell = widget.showSilentBroadcastToggle &&
+                !widget.isEditing &&
+                !widget.hasAttachments &&
+                value.text.trim().isEmpty;
+            final bool disableAnim =
+                MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+            return AnimatedSize(
+              duration: disableAnim
+                  ? Duration.zero
+                  : const Duration(milliseconds: 150),
+              curve: Curves.easeOutCubic,
+              child: AnimatedSwitcher(
+                duration: disableAnim
+                    ? Duration.zero
+                    : const Duration(milliseconds: 150),
+                switchInCurve: Curves.easeOutBack,
+                switchOutCurve: Curves.easeInCubic,
+                transitionBuilder: (child, animation) => ScaleTransition(
+                  scale: animation,
+                  child: child,
+                ),
+                child: showSilentBell
+                    ? Padding(
+                        key: const ValueKey('input_pill_silent_bell_slot'),
+                        padding:
+                            const EdgeInsets.only(left: 2, top: 6, bottom: 6),
+                        child: Semantics(
+                          button: true,
+                          toggled: widget.isSilentBroadcast,
+                          label: widget.isSilentBroadcast
+                              ? 'Беззвучная публикация включена'
+                              : 'Беззвучная публикация выключена',
+                          child: Tooltip(
+                            message: widget.isSilentBroadcast
+                                ? 'Без звука'
+                                : 'Со звуком',
+                            child: GestureDetector(
+                              key: const ValueKey(
+                                'input_pill_silent_bell_button',
+                              ),
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () {
+                                if (widget.onToggleSilentBroadcast != null) {
+                                  HapticUtils.selection();
+                                  widget.onToggleSilentBroadcast!();
+                                }
+                              },
+                              child: SizedBox(
+                                width: 36,
+                                height: _kActionButtonSize,
+                                child: Center(
+                                  child: _CrossOutBellIcon(
+                                    isSilent: widget.isSilentBroadcast,
+                                    activeColor: rightButtonBg,
+                                    inactiveColor: iconColor,
+                                    size: 22.0,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(
+                        key: ValueKey('input_pill_silent_bell_empty'),
+                      ),
+              ),
+            );
+          },
+        ),
+        if (widget.onAttach != null) const SizedBox(width: 2),
         Padding(
           padding: const EdgeInsets.only(bottom: 6, top: 6),
           child: widget.onAttach != null
@@ -883,7 +1062,9 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
                         cursorOpacityAnimates: true,
                         textCapitalization: TextCapitalization.sentences,
                         maxLines: null,
-                        keyboardType: TextInputType.multiline,
+                        keyboardType: widget.isEmojiPanelOpen && _isMobilePlatform
+                            ? TextInputType.none
+                            : TextInputType.multiline,
                         strutStyle: const StrutStyle(
                           fontSize: _kInputFontSize,
                           height: 1.2,
@@ -1036,7 +1217,15 @@ class _LiquidGlassInputFieldState extends State<LiquidGlassInputField>
             }
           },
           onLongPressStart: (details) {
-            if (canSend || widget.isSending || isSlowmodeLocked) return;
+            if (widget.isSending) return;
+            if (canSend) {
+              if (widget.onSendLongPress != null) {
+                HapticUtils.impact();
+                widget.onSendLongPress!();
+              }
+              return;
+            }
+            if (isSlowmodeLocked) return;
             if (_isVideoMode) {
               widget.onStartVideoRecord?.call();
             } else {
@@ -1252,8 +1441,8 @@ class InputQuotePainter extends CustomPainter {
 
       final isMidLineStart = start > 0 && text[start - 1] != '\n';
       final isMidLineEnd = end < text.length && text[end] != '\n';
-      final isSingleLineMidQuote =
-          (isMidLineStart || isMidLineEnd) && !text.substring(start, end).contains('\n');
+      final isSingleLineMidQuote = (isMidLineStart || isMidLineEnd) &&
+          !EntityParser.safeSubstring(text, start, end).contains('\n');
 
       final double rectLeft = isSingleLineMidQuote && isMidLineStart
           ? (minLeft - 10.0).clamp(2.0, math.max(2.0, size.width - 28.0))
@@ -1594,12 +1783,14 @@ class _TelegramTextSelectionToolbarState
     }
     final sel = widget.controller.selection;
     if (!sel.isValid || sel.isCollapsed) return;
-    final text = widget.controller.text.substring(sel.start, sel.end);
+    final start = EntityParser.snapUtf16Offset(widget.controller.text, sel.start);
+    final end = EntityParser.snapUtf16Offset(widget.controller.text, sel.end);
+    final text = EntityParser.safeSubstring(widget.controller.text, start, end);
     Clipboard.setData(ClipboardData(text: text));
-    final newText = widget.controller.text.replaceRange(sel.start, sel.end, '');
+    final newText = widget.controller.text.replaceRange(start, end, '');
     widget.controller.value = TextEditingValue(
       text: newText,
-      selection: TextSelection.collapsed(offset: sel.start),
+      selection: TextSelection.collapsed(offset: start),
     );
   }
 
@@ -1613,7 +1804,8 @@ class _TelegramTextSelectionToolbarState
     }
     final sel = widget.controller.selection;
     if (!sel.isValid || sel.isCollapsed) return;
-    final text = widget.controller.text.substring(sel.start, sel.end);
+    final text =
+        EntityParser.safeSubstring(widget.controller.text, sel.start, sel.end);
     Clipboard.setData(ClipboardData(text: text));
   }
 
@@ -1973,92 +2165,85 @@ class TextFormattingUtils {
   static void showCodeDialog(
       BuildContext context, TextEditingController controller) {
     final sel = controller.selection;
-    final start = sel.isValid ? math.min(sel.start, sel.end) : controller.text.length;
-    final end = sel.isValid ? math.max(sel.start, sel.end) : start;
-    final String selectedText = (start < end)
-        ? controller.text.substring(start, end)
-        : '';
+    final start = sel.isValid
+        ? EntityParser.snapUtf16Offset(controller.text, math.min(sel.start, sel.end))
+        : controller.text.length;
+    final end = sel.isValid
+        ? EntityParser.snapUtf16Offset(controller.text, math.max(sel.start, sel.end))
+        : start;
+    final String selectedText =
+        (start < end) ? EntityParser.safeSubstring(controller.text, start, end) : '';
 
     final langController = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    showDialog(
+    void submitCode() {
+      final lang = langController.text.trim();
+      Navigator.of(context, rootNavigator: false).maybePop();
+
+      final codeBlock = '```$lang\n$selectedText\n```';
+      final newText = controller.text.replaceRange(start, end, codeBlock);
+
+      final cursorOffset = selectedText.isEmpty
+          ? start + 4 + lang.length
+          : start + codeBlock.length;
+
+      controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: cursorOffset),
+      );
+    }
+
+    showTheavDialog<bool>(
       context: context,
-      builder: (ctx) {
-        void submitCode() {
-          final lang = langController.text.trim();
-          Navigator.of(ctx).pop();
-
-          final codeBlock = '```$lang\n$selectedText\n```';
-          final newText = controller.text.replaceRange(start, end, codeBlock);
-
-          final cursorOffset = selectedText.isEmpty
-              ? start + 4 + lang.length
-              : start + codeBlock.length;
-
-          controller.value = TextEditingValue(
-            text: newText,
-            selection: TextSelection.collapsed(offset: cursorOffset),
-          );
-        }
-
-        return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF1E2225) : null,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text(
-            'Создать блок кода',
-            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
+      title: 'Создать блок кода',
+      content: TheavInsetGroup(
+        children: [
+          TheavInlineTextField(
+            controller: langController,
+            label: 'Язык программирования',
+            placeholder: 'например: dart, python, js...',
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => submitCode(),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: langController,
-                autofocus: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) => submitCode(),
-                style: TextStyle(color: isDark ? Colors.white : Colors.black),
-                decoration: const InputDecoration(
-                  labelText: 'Язык программирования',
-                  hintText: 'например: dart, python, js...',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Отмена'),
-            ),
-            ElevatedButton(
-              onPressed: submitCode,
-              child: const Text('Создать'),
-            ),
-          ],
-        );
-      },
-    );
+        ],
+      ),
+      actions: [
+        const TheavDialogAction<bool>(
+          label: 'Отмена',
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: 'Создать',
+          result: true,
+          isPrimary: true,
+          onPressed: submitCode,
+        ),
+      ],
+    ).whenComplete(() {
+      Future.delayed(const Duration(milliseconds: 250), langController.dispose);
+    });
   }
 
   static void showLinkDialog(
       BuildContext context, TextEditingController controller) {
     final sel = controller.selection;
-    RichSpan? existingLink;
+    RichSpan? targetLink;
     if (controller is RichTextEditingController) {
-      existingLink = controller.getLinkSpanForSelection(sel);
+      targetLink = controller.getLinkSpanForSelection(sel);
     }
 
-    final bool isEditingExisting = existingLink != null;
+    
+    final bool isEditingExisting = targetLink != null;
     final String initialUrl = isEditingExisting
-        ? (existingLink.url ?? 'https://')
+        ? (targetLink.url ?? 'https://')
         : (sel.isValid && !sel.isCollapsed
-            ? (EntityParser.urlRegex.hasMatch(controller.text.substring(
+            ? (EntityParser.urlRegex.hasMatch(EntityParser.safeSubstring(
+                    controller.text,
                     math.min(sel.start, sel.end),
                     math.max(sel.start, sel.end)))
-                ? EntityParser.normalizeUrl(controller.text.substring(
+                ? EntityParser.normalizeUrl(EntityParser.safeSubstring(
+                    controller.text,
                     math.min(sel.start, sel.end),
                     math.max(sel.start, sel.end)))
                 : 'https://')
@@ -2069,112 +2254,232 @@ class TextFormattingUtils {
 
     final urlController = TextEditingController(text: initialUrl);
     final textController = TextEditingController();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    showDialog(
+    void submitLink() {
+      final url = urlController.text.trim();
+      final label = textController.text.trim();
+      Navigator.of(context).maybePop();
+      if (url.isNotEmpty && url != 'https://') {
+        if (controller is RichTextEditingController) {
+          if (isEditingExisting) {
+            
+            controller.applyLinkToSelection(
+              url,
+              start: targetLink!.start,
+              end: targetLink.end,
+            );
+          } else if (showTextField && label.isNotEmpty) {
+            controller.applyLinkToSelection(
+              url,
+              replacementText: label,
+            );
+          } else {
+            controller.applyLinkToSelection(url);
+          }
+        } else {
+          applyFormatting(controller, 'link', url: url);
+        }
+      }
+    }
+
+    bool routeDisposalHooked = false;
+    showTheavDialog<bool>(
       context: context,
-      builder: (ctx) {
-        void submitLink() {
-          final url = urlController.text.trim();
-          final label = textController.text.trim();
-          Navigator.pop(ctx);
-          if (url.isNotEmpty && url != 'https://') {
-            if (controller is RichTextEditingController) {
-              if (isEditingExisting) {
-                final targetLink = existingLink!;
-                controller.applyLinkToSelection(
-                  url,
-                  start: targetLink.start,
-                  end: targetLink.end,
-                );
-              } else if (showTextField && label.isNotEmpty) {
-                controller.applyLinkToSelection(
-                  url,
-                  replacementText: label,
-                );
-              } else {
-                controller.applyLinkToSelection(url);
-              }
-            } else {
-              applyFormatting(controller, 'link', url: url);
+      title: isEditingExisting
+          ? 'Редактировать ссылку'
+          : (AppLocalizations.of(context)?.translate('chat_action_link') ??
+              'Ссылка'),
+      content: Builder(
+        builder: (dialogCtx) {
+          if (!routeDisposalHooked) {
+            routeDisposalHooked = true;
+            final route = ModalRoute.of(dialogCtx);
+            if (route != null) {
+              route.completed.whenComplete(() {
+                urlController.dispose();
+                textController.dispose();
+              });
             }
           }
-        }
-
-        return AlertDialog(
-          backgroundColor: isDark ? const Color(0xFF1E2225) : null,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text(
-            isEditingExisting
-                ? 'Редактировать ссылку'
-                : (AppLocalizations.of(ctx)?.translate('chat_action_link') ??
-                    'Ссылка'),
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
+          return TheavInsetGroup(
             children: [
-              if (showTextField) ...[
-                TextField(
+              if (showTextField)
+                TheavInlineTextField(
                   controller: textController,
+                  label: 'Текст ссылки',
+                  placeholder: 'Название ссылки',
                   autofocus: true,
                   textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(
-                    labelText: 'Текст ссылки',
-                    hintText: 'Название ссылки',
-                    border: OutlineInputBorder(),
-                  ),
                 ),
-                const SizedBox(height: 12),
-              ],
-              TextField(
+              TheavInlineTextField(
                 controller: urlController,
+                label: isEditingExisting ? 'URL' : 'Адрес ссылки',
+                placeholder: 'https://example.com',
                 autofocus: !showTextField,
+                keyboardType: TextInputType.url,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => submitLink(),
-                decoration: InputDecoration(
-                  labelText: isEditingExisting ? 'URL' : null,
-                  hintText: 'https://example.com',
-                  border: const OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.url,
               ),
             ],
-          ),
-          actions: [
-            if (isEditingExisting) ...[
-              Builder(builder: (c) {
-                final targetLink = existingLink!;
-                return TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    if (controller is RichTextEditingController) {
-                      controller.removeLinkFromSelection(
-                        start: targetLink.start,
-                        end: targetLink.end,
-                      );
-                    }
-                  },
-                  child: const Text('Удалить ссылку',
-                      style: TextStyle(color: Colors.redAccent)),
+          );
+        },
+      ),
+      actions: [
+        if (isEditingExisting)
+          TheavDialogAction<bool>(
+            label: 'Удалить ссылку',
+            isDestructive: true,
+            onPressed: () {
+              
+              Navigator.of(context).maybePop();
+              if (controller is RichTextEditingController) {
+                controller.removeLinkFromSelection(
+                  start: targetLink!.start,
+                  end: targetLink.end,
                 );
-              }),
-            ],
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(
-                  AppLocalizations.of(ctx)?.translate('cancel') ?? 'Отмена'),
-            ),
-            TextButton(
-              onPressed: submitLink,
-              child: Text(isEditingExisting ? 'Сохранить' : 'OK'),
-            ),
-          ],
+              }
+            },
+          ),
+        TheavDialogAction<bool>(
+          label: AppLocalizations.of(context)?.translate('cancel') ?? 'Отмена',
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: isEditingExisting ? 'Сохранить' : 'OK',
+          isPrimary: true,
+          onPressed: submitLink,
+        ),
+      ],
+    );
+  }
+}
+
+/// Telegram-style animated silent broadcast bell icon (`CrossOutDrawable` parity).
+/// Animates `crossOutProgress` (`0.0 -> 1.0`) over `200ms` with a crisp mask gap
+/// parallel to the diagonal strike-through.
+class _CrossOutBellIcon extends StatelessWidget {
+  final bool isSilent;
+  final Color activeColor;
+  final Color inactiveColor;
+  final double size;
+
+  const _CrossOutBellIcon({
+    required this.isSilent,
+    required this.activeColor,
+    required this.inactiveColor,
+    this.size = 22.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bool disableAnim =
+        MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    final double target = isSilent ? 1.0 : 0.0;
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: target, end: target),
+      duration:
+          disableAnim ? Duration.zero : const Duration(milliseconds: 200),
+      curve: Curves.easeOutCubic,
+      builder: (context, progress, _) {
+        final Color resolvedColor =
+            Color.lerp(inactiveColor, activeColor, progress) ?? inactiveColor;
+        return CustomPaint(
+          key: ValueKey<String>(
+            isSilent ? 'silent_bell_off' : 'silent_bell_on',
+          ),
+          size: Size.square(size),
+          painter: _CrossOutBellPainter(
+            color: resolvedColor,
+            crossOutProgress: progress,
+          ),
         );
       },
     );
   }
 }
+
+class _CrossOutBellPainter extends CustomPainter {
+  final Color color;
+  final double crossOutProgress;
+
+  const _CrossOutBellPainter({
+    required this.color,
+    required this.crossOutProgress,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+    final double strokeWidth = math.max(1.6, w * 0.082);
+
+    final Paint strokePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+
+    final Path bellPath = Path()
+      // Top finial / stem
+      ..moveTo(w * 0.50, h * 0.11)
+      ..lineTo(w * 0.50, h * 0.18)
+      // Bell body + flared skirt
+      ..moveTo(w * 0.27, h * 0.44)
+      ..cubicTo(w * 0.27, h * 0.27, w * 0.37, h * 0.18, w * 0.50, h * 0.18)
+      ..cubicTo(w * 0.63, h * 0.18, w * 0.73, h * 0.27, w * 0.73, h * 0.44)
+      ..cubicTo(w * 0.73, h * 0.58, w * 0.79, h * 0.66, w * 0.82, h * 0.70)
+      ..lineTo(w * 0.18, h * 0.70)
+      ..cubicTo(w * 0.21, h * 0.66, w * 0.27, h * 0.58, w * 0.27, h * 0.44)
+      ..close();
+
+    final Path clapperPath = Path()
+      ..addArc(
+        Rect.fromCenter(
+          center: Offset(w * 0.50, h * 0.75),
+          width: w * 0.22,
+          height: h * 0.18,
+        ),
+        0.15,
+        math.pi - 0.30,
+      );
+
+    final double p = crossOutProgress.clamp(0.0, 1.0);
+    if (p <= 0.001) {
+      canvas.drawPath(bellPath, strokePaint);
+      canvas.drawPath(clapperPath, strokePaint);
+      return;
+    }
+
+    final Offset start = Offset(w * 0.16, h * 0.16);
+    final Offset fullEnd = Offset(w * 0.84, h * 0.84);
+    final Offset end = Offset.lerp(start, fullEnd, p)!;
+
+    canvas.saveLayer(Offset.zero & size, Paint());
+    canvas.drawPath(bellPath, strokePaint);
+    canvas.drawPath(clapperPath, strokePaint);
+
+    // Mask gap cutout parallel to the diagonal strike-through
+    final Paint clearPaint = Paint()
+      ..blendMode = BlendMode.clear
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth * 2.35
+      ..strokeCap = StrokeCap.round
+      ..isAntiAlias = true;
+    final Offset gapShift = Offset(strokeWidth * 0.45, -strokeWidth * 0.45);
+    canvas.drawLine(start + gapShift, end + gapShift, clearPaint);
+
+    canvas.drawLine(start, end, strokePaint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CrossOutBellPainter oldDelegate) {
+    return oldDelegate.color != color ||
+        oldDelegate.crossOutProgress != crossOutProgress;
+  }
+}
+
 
 

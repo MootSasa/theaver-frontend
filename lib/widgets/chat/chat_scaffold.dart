@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -7,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/wallpaper_provider.dart';
+import '../../utils/blur_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../theme/baked_chat_wallpaper.dart';
 import '../theme/motion_wallpaper_wrapper.dart';
 import '../tiling/tile_viewport_scope.dart';
@@ -26,6 +27,7 @@ class ChatScaffold extends StatelessWidget {
   final Color? backgroundColor;
   final bool? canPop;
   final void Function(bool didPop, dynamic result)? onPopInvoked;
+  final bool swipeBackBlocked;
   final bool enableStatusBarBlur;
   final bool enableBottomScrollEdge;
   final double? bottomScrollEdgeHeight;
@@ -40,6 +42,7 @@ class ChatScaffold extends StatelessWidget {
     this.backgroundColor,
     this.canPop,
     this.onPopInvoked,
+    this.swipeBackBlocked = false,
     this.enableStatusBarBlur = true,
     this.enableBottomScrollEdge = true,
     this.bottomScrollEdgeHeight,
@@ -56,7 +59,7 @@ class ChatScaffold extends StatelessWidget {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final bool isKeyboardVisible = bottomInset > 0;
     final defaultCanPop = canPop ?? !isKeyboardVisible;
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
 
     final Widget stackContent = Stack(
       fit: StackFit.expand,
@@ -100,22 +103,30 @@ class ChatScaffold extends StatelessWidget {
       ],
     );
 
-    return PopScope(
-      canPop: defaultCanPop,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) {
-          if (isKeyboardVisible) {
-            FocusScope.of(context).unfocus();
+    final Widget groupedStack = BackdropGroup.of(context) == null
+        ? BackdropGroup(child: stackContent)
+        : stackContent;
+
+    return SwipeBackPopScope(
+      swipeBackEnabled: !swipeBackBlocked,
+      child: PopScope(
+        canPop: defaultCanPop,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) {
+            if (isKeyboardVisible) {
+              FocusScope.of(context).unfocus();
+            }
+            if (onPopInvoked != null) {
+              onPopInvoked!(didPop, result);
+            }
           }
-          if (onPopInvoked != null) {
-            onPopInvoked!(didPop, result);
-          }
-        }
-      },
-      child: Scaffold(
-        resizeToAvoidBottomInset: false,
-        backgroundColor: backgroundColor ?? Theme.of(context).scaffoldBackgroundColor,
-        body: stackContent,
+        },
+        child: Scaffold(
+          resizeToAvoidBottomInset: false,
+          backgroundColor:
+              backgroundColor ?? Theme.of(context).scaffoldBackgroundColor,
+          body: groupedStack,
+        ),
       ),
     );
   }
@@ -125,37 +136,25 @@ class ChatScaffold extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    final isGlass = glassProvider?.enabled ?? false;
+    if (!isGlass || !BlurUtils.shouldBlurMaterialHud(context)) {
+      return const SizedBox.shrink();
+    }
+
     final statusBarHeight = MediaQuery.paddingOf(context).top;
     // On PC / desktop / web, statusBarHeight is 0, so do not apply blur at all
     if (statusBarHeight <= 0) return const SizedBox.shrink();
 
-    final isGlass = glassProvider?.enabled ?? false;
     final effectiveBlur = math.max(glassProvider?.blur ?? 8.0, 8.0);
-    if (isGlass) {
-      return Positioned(
-        top: 0,
-        left: 0,
-        right: 0,
-        height: statusBarHeight,
-        child: LiquidGlassScrollEdge(
-          edge: LiquidGlassEdge.top,
-          style: LiquidGlassScrollEdgeStyle.soft,
-          blur: effectiveBlur,
-          color: Colors.transparent,
-        ),
-      );
-    }
-
-    // Fallback for classic / matte mode using downsampled soft edge blur
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
       height: statusBarHeight,
-      child: const LiquidGlassScrollEdge(
+      child: LiquidGlassScrollEdge(
         edge: LiquidGlassEdge.top,
         style: LiquidGlassScrollEdgeStyle.soft,
-        blur: 16.0,
+        blur: effectiveBlur,
         color: Colors.transparent,
       ),
     );
@@ -206,16 +205,13 @@ class ChatScaffold extends StatelessWidget {
     }
 
     if (!kIsWeb && wallpaperPath != null && wallpaperPath.isNotEmpty) {
-      final file = File(wallpaperPath);
-      if (file.existsSync()) {
-        return Positioned.fill(
-          child: RepaintBoundary(
-            child: BakedChatWallpaper(
-              fallbackWallpaperPath: wallpaperPath,
-            ),
+      return Positioned.fill(
+        child: RepaintBoundary(
+          child: BakedChatWallpaper(
+            fallbackWallpaperPath: wallpaperPath,
           ),
-        );
-      }
+        ),
+      );
     }
 
     return const SizedBox.shrink();
@@ -233,7 +229,7 @@ class ChatBottomScrollEdge extends StatelessWidget {
     if (TileViewportScope.hasBottomNeighborOf(context)) {
       return const SizedBox.shrink();
     }
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final isGlass = glassProvider?.enabled ?? false;
     if (!isGlass) return const SizedBox.shrink();
 

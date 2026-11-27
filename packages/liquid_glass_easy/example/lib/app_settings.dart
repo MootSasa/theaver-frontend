@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+// ignore: implementation_imports
+import 'package:liquid_glass_easy/src/widgets/liquid_glass_configuration.dart'
+    show LiquidGlassTintOverride;
 
 /// Whether the gallery paints itself dark.
 ///
@@ -23,6 +26,16 @@ final ValueNotifier<bool> liteGlass = ValueNotifier<bool>(false)
     LiquidGlassEngine.liteGlassOnSkia = liteGlass.value;
     LiquidGlassEngine.liteGlassOnImpeller = liteGlass.value;
   });
+
+/// Whether lenses and blenders read a baked shape instead of evaluating it
+/// per pixel; flips `LiquidGlassConfiguration.shapeCache`.
+final ValueNotifier<bool> shapeCache = ValueNotifier<bool>(true)
+  ..addListener(() => LiquidGlassConfiguration.shapeCache = shapeCache.value);
+
+/// Whether the gallery shows Flutter's performance overlay — the raster
+/// and UI frame graphs — over every page. The Settings page flips it; the
+/// gallery's [MaterialApp] rebuilds from it.
+final ValueNotifier<bool> performanceOverlay = ValueNotifier<bool>(false);
 
 /// The gallery's page backdrop for [brightness]: a deep violet wash in the
 /// dark, the same hue bleached to near-paper in the light.
@@ -53,3 +66,115 @@ ThemeData galleryTheme(Brightness brightness) => ThemeData(
       ),
       useMaterial3: true,
     );
+
+/// Whether batches split an engine blur into a pass of its own; sets
+/// `LiquidGlassConfiguration.batchMode`, which a lens reads when it builds.
+final ValueNotifier<bool> separatePassBatch = ValueNotifier<bool>(true)
+  ..addListener(() => LiquidGlassConfiguration.batchMode = separatePassBatch.value
+      ? LiquidGlassBatchMode.separatePass
+      : LiquidGlassBatchMode.singlePass);
+
+/// Whether a lens outside any batch blurs inside its shader instead of an
+/// engine blur pass; sets `LiquidGlassConfiguration.blurMethod`, which a lens reads
+/// when it builds.
+final ValueNotifier<bool> shaderBlur = ValueNotifier<bool>(
+    LiquidGlassConfiguration.blurMethod == LiquidGlassBlurMethod.shader)
+  ..addListener(() => LiquidGlassConfiguration.blurMethod = shaderBlur.value
+      ? LiquidGlassBlurMethod.shader
+      : LiquidGlassBlurMethod.engine);
+
+/// The same for a lens in a batch; sets `LiquidGlassConfiguration.batchBlurMethod`.
+final ValueNotifier<bool> batchShaderBlur = ValueNotifier<bool>(
+    LiquidGlassConfiguration.batchBlurMethod == LiquidGlassBlurMethod.shader)
+  ..addListener(() => LiquidGlassConfiguration.batchBlurMethod = batchShaderBlur.value
+      ? LiquidGlassBlurMethod.shader
+      : LiquidGlassBlurMethod.engine);
+
+/// Whether a batched lens's shader blur keeps the dispersion; sets
+/// `LiquidGlassConfiguration.batchShaderBlurDispersion`.
+final ValueNotifier<bool> batchShaderBlurDispersion =
+    ValueNotifier<bool>(LiquidGlassConfiguration.batchShaderBlurDispersion)
+      ..addListener(() => LiquidGlassConfiguration.batchShaderBlurDispersion =
+          batchShaderBlurDispersion.value);
+
+/// Whether an unbatched lens's shader blur keeps the dispersion; sets
+/// `LiquidGlassConfiguration.shaderBlurDispersion`.
+final ValueNotifier<bool> shaderBlurDispersion =
+    ValueNotifier<bool>(LiquidGlassConfiguration.shaderBlurDispersion)
+      ..addListener(() =>
+          LiquidGlassConfiguration.shaderBlurDispersion = shaderBlurDispersion.value);
+
+/// Whether every lens takes the global light/dark tint and saturation; sets
+/// `LiquidGlassTintOverride.enabled`, read when a page opens.
+final ValueNotifier<bool> globalTint =
+    ValueNotifier<bool>(LiquidGlassTintOverride.enabled)
+      ..addListener(
+          () => LiquidGlassTintOverride.enabled = globalTint.value);
+
+/// The global tint on a light theme; sets
+/// `LiquidGlassTintOverride.colorLight`.
+final ValueNotifier<Color> tintLight =
+    ValueNotifier<Color>(LiquidGlassTintOverride.colorLight)
+      ..addListener(
+          () => LiquidGlassTintOverride.colorLight = tintLight.value);
+
+/// The global tint on a dark theme; sets
+/// `LiquidGlassTintOverride.colorDark`.
+final ValueNotifier<Color> tintDark =
+    ValueNotifier<Color>(LiquidGlassTintOverride.colorDark)
+      ..addListener(
+          () => LiquidGlassTintOverride.colorDark = tintDark.value);
+
+/// The global saturation on a light theme; sets
+/// `LiquidGlassTintOverride.saturationLight`.
+final ValueNotifier<double> saturationLight =
+    ValueNotifier<double>(LiquidGlassTintOverride.saturationLight)
+      ..addListener(() => LiquidGlassTintOverride.saturationLight =
+          saturationLight.value);
+
+/// The global saturation on a dark theme; sets
+/// `LiquidGlassTintOverride.saturationDark`.
+final ValueNotifier<double> saturationDark =
+    ValueNotifier<double>(LiquidGlassTintOverride.saturationDark)
+      ..addListener(() => LiquidGlassTintOverride.saturationDark =
+          saturationDark.value);
+
+/// Whether [shadowLight] and [shadowDark] replace every shadow's colour.
+final ValueNotifier<bool> overrideShadow = ValueNotifier<bool>(false)
+  ..addListener(_applyShadowOverrides);
+
+/// The shadow colour on a light theme while [overrideShadow] is on.
+final ValueNotifier<Color> shadowLight =
+    ValueNotifier<Color>(const Color(0xFF000000))
+      ..addListener(_applyShadowOverrides);
+
+/// The shadow colour on a dark theme while [overrideShadow] is on.
+final ValueNotifier<Color> shadowDark =
+    ValueNotifier<Color>(const Color(0xFF000000))
+      ..addListener(_applyShadowOverrides);
+
+void _applyShadowOverrides() {
+  final bool on = overrideShadow.value;
+  LiquidGlassConfiguration.shadowColorOverrideLight =
+      on ? shadowLight.value : null;
+  LiquidGlassConfiguration.shadowColorOverrideDark =
+      on ? shadowDark.value : null;
+}
+
+/// Whether [glassBlur] and [glassDispersion] replace every lens's own.
+final ValueNotifier<bool> overrideGlass = ValueNotifier<bool>(false)
+  ..addListener(_applyGlassOverrides);
+
+/// The blur every lens takes while [overrideGlass] is on.
+final ValueNotifier<double> glassBlur = ValueNotifier<double>(3.0)
+  ..addListener(_applyGlassOverrides);
+
+/// The dispersion every lens takes while [overrideGlass] is on.
+final ValueNotifier<double> glassDispersion = ValueNotifier<double>(0.0)
+  ..addListener(_applyGlassOverrides);
+
+void _applyGlassOverrides() {
+  final bool on = overrideGlass.value;
+  LiquidGlassConfiguration.blurOverride = on ? glassBlur.value : null;
+  LiquidGlassConfiguration.dispersionOverride = on ? glassDispersion.value : null;
+}

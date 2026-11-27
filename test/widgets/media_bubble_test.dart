@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:theaver/services/chat_service.dart';
+import 'package:theaver/widgets/media_viewer/theav_media_viewer.dart';
 import 'package:theaver/widgets/message/message_bubble.dart';
 import 'package:theaver/widgets/message/fullscreen_photo_viewer.dart';
 import 'package:theaver/widgets/message/document_message_widget.dart';
@@ -206,10 +207,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(FullscreenPhotoViewer), findsOneWidget);
-      expect(find.byType(iconoir.Xmark), findsOneWidget);
+      expect(find.byType(TheavMediaViewer), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back), findsOneWidget);
 
       // Tap close button
-      await tester.tap(find.byType(iconoir.Xmark));
+      await tester.tap(find.byIcon(Icons.arrow_back));
       await tester.pumpAndSettle();
 
       expect(find.byType(FullscreenPhotoViewer), findsNothing);
@@ -253,7 +255,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Fullscreen viewer opened
-      expect(find.byType(FullscreenPhotoViewer), findsOneWidget);
+      expect(find.byType(TheavMediaViewer), findsOneWidget);
     });
 
     testWidgets('Renders image with caption in same bubble', (WidgetTester tester) async {

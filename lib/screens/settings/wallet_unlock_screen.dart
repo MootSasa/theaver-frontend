@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/wallet_security_provider.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 
 class WalletUnlockScreen extends StatefulWidget {
   const WalletUnlockScreen({super.key});
@@ -61,10 +62,9 @@ class _WalletUnlockScreenState extends State<WalletUnlockScreen> {
   Widget build(BuildContext context) {
     final security = context.watch<WalletSecurityProvider>();
     
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Unlock Wallet'),
-      ),
+    return SettingsFloatingScaffold(
+      title: 'Unlock Wallet',
+      padBodyTop: true,
       body: _buildUnlockContent(security),
     );
   }

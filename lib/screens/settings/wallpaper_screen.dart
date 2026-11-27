@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:image_picker/image_picker.dart';
 import 'package:ios_color_picker/show_ios_color_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +10,8 @@ import '../../models/theav_theme.dart';
 import '../../services/theav_theme_service.dart';
 import '../../services/wallpaper_provider.dart';
 import '../../theme/theme_provider.dart';
+import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/theme/chat_preview_card.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
 import '../../l10n/app_localizations.dart';
@@ -102,6 +105,17 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
   }
 
   Future<void> _pickImage() async {
+    if (kIsWeb) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.l10n.translate('wallpaper_photo_web_unsupported')),
+          ),
+        );
+      }
+      return;
+    }
+
     final picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
@@ -154,10 +168,12 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
         await context.read<WallpaperProvider>().setWallpaper(_currentWallpaper.imagePath!);
       } else {
         await context.read<WallpaperProvider>().removeWallpaper(syncToServer: false);
-        try {
-          final appDir = await getApplicationDocumentsDirectory();
-          await _cleanupOldWallpaperFiles(Directory('${appDir.path}/wallpapers'));
-        } catch (_) {}
+        if (!kIsWeb) {
+          try {
+            final appDir = await getApplicationDocumentsDirectory();
+            await _cleanupOldWallpaperFiles(Directory('${appDir.path}/wallpapers'));
+          } catch (_) {}
+        }
       }
 
       if (mounted) {
@@ -189,19 +205,19 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
         : themeProvider.activeLightTheme;
     final previewTheme = activeTheme.copyWith(wallpaper: _currentWallpaper);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('wallpaper_title')),
-        actions: [
-          TextButton(
-            onPressed: _isLoading ? null : _applyWallpaper,
-            child: Text(
-              l10n.translate('wallpaper_apply'),
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-            ),
-          ),
-        ],
-      ),
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
+
+    return SettingsFloatingScaffold(
+      title: l10n.translate('wallpaper_title'),
+      padBodyTop: true,
+      actions: [
+        SettingsHeaderAction(
+          enabled: !_isLoading,
+          tooltip: l10n.translate('wallpaper_apply'),
+          onTap: _isLoading ? null : _applyWallpaper,
+          icon: iconoir.Check(width: 22, height: 22, color: headerFg),
+        ),
+      ],
       body: Column(
         children: [
           // 1. Live Sticky Interactive Preview Card
@@ -295,7 +311,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               ),
               child: Material(
                 type: MaterialType.transparency,
-                child: SwitchListTile(
+                child: AdaptiveSwitchListTile(
                   title: Text(
                   l10n.translate('wallpaper_motion'),
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -419,7 +435,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
                     Text('${(_currentWallpaper.patternOpacity * 100).round()}%'),
                   ],
                 ),
-                Slider(
+                AdaptiveSlider(
                   value: _currentWallpaper.patternOpacity.clamp(0.04, 0.50),
                   min: 0.04,
                   max: 0.50,
@@ -507,7 +523,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               Text('${_currentWallpaper.blurRadius.toStringAsFixed(1)} px'),
             ],
           ),
-          Slider(
+          AdaptiveSlider(
             value: _currentWallpaper.blurRadius.clamp(0.0, 25.0),
             min: 0.0,
             max: 25.0,
@@ -528,7 +544,7 @@ class _WallpaperScreenState extends State<WallpaperScreen> with SingleTickerProv
               Text('${(_currentWallpaper.dimming * 100).round()}%'),
             ],
           ),
-          Slider(
+          AdaptiveSlider(
             value: _currentWallpaper.dimming.clamp(0.0, 0.75),
             min: 0.0,
             max: 0.75,

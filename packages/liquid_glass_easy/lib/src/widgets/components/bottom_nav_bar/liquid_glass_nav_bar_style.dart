@@ -7,8 +7,11 @@ import '../../utils/liquid_glass_lens_motion.dart';
 import '../../utils/liquid_glass_light.dart';
 import '../../utils/liquid_glass_shape.dart';
 import '../liquid_glass_shadow.dart';
+import 'liquid_glass_tab_pill_behavior.dart';
 
-/// Which renderer(s) get the full iOS-26 **glass-refracting** morphing
+export 'liquid_glass_tab_pill_behavior.dart' show LiquidGlassTabPillBehavior;
+
+/// Which renderer(s) get the full **glass-refracting** morphing
 /// pill (the dual-pipeline animated bar). See
 /// [LiquidGlassTabBar.glassPill] for how to opt in.
 enum LiquidGlassPillMode {
@@ -28,17 +31,30 @@ enum LiquidGlassPillMode {
 /// and label render. Defaults mirror the bar's flat parameters, so
 /// swapping APIs is lossless.
 class LiquidGlassTabItemStyle {
-  /// Color of the selected item's icon + label.
-  final Color selectedColor;
+  /// Color of the selected item's icon + label. Left unset (the default)
+  /// the bar draws the system blue for the theme's brightness,
+  /// [defaultSelectedLight] or [defaultSelectedDark]; read here, an unset
+  /// colour is [defaultSelectedLight].
+  Color get selectedColor => _selectedColor ?? defaultSelectedLight;
+  final Color? _selectedColor;
 
-  /// Color of unselected items' icons + labels.
-  final Color unselectedColor;
+  /// Color of unselected items' icons + labels. Left unset (the default)
+  /// the bar draws black on a light theme and white on a dark one; read
+  /// here, an unset colour is black.
+  Color get unselectedColor => _unselectedColor ?? Colors.black;
+  final Color? _unselectedColor;
+
+  /// The selected colour on a light theme when [selectedColor] is unset.
+  static const Color defaultSelectedLight = Color(0xFF0088FF);
+
+  /// The selected colour on a dark theme when [selectedColor] is unset.
+  static const Color defaultSelectedDark = Color(0xFF0091FF);
 
   /// Icon size for every item.
   final double iconSize;
 
   /// Icon size for the item **under the glass** — and only there. `null`
-  /// (the default) keeps [iconSize], so nothing changes unless asked.
+  /// keeps [iconSize]. Default `30`.
   ///
   /// This is the **glass's** state, not the selection's: it applies
   /// while the moving glass pill is over an item — lifted on it,
@@ -59,13 +75,19 @@ class LiquidGlassTabItemStyle {
   /// Label font size. Labels are only shown for items that provide one.
   final double labelFontSize;
 
-  /// Label font size for the item **under the glass**. `null` (the
-  /// default) keeps [labelFontSize]. Same rules as [underGlassIconSize]:
+  /// Label font size for the item **under the glass**. `null` keeps
+  /// [labelFontSize]. Default `10`. Same rules as [underGlassIconSize]:
   /// the glass's state, not the selection's.
   final double? underGlassLabelFontSize;
 
-  /// Vertical gap between the icon and its label, in logical pixels.
+  /// Gap between the icon and its label, in logical pixels: below the
+  /// icon, or beside it with a horizontal [axis].
   final double iconLabelGap;
+
+  /// How the icon and label are laid out: [Axis.vertical] (the default)
+  /// puts the label under the icon; [Axis.horizontal] puts it beside it,
+  /// as suits a phone in landscape.
+  final Axis axis;
 
   /// Font weight of the selected item's label.
   final FontWeight selectedFontWeight;
@@ -74,18 +96,34 @@ class LiquidGlassTabItemStyle {
   final FontWeight unselectedFontWeight;
 
   const LiquidGlassTabItemStyle({
-    this.selectedColor = Colors.white,
-    this.unselectedColor = Colors.white70,
-    this.iconSize = 24,
-    this.underGlassIconSize,
-    this.labelFontSize = 10.5,
-    this.underGlassLabelFontSize,
-    this.iconLabelGap = 2,
+    Color? selectedColor,
+    Color? unselectedColor,
+    this.iconSize = 28,
+    this.underGlassIconSize = 30,
+    this.labelFontSize = 10,
+    this.underGlassLabelFontSize = 10,
+    this.iconLabelGap = 1,
+    this.axis = Axis.vertical,
     this.selectedFontWeight = FontWeight.w600,
-    this.unselectedFontWeight = FontWeight.w500,
-  });
+    this.unselectedFontWeight = FontWeight.w600,
+  })  : _selectedColor = selectedColor,
+        _unselectedColor = unselectedColor;
 
-  /// Resolves the icon/label color for a cell in [selected] state.
+  /// This style with an unset [selectedColor] or [unselectedColor] filled
+  /// in for [brightness].
+  LiquidGlassTabItemStyle resolve(Brightness brightness) {
+    if (_selectedColor != null && _unselectedColor != null) return this;
+    final bool dark = brightness == Brightness.dark;
+    return copyWith(
+      selectedColor: _selectedColor ??
+          (dark ? defaultSelectedDark : defaultSelectedLight),
+      unselectedColor:
+          _unselectedColor ?? (dark ? Colors.white : Colors.black),
+    );
+  }
+
+  /// Resolves the icon/label color for a cell in [selected] state; an
+  /// unset colour reads as its light-theme default.
   Color colorFor({required bool selected}) =>
       selected ? selectedColor : unselectedColor;
 
@@ -116,18 +154,20 @@ class LiquidGlassTabItemStyle {
     double? labelFontSize,
     double? underGlassLabelFontSize,
     double? iconLabelGap,
+    Axis? axis,
     FontWeight? selectedFontWeight,
     FontWeight? unselectedFontWeight,
   }) {
     return LiquidGlassTabItemStyle(
-      selectedColor: selectedColor ?? this.selectedColor,
-      unselectedColor: unselectedColor ?? this.unselectedColor,
+      selectedColor: selectedColor ?? _selectedColor,
+      unselectedColor: unselectedColor ?? _unselectedColor,
       iconSize: iconSize ?? this.iconSize,
       underGlassIconSize: underGlassIconSize ?? this.underGlassIconSize,
       labelFontSize: labelFontSize ?? this.labelFontSize,
       underGlassLabelFontSize:
           underGlassLabelFontSize ?? this.underGlassLabelFontSize,
       iconLabelGap: iconLabelGap ?? this.iconLabelGap,
+      axis: axis ?? this.axis,
       selectedFontWeight: selectedFontWeight ?? this.selectedFontWeight,
       unselectedFontWeight: unselectedFontWeight ?? this.unselectedFontWeight,
     );
@@ -157,7 +197,7 @@ class LiquidGlassTabMagnifierPillStyle {
 
   const LiquidGlassTabMagnifierPillStyle({
     this.enabled = true,
-    this.magnification = 0.87,
+    this.magnification = 0.832,
   });
 
   LiquidGlassTabMagnifierPillStyle copyWith({
@@ -184,7 +224,7 @@ class LiquidGlassTabMagnifierPillStyle {
 ///    to this tier only. A settled bar costs no shader pass, no clip
 ///    and no capture, on either backend.
 ///  • sliding highlight — [mode] none + [animated] true: the pill
-///    slides between tabs with the iOS-26 icon-reveal, drawn inside
+///    slides between tabs with the icon-reveal, drawn inside
 ///    the lens (works on every renderer);
 ///  • static highlight — [mode] none, [animated] false: the flat
 ///    instant highlight, the cheapest tier of all.
@@ -199,7 +239,7 @@ class LiquidGlassTabPillStyle {
   final Color color;
 
   /// When `true`, the selection pill **slides** between tabs with the
-  /// iOS-26 "icon highlights through the moving pill" reveal. When
+  /// "icon highlights through the moving pill" reveal. When
   /// `false` the selection jumps instantly.
   final bool animated;
 
@@ -219,6 +259,17 @@ class LiquidGlassTabPillStyle {
   /// whole travel, and comes back down once it has landed.
   final double growHeight;
 
+  /// How much wider than the resting pill the glass pill is while it is
+  /// lifted (glass [mode]s only). `null` keeps the resting pill's
+  /// proportions, so the width follows [growHeight]. Default `12`.
+  final double? growWidth;
+
+  /// Whether the moving glass pill stays inside the bar's left and right
+  /// edges (glass [mode]s only): the lifted width, the squash and stretch
+  /// and the landing overshoot are all kept within the capsule rather than
+  /// poking past its ends. Default `false`.
+  final bool confineToBar;
+
   /// Refraction strength of the moving glass pill (glass [mode]s only).
   final double refractionIndex;
 
@@ -230,8 +281,34 @@ class LiquidGlassTabPillStyle {
   /// [mode]s only). `1` = none.
   final double magnification;
 
+  /// Colour fringing at the moving glass pill's edge, in logical pixels
+  /// (glass [mode]s only). `0` = none. Default `1.32`.
+  final double dispersion;
+
+  /// The selection pill's width at rest, in logical pixels. `null` (the
+  /// default) makes it [targetWidth], kept between one equal share of the
+  /// bar and [widthFactor] shares.
+  ///
+  /// Set it to make the pill wider than a share: the first and last items
+  /// then sit `itemPadding + width / 2` in from the bar's ends and the
+  /// items between spread evenly over the rest. The lifted glass pill keeps
+  /// the same proportions.
+  final double? width;
+
+  /// With a `null` [width], the widest the resting pill grows, as a
+  /// multiple of one equal share of the bar. `1` centres each item in its
+  /// share; the default `1.175` is a wider pill on a tight bar, with
+  /// the end items half a pill in from the bar's ends.
+  final double widthFactor;
+
+  /// With a `null` [width], the resting pill's width in logical pixels,
+  /// kept between one share and [widthFactor] shares. The default `94` is
+  /// the pill on a 328 pt, four-tab bar; a roomier bar (fewer or wider
+  /// tabs) stops at it instead of growing with its share.
+  final double targetWidth;
+
   /// Shape of the moving **glass** pill (glass [mode]s only). When
-  /// `null` (the default) the pill is an Apple capsule-style
+  /// `null` (the default) the pill is a continuous capsule-style
   /// [LiquidGlassShape] whose corner radius tracks the
   /// pill's height, so it stays a clean capsule while it grows and
   /// squashes. Supply a custom [LiquidGlassShape] — e.g. a
@@ -247,7 +324,7 @@ class LiquidGlassTabPillStyle {
   /// The **moving glass pill**'s full look as one [LiquidGlassStyle]
   /// (shape + fill/blur + refraction). When non-null it supersedes the
   /// individual glass-pill fields ([shape], [blur], [refractionIndex],
-  /// [refractionWidth], [magnification]);
+  /// [refractionWidth], [magnification], [dispersion]);
   /// a `null` shape inside it falls back to [shape]. Glass [mode]s only.
   final LiquidGlassStyle? glassStyle;
 
@@ -258,14 +335,12 @@ class LiquidGlassTabPillStyle {
   /// [shape]). It draws no border; refraction is ignored.
   final LiquidGlassStyle? rest;
 
-  /// Stiffness of the spring that carries the glass pill between tabs
-  /// (glass [mode]s only). Higher → snappier travel. Default `320`.
+  /// No longer read: the travel spring is [behavior]'s
+  /// `travelDuration` / `travelBounce` (0.4 s, bounce 0.15).
+  /// Kept so existing callers keep compiling.
   final double travelStiffness;
 
-  /// Damping of the travel spring (glass [mode]s only). The critical
-  /// (no-overshoot) value is `2·√travelStiffness` (≈ 36 at the default
-  /// stiffness): below it the pill bounces, at/above it just settles.
-  /// Default `30` — a faint settle.
+  /// No longer read; see [travelStiffness].
   final double travelDamping;
 
   /// The pill's squash/stretch tuning (glass [mode]s only) — the same
@@ -284,21 +359,35 @@ class LiquidGlassTabPillStyle {
 
   /// The Impeller-only **magnifier pill** under the moving glass pill —
   /// see [LiquidGlassTabMagnifierPillStyle]. Defaults to enabled at
-  /// magnification `0.87`.
+  /// magnification `0.832`.
   final LiquidGlassTabMagnifierPillStyle magnifierPill;
+
+  /// The glass pill's events, timing and travel (glass [mode]s only): a
+  /// zero-delay press that sends the pill on the press, a scrub past 10 pt
+  /// with the pill chasing the finger, a release on the tab nearest the
+  /// finger, one 0.4 s travel spring, a 0.25 s lift that drops as the pill
+  /// lands, a 0.4 s shed and the landing wobble. See
+  /// [LiquidGlassTabPillBehavior].
+  final LiquidGlassTabPillBehavior behavior;
 
   const LiquidGlassTabPillStyle({
     this.mode = LiquidGlassPillMode.both,
     this.show = true,
-    this.color = const Color(0x2EAEAEB2),
+    this.color = const Color(0x46AEAEB2),
     this.animated = false,
     this.animationDuration = const Duration(milliseconds: 320),
     this.animationCurve = Curves.easeOutCubic,
     this.blur = 0,
-    this.growHeight = 9,
-    this.refractionIndex = 1.025,
-    this.refractionWidth = 12,
+    this.growHeight = 7,
+    this.growWidth = 12,
+    this.confineToBar = false,
+    this.refractionIndex = 1.015,
+    this.refractionWidth = 24,
     this.magnification = 1,
+    this.dispersion = 1.32,
+    this.width,
+    this.widthFactor = 1.175,
+    this.targetWidth = 94,
     this.shape,
     this.glassStyle,
     this.rest,
@@ -313,6 +402,7 @@ class LiquidGlassTabPillStyle {
       responseTime: 0.18,
     ),
     this.magnifierPill = const LiquidGlassTabMagnifierPillStyle(),
+    this.behavior = const LiquidGlassTabPillBehavior(),
   });
 
   /// The tuned default contact shadow of the moving glass pill — a soft
@@ -333,9 +423,15 @@ class LiquidGlassTabPillStyle {
     Curve? animationCurve,
     double? blur,
     double? growHeight,
+    double? growWidth,
+    bool? confineToBar,
     double? refractionIndex,
     double? refractionWidth,
     double? magnification,
+    double? dispersion,
+    double? width,
+    double? widthFactor,
+    double? targetWidth,
     LiquidGlassShape? shape,
     LiquidGlassStyle? glassStyle,
     LiquidGlassStyle? rest,
@@ -343,6 +439,7 @@ class LiquidGlassTabPillStyle {
     double? travelDamping,
     LiquidGlassLensMotionSpec? motion,
     LiquidGlassTabMagnifierPillStyle? magnifierPill,
+    LiquidGlassTabPillBehavior? behavior,
   }) {
     return LiquidGlassTabPillStyle(
       mode: mode ?? this.mode,
@@ -353,9 +450,15 @@ class LiquidGlassTabPillStyle {
       animationCurve: animationCurve ?? this.animationCurve,
       blur: blur ?? this.blur,
       growHeight: growHeight ?? this.growHeight,
+      growWidth: growWidth ?? this.growWidth,
+      confineToBar: confineToBar ?? this.confineToBar,
       refractionIndex: refractionIndex ?? this.refractionIndex,
       refractionWidth: refractionWidth ?? this.refractionWidth,
       magnification: magnification ?? this.magnification,
+      dispersion: dispersion ?? this.dispersion,
+      width: width ?? this.width,
+      widthFactor: widthFactor ?? this.widthFactor,
+      targetWidth: targetWidth ?? this.targetWidth,
       shape: shape ?? this.shape,
       glassStyle: glassStyle ?? this.glassStyle,
       rest: rest ?? this.rest,
@@ -363,6 +466,7 @@ class LiquidGlassTabPillStyle {
       travelDamping: travelDamping ?? this.travelDamping,
       motion: motion ?? this.motion,
       magnifierPill: magnifierPill ?? this.magnifierPill,
+      behavior: behavior ?? this.behavior,
     );
   }
 
@@ -389,7 +493,7 @@ class LiquidGlassTabPillStyle {
             refractionIndex: refractionIndex,
             refractionWidth: refractionWidth,
             magnification: magnification,
-            dispersion: 1.32,
+            dispersion: dispersion,
           ),
       liteGlass: g?.liteGlass ?? false,
     );
@@ -450,4 +554,52 @@ class LiquidGlassTabPillStyle {
       ),
     );
   }
+}
+
+/// How the tab bar grows while its glass pill is lifted: the capsule, the
+/// pills and the items scale up together on one spring, and come back
+/// down when the pill does. A plain scale — the bar keeps its shape.
+///
+/// Glass pill modes only; a bar with no moving pill has nothing to lift.
+@immutable
+class LiquidGlassTabBarSwell {
+  const LiquidGlassTabBarSwell({
+    this.scale = 0.03,
+    this.grip = 0.75,
+    this.stiffness = 320,
+    this.damping = 24,
+    this.releaseDamping = 17,
+  });
+
+  /// How much bigger the bar is while the pill is up, as a fraction of its
+  /// size: `0.03` is 3% on both axes. Negative shrinks it.
+  final double scale;
+
+  /// Where the bar grows from, `0`..`1`. `0` grows it evenly about its
+  /// middle; `1` leans the growth toward the pill, so the side the pill
+  /// is on grows the most. The point follows the pill as it travels.
+  final double grip;
+
+  /// Stiffness of the scale spring. Higher → it gets there faster.
+  final double stiffness;
+
+  /// Damping of the scale spring while the pill is up.
+  final double damping;
+
+  /// Damping once the pill comes down. Below [damping] it rebounds a
+  /// little as it settles.
+  final double releaseDamping;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LiquidGlassTabBarSwell &&
+      other.scale == scale &&
+      other.grip == grip &&
+      other.stiffness == stiffness &&
+      other.damping == damping &&
+      other.releaseDamping == releaseDamping;
+
+  @override
+  int get hashCode =>
+      Object.hash(scale, grip, stiffness, damping, releaseDamping);
 }

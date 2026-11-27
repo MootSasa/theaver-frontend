@@ -3,15 +3,16 @@ import 'package:provider/provider.dart';
 import '../../services/notification_service.dart';
 import '../../services/push_service_detector.dart';
 import '../../services/notification_settings_provider.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../services/notification_settings_launcher.dart';
 import '../../services/settings_service.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/notifications/huawei_autostart_prompt.dart';
 import '../../utils/haptic_utils.dart';
 import 'chat_type_notifications_screen.dart';
-import 'in_app_notifications_screen.dart';
 import 'badge_settings_screen.dart';
 import 'notification_exceptions_screen.dart';
 import 'widgets/sound_picker_sheet.dart';
@@ -26,6 +27,28 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _isSendingTest = false;
+  final TextEditingController _globalKeywordController = TextEditingController();
+
+  @override
+  void dispose() {
+    _globalKeywordController.dispose();
+    super.dispose();
+  }
+
+  void _addGlobalKeyword(
+    NotificationSettingsProvider provider,
+    List<String> current,
+  ) {
+    final kw = _globalKeywordController.text.trim();
+    if (kw.isEmpty) return;
+    final lower = kw.toLowerCase();
+    if (current.any((e) => e.trim().toLowerCase() == lower)) {
+      _globalKeywordController.clear();
+      return;
+    }
+    provider.updateGlobalSettings(globalKeywords: [...current, kw]);
+    _globalKeywordController.clear();
+  }
 
   Future<void> _handleSendTestNotification() async {
     HapticUtils.tap();
@@ -86,38 +109,25 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     HapticUtils.tap();
     final options = [0, 5, 10, 30, 60, 120];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                'Повтор уведомлений',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-            ),
-            const Divider(height: 1),
-            ...options.map((m) => ListTile(
-                  title: Text(_repeatLabel(m)),
-                  trailing: m == current
-                      ? const Icon(Icons.check, color: Color(0xFF0088CC))
-                      : null,
-                  onTap: () {
-                    HapticUtils.selection();
-                    onChanged(m);
-                    Navigator.pop(ctx);
-                  },
-                )),
-          ],
-        ),
+      title: 'Повтор уведомлений',
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ...options.map((m) => ListTile(
+                title: Text(_repeatLabel(m)),
+                trailing: m == current
+                    ? const Icon(Icons.check, color: Color(0xFF0088CC))
+                    : null,
+                onTap: () {
+                  HapticUtils.selection();
+                  onChanged(m);
+                  Navigator.pop(ctx);
+                },
+              )),
+        ],
       ),
     );
   }
@@ -169,11 +179,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
 
-    return Consumer<LiquidGlassProvider>(
-      builder: (context, glassProvider, _) {
-        final glassEnabled = glassProvider.enabled;
-
-        final content = Consumer<NotificationSettingsProvider>(
+    return SettingsFloatingScaffold(
+      title: l10n.translate('notifications_title'),
+      body: Consumer<NotificationSettingsProvider>(
           builder: (context, provider, _) {
             final s = provider.globalSettings;
             final exceptions = provider.exceptions;
@@ -184,7 +192,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
             return ListView(
               physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 8),
+              padding: EdgeInsets.only(
+                top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+                bottom: 24,
+              ),
               children: [
                 // === Главный переключатель и статус доставки ===
                 SettingsGroup(
@@ -375,9 +386,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       if (s.callNotifications) ...[
                         ListTile(
                           title: const Text('Мелодия звонка'),
-                          subtitle: Text(s.callRingtone != null && s.callRingtone!.isNotEmpty
-                              ? s.callRingtone!
-                              : 'По умолчанию'),
+                          subtitle: Text(soundOptionLabel(s.callRingtone, isRingtone: true)),
                           trailing: const Icon(Icons.chevron_right, color: Colors.grey),
                           onTap: () {
                             SoundPickerSheet.show(
@@ -427,36 +436,37 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         },
                       ),
                       AdaptiveSwitchListTile(
-                        secondary: const Icon(Icons.notifications_paused_outlined, color: Color(0xFF0088CC)),
-                        title: const Text('Отключить встроенные уведомления'),
+                        secondary: const Icon(Icons.phone_android, color: Color(0xFF0088CC)),
+                        title: const Text('Уведомления при открытом приложении'),
                         subtitle: const Text(
-                          'Отправлять все уведомления через стандартный сервис уведомлений устройства',
+                          'Показывать системные уведомления, пока Theaver открыт',
                         ),
-                        value: s.disableInAppNotifications,
+                        value: s.foregroundNotifications,
                         onChanged: (val) {
                           HapticUtils.selection();
-                          provider.updateGlobalSettings(disableInAppNotifications: val);
+                          provider.updateGlobalSettings(foregroundNotifications: val);
                         },
                       ),
                       ListTile(
-                        leading: const Icon(Icons.phone_android, color: Color(0xFF0088CC)),
-                        title: const Text('Уведомления в приложении'),
-                        subtitle: Text(
-                          s.disableInAppNotifications
-                              ? 'Отключены (используются системные уведомления)'
-                              : 'Звуки, вибрация, предпросмотр',
-                        ),
-                        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                        leading: const Icon(Icons.settings_applications_outlined, color: Color(0xFF0088CC)),
+                        title: const Text('Системные настройки уведомлений'),
+                        trailing: const Icon(Icons.open_in_new, color: Colors.grey),
                         onTap: () {
                           HapticUtils.tap();
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const InAppNotificationsScreen(),
-                            ),
-                          );
+                          NotificationSettingsLauncher.openAppNotificationSettings();
                         },
                       ),
+                      if (HuaweiAutoStartPrompt.isRelevant)
+                        ListTile(
+                          leading: const Icon(Icons.rocket_launch_outlined, color: Color(0xFF0088CC)),
+                          title: const Text('Автозапуск (Huawei)'),
+                          subtitle: const Text('Нужен, чтобы уведомления приходили, когда Theaver закрыт'),
+                          trailing: const Icon(Icons.open_in_new, color: Colors.grey),
+                          onTap: () {
+                            HapticUtils.tap();
+                            HuaweiAutoStartPrompt.openSettings();
+                          },
+                        ),
                       ListTile(
                         leading: const Icon(Icons.update, color: Color(0xFF0088CC)),
                         title: const Text('Повторять уведомления'),
@@ -467,6 +477,82 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           (m) => provider.updateGlobalSettings(repeatNotifications: m),
                         ),
                       ),
+                      AdaptiveSwitchListTile(
+                        secondary: const Icon(Icons.archive_outlined, color: Color(0xFF0088CC)),
+                        title: const Text('Не заглушать архивные чаты'),
+                        subtitle: const Text(
+                          'Оставлять уведомления для архивных чатов, если у них включён звук',
+                        ),
+                        value: s.keepArchivedUnmuted,
+                        onChanged: (val) {
+                          HapticUtils.selection();
+                          provider.updateGlobalSettings(keepArchivedUnmuted: val);
+                        },
+                      ),
+                      AdaptiveSwitchListTile(
+                        secondary: const Icon(Icons.label_important_outline, color: Color(0xFF0088CC)),
+                        title: const Text('Ключевые слова'),
+                        subtitle: const Text(
+                          'Уведомлять при совпадении слов даже в беззвучных чатах',
+                        ),
+                        value: s.keywordsNotifications,
+                        onChanged: (val) {
+                          HapticUtils.selection();
+                          provider.updateGlobalSettings(keywordsNotifications: val);
+                        },
+                      ),
+                      if (s.keywordsNotifications) ...[
+                        if (s.globalKeywords.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: s.globalKeywords
+                                  .map(
+                                    (kw) => Chip(
+                                      label: Text(kw),
+                                      deleteIcon: const Icon(Icons.close, size: 16),
+                                      onDeleted: () {
+                                        final next = s.globalKeywords
+                                            .where((e) => e != kw)
+                                            .toList();
+                                        provider.updateGlobalSettings(
+                                          globalKeywords: next,
+                                        );
+                                      },
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                          child: TextField(
+                            controller: _globalKeywordController,
+                            decoration: InputDecoration(
+                              hintText: 'Добавить ключевое слово...',
+                              isDense: true,
+                              border: const OutlineInputBorder(),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              suffixIcon: IconButton(
+                                icon: const Icon(Icons.add),
+                                onPressed: () => _addGlobalKeyword(
+                                  provider,
+                                  s.globalKeywords,
+                                ),
+                              ),
+                            ),
+                            onSubmitted: (_) => _addGlobalKeyword(
+                              provider,
+                              s.globalKeywords,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
 
@@ -535,43 +621,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ],
             );
           },
-        );
-
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: topPadding),
-                    child: content,
-                  ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('notifications_title')),
-                    centerTitle: true,
-                    isLite: glassProvider.isLite,
-                  ),
-                ),
-              ],
-            ),
-          );
-        }
-
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(l10n.translate('notifications_title')),
-            centerTitle: true,
-          ),
-          body: content,
-        );
-      },
-    );
+        ),
+      );
   }
 }
 

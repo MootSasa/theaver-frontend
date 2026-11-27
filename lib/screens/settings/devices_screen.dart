@@ -1,6 +1,8 @@
+import 'dart:async' as async;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:dio/dio.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:iconoir_flutter/regular/laptop.dart';
 import 'package:iconoir_flutter/regular/smartphone_device.dart';
 import 'package:iconoir_flutter/regular/globe.dart';
@@ -20,6 +22,8 @@ import '../../services/account_manager.dart';
 import '../../services/auth_service.dart';
 import '../../services/deep_link_service.dart';
 import '../../config/app_config.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/settings/settings_group.dart';
 import '../../utils/swipe_back_route.dart';
 import '../auth/login_screen.dart';
@@ -250,16 +254,27 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
       final scaffoldMessenger = ScaffoldMessenger.of(context);
       try {
-        final success = await AuthService.logoutDevice(deviceId);
+        final res = await AuthService.logoutDeviceWithResult(
+          deviceId,
+          sessionId: sessionId,
+        );
         if (!mounted) return;
-        if (success) {
+        if (res['success'] == true) {
           scaffoldMessenger.showSnackBar(
             SnackBar(content: Text(l10n.translate('devices_terminate_success'))),
           );
           await _loadSessions();
         } else {
+          final isQuarantine = res['error'] == 'session_too_new';
           scaffoldMessenger.showSnackBar(
-            SnackBar(content: Text(l10n.translate('devices_terminate_error')), backgroundColor: Colors.red),
+            SnackBar(
+              content: Text(
+                isQuarantine
+                    ? l10n.translate('devices_session_too_new')
+                    : l10n.translate('devices_terminate_error'),
+              ),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       } catch (e) {
@@ -312,16 +327,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
     if (confirmed == true && mounted) {
       final scaffoldMessenger = ScaffoldMessenger.of(context);
       try {
-        final success = await AuthService.terminateOtherSessions(currentDeviceId);
+        final res = await AuthService.terminateOtherSessionsWithResult(currentDeviceId);
         if (!mounted) return;
-        if (success) {
+        if (res['success'] == true) {
           scaffoldMessenger.showSnackBar(
             SnackBar(content: Text(l10n.translate('devices_terminate_all_success'))),
           );
           await _loadSessions();
         } else {
+          final isQuarantine = res['error'] == 'session_too_new';
           scaffoldMessenger.showSnackBar(
-            SnackBar(content: Text(l10n.translate('devices_terminate_error')), backgroundColor: Colors.red),
+            SnackBar(
+              content: Text(
+                isQuarantine
+                    ? l10n.translate('devices_session_too_new')
+                    : l10n.translate('devices_terminate_error'),
+              ),
+              backgroundColor: Colors.red,
+            ),
           );
         }
       } catch (e) {
@@ -407,62 +430,60 @@ class _DevicesScreenState extends State<DevicesScreen> {
       {'days': 365, 'label': l10n.translate('devices_ttl_1_year')},
     ];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      title: l10n.translate('devices_auto_terminate_title'),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 14),
       builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                  child: Text(
-                    l10n.translate('devices_auto_terminate_title'),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                  ),
-                ),
-                const Divider(),
-                ...options.map((opt) {
-                  final days = opt['days'] as int;
-                  final label = opt['label'] as String;
-                  final isSelected = _sessionsTTLDays == days;
+        return SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ...options.map((opt) {
+                final days = opt['days'] as int;
+                final label = opt['label'] as String;
+                final isSelected = _sessionsTTLDays == days;
 
-                  return ListTile(
-                    title: Text(label),
-                    trailing: isSelected
-                        ? Check(
-                            width: 20,
-                            height: 20,
-                            color: Theme.of(context).primaryColor,
-                          )
-                        : null,
-                    onTap: () async {
-                      Navigator.pop(ctx);
-                      HapticFeedback.lightImpact();
+                return ListTile(
+                  title: Text(label),
+                  trailing: isSelected
+                      ? Check(
+                          width: 20,
+                          height: 20,
+                          color: Theme.of(context).primaryColor,
+                        )
+                      : null,
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    HapticFeedback.lightImpact();
+                    final prevDays = _sessionsTTLDays;
+                    setState(() {
+                      _sessionsTTLDays = days;
+                    });
+                    final success = await AuthService.setSessionsTTL(days);
+                    if (!mounted) return;
+                    if (success) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(l10n.translate('settings_saved')),
+                        ),
+                      );
+                    } else {
                       setState(() {
-                        _sessionsTTLDays = days;
+                        _sessionsTTLDays = prevDays;
                       });
-                      final success = await AuthService.setSessionsTTL(days);
-                      if (mounted && success) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(l10n.translate('settings_saved')),
-                          ),
-                        );
-                      }
-                    },
-                  );
-                }).toList(),
-              ],
-            ),
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(l10n.translate('common_error')),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  },
+                );
+              }),
+            ],
           ),
         );
       },
@@ -483,13 +504,14 @@ class _DevicesScreenState extends State<DevicesScreen> {
       case 365:
         return l10n.translate('devices_ttl_1_year');
       default:
-        return '$days ${l10n.translate('devices_days_ago')}';
+        return '$days ${l10n.translate('devices_ttl_days')}';
     }
   }
 
   String _formatLastActive(DateTime lastActive) {
+    final local = lastActive.toLocal();
     final now = DateTime.now();
-    final difference = now.difference(lastActive);
+    final difference = now.difference(local);
     final l10n = context.l10n;
 
     if (difference.inMinutes < 1) {
@@ -501,8 +523,29 @@ class _DevicesScreenState extends State<DevicesScreen> {
     } else if (difference.inDays < 7) {
       return '${difference.inDays} ${l10n.translate('devices_days_ago')}';
     } else {
-      return '${lastActive.day.toString().padLeft(2, '0')}.${lastActive.month.toString().padLeft(2, '0')}.${lastActive.year}';
+      return '${local.day.toString().padLeft(2, '0')}.${local.month.toString().padLeft(2, '0')}.${local.year}';
     }
+  }
+
+  Future<void> _showLinkDeviceSheet() async {
+    final l10n = context.l10n;
+    final result = await showTheavModalSheet<String>(
+      context: context,
+      title: l10n.translate('devices_link_desktop_title'),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      builder: (_) => const _LinkDeviceBottomSheet(),
+    );
+    if (!mounted || result == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          result == 'awaiting_2fa'
+              ? l10n.translate('devices_link_awaiting_2fa')
+              : l10n.translate('devices_link_success'),
+        ),
+      ),
+    );
+    await _loadSessions();
   }
 
   Widget _buildDeviceIcon(DeviceType type, Color color) {
@@ -525,18 +568,17 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
+    final headerFg = SettingsFloatingHeader.foregroundColorOf(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('devices_title')),
-        actions: [
-          IconButton(
-            icon: Refresh(width: 22, height: 22, color: theme.colorScheme.onSurface),
-            onPressed: _loadData,
-            tooltip: l10n.translate('devices_refresh'),
-          ),
-        ],
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('devices_title'),
+      actions: [
+        SettingsHeaderAction(
+          icon: Refresh(width: 22, height: 22, color: headerFg),
+          onTap: _loadData,
+          tooltip: l10n.translate('devices_refresh'),
+        ),
+      ],
       body: _buildBody(theme, l10n),
     );
   }
@@ -566,7 +608,10 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final otherSessions = _sessions.where((s) => !s.isCurrent).toList();
 
     return ListView(
-      padding: const EdgeInsets.symmetric(vertical: 12),
+      padding: EdgeInsets.only(
+        top: SettingsFloatingHeader.topClearanceOf(context) + 8,
+        bottom: 24,
+      ),
       children: [
         // Current Device Group
         if (currentSession != null) ...[
@@ -582,6 +627,37 @@ class _DevicesScreenState extends State<DevicesScreen> {
             ],
           ),
         ],
+
+        // Link Desktop / Web Device Group
+        SettingsGroup(
+          title: l10n.translate('devices_link_section'),
+          children: [
+            ListTile(
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.qr_code_2,
+                  size: 22,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              title: Text(l10n.translate('devices_link_desktop_title')),
+              subtitle: Text(l10n.translate('devices_link_desktop_subtitle')),
+              trailing: NavArrowRight(
+                width: 18,
+                height: 18,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              onTap: _showLinkDeviceSheet,
+            ),
+          ],
+        ),
 
         // Session Auto-Termination TTL Group
         SettingsGroup(
@@ -837,6 +913,351 @@ class _DevicesScreenState extends State<DevicesScreen> {
               ],
             ),
       onLongPress: onRename,
+    );
+  }
+}
+
+class _LinkDeviceBottomSheet extends StatefulWidget {
+  const _LinkDeviceBottomSheet();
+
+  @override
+  State<_LinkDeviceBottomSheet> createState() => _LinkDeviceBottomSheetState();
+}
+
+class _LinkDeviceBottomSheetState extends State<_LinkDeviceBottomSheet> {
+  int _tabIndex = 0;
+  bool _qrLoading = true;
+  bool _qrExpired = false;
+  String? _qrError;
+  String? _token;
+  String? _secret;
+  String? _shortCode;
+  String? _qrUrl;
+  async.Timer? _pollTimer;
+
+  final _codeCtrl = TextEditingController();
+  bool _submittingCode = false;
+  String? _codeError;
+  bool _copiedFeedback = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _createGrantSession();
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _codeCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _createGrantSession() async {
+    _pollTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _qrLoading = true;
+      _qrExpired = false;
+      _qrError = null;
+      _token = null;
+      _secret = null;
+      _shortCode = null;
+      _qrUrl = null;
+    });
+
+    final created = await AuthService.createQrGrantSession();
+    if (!mounted) return;
+
+    if (created['success'] != true || created['token'] == null) {
+      setState(() {
+        _qrLoading = false;
+        _qrError = created['message']?.toString().isNotEmpty == true
+            ? created['message'].toString()
+            : context.l10n.translate('common_error');
+      });
+      return;
+    }
+
+    setState(() {
+      _qrLoading = false;
+      _token = created['token']?.toString();
+      _secret = created['qr_secret']?.toString();
+      _shortCode = created['short_code']?.toString();
+      _qrUrl = created['qr_url']?.toString();
+    });
+
+    _pollTimer = async.Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _pollGrantStatus(),
+    );
+  }
+
+  Future<void> _pollGrantStatus() async {
+    final tok = _token;
+    final sec = _secret;
+    if (!mounted || tok == null || sec == null) {
+      _pollTimer?.cancel();
+      return;
+    }
+    final res = await AuthService.pollQrLoginStatus(token: tok, qrSecret: sec);
+    if (!mounted) return;
+    final status = res['status']?.toString() ?? '';
+    if (status == 'expired') {
+      _pollTimer?.cancel();
+      setState(() => _qrExpired = true);
+    } else if (status == 'claimed') {
+      _pollTimer?.cancel();
+      Navigator.pop(context, 'linked');
+    }
+  }
+
+  Future<void> _submitManualCode() async {
+    final l10n = context.l10n;
+    final raw = _codeCtrl.text.trim();
+    if (raw.isEmpty || _submittingCode) return;
+
+    setState(() {
+      _submittingCode = true;
+      _codeError = null;
+    });
+
+    String? token;
+    String? shortCode;
+    if (raw.contains('token=')) {
+      final uri = Uri.tryParse(raw);
+      token = uri?.queryParameters['token'];
+    }
+    if (token == null || token.isEmpty) {
+      shortCode = raw.replaceAll('-', '').replaceAll(' ', '').toUpperCase();
+    }
+
+    final res = await AuthService.confirmQrLogin(
+      token: token,
+      shortCode: shortCode,
+    );
+    if (!mounted) return;
+
+    if (res['success'] == true) {
+      _pollTimer?.cancel();
+      Navigator.pop(
+        context,
+        res['status'] == 'awaiting_2fa' ? 'awaiting_2fa' : 'linked',
+      );
+      return;
+    }
+
+    final errCode = res['error']?.toString() ?? '';
+    setState(() {
+      _submittingCode = false;
+      _codeError = errCode == 'qr_expired_or_invalid'
+          ? l10n.translate('devices_link_error')
+          : (res['message']?.toString().isNotEmpty == true
+              ? res['message'].toString()
+              : l10n.translate('devices_link_error'));
+    });
+  }
+
+  void _copyShortCode() {
+    final code = _shortCode;
+    if (code == null || code.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: code));
+    setState(() => _copiedFeedback = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copiedFeedback = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final theme = Theme.of(context);
+
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+            SegmentedButton<int>(
+              segments: [
+                ButtonSegment<int>(
+                  value: 0,
+                  icon: const Icon(Icons.qr_code_2, size: 18),
+                  label: Text(l10n.translate('devices_link_tab_qr')),
+                ),
+                ButtonSegment<int>(
+                  value: 1,
+                  icon: const Icon(Icons.keyboard_outlined, size: 18),
+                  label: Text(l10n.translate('devices_link_tab_code')),
+                ),
+              ],
+              selected: {_tabIndex},
+              onSelectionChanged: (sel) {
+                setState(() => _tabIndex = sel.first);
+              },
+            ),
+            const SizedBox(height: 18),
+            if (_tabIndex == 0) ...[
+              if (_qrLoading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 48),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_qrError != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    children: [
+                      Text(
+                        _qrError!,
+                        style: const TextStyle(color: Colors.red),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton(
+                        onPressed: _createGrantSession,
+                        child: Text(l10n.translate('devices_retry')),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_qrExpired)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    children: [
+                      Text(
+                        l10n.translate('auth_qr_expired'),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        onPressed: _createGrantSession,
+                        icon: const Icon(Icons.refresh),
+                        label: Text(l10n.translate('auth_qr_refresh')),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_qrUrl != null) ...[
+                Center(
+                  child: Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: QrImageView(
+                      data: _qrUrl!,
+                      version: QrVersions.auto,
+                      size: 188,
+                      backgroundColor: Colors.white,
+                    ),
+                  ),
+                ),
+                if (_shortCode != null && _shortCode!.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Center(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: _copyShortCode,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${l10n.translate('auth_qr_code_label')}: $_shortCode',
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(
+                              _copiedFeedback ? Icons.check : Icons.copy_rounded,
+                              size: 16,
+                              color: _copiedFeedback
+                                  ? Colors.green
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_copiedFeedback)
+                    Center(
+                      child: Text(
+                        l10n.translate('auth_qr_code_copied'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green,
+                        ),
+                      ),
+                    ),
+                ],
+                const SizedBox(height: 10),
+                Text(
+                  l10n.translate('devices_link_qr_hint'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ] else ...[
+              Text(
+                l10n.translate('devices_link_desktop_hint'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _codeCtrl,
+                autofocus: true,
+                textCapitalization: TextCapitalization.characters,
+                decoration: InputDecoration(
+                  labelText: l10n.translate('devices_link_code_label'),
+                  hintText: 'ABCD1234',
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.paste),
+                    onPressed: () async {
+                      final data = await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null) {
+                        _codeCtrl.text = data!.text!.trim();
+                      }
+                    },
+                  ),
+                ),
+                onSubmitted: (_) => _submitManualCode(),
+              ),
+              if (_codeError != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _codeError!,
+                  style: const TextStyle(color: Colors.red, fontSize: 13),
+                ),
+              ],
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: _submittingCode ? null : _submitManualCode,
+                child: _submittingCode
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(l10n.translate('devices_link_confirm')),
+              ),
+            ],
+          ],
+      ),
     );
   }
 }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/call_state_provider.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
 
 /// Floating or persistent banner that indicates an active call is ongoing
 /// on another device of the same account, allowing one-tap seamless transfer.
@@ -16,9 +18,28 @@ class CallDeviceTransferBanner extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final chatTitle = callProvider.otherDeviceActiveChatTitle ?? 'Звонок';
+    final rawTitle = callProvider.otherDeviceActiveChatTitle ?? 'Звонок';
+    final otherChatId = callProvider.otherDeviceActiveChatId;
 
-    return Container(
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) {
+        String chatTitle = rawTitle;
+        if (otherChatId != null && otherChatId.isNotEmpty) {
+          final cachedChat = ChatInstantCache.instance.getSync(otherChatId)?.chat;
+          if (cachedChat != null &&
+              cachedChat.chatType == 'private' &&
+              !cachedChat.isBot &&
+              ContactsService.shouldResolveUserIdentity(cachedChat.otherUserId)) {
+            chatTitle = ContactsService.resolvePeerName(
+              cachedChat.otherUserId,
+              rawTitle,
+              isBot: cachedChat.isBot,
+            );
+          }
+        }
+
+        return Container(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
@@ -98,6 +119,8 @@ class CallDeviceTransferBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+      },
     );
   }
 }

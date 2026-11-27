@@ -3,11 +3,13 @@ import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 
+import '../lens/liquid_glass_batch.dart';
 import '../lens/liquid_glass_lens.dart';
 import '../liquid_glass_config.dart';
 import '../liquid_glass_style.dart';
 import '../utils/liquid_glass_light.dart';
 import '../utils/liquid_glass_shape.dart';
+import 'liquid_glass_shadow.dart';
 
 /// **Label** group for [LiquidGlassSegmented]: how each segment's text
 /// renders in selected / unselected state. Mirrors
@@ -418,15 +420,24 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
             top: pillTop,
             width: pillW,
             height: pillH,
-            child: LiquidGlassLens(
-              style: _fadeStyle(pill.resolveGlass(pillH / 2), glassOpacity),
+            // Its own read, never a batch's: the pill refracts the capsule
+            // under it, and a batch's shared copy is taken before the
+            // capsule has painted.
+            child: LiquidGlassBatch.exclude(
+              child: LiquidGlassLens(
+                style:
+                    _fadeStyle(pill.resolveGlass(pillH / 2), glassOpacity),
+              ),
             ),
           ),
 
         // ── labels (on top, tappable) ──
         Positioned.fill(
-          child: Padding(
-            padding: EdgeInsets.all(pad),
+          child: MetaData(
+            metaData: 'liquid_glass_horizontal_gesture',
+            behavior: HitTestBehavior.deferToChild,
+            child: Padding(
+              padding: EdgeInsets.all(pad),
             child: Material(
               type: MaterialType.transparency,
               child: Row(
@@ -467,7 +478,8 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
                         ),
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -525,11 +537,23 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
   Widget _tintedPill(LiquidGlassStyle rest) {
     final radius =
         rest.shape?.cornerRadius ?? (widget.height - widget.padding * 2) / 2;
+    // The rest style's shadow, as a plain box shadow: this pill is no lens.
+    final LiquidGlassShadow? shadow = rest.appearance.shadow;
     return IgnorePointer(
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: rest.appearance.color,
           borderRadius: BorderRadius.circular(radius),
+          boxShadow: shadow == null
+              ? null
+              : [
+                  BoxShadow(
+                    color: shadow.color
+                        .withValues(alpha: shadow.color.a * shadow.opacity),
+                    blurRadius: shadow.blur,
+                    offset: shadow.offset ?? Offset.zero,
+                  ),
+                ],
         ),
       ),
     );

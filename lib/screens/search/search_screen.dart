@@ -4,10 +4,17 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../services/search_service.dart';
 import '../../services/chat_service.dart';
 import '../../services/community_service.dart';
+import '../../services/contacts_service.dart';
+import '../../services/groups_channels_parity_service.dart';
 import '../../l10n/app_localizations.dart';
+import '../../models/profile_customization.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../utils/image_utils.dart';
 import '../../widgets/common/peer_badges_widget.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/settings/settings_group.dart';
+import '../../widgets/user/avatar_with_status.dart';
+import '../../widgets/user/emoji_status_badge.dart';
 
 class SearchScreen extends StatefulWidget {
   final String? initialChatId;
@@ -33,6 +40,20 @@ class _SearchScreenState extends State<SearchScreen> {
   bool _isLoading = false;
   final Set<String> _joiningPeerIds = {};
 
+  // In-chat search filters
+  String? _messageTypeFilter;
+  String? _fromUserId;
+  String? _fromUserName;
+  bool _fromUserIsBot = false;
+  DateTime? _minDate;
+  DateTime? _maxDate;
+
+  bool get _hasActiveInChatFilters =>
+      _messageTypeFilter != null ||
+      (_fromUserId != null && _fromUserId!.isNotEmpty) ||
+      _minDate != null ||
+      _maxDate != null;
+
   @override
   void initState() {
     super.initState();
@@ -40,6 +61,11 @@ class _SearchScreenState extends State<SearchScreen> {
       _selectedFilter = 'messages';
     }
     _searchController.addListener(_onSearchChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onSearchChanged() {
@@ -50,14 +76,18 @@ class _SearchScreenState extends State<SearchScreen> {
       });
       _debounce?.cancel();
       final trimmed = _searchQuery.trim();
-      if (trimmed.isEmpty) {
+      final bool allowFilterOnly =
+          widget.initialChatId != null && _hasActiveInChatFilters;
+      if (trimmed.isEmpty && !allowFilterOnly) {
         setState(() {
           _result = UnifiedSearchResult.empty;
           _isLoading = false;
         });
         return;
       }
-      _performLocalSearch(trimmed);
+      if (trimmed.isNotEmpty) {
+        _performLocalSearch(trimmed);
+      }
       _debounce = Timer(const Duration(milliseconds: 280), _performSearch);
     }
   }
@@ -77,7 +107,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Future<void> _performSearch() async {
     final q = _searchQuery.trim();
-    if (q.isEmpty) return;
+    final bool allowFilterOnly =
+        widget.initialChatId != null && _hasActiveInChatFilters;
+    if (q.isEmpty && !allowFilterOnly) return;
 
     setState(() => _isLoading = true);
     try {
@@ -85,10 +117,16 @@ class _SearchScreenState extends State<SearchScreen> {
         query: q,
         type: widget.initialChatId != null ? 'messages' : 'all',
         chatId: widget.initialChatId,
+        fromUserId: _fromUserId,
+        messageType: _messageTypeFilter,
+        minDate: _minDate?.toUtc().toIso8601String(),
+        maxDate: _maxDate?.toUtc().toIso8601String(),
       );
       if (mounted && _searchQuery.trim() == q) {
         setState(() {
-          _result = _result.mergeWithServer(res);
+          _result = (q.isEmpty || _hasActiveInChatFilters)
+              ? res
+              : _result.mergeWithServer(res);
           _isLoading = false;
         });
       }
@@ -99,8 +137,166 @@ class _SearchScreenState extends State<SearchScreen> {
     }
   }
 
+  void _triggerInChatFilterSearch() {
+    _debounce?.cancel();
+    if (_searchQuery.trim().isEmpty && !_hasActiveInChatFilters) {
+      setState(() {
+        _result = UnifiedSearchResult.empty;
+        _isLoading = false;
+      });
+      return;
+    }
+    _performSearch();
+  }
+
+  Future<void> _pickSenderFilter() async {
+    final cid = widget.initialChatId;
+    if (cid == null || cid.isEmpty) return;
+    final page = await GroupsChannelsParityService.getMembersFiltered(
+      cid,
+      limit: 50,
+    );
+    if (!mounted) return;
+    final pickedId = await showTheavModalSheet<String>(
+      context: context,
+      title: 'Сообщения от участника',
+      builder: (ctx) => ValueListenableBuilder<int>(
+        valueListenable: ContactsService.revisionNotifier,
+        builder: (_, __, ___) => ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
+          children: [
+            TheavInsetGroup(
+              children: [
+                TheavListRow(
+                  leading: const iconoir.Group(width: 20, height: 20),
+                  title: 'Все участники',
+                  trailing: TheavCheckCircle(selected: _fromUserId == null),
+                  onTap: () => Navigator.pop(ctx, ''),
+                ),
+                for (final member in page.members)
+                  Builder(
+                    builder: (_) {
+                      final rawName = member.displayName.isNotEmpty
+                          ? member.displayName
+                          : '@${member.username}';
+                      final memberName = ContactsService.resolvePeerName(
+                        member.id,
+                        rawName,
+                        isBot: member.isBot,
+                      );
+                      final memberAvatar = ContactsService.resolvePeerAvatarUrl(
+                        member.id,
+                        member.avatarUrl,
+                        isBot: member.isBot,
+                      );
+                      return TheavListRow(
+                        leading: AvatarWithStatus(
+                          userId: member.id,
+                          avatarUrl: memberAvatar,
+                          name: memberName,
+                          radius: 18,
+                          isOnline: member.isOnline,
+                          resolveContactOverride: !member.isBot,
+                        ),
+                        title: memberName,
+                        subtitle: member.username.isNotEmpty
+                            ? '@${member.username}'
+                            : null,
+                        trailing: TheavCheckCircle(
+                          selected: _fromUserId == member.id,
+                        ),
+                        onTap: () => Navigator.pop(ctx, member.id),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || pickedId == null) return;
+    if (pickedId.isEmpty) {
+      setState(() {
+        _fromUserId = null;
+        _fromUserName = null;
+        _fromUserIsBot = false;
+      });
+    } else {
+      final matched = page.members.where((m) => m.id == pickedId).firstOrNull;
+      setState(() {
+        _fromUserId = pickedId;
+        _fromUserIsBot = matched?.isBot ?? false;
+        _fromUserName = matched == null
+            ? pickedId
+            : (matched.displayName.isNotEmpty
+                  ? matched.displayName
+                  : '@${matched.username}');
+      });
+    }
+    _triggerInChatFilterSearch();
+  }
+
+  Future<void> _pickDateRangeFilter() async {
+    if (_minDate != null || _maxDate != null) {
+      setState(() {
+        _minDate = null;
+        _maxDate = null;
+      });
+      _triggerInChatFilterSearch();
+      return;
+    }
+    final now = DateTime.now();
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: now,
+      initialDateRange: _minDate != null && _maxDate != null
+          ? DateTimeRange(start: _minDate!, end: _maxDate!)
+          : DateTimeRange(
+              start: now.subtract(const Duration(days: 7)),
+              end: now,
+            ),
+    );
+    if (!mounted || range == null) return;
+    setState(() {
+      _minDate = DateTime(
+        range.start.year,
+        range.start.month,
+        range.start.day,
+      );
+      _maxDate = DateTime(
+        range.end.year,
+        range.end.month,
+        range.end.day,
+        23,
+        59,
+        59,
+      );
+    });
+    _triggerInChatFilterSearch();
+  }
+
+  void _insertHashtagPrefix() {
+    final text = _searchController.text;
+    if (text.trim().isEmpty) {
+      _searchController.text = '#';
+      _searchController.selection = const TextSelection.collapsed(offset: 1);
+      return;
+    }
+    if (!text.startsWith('#')) {
+      final updated = '#$text';
+      _searchController.text = updated;
+      _searchController.selection = TextSelection.collapsed(
+        offset: updated.length,
+      );
+    }
+  }
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -169,15 +365,127 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
       body: Column(
         children: [
-          if (!isInChatSearch) _buildFilterChips(context),
+          if (!isInChatSearch)
+            _buildFilterChips(context)
+          else
+            _buildInChatFilterBar(context),
           Expanded(child: _buildBody(context)),
         ],
       ),
     );
   }
 
+  Widget _buildInChatFilterBar(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final unselectedBg = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : Colors.black.withValues(alpha: 0.06);
+
+    const typeChips = <(String?, String)>[
+      (null, 'Все'),
+      ('photo', 'Фото'),
+      ('video', 'Видео'),
+      ('file', 'Файлы'),
+      ('audio', 'Аудио'),
+      ('voice', 'Голосовые'),
+      ('links', 'Ссылки'),
+    ];
+
+    final String dateLabel = (_minDate != null && _maxDate != null)
+        ? '${_minDate!.day}.${_minDate!.month}–${_maxDate!.day}.${_maxDate!.month} ×'
+        : 'Дата';
+    final bool hasDate = _minDate != null || _maxDate != null;
+    final bool hasSender = _fromUserId != null && _fromUserId!.isNotEmpty;
+
+    Widget buildChip({
+      required String label,
+      required bool selected,
+      required VoidCallback onTap,
+      Widget? icon,
+    }) {
+      return GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? primary : unselectedBg,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[icon, const SizedBox(width: 5)],
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: selected ? Colors.white : onSurface,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        children: [
+          for (final (typeKey, label) in typeChips) ...[
+            buildChip(
+              label: label,
+              selected: _messageTypeFilter == typeKey,
+              onTap: () {
+                setState(() => _messageTypeFilter = typeKey);
+                _triggerInChatFilterSearch();
+              },
+            ),
+            const SizedBox(width: 8),
+          ],
+          buildChip(
+            label: hasSender
+                ? '${ContactsService.resolvePeerName(_fromUserId, _fromUserName ?? _fromUserId!, isBot: _fromUserIsBot)} ▾'
+                : 'От кого',
+            selected: hasSender,
+            icon: iconoir.User(
+              width: 14,
+              height: 14,
+              color: hasSender ? Colors.white : onSurface,
+            ),
+            onTap: _pickSenderFilter,
+          ),
+          const SizedBox(width: 8),
+          buildChip(
+            label: dateLabel,
+            selected: hasDate,
+            icon: iconoir.Calendar(
+              width: 14,
+              height: 14,
+              color: hasDate ? Colors.white : onSurface,
+            ),
+            onTap: _pickDateRangeFilter,
+          ),
+          const SizedBox(width: 8),
+          buildChip(
+            label: '#хэштег',
+            selected: _searchQuery.trim().startsWith('#'),
+            onTap: _insertHashtagPrefix,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildFilterChips(BuildContext context) {
-    final filters = const <(String, String)>[
+    const filters = <(String, String)>[
       ('all', 'Все'),
       ('chats', 'Чаты'),
       ('users', 'Люди и боты'),
@@ -232,7 +540,9 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildBody(BuildContext context) {
     final l10n = context.l10n;
-    if (_searchQuery.trim().isEmpty) {
+    final bool isInChatSearch = widget.initialChatId != null;
+    if (_searchQuery.trim().isEmpty &&
+        !(isInChatSearch && _hasActiveInChatFilters)) {
       return Center(
         child: Text(
           l10n.translate('search_start_typing'),
@@ -313,7 +623,22 @@ class _SearchScreenState extends State<SearchScreen> {
 
   Widget _buildPeerTile(BuildContext context, SearchPeer peer,
       {bool isGlobal = false}) {
-    final validAvatar = getValidAvatarUrl(peer.avatarUrl);
+    final bool isHumanUserPeer = peer.type == 'user' && !peer.isBot;
+    final displayTitle = isHumanUserPeer
+        ? ContactsService.resolvePeerName(
+            peer.id,
+            peer.title,
+            isBot: peer.isBot,
+          )
+        : peer.title;
+    final resolvedAvatarUrl = isHumanUserPeer
+        ? ContactsService.resolvePeerAvatarUrl(
+            peer.id,
+            peer.avatarUrl,
+            isBot: peer.isBot,
+          )
+        : peer.avatarUrl;
+    final validAvatar = getValidAvatarUrl(resolvedAvatarUrl);
     final canJoin = isGlobal &&
         !peer.isMember &&
         (peer.type == 'group' || peer.type == 'channel' || peer.type == 'community');
@@ -344,43 +669,75 @@ class _SearchScreenState extends State<SearchScreen> {
       subtitleParts.add(peer.description);
     }
 
+    final PeerCustomization? cust = peer.type == 'user'
+        ? (PeerCustomizationCache.instance.getSync(peer.id) ??
+            peer.peerCustomization)
+        : null;
+
     return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
-        backgroundImage:
-            validAvatar != null ? avatarImageProvider(peer.avatarUrl) : null,
-        child: validAvatar == null
-            ? (peer.type == 'channel'
-                ? Icon(Icons.campaign_rounded,
-                    color: Theme.of(context).colorScheme.primary)
-                : peer.type == 'community'
-                    ? Icon(Icons.hub_rounded,
-                        color: Theme.of(context).colorScheme.primary)
-                    : peer.type == 'group'
-                        ? Icon(Icons.group_rounded,
-                            color: Theme.of(context).colorScheme.primary)
-                        : Text(
-                            peer.title.isNotEmpty
-                                ? peer.title[0].toUpperCase()
-                                : '?',
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ))
-            : null,
-      ),
+      leading: peer.type == 'user'
+          ? AvatarWithStatus(
+              userId: peer.id,
+              avatarUrl: validAvatar,
+              name: displayTitle,
+              radius: 20,
+              resolveContactOverride: isHumanUserPeer,
+              decorationOverride: cust?.avatarDecoration,
+              showDecoration: true,
+              animateDecoration: false,
+            )
+          : CircleAvatar(
+              backgroundColor:
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
+              backgroundImage: validAvatar != null
+                  ? avatarImageProvider(resolvedAvatarUrl)
+                  : null,
+              child: validAvatar == null
+                  ? (peer.type == 'channel'
+                      ? Icon(Icons.campaign_rounded,
+                          color: Theme.of(context).colorScheme.primary)
+                      : peer.type == 'community'
+                          ? Icon(Icons.hub_rounded,
+                              color: Theme.of(context).colorScheme.primary)
+                          : peer.type == 'group'
+                              ? Icon(Icons.group_rounded,
+                                  color: Theme.of(context).colorScheme.primary)
+                              : Text(
+                                  displayTitle.isNotEmpty
+                                      ? displayTitle[0].toUpperCase()
+                                      : '?',
+                                  style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ))
+                  : null,
+            ),
       title: Row(
         children: [
           Flexible(
             child: Text(
-              peer.title,
+              displayTitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
-          PeerBadgesRow(isBot: peer.isBot, isVerified: peer.isVerified),
+          if (cust?.activeEmojiStatus != null) ...[
+            const SizedBox(width: 4),
+            EmojiStatusBadge(
+              status: cust!.activeEmojiStatus,
+              size: 15,
+              interactive: false,
+            ),
+          ],
+          PeerBadgesRow(
+            isBot: peer.isBot,
+            isVerified: peer.isVerified,
+            badge: cust?.visibleBadge,
+            interactiveBadge: false,
+          ),
         ],
       ),
       subtitle: subtitleParts.isNotEmpty
@@ -512,7 +869,21 @@ class _SearchScreenState extends State<SearchScreen> {
 
   void _onPeerTap(SearchPeer peer) {
     if (peer.type == 'user') {
-      Navigator.pop(context, {'type': 'user', 'data': peer.toUser()});
+      final resolvedPeer = !peer.isBot
+          ? peer.copyWith(
+              name: ContactsService.resolvePeerName(
+                peer.id,
+                peer.name,
+                isBot: peer.isBot,
+              ),
+              avatarUrl: ContactsService.resolvePeerAvatarUrl(
+                peer.id,
+                peer.avatarUrl,
+                isBot: peer.isBot,
+              ),
+            )
+          : peer;
+      Navigator.pop(context, {'type': 'user', 'data': resolvedPeer.toUser()});
     } else if (peer.type == 'group') {
       Navigator.pop(context, {'type': 'group', 'data': peer.toGroup()});
     } else if (peer.type == 'channel') {

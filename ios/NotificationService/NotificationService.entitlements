@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Shared UserDefaults with the app (base URLs, auth token, user id). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.app.theaver.messenger</string>
+	</array>
+	<!-- Communication Notifications (avatar of the sender / chat). -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+</dict>
+</plist>

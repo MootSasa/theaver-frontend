@@ -1,17 +1,16 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../models/community_models.dart';
-import '../../models/theav_theme.dart';
 import '../../services/account_manager.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
@@ -20,6 +19,7 @@ import '../../utils/swipe_back_route.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../community/create_community_screen.dart';
+import '../contacts/contacts_screen.dart';
 import 'create_channel_screen.dart';
 import 'create_group_screen.dart';
 import 'private_chat_screen.dart';
@@ -51,11 +51,42 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadInitialUsers();
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final lower = _searchQuery.trim().toLowerCase();
+    setState(() {
+      if (lower.isNotEmpty) {
+        _searchResults = _recentUsers
+            .where((u) =>
+                _resolvedUserName(u).toLowerCase().contains(lower) ||
+                u.name.toLowerCase().contains(lower) ||
+                u.username.toLowerCase().contains(lower))
+            .toList();
+      }
+    });
+  }
+
+  String _resolvedUserName(SearchResultUser user) =>
+      ContactsService.resolvePeerName(
+        user.id,
+        user.name,
+        isBot: user.isBot,
+      );
+
+  String? _resolvedUserAvatar(SearchResultUser user) =>
+      ContactsService.resolvePeerAvatarUrl(
+        user.id,
+        user.avatarUrl,
+        isBot: user.isBot,
+      );
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -101,10 +132,23 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
         });
       }
 
-      // 2. Пользователи с сервера
+      // 2. Контакты пользователя (/api/contacts) и глобальные пользователи с сервера
+      final contacts = await ContactsService.getContacts();
+      for (final ct in contacts) {
+        merged[ct.contactUserId] = SearchResultUser(
+          id: ct.contactUserId,
+          username: ct.username,
+          name: ct.effectiveName,
+          avatarUrl: ct.effectiveAvatarUrl ?? '',
+          bio: '',
+          isOnline: ct.isOnline,
+          isBot: ct.isBot,
+          isVerified: ct.isVerified,
+        );
+      }
       final remote = await SearchService.searchUsers(query: '');
       for (final u in remote) {
-        merged[u.id] = u;
+        merged.putIfAbsent(u.id, () => u);
       }
 
       if (mounted) {
@@ -139,6 +183,7 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
       setState(() {
         _searchResults = _recentUsers
             .where((u) =>
+                _resolvedUserName(u).toLowerCase().contains(lower) ||
                 u.name.toLowerCase().contains(lower) ||
                 u.username.toLowerCase().contains(lower))
             .toList();
@@ -161,7 +206,7 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
           merged[u.id] = u;
         }
         for (final u in users) {
-          merged[u.id] = u;
+          merged.putIfAbsent(u.id, () => u);
         }
         setState(() {
           _searchResults = merged.values.toList();
@@ -228,13 +273,15 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
       if (!mounted) return;
       if (result['success'] == true) {
         final chat = result['chat'] as Chat;
+        final resolvedName = _resolvedUserName(user);
+        final resolvedAvatar = _resolvedUserAvatar(user);
         if (TilingLayoutController.instance.isWorkspaceMounted) {
           Navigator.of(context).pop();
           TilingLayoutController.instance.openChatInActiveTile(
             chatId: chat.id,
             chatType: 'private',
-            chatName: user.name,
-            avatarUrl: user.avatarUrl,
+            chatName: resolvedName,
+            avatarUrl: resolvedAvatar,
             otherUserId: user.id,
           );
           return;
@@ -244,8 +291,8 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
           SwipeBackPageRoute(
             builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              otherUserName: user.name,
-              otherUserAvatar: user.avatarUrl,
+              otherUserName: resolvedName,
+              otherUserAvatar: resolvedAvatar,
               otherUserOnline: user.isOnline,
               otherUserId: user.id,
             ),
@@ -268,39 +315,29 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final palette = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlass = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
-    final primaryColor = theme.colorScheme.primary;
+    final primaryColor = palette.primary;
     final isSearching = _searchQuery.trim().isNotEmpty;
     final displayUsers = isSearching ? _searchResults : _recentUsers;
 
-    return Scaffold(
+    return SettingsFloatingScaffold(
+      title: _tr('chat_new_private', 'Новое сообщение'),
       backgroundColor: palette.bgBase,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: iconoir.NavArrowLeft(
-            width: 24,
-            height: 24,
-            color: palette.textPrimary,
-          ),
+      padBodyTop: true,
+      actions: [
+        SettingsHeaderAction(
+          tooltip: 'Контакты',
+          foregroundColor: palette.primary,
+          icon: iconoir.Book(width: 21, height: 21, color: palette.primary),
+          onTap: () {
+            HapticUtils.tap();
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(builder: (_) => const ContactsScreen()),
+            );
+          },
         ),
-        title: Text(
-          _tr('chat_new_private', 'Новое сообщение'),
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
-            letterSpacing: -0.2,
-          ),
-        ),
-      ),
+      ],
       body: Stack(
         children: [
           Column(
@@ -310,9 +347,6 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
                 child: _buildSurfaceCard(
                   context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
                   cornerRadius: 18,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -345,6 +379,10 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                               )
                             : null,
                         border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        filled: false,
+                        fillColor: Colors.transparent,
                       ),
                     ),
                   ),
@@ -360,9 +398,6 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                     if (!isSearching) ...[
                       _buildSurfaceCard(
                         context,
-                        isGlass: isGlass,
-                        isLite: isLite,
-                        isDark: isDark,
                         child: Column(
                           children: [
                             _buildQuickTypeTile(
@@ -528,9 +563,6 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                     if (displayUsers.isEmpty && !_isLoading)
                       _buildSurfaceCard(
                         context,
-                        isGlass: isGlass,
-                        isLite: isLite,
-                        isDark: isDark,
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 24,
@@ -569,9 +601,6 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
                     else if (displayUsers.isNotEmpty)
                       _buildSurfaceCard(
                         context,
-                        isGlass: isGlass,
-                        isLite: isLite,
-                        isDark: isDark,
                         child: Column(
                           children: [
                             for (int i = 0; i < displayUsers.length; i++) ...[
@@ -674,6 +703,8 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
     required TheavPalette palette,
     required Color primaryColor,
   }) {
+    final userName = _resolvedUserName(user);
+    final userAvatar = getValidAvatarUrl(_resolvedUserAvatar(user));
     final subtitleParts = <String>[];
     if (user.username.isNotEmpty) {
       subtitleParts.add('@${user.username}');
@@ -685,16 +716,18 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
       leading: AvatarWithStatus(
-        avatarUrl: getValidAvatarUrl(user.avatarUrl),
-        name: user.name,
+        userId: user.id,
+        avatarUrl: userAvatar,
+        name: userName,
         radius: 21,
         isOnline: user.isOnline,
+        resolveContactOverride: !user.isBot,
       ),
       title: Row(
         children: [
           Flexible(
             child: Text(
-              user.name,
+              userName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -729,56 +762,13 @@ class _CreatePrivateChatScreenState extends State<CreatePrivateChatScreen> {
 
   Widget _buildSurfaceCard(
     BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
     required Widget child,
     double cornerRadius = 20,
   }) {
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
-      final style = glassProvider.createStyle(
-        context: context,
-        isLiteOverride: isLite,
-        shape: LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: cornerRadius,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(cornerRadius),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.6,
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: child,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(cornerRadius),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.06),
-          width: 0.6,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: child,
-      ),
+    return TheavInsetGroup(
+      margin: EdgeInsets.zero,
+      borderRadius: cornerRadius,
+      children: [child],
     );
   }
 }

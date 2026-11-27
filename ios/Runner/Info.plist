@@ -72,10 +72,34 @@
 	<string>Theaver needs photo library access to select photos for your avatar</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Theaver needs microphone access for voice messages, video messages, and calls</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Theaver needs your location when you share your location or allow a website to access it</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 		<string>remote-notification</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>app.theaver.messenger</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>theaver</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
 	</array>
 	</dict>
 	</plist>

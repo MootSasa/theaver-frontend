@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../l10n/app_localizations.dart';
 import '../services/chat_service.dart';
+import '../widgets/chat/channel_post_card.dart';
 import '../widgets/chat/message_context_menu.dart';
+import '../widgets/design_system/theav_overlays.dart';
 import '../widgets/message/media_album_widget.dart';
 import '../widgets/message/message_bubble.dart';
 import '../widgets/message/poll_message_widget.dart';
@@ -17,6 +19,7 @@ class MessageContextMenuService {
   bool _isShowing = false;
   NavigatorState? _activeNavigator;
   OverlayEntry? _activeOverlayEntry;
+  LocalHistoryEntry? _localHistoryEntry;
   GlobalKey<MessageContextMenuState>? _activeMenuKey;
 
   /// Notifies chat lists which message ID is currently separated into the blur
@@ -47,6 +50,13 @@ class MessageContextMenuService {
     _isExternalDragActive = false;
     _activeNavigator = null;
     _activeMenuKey = null;
+    final history = _localHistoryEntry;
+    _localHistoryEntry = null;
+    if (history != null) {
+      try {
+        history.remove();
+      } catch (_) {}
+    }
     final entry = _activeOverlayEntry;
     _activeOverlayEntry = null;
     if (entry != null && entry.mounted) {
@@ -80,7 +90,7 @@ class MessageContextMenuService {
     required Message message,
     required GlobalKey messageKey,
     required bool isMe,
-    required VoidCallback onReply,
+    VoidCallback? onReply,
     VoidCallback? onQuote,
     void Function(String selectedText, int offset, int length)? onQuotePartial,
     VoidCallback? onPin,
@@ -88,13 +98,23 @@ class MessageContextMenuService {
     VoidCallback? onForward,
     VoidCallback? onEdit,
     VoidCallback? onSelect,
-    required Function(Message message) onDelete,
+    VoidCallback? onViewPollResults,
+    VoidCallback? onRetractVote,
+    VoidCallback? onStopPoll,
+    VoidCallback? onTranslate,
+    bool isTranslated = false,
+    VoidCallback? onReport,
+    VoidCallback? onTagMessage,
+    VoidCallback? onReplyInAnotherChat,
+    VoidCallback? onViewStats,
+    Function(Message message)? onDelete,
     required Function(String messageId, String emoji) onReaction,
     Set<String>? selectedEmojis,
     String? currentUserId,
     bool canManagePoll = false,
     ValueChanged<Map<String, dynamic>>? onPollUpdated,
     bool enableBlur = true,
+    bool hasProtectedContent = false,
     Offset? initialDragStartGlobalPosition,
     Offset? initialDragCurrentGlobalPosition,
   }) {
@@ -123,6 +143,9 @@ class MessageContextMenuService {
       focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
     } else if (originalWidget is MediaAlbumWidget) {
       detectedChatType = originalWidget.chatType;
+      focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
+    } else if (originalWidget is ChannelPostCard) {
+      detectedChatType = 'channel';
       focusedMessageBuilder = (focusedKey) => originalWidget.copyWithKey(focusedKey);
     }
 
@@ -218,6 +241,7 @@ class MessageContextMenuService {
         messageContent: message.content,
         focusedMessageBuilder: focusedMessageBuilder,
         enableBlur: enableBlur,
+        hasProtectedContent: hasProtectedContent,
         initialDragStartGlobalPosition: initialDragStartGlobalPosition,
         initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
         onReply: onReply,
@@ -234,13 +258,36 @@ class MessageContextMenuService {
         onViewPollResults: onViewPollResults,
         onRetractVote: onRetractVote,
         onStopPoll: onStopPoll,
-        onDelete: () => onDelete(message),
+        onTranslate: onTranslate,
+        isTranslated: isTranslated,
+        onReport: onReport,
+        onTagMessage: onTagMessage,
+        onReplyInAnotherChat: onReplyInAnotherChat,
+        onViewStats: onViewStats,
+        onDelete: onDelete != null ? () => onDelete(message) : null,
         onReaction: (emoji) => onReaction(message.id, emoji),
         selectedEmojis: selectedEmojis ?? message.myReactions,
       ),
     );
 
     overlayState.insert(_activeOverlayEntry!);
+
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      late final LocalHistoryEntry historyEntry;
+      historyEntry = LocalHistoryEntry(
+        onRemove: () {
+          if (identical(_localHistoryEntry, historyEntry)) {
+            _localHistoryEntry = null;
+            if (_activeOverlayEntry != null || _isShowing) {
+              removeActiveOverlay();
+            }
+          }
+        },
+      );
+      _localHistoryEntry = historyEntry;
+      route.addLocalHistoryEntry(historyEntry);
+    }
   }
 
   void _showStopPollConfirmation({
@@ -250,25 +297,21 @@ class MessageContextMenuService {
     ValueChanged<Map<String, dynamic>>? onPollUpdated,
   }) {
     final l10n = context.l10n;
-    showDialog<bool>(
+    showTheavDialog<bool>(
       context: context,
-      builder: (dialogCtx) => AlertDialog(
-        title: Text(l10n.translate('poll_stop_confirm_title')),
-        content: Text(l10n.translate('poll_stop_confirm_desc')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx, false),
-            child: Text(l10n.translate('cancel')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx, true),
-            child: Text(
-              l10n.translate('poll_stop_confirm_action'),
-              style: const TextStyle(color: Colors.red),
-            ),
-          ),
-        ],
-      ),
+      title: l10n.translate('poll_stop_confirm_title'),
+      message: l10n.translate('poll_stop_confirm_desc'),
+      actions: [
+        TheavDialogAction<bool>(
+          label: l10n.translate('cancel'),
+          result: false,
+        ),
+        TheavDialogAction<bool>(
+          label: l10n.translate('poll_stop_confirm_action'),
+          result: true,
+          isDestructive: true,
+        ),
+      ],
     ).then((confirmed) async {
       if (confirmed == true) {
         final updated = await PollMessageWidget.closePoll(

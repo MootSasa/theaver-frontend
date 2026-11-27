@@ -10,6 +10,7 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../l10n/app_localizations.dart';
 import '../../screens/stickers/sticker_pack_detail_sheet.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/sticker_service.dart';
@@ -19,6 +20,8 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../theme/viewport_gradient_box.dart';
 import '../tiling/static_tile_cache_boundary.dart';
+import '../design_system/theav_design_system.dart';
+import 'message_seen_view.dart';
 import 'sticker_item_widget.dart';
 import 'telegram_avatar_stack.dart';
 
@@ -77,9 +80,10 @@ class MessageContextMenu extends StatefulWidget {
   final String messageContent;
   final Widget Function(GlobalKey focusedKey)? focusedMessageBuilder;
   final bool enableBlur;
+  final bool hasProtectedContent;
   final Offset? initialDragStartGlobalPosition;
   final Offset? initialDragCurrentGlobalPosition;
-  final VoidCallback onReply;
+  final VoidCallback? onReply;
   final VoidCallback? onQuote;
   final void Function(String selectedText, int offset, int length)? onQuotePartial;
   final VoidCallback onCopy;
@@ -91,7 +95,13 @@ class MessageContextMenu extends StatefulWidget {
   final VoidCallback? onViewPollResults;
   final VoidCallback? onRetractVote;
   final VoidCallback? onStopPoll;
-  final VoidCallback onDelete;
+  final VoidCallback? onTranslate;
+  final bool isTranslated;
+  final VoidCallback? onReport;
+  final VoidCallback? onTagMessage;
+  final VoidCallback? onReplyInAnotherChat;
+  final VoidCallback? onViewStats;
+  final VoidCallback? onDelete;
   final Function(String emoji) onReaction;
   final Set<String> selectedEmojis;
 
@@ -108,9 +118,10 @@ class MessageContextMenu extends StatefulWidget {
     this.messageContent = '',
     this.focusedMessageBuilder,
     this.enableBlur = true,
+    this.hasProtectedContent = false,
     this.initialDragStartGlobalPosition,
     this.initialDragCurrentGlobalPosition,
-    required this.onReply,
+    this.onReply,
     this.onQuote,
     this.onQuotePartial,
     required this.onCopy,
@@ -122,7 +133,13 @@ class MessageContextMenu extends StatefulWidget {
     this.onViewPollResults,
     this.onRetractVote,
     this.onStopPoll,
-    required this.onDelete,
+    this.onTranslate,
+    this.isTranslated = false,
+    this.onReport,
+    this.onTagMessage,
+    this.onReplyInAnotherChat,
+    this.onViewStats,
+    this.onDelete,
     required this.onReaction,
     this.selectedEmojis = const {},
   }) : super(key: key);
@@ -221,6 +238,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _originGradientBounds = ViewportGradientBoundsScope.resolveFromRenderObject(
       widget.messageKey?.currentContext?.findRenderObject(),
     );
@@ -442,12 +460,17 @@ class MessageContextMenuState extends State<MessageContextMenu>
 
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _reactionSearchController.dispose();
     _releaseBackdropIsolation?.call();
     _releaseBackdropIsolation = null;
     MessageContextMenuService().clearActiveBlurMessage();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted && !_isDismissing) setState(() {});
   }
 
   void _handleDismiss([VoidCallback? onDismissed]) {
@@ -1247,6 +1270,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
                     child: MessageTextSelectionToolbar(
                       anchors: selectionAnchors,
                       onCopy: () {
+                        if (widget.hasProtectedContent) {
+                          GlassToastService().show(
+                            context,
+                            'Копирование и пересылка запрещены в этом чате',
+                          );
+                          _handleDismiss();
+                          return;
+                        }
                         final text = _getSelectedPlainText();
                         if (text.isNotEmpty) {
                           Clipboard.setData(ClipboardData(text: text));
@@ -1301,26 +1332,52 @@ class MessageContextMenuState extends State<MessageContextMenu>
     );
   }
 
+  Widget _wrapDualModePanel({
+    required TheavSurfaceStyle style,
+    required double borderRadius,
+    required Widget panel,
+  }) {
+    final blurFilter = style.getBlurFilter(sigma: 20.0);
+    Widget inner = panel;
+    if (blurFilter != null) {
+      inner = ClipRRect(
+        borderRadius: BorderRadius.circular(borderRadius),
+        child: BackdropFilter(
+          filter: blurFilter,
+          child: panel,
+        ),
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        boxShadow: style.floatingShadow,
+      ),
+      child: inner,
+    );
+  }
+
   Widget _buildEmojiPanel(ThemeData theme, double maxHeight) {
     final emojis = EmojiUtils.getFrequentEmojis();
-    return Container(
-      width: 44,
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+    final surfaceStyle = TheavSurfaceStyle.of(context);
+    return _wrapDualModePanel(
+      style: surfaceStyle,
+      borderRadius: 22,
+      panel: Container(
+        width: 44,
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: surfaceStyle.overlayFill,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: surfaceStyle.hudBorder,
+            width: surfaceStyle.isGlass ? 0.6 : 0.5,
           ),
-        ],
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Flexible(
@@ -1412,12 +1469,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
           ],
         ),
       ),
+    ),
     );
   }
 
   Widget _buildExpandedReactionsView(ThemeData theme, double maxHeight) {
     final query = _reactionSearchQuery.trim().toLowerCase();
     final installedEmojiPacks = StickerService.instance.installedEmojiPacks;
+    final surfaceStyle = TheavSurfaceStyle.of(context);
 
     final List<String> allStandardEmojis = [];
     final seenStd = <String>{};
@@ -1436,27 +1495,27 @@ class MessageContextMenuState extends State<MessageContextMenu>
       }
     }
 
-    return Container(
-      key: const ValueKey('expanded_reactions_view'),
-      width: 280,
-      constraints: BoxConstraints(
-        maxHeight: math.min(maxHeight, 340.0),
-      ),
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.14),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+    return _wrapDualModePanel(
+      style: surfaceStyle,
+      borderRadius: 20,
+      panel: Container(
+        key: const ValueKey('expanded_reactions_view'),
+        width: 280,
+        constraints: BoxConstraints(
+          maxHeight: math.min(maxHeight, 340.0),
+        ),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: surfaceStyle.overlayFill,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: surfaceStyle.hudBorder,
+            width: surfaceStyle.isGlass ? 0.6 : 0.5,
           ),
-        ],
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: Column(
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
@@ -1513,6 +1572,10 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                       .withValues(alpha: 0.45),
                                 ),
                                 border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                filled: false,
+                                fillColor: Colors.transparent,
                                 isDense: true,
                                 contentPadding: EdgeInsets.zero,
                               ),
@@ -1602,10 +1665,14 @@ class MessageContextMenuState extends State<MessageContextMenu>
                                         child: Center(
                                           child: StickerMediaView(
                                             fileUrl: item.fileUrl,
+                                            thumbnailUrl: item.thumbnailUrl,
+                                            stickerId: item.id,
                                             format: item.format,
                                             width: 26,
                                             height: 26,
                                             animate: true,
+                                            isAdaptiveOverride:
+                                                item.isAdaptiveTextColor,
                                           ),
                                         ),
                                       ),
@@ -1683,6 +1750,7 @@ class MessageContextMenuState extends State<MessageContextMenu>
           ],
         ),
       ),
+    ),
     );
   }
 
@@ -1691,32 +1759,33 @@ class MessageContextMenuState extends State<MessageContextMenu>
     double maxHeight, {
     bool showAbove = false,
   }) {
-    final bool isSending = widget.sendStatus == 0;
+    final bool isSending = widget.sendStatus == 0 || widget.sendStatus == 2;
     final BuildContext navContext = widget.messageKey?.currentContext ??
         Navigator.maybeOf(context)?.context ??
         context;
+    final surfaceStyle = TheavSurfaceStyle.of(context);
     return AnimatedSize(
       duration: const Duration(milliseconds: 220),
       curve: Curves.easeOutCubic,
       alignment: showAbove ? Alignment.bottomRight : Alignment.topRight,
-      child: Container(
-        width: _showingReadersList ? 275 : 225,
-        constraints: BoxConstraints(maxHeight: maxHeight),
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+      child: _wrapDualModePanel(
+        style: surfaceStyle,
+        borderRadius: 20,
+        panel: Container(
+          width: _showingReadersList ? 275 : 225,
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: surfaceStyle.overlayFill,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: surfaceStyle.hudBorder,
+              width: surfaceStyle.isGlass ? 0.6 : 0.5,
             ),
-          ],
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          child: AnimatedSwitcher(
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
             switchInCurve: Curves.easeOutCubic,
             switchOutCurve: Curves.easeInCubic,
@@ -1733,17 +1802,31 @@ class MessageContextMenuState extends State<MessageContextMenu>
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (_shouldShowReadStatus) ...[
+                          if (widget.chatType == 'channel' &&
+                              widget.message != null &&
+                              widget.message!.id.isNotEmpty &&
+                              !widget.message!.id.startsWith('local_')) ...[
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+                              child: MessageSeenView(
+                                message: widget.message!,
+                                chatType: widget.chatType,
+                                isMe: widget.isMe,
+                              ),
+                            ),
+                            const Divider(height: 1),
+                          ] else if (_shouldShowReadStatus) ...[
                             _buildReadReceiptItem(theme),
                             const Divider(height: 1),
                           ],
-                          _buildActionItem(
-                            (c) => iconoir.Reply(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_reply'),
-                            widget.onReply,
-                            theme,
-                            enabled: !isSending,
-                          ),
+                          if (widget.onReply != null)
+                            _buildActionItem(
+                              (c) => iconoir.Reply(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_reply'),
+                              widget.onReply!,
+                              theme,
+                              enabled: !isSending,
+                            ),
                           if (widget.onQuote != null)
                             _buildActionItem(
                               (c) => iconoir.Quote(color: c, width: 20, height: 20),
@@ -1770,19 +1853,20 @@ class MessageContextMenuState extends State<MessageContextMenu>
                             ),
                           if (widget.onStopPoll != null)
                             _buildActionItem(
-                              (c) => Icon(Icons.stop_circle_outlined, color: c, size: 20),
+                              (c) => iconoir.XmarkCircle(color: c, width: 20, height: 20),
                               context.l10n.translate('poll_stop'),
                               widget.onStopPoll!,
                               theme,
                               enabled: !isSending,
                             ),
-                          _buildActionItem(
-                            (c) => iconoir.Copy(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_copy'),
-                            widget.onCopy,
-                            theme,
-                            enabled: !isSending,
-                          ),
+                          if (!widget.hasProtectedContent)
+                            _buildActionItem(
+                              (c) => iconoir.Copy(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_copy'),
+                              widget.onCopy,
+                              theme,
+                              enabled: !isSending,
+                            ),
                           if (widget.onPin != null)
                             _buildActionItem(
                               (c) => iconoir.Pin(color: c, width: 20, height: 20),
@@ -1793,7 +1877,8 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               theme,
                               enabled: !isSending,
                             ),
-                          if (widget.onForward != null)
+                          if (!widget.hasProtectedContent &&
+                              widget.onForward != null)
                             _buildActionItem(
                               (c) => iconoir.ForwardMessage(color: c, width: 20, height: 20),
                               'Переслать',
@@ -1950,20 +2035,87 @@ class MessageContextMenuState extends State<MessageContextMenu>
                               theme,
                               enabled: !isSending,
                             ),
-                          const Divider(height: 1),
-                          _buildActionItem(
-                            (c) => iconoir.Trash(color: c, width: 20, height: 20),
-                            context.l10n.translate('chat_action_delete'),
-                            widget.onDelete,
-                            theme,
-                            isDestructive: true,
-                          ),
+                          if (widget.onReplyInAnotherChat != null)
+                            _buildActionItem(
+                              (c) => iconoir.ChatBubble(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Ответить в другом чате',
+                              widget.onReplyInAnotherChat!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onTranslate != null)
+                            _buildActionItem(
+                              (c) => iconoir.Translate(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              widget.isTranslated
+                                  ? 'Скрыть перевод'
+                                  : 'Перевести',
+                              widget.onTranslate!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onTagMessage != null)
+                            _buildActionItem(
+                              (c) => iconoir.Label(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Добавить/снять тег',
+                              widget.onTagMessage!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onViewStats != null)
+                            _buildActionItem(
+                              (c) => iconoir.StatsUpSquare(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Статистика',
+                              widget.onViewStats!,
+                              theme,
+                              enabled: !isSending,
+                            ),
+                          if ((widget.onReport != null && !widget.isMe) ||
+                              widget.onDelete != null)
+                            const Divider(height: 1),
+                          if (widget.onReport != null && !widget.isMe)
+                            _buildActionItem(
+                              (c) => iconoir.WarningTriangle(
+                                color: c,
+                                width: 20,
+                                height: 20,
+                              ),
+                              'Пожаловаться',
+                              widget.onReport!,
+                              theme,
+                              isDestructive: true,
+                              enabled: !isSending,
+                            ),
+                          if (widget.onDelete != null)
+                            _buildActionItem(
+                              (c) => iconoir.Trash(color: c, width: 20, height: 20),
+                              context.l10n.translate('chat_action_delete'),
+                              widget.onDelete!,
+                              theme,
+                              isDestructive: true,
+                            ),
                         ],
                       ),
                     ),
                   ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -2253,11 +2405,25 @@ class MessageContextMenuState extends State<MessageContextMenu>
               itemCount: _readers.length,
               itemBuilder: (context, index) {
                 final reader = _readers[index];
-                final name = (reader['display_name'] ?? reader['username'] ?? '?')
-                    .toString()
-                    .trim();
+                final readerId =
+                    (reader['user_id'] ?? reader['id'] ?? '').toString().trim();
+                final isBot = reader['is_bot'] == true || reader['is_bot'] == 1;
+                final rawName =
+                    (reader['display_name'] ?? reader['username'] ?? '?')
+                        .toString()
+                        .trim();
+                final name = ContactsService.resolvePeerName(
+                  readerId,
+                  rawName,
+                  isBot: isBot,
+                ).trim();
                 final rawAvatar = reader['avatar_url']?.toString();
-                final validAvatar = getValidAvatarUrl(rawAvatar);
+                final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+                  readerId,
+                  rawAvatar,
+                  isBot: isBot,
+                );
+                final validAvatar = getValidAvatarUrl(resolvedAvatar);
                 final imgProvider = validAvatar != null
                     ? avatarImageProvider(validAvatar)
                     : null;

@@ -1,0 +1,468 @@
+import 'dart:convert';
+import 'dart:io' show Platform;
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel;
+import 'package:flutter/widgets.dart' show WidgetsFlutterBinding;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:http/http.dart' as http;
+import 'package:huawei_push/huawei_push.dart' as hms;
+import 'package:uuid/uuid.dart';
+
+import '../../config/app_config.dart';
+import '../account_manager.dart';
+import '../contacts_service.dart';
+import '../update_service.dart';
+import 'call_notifications.dart';
+import 'message_notification_presenter.dart';
+import 'notification_channels.dart';
+import 'notification_dedup_store.dart';
+import 'notification_payload.dart';
+
+/// Initializes flutter_local_notifications in a background isolate.
+Future<FlutterLocalNotificationsPlugin> initBackgroundNotificationsPlugin() async {
+  final plugin = FlutterLocalNotificationsPlugin();
+  await plugin.initialize(
+    InitializationSettings(
+      android: const AndroidInitializationSettings('@drawable/ic_notification'),
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: false,
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+        notificationCategories: MessageNotificationPresenter.darwinCategories(),
+      ),
+    ),
+  );
+  await NotificationChannels.ensureBaseChannels(plugin);
+  return plugin;
+}
+
+/// FCM background handler (must be a top-level function).
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  if (kIsWeb) return;
+  final data = Map<String, dynamic>.from(message.data);
+  final msgType = data['type']?.toString() ?? '';
+
+  // Chat messages with a notification block are rendered by the OS itself.
+  if (message.notification != null && msgType != 'incoming_call' && msgType != 'call_ended') {
+    return;
+  }
+
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {}
+  await processBackgroundPushData(data);
+}
+
+/// HMS background handler for data messages (calls, sync). Chat messages are
+/// notification messages rendered by the Huawei notification center.
+@pragma('vm:entry-point')
+void hmsMessagingBackgroundHandler(hms.RemoteMessage message) async {
+  if (kIsWeb) return;
+  WidgetsFlutterBinding.ensureInitialized();
+  Map<String, dynamic> data = <String, dynamic>{};
+  if (message.dataOfMap != null && message.dataOfMap!.isNotEmpty) {
+    data = Map<String, dynamic>.from(message.dataOfMap!);
+  } else if (message.data != null && message.data!.isNotEmpty) {
+    data = normalizePushPayload(message.data);
+  }
+  if (data.isEmpty) return;
+  await processBackgroundPushData(data);
+}
+
+/// Handles data-only pushes while the app UI is not running.
+Future<void> processBackgroundPushData(Map<String, dynamic> data) async {
+  final msgType = data['type']?.toString() ?? '';
+
+  // On Android chat messages, read receipts, and app updates are rendered/cancelled
+  // by the native TheaverFirebaseMessagingService / TheaverHmsMessageService (single renderer
+  // for all notifications); rendering them here would duplicate them.
+  if (!kIsWeb &&
+      Platform.isAndroid &&
+      (msgType == 'new_message' ||
+          msgType == 'read_status_updated' ||
+          msgType == 'app_update')) {
+    return;
+  }
+
+  final plugin = await initBackgroundNotificationsPlugin();
+
+  switch (msgType) {
+    case 'call_ended':
+      await CallNotifications.cancelIncoming(
+        plugin,
+        callId: data['call_id']?.toString(),
+        chatId: data['chat_id']?.toString(),
+      );
+      return;
+    case 'channel_live_started':
+      final liveChatId = payloadString(data, const ['chat_id']);
+      if (liveChatId.isEmpty) return;
+      final liveTitle = payloadString(
+        data,
+        const ['chat_title', 'chat_name', 'caller_name'],
+        'Канал',
+      );
+      final liveAvatar =
+          payloadString(data, const ['caller_avatar', 'avatar_url']);
+      final liveNotif = ChatMessageNotification(
+        chatId: liveChatId,
+        chatName: liveTitle,
+        senderName: '',
+        text: 'Прямой эфир начался',
+        senderId: payloadString(data, const ['caller_id']),
+        avatarUrl: liveAvatar.isNotEmpty ? liveAvatar : null,
+        isChannel: true,
+        messageType: 'system',
+      );
+      final liveKey = NotificationDedupStore.keyFor(
+        kind: 'live',
+        chatId: liveNotif.chatId,
+        messageId: data['call_id']?.toString(),
+        fallbackText: liveNotif.text,
+      );
+      if (await NotificationDedupStore().checkAndMark(liveKey)) return;
+      await MessageNotificationPresenter(plugin).present(liveNotif);
+      return;
+    case 'incoming_call':
+      final callId = data['call_id']?.toString() ?? '';
+      if (!await CallNotifications.markCallShown(callId)) return;
+      await _initContactsForBackground();
+      final callerId = payloadString(data, const ['caller_id']).trim();
+      final rawCallerName =
+          payloadString(data, const ['caller_name', 'chat_name'], 'Входящий звонок');
+      final rawCallerAvatar =
+          payloadString(data, const ['caller_avatar', 'avatar_url']);
+      final isVideo =
+          payloadBool(data['is_video']) || data['call_type'] == 'video';
+      final isGroup =
+          data['chat_type'] == 'group' || payloadBool(data['is_group']);
+      final canResolveCaller = ContactsService.shouldResolveUserIdentity(callerId);
+      final callerName = canResolveCaller
+          ? ContactsService.resolvePeerName(callerId, rawCallerName)
+          : rawCallerName;
+      final resolvedCallerAvatar = canResolveCaller
+          ? ContactsService.resolvePeerAvatarUrl(
+              callerId,
+              rawCallerAvatar.isNotEmpty ? rawCallerAvatar : null,
+            )
+          : (rawCallerAvatar.isNotEmpty ? rawCallerAvatar : null);
+      final rawChatTitle = data['chat_title']?.toString();
+      final resolvedChatTitle =
+          (!isGroup && canResolveCaller && rawChatTitle != null)
+              ? ContactsService.resolvePeerName(callerId, rawChatTitle)
+              : rawChatTitle;
+      await CallNotifications.showIncoming(
+        plugin,
+        payload: <String, dynamic>{
+          ...data,
+          'type': 'incoming_call',
+          'call_id': callId,
+          'caller_name': callerName,
+          if (resolvedCallerAvatar != null)
+            'caller_avatar': resolvedCallerAvatar,
+          if (resolvedChatTitle != null) 'chat_title': resolvedChatTitle,
+          'is_video': isVideo,
+        },
+        callerName: callerName,
+        callerAvatar: resolvedCallerAvatar,
+        isVideo: isVideo,
+        isGroup: isGroup,
+      );
+      return;
+    case 'read_status_updated':
+      final chatId = data['chat_id']?.toString() ?? '';
+      if (chatId.isEmpty) return;
+      await MessageNotificationPresenter(plugin).cancelChat(chatId);
+      if (Platform.isAndroid) {
+        try {
+          await const MethodChannel('app.theaver.messenger/push_detector')
+              .invokeMethod('cancelChatNotifications', {'chat_id': chatId});
+        } catch (_) {}
+      }
+      return;
+    case 'new_message':
+      // Legacy data-only chat push (no notification block): render it ourselves.
+      final rawMsg = ChatMessageNotification.fromPush(data);
+      if (rawMsg == null) return;
+      await _initContactsForBackground();
+      final m = _applyBackgroundContactOverrides(rawMsg, rawData: data);
+      final key = NotificationDedupStore.keyFor(
+          kind: 'msg', chatId: m.chatId, messageId: m.messageId, fallbackText: m.text);
+      if (await NotificationDedupStore().checkAndMark(key)) return;
+      await MessageNotificationPresenter(plugin).present(m);
+      return;
+    case 'app_update':
+      final latestVersion = data['latest_version']?.toString().trim() ?? '';
+      final latestBuild = data['latest_build']?.toString().trim() ?? '';
+      final dedupKey = 'app_update_${latestBuild.isNotEmpty ? latestBuild : latestVersion}';
+      if (await NotificationDedupStore().checkAndMark(dedupKey)) return;
+      final title = latestVersion.isNotEmpty
+          ? 'Доступна версия $latestVersion'
+          : 'Доступно обновление Theaver';
+      final langCode = Platform.localeName.toLowerCase().startsWith('ru') ? 'ru' : 'en';
+      final rawNotes = data['release_notes']?.toString().trim() ?? '';
+      final cleanNotes = AppUpdateInfo.extractPlainSummary(
+        rawNotes,
+        languageCode: langCode,
+        maxChars: 160,
+      );
+      final body = cleanNotes.isNotEmpty
+          ? cleanNotes
+          : 'Нажмите, чтобы загрузить и установить обновление';
+      await plugin.show(
+        9402,
+        title,
+        body,
+        const NotificationDetails(
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            categoryIdentifier: 'app_update',
+          ),
+          macOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        ),
+        payload: jsonEncode(<String, dynamic>{...data, 'type': 'app_update'}),
+      );
+      return;
+    default:
+      return;
+  }
+}
+
+/// Handles notification actions that do not open the UI ("Ответить", "Прочитано").
+/// flutter_local_notifications runs this in a dedicated background isolate even
+/// while the app is alive, so it must be self-contained.
+@pragma('vm:entry-point')
+Future<void> notificationActionBackgroundHandler(NotificationResponse response) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await handleMessageNotificationAction(response);
+}
+
+/// Returns true if the response was a message action and was handled.
+Future<bool> handleMessageNotificationAction(NotificationResponse response) async {
+  final actionId = response.actionId;
+  if (actionId != MessageNotificationPresenter.actionReply &&
+      actionId != MessageNotificationPresenter.actionMarkRead) {
+    return false;
+  }
+  final payload = normalizePushPayload(response.payload);
+  final chatId = payload['chat_id']?.toString() ?? '';
+  if (chatId.isEmpty) return true;
+
+  final plugin = await initBackgroundNotificationsPlugin();
+  final presenter = MessageNotificationPresenter(plugin);
+  final token = await _authToken();
+  if (token == null) {
+    debugPrint('NotificationActions: not logged in, ignoring $actionId');
+    return true;
+  }
+
+  if (actionId == MessageNotificationPresenter.actionReply) {
+    final text = (response.input ?? '').trim();
+    if (text.isEmpty) return true;
+    final ok = await _post(
+      '${AppConfig.baseUrl}/api/chats/$chatId/messages',
+      token,
+      <String, dynamic>{
+        'content': text,
+        'message_type': 'text',
+        'local_id': const Uuid().v4(),
+      },
+    );
+    if (ok) {
+      // Sending a message marks the chat as read on the server as well.
+      await _post('${AppConfig.baseUrl}/api/chats/$chatId/messages/read', token, null);
+      await presenter.appendOwnReply(tapPayload: payload, text: text);
+    } else {
+      await presenter.appendOwnReply(tapPayload: payload, text: '⚠️ Не отправлено: $text');
+    }
+    return true;
+  }
+
+  // mark_read
+  await _post('${AppConfig.baseUrl}/api/chats/$chatId/messages/read', token, null);
+  await presenter.cancelChat(chatId);
+  return true;
+}
+
+Future<void> _initContactsForBackground() async {
+  try {
+    final manager = AccountManager();
+    if (manager.currentAccount == null) {
+      await manager.init();
+    }
+    await ContactsService.init(userId: manager.currentAccount?.userId);
+  } catch (e) {
+    debugPrint('BackgroundPush: ContactsService init failed: $e');
+  }
+}
+
+ChatMessageNotification _applyBackgroundContactOverrides(
+  ChatMessageNotification m, {
+  required Map<String, dynamic> rawData,
+}) {
+  if (m.isChannel) return m;
+  final msgMap = rawData['message'] is Map
+      ? Map<String, dynamic>.from(rawData['message'] as Map)
+      : rawData;
+  final senderChatId =
+      (msgMap['sender_chat_id'] ?? rawData['sender_chat_id'])
+              ?.toString()
+              .trim() ??
+          '';
+  final isAnon = payloadBool(msgMap['is_from_anonymous_admin']) ||
+      payloadBool(rawData['is_from_anonymous_admin']);
+  final isMirrored =
+      ((msgMap['channel_post_id'] ?? rawData['channel_post_id'])
+                  ?.toString()
+                  .trim() ??
+              '')
+          .isNotEmpty;
+  final isBot = payloadBool(msgMap['sender_is_bot']) ||
+      payloadBool(rawData['sender_is_bot']) ||
+      payloadBool(rawData['is_bot']);
+
+  if (m.isGroup) {
+    final sid = m.senderId.trim();
+    if (!ContactsService.shouldResolveUserIdentity(
+      sid,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    )) {
+      return m;
+    }
+    return ChatMessageNotification(
+      chatId: m.chatId,
+      chatName: m.chatName,
+      senderName: ContactsService.resolvePeerName(
+        sid,
+        m.senderName,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: isBot,
+      ),
+      senderId: m.senderId,
+      text: m.text,
+      messageId: m.messageId,
+      avatarUrl: m.avatarUrl,
+      senderAvatarUrl: ContactsService.resolvePeerAvatarUrl(
+        sid,
+        m.senderAvatarUrl,
+        senderChatId: senderChatId,
+        isAnonymousAdmin: isAnon,
+        isMirroredChannelPost: isMirrored,
+        isBot: isBot,
+      ),
+      mediaUrl: m.mediaUrl,
+      isGroup: m.isGroup,
+      isChannel: m.isChannel,
+      isMention: m.isMention,
+      isSilent: m.isSilent,
+      isOwn: m.isOwn,
+      messageType: m.messageType,
+    );
+  }
+
+  if (m.isOwn) return m;
+  final peerId = m.senderId.trim();
+  if (!ContactsService.shouldResolveUserIdentity(
+    peerId,
+    senderChatId: senderChatId,
+    isAnonymousAdmin: isAnon,
+    isMirroredChannelPost: isMirrored,
+    isBot: isBot,
+  )) {
+    return m;
+  }
+  return ChatMessageNotification(
+    chatId: m.chatId,
+    chatName: ContactsService.resolvePeerName(
+      peerId,
+      m.chatName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    senderName: ContactsService.resolvePeerName(
+      peerId,
+      m.senderName,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    senderId: m.senderId,
+    text: m.text,
+    messageId: m.messageId,
+    avatarUrl: ContactsService.resolvePeerAvatarUrl(
+      peerId,
+      m.avatarUrl,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    senderAvatarUrl: ContactsService.resolvePeerAvatarUrl(
+      peerId,
+      m.senderAvatarUrl,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+      isBot: isBot,
+    ),
+    mediaUrl: m.mediaUrl,
+    isGroup: m.isGroup,
+    isChannel: m.isChannel,
+    isMention: m.isMention,
+    isSilent: m.isSilent,
+    isOwn: m.isOwn,
+    messageType: m.messageType,
+  );
+}
+
+Future<String?> _authToken() async {
+  try {
+    final manager = AccountManager();
+    if (manager.currentAccount == null) {
+      await manager.init();
+    }
+    final token = manager.currentAccount?.token;
+    return (token == null || token.isEmpty) ? null : token;
+  } catch (e) {
+    debugPrint('NotificationActions: token load failed: $e');
+    return null;
+  }
+}
+
+Future<bool> _post(String url, String token, Map<String, dynamic>? body) async {
+  try {
+    final response = await http
+        .post(
+          Uri.parse(url),
+          headers: <String, String>{
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: body != null ? jsonEncode(body) : null,
+        )
+        .timeout(const Duration(seconds: 15));
+    return response.statusCode >= 200 && response.statusCode < 300;
+  } catch (e) {
+    debugPrint('NotificationActions: POST $url failed: $e');
+    return false;
+  }
+}

@@ -136,6 +136,11 @@ class LiquidGlassView extends StatefulWidget {
   /// around the view still reaches the lenses inside it.
   final bool batch;
 
+  /// How the glass in both batches shares the read — see
+  /// `LiquidGlassBatchMode`. Only with [batch] on. `null` (the default)
+  /// uses `LiquidGlassConfiguration.batchMode`.
+  final LiquidGlassBatchMode? batchMode;
+
   /// The key the batch over [child] carries, when a host owns it.
   ///
   /// `null` (the default) gives that batch a key of its own. A host that
@@ -207,6 +212,7 @@ class LiquidGlassView extends StatefulWidget {
       this.useImpellerBackdrop,
       this.regionCapture = false,
       this.batch = true,
+      this.batchMode,
       this.foregroundBatchId,
       this.adaptiveSampling})
       : children = const [],
@@ -231,6 +237,7 @@ class LiquidGlassView extends StatefulWidget {
       this.regionCapture = false,
       this.honorBackdropAlpha = false,
       this.batch = true,
+      this.batchMode,
       this.foregroundBatchId,
       this.adaptiveSampling});
 
@@ -988,8 +995,14 @@ class _LiquidGlassViewState extends State<LiquidGlassView>
   /// taking one of its own.
   Widget _batched(Widget child, {int? backdropId}) {
     if (!widget.batch) return child;
-    if (backdropId == null) return LiquidGlassBatch(child: child);
-    return LiquidGlassBatchScope(backdropId: backdropId, child: child);
+    if (backdropId == null) {
+      return LiquidGlassBatch(mode: widget.batchMode, child: child);
+    }
+    return LiquidGlassBatchScope(
+      backdropId: backdropId,
+      mode: widget.batchMode,
+      child: child,
+    );
   }
 
   @override

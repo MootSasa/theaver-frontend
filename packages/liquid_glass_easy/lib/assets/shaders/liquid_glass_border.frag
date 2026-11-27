@@ -24,7 +24,7 @@ uniform vec2 u_touch;
 uniform sampler2D u_texture_input;
 
 // --- Packed scalar uniforms (Metal [[buffer(N)]] limit fix) ----------------
-// Mirrors liquid_glass.frag: scalars merged into vec4s to stay under iOS 26
+// Mirrors liquid_glass.frag: scalars merged into vec4s to stay under iOS
 // Impeller's ~30 Metal-buffer cap. The #define block restores scalar names;
 // float offsets are unchanged, so the Dart packing code stays in sync,
 // including u_lensColor at the main shader's slot: the rim lifts from the
@@ -32,7 +32,7 @@ uniform sampler2D u_texture_input;
 
 // x=lensWidth  y=lensHeight  z=cornerRadius  w=cornerStyle
 //   cornerStyle: 0 = circular, 1 = squircle (full smoothing),
-//   2 = continuous (Apple capsule-style). Mirrors liquid_glass.frag.
+//   2 = continuous (capsule-style). Mirrors liquid_glass.frag.
 uniform vec4 u_lensGeom;
 // x=magnification  y=refractionIndex  z=refractionWidthPx
 // w=dispersion
@@ -60,7 +60,8 @@ uniform vec4 u_packC;
 uniform vec4 u_specular2;
 // The second specular's own colour, as u_specularColor.
 uniform vec4 u_specular2Color;
-// Far-arc strength per light: x=specular  y=glow  z=second specular.
+// Far-arc strength per light: x=specular  y=glow  z=second specular;
+// w=the glass's opacity, which every output is multiplied by.
 uniform vec4 u_lightOpposite;
 
 // Restore the original scalar names (plain float aliases, no swizzle chain).
@@ -82,6 +83,8 @@ uniform vec4 u_lightOpposite;
 #define u_glowAngle                    u_packB.w
 #define u_glowSpread                   u_packC.x
 #define u_specular2Intensity           u_packC.y
+// The glass's opacity: 1 draws it whole, 0 leaves the backdrop as it was.
+#define u_glassOpacity                 u_lightOpposite.w
 // Each light as the border reads it: (angle in degrees, spread, intensity).
 #define u_specular vec3(u_specularAngle, u_specularSpread, u_specularIntensity)
 #define u_glow     vec3(u_glowAngle, u_glowSpread, u_glowIntensity)
@@ -100,6 +103,10 @@ uniform vec2 u_shapeScale;
 // This pass only ever DRAWS in lens space, so it maps on sampling alone.
 uniform vec4 u_xformRow;
 uniform vec2 u_xformOff;
+
+// 1.0 when the glow fades over dark backdrops (see rimLift):
+// LiquidGlassConfiguration.rimLiftOnDark off.
+uniform float u_rimDarkFade;
 
 out vec4 frag_color;
 
@@ -272,10 +279,10 @@ void main() {
         u_glowThickness, u_glow, u_glowColor,
         u_specular2, u_specular2Intensity, u_specular2Color,
         u_lightOpposite.xyz,
-        outerAa
+        outerAa, u_rimDarkFade
     );
     // Apply the soft outer-edge mask so the rounded corners fade
     // out smoothly on Impeller (where there's no surrounding draw
     // call to provide AA).
-    frag_color = borderPremul * outerMask;
+    frag_color = borderPremul * outerMask * u_glassOpacity;
 }

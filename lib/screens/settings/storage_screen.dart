@@ -1,6 +1,7 @@
-import 'dart:ui' show ImageFilter;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,12 +10,16 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart' hide LiquidGlassAppBar
 import '../../services/settings_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/cache_service.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/contacts_service.dart';
+import '../../services/database/app_database.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../widgets/chat/liquid_glass_app_bar.dart';
 import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/user/avatar_with_status.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/image_utils.dart';
 
 /// Экран «Данные и хранилище» — полный пункт 3.6 плана.
 /// Поддерживает два полноценных дизайна:
@@ -51,6 +56,7 @@ class _StorageScreenState extends State<StorageScreen> {
   int _totalUsedBytes = 0;
   List<_MediaTypeStorage> _byType = [];
   List<_ChatStorage> _byChat = [];
+  Map<String, DbChat> _dbChatsById = const {};
 
   // Storage settings from server
   StorageServerSettings _storageSettings = const StorageServerSettings();
@@ -65,7 +71,70 @@ class _StorageScreenState extends State<StorageScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadData();
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
+  }
+
+  Future<void> _loadDbChats() async {
+    try {
+      final chats = await AppDatabase().getChats();
+      if (!mounted) return;
+      setState(() {
+        _dbChatsById = {for (final c in chats) c.chatId: c};
+      });
+    } catch (_) {}
+  }
+
+  ({
+    String chatName,
+    String? avatarUrl,
+    String? peerUserId,
+    bool isPrivateHuman,
+    bool isPrivate,
+  }) _resolveChatStorageMeta(_ChatStorage item, AppLocalizations l10n) {
+    final cachedChat = ChatInstantCache.instance.getSync(item.chatId)?.chat;
+    final dbChat = _dbChatsById[item.chatId];
+    final chatType = cachedChat?.chatType ?? dbChat?.chatType ?? '';
+    final isBot = cachedChat?.isBot ?? dbChat?.isBot ?? false;
+    final peerId = cachedChat?.otherUserId ?? dbChat?.otherUserId;
+    final isPrivate = chatType == 'private';
+    final isPrivateHuman = isPrivate &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(peerId);
+    final resolvedName = chatType == 'saved'
+        ? l10n.translate('chat_saved_messages')
+        : (isPrivateHuman
+            ? ContactsService.resolvePeerName(
+                peerId,
+                item.chatName,
+                isBot: isBot,
+              )
+            : item.chatName);
+    final rawAvatar = cachedChat?.avatarUrl ?? dbChat?.avatarUrl;
+    final resolvedAvatar = isPrivateHuman
+        ? ContactsService.resolvePeerAvatarUrl(
+            peerId,
+            rawAvatar,
+            isBot: isBot,
+          )
+        : rawAvatar;
+    return (
+      chatName: resolvedName,
+      avatarUrl: resolvedAvatar,
+      peerUserId: peerId,
+      isPrivateHuman: isPrivateHuman,
+      isPrivate: isPrivate,
+    );
   }
 
   Future<void> _loadLocalChatStats() async {
@@ -93,6 +162,7 @@ class _StorageScreenState extends State<StorageScreen> {
   Future<void> _loadData() async {
     _autoDownloadSettings = _settingsService.storageSettings;
     try {
+      await _loadDbChats();
       _keepMediaPeriod = await _cacheService.getKeepMediaPeriod();
       _maxCacheSizeBytes = await _cacheService.getMaxCacheSize();
       if (widget.initialBreakdown != null) {
@@ -300,10 +370,11 @@ class _StorageScreenState extends State<StorageScreen> {
 
   void _showClearChatDialog(_ChatStorage chat) {
     final l10n = context.l10n;
+    final meta = _resolveChatStorageMeta(chat, l10n);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(l10n.translate('storage_clear_chat_cache_title').replaceAll('{chat}', chat.chatName)),
+        title: Text(l10n.translate('storage_clear_chat_cache_title').replaceAll('{chat}', meta.chatName)),
         content: Text(l10n.translate('storage_clear_chat_cache_message')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: Text(l10n.translate('storage_cancel'))),
@@ -358,58 +429,28 @@ class _StorageScreenState extends State<StorageScreen> {
         final glassEnabled = glassProvider.enabled;
         final isLite = glassProvider.isLite;
 
-        if (glassEnabled) {
-          final topPadding = MediaQuery.of(context).padding.top + kToolbarHeight;
-          return Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(
-                  child: _isLoading
-                      ? const Center(child: CircularProgressIndicator())
-                      : ListView(
-                          physics: const ClampingScrollPhysics(),
-                          padding: EdgeInsets.only(top: topPadding + 10, bottom: 40),
-                          children: _buildSections(context, l10n, glassEnabled: true, isLite: isLite),
-                        ),
-                ),
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: LiquidGlassAppBar(
-                    title: Text(l10n.translate('storage_title')),
-                    centerTitle: true,
-                    isLite: isLite,
-                  ),
-                ),
-                if (_isClearing)
-                  Container(
-                    color: Colors.black45,
-                    child: const Center(child: CircularProgressIndicator()),
-                  ),
-              ],
-            ),
-          );
-        }
-
-        // Standard Material 3 Design
-        return Scaffold(
-          appBar: AppBar(
-            title: Text(l10n.translate('storage_title')),
-            centerTitle: true,
-          ),
+        return SettingsFloatingScaffold(
+          title: l10n.translate('storage_title'),
           body: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : Stack(
                   children: [
                     ListView(
                       physics: const ClampingScrollPhysics(),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      children: _buildSections(context, l10n, glassEnabled: false, isLite: false),
+                      padding: EdgeInsets.only(
+                        top: SettingsFloatingHeader.topClearanceOf(context) + 10,
+                        bottom: 40,
+                      ),
+                      children: _buildSections(
+                        context,
+                        l10n,
+                        glassEnabled: glassEnabled,
+                        isLite: isLite,
+                      ),
                     ),
                     if (_isClearing)
                       Container(
-                        color: Colors.black26,
+                        color: glassEnabled ? Colors.black45 : Colors.black26,
                         child: const Center(child: CircularProgressIndicator()),
                       ),
                   ],
@@ -994,24 +1035,59 @@ class _StorageScreenState extends State<StorageScreen> {
     final child = Column(
       children: [
         for (int i = 0; i < _byChat.length; i++) ...[
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: CircleAvatar(
-              backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-              child: Icon(Icons.chat_bubble_outline, color: Theme.of(context).colorScheme.primary, size: 20),
-            ),
-            title: Text(_byChat[i].chatName, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text('${_byChat[i].fileCount} ${l10n.translate('storage_files_count')}'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(_byChat[i].sizeHuman, style: const TextStyle(fontWeight: FontWeight.w500)),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _showClearChatDialog(_byChat[i]),
+          Builder(
+            builder: (context) {
+              final item = _byChat[i];
+              final meta = _resolveChatStorageMeta(item, l10n);
+              final nonPrivateProvider = !meta.isPrivate
+                  ? avatarImageProvider(meta.avatarUrl)
+                  : null;
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: meta.isPrivate
+                    ? AvatarWithStatus(
+                        userId: meta.peerUserId,
+                        avatarUrl: meta.avatarUrl,
+                        name: meta.chatName,
+                        radius: 20,
+                        resolveContactOverride: meta.isPrivateHuman,
+                      )
+                    : CircleAvatar(
+                        backgroundColor: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                        backgroundImage: nonPrivateProvider,
+                        onBackgroundImageError:
+                            nonPrivateProvider != null ? (_, __) {} : null,
+                        child: nonPrivateProvider == null
+                            ? Icon(
+                                Icons.chat_bubble_outline,
+                                color: Theme.of(context).colorScheme.primary,
+                                size: 20,
+                              )
+                            : null,
+                      ),
+                title: Text(
+                  meta.chatName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
-            ),
+                subtitle: Text(
+                    '${item.fileCount} ${l10n.translate('storage_files_count')}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(item.sizeHuman,
+                        style: const TextStyle(fontWeight: FontWeight.w500)),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      onPressed: () => _showClearChatDialog(item),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
           if (i < _byChat.length - 1)
             const Divider(height: 1),
@@ -1223,15 +1299,9 @@ class _StorageScreenState extends State<StorageScreen> {
     bool clearFiles = true;
     bool clearOther = true;
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: glassEnabled ? Colors.transparent : null,
-      shape: glassEnabled
-          ? null
-          : const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            ),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
@@ -1249,30 +1319,11 @@ class _StorageScreenState extends State<StorageScreen> {
                 ? '${l10n.translate('storage_clear')} (${CacheService.formatBytes(selectedBytes)})'
                 : l10n.translate('storage_clear_cache');
 
-            final sheetBody = SingleChildScrollView(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-                left: 20,
-                right: 20,
-                top: 12,
-              ),
+            return SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Handle indicator
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: isDark ? Colors.white30 : Colors.black26,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
                   // Header with Select All toggle
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1414,35 +1465,6 @@ class _StorageScreenState extends State<StorageScreen> {
                 ],
               ),
             );
-
-            if (glassEnabled) {
-              return ClipRRect(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color.fromARGB(220, 20, 20, 32)
-                          : const Color.fromARGB(220, 245, 245, 252),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                      border: Border(
-                        top: BorderSide(
-                          color: isDark ? Colors.white24 : Colors.black12,
-                          width: 0.8,
-                        ),
-                      ),
-                    ),
-                    child: Material(
-                      type: MaterialType.transparency,
-                      child: sheetBody,
-                    ),
-                  ),
-                ),
-              );
-            }
-
-            return sheetBody;
           },
         );
       },

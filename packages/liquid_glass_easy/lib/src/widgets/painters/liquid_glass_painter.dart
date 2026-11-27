@@ -161,7 +161,8 @@ class LiquidGlassPainter extends CustomPainter {
     // toggle track). Otherwise treat it as opaque (matching Impeller),
     // else a non-transparent capture's alpha washes the body white and
     // drops the rim. Set per-view via [LiquidGlassView.honorBackdropAlpha].
-    shader.setFloat(index++, honorBackdropAlpha ? 1.0 : 0.0);
+    // Plus the rim's switch, LiquidGlassConfiguration.rimLiftOnDark.
+    shader.setFloat(index++, liquidGlassBackdropFlags(honorBackdropAlpha));
     // u_shapeAaPx — the Skia CustomPaint path runs in logical px, so the
     // edge-AA band is one logical pixel: pass 1.0 (Impeller passes dpr via
     // packLiquidGlassUniforms). Last uniform in liquid_glass.frag.
@@ -169,6 +170,12 @@ class LiquidGlassPainter extends CustomPainter {
     // u_shapeScale — last uniform; a ratio, so never scaled.
     shader.setFloat(index++, shapeScale.dx == 0 ? 1.0 : shapeScale.dx);
     shader.setFloat(index++, shapeScale.dy == 0 ? 1.0 : shapeScale.dy);
+    // u_xformRow / u_xformOff — untransformed.
+    for (final double v in const <double>[1, 0, 0, 1, 0, 0]) {
+      shader.setFloat(index++, v);
+    }
+    // u_geom + u_geomTex — no bake on this path.
+    packLiquidGlassBake(shader, index, null, 0, 0);
 
     shader.setImageSampler(0, sampledImage);
 
@@ -374,6 +381,11 @@ class LiquidGlassBorderPainter extends CustomPainter {
       // u_shapeScale — must match the main pass or the rim leaves the fill.
       ..setFloat(index++, shapeScale.dx == 0 ? 1.0 : shapeScale.dx)
       ..setFloat(index++, shapeScale.dy == 0 ? 1.0 : shapeScale.dy);
+    // u_xformRow / u_xformOff — untransformed, then u_rimDarkFade.
+    for (final double v in const <double>[1, 0, 0, 1, 0, 0]) {
+      borderShader.setFloat(index++, v);
+    }
+    borderShader.setFloat(index++, liquidGlassRimDarkFade());
 
     borderShader.setImageSampler(0, sampledImage);
 

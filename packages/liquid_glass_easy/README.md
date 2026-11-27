@@ -12,6 +12,11 @@
   The full guide, the API reference, and every component running as real liquid glass in your browser — press it, drag it, scroll under it.
 </p>
 
+<p align="center">
+  <strong>⚡ <a href="https://ahmeedgamil.github.io/liquid_glass_easy/en/efficiency.html">Performance guide</a></strong><br/>
+  How to keep glass fast: floating chrome, batching, and how much blur — read it before you ship.
+</p>
+
 **A Flutter package that brings Apple's iOS-style Liquid Glass to your app with real-time, interactive lenses.**
 These dynamic lenses **magnify**, **distort**, **blur**, **tint**, and **refract** the content behind them — recreating the iOS 26 Liquid Glass look with stunning, glass-like effects that respond fluidly to **movement** and **touch**.
 
@@ -56,7 +61,8 @@ These dynamic lenses **magnify**, **distort**, **blur**, **tint**, and **refract
 | **Morph** | `LiquidGlassMorph` | Glass that fits whatever you put in it: swap the child and the surface flows to the new size, as two blobs of one liquid with a neck between them. Motion is a preset. |
 | **Lite** | `LiquidGlassLite`, `LiquidGlassEngine`, `LiquidGlassStyle.liteGlass` | The material without the shader: frost, tint and a lit rim, no refraction. Flip one lens, or the whole app per engine — nothing to compile, no capture on Skia, no slot in the lens budget. |
 | **Shadow** | `LiquidGlassShadow` | The contact shadow that sets glass *into* the page: a soft ring hugging the rim and pooling beneath, multiplied over whatever is under it. Authored on the style's `shadow`, where the lens wraps itself in it; usable on its own around anything. |
-| **Batch** | `LiquidGlassBatch` | Wrap a subtree and every lens inside it shares **one** read of the backdrop — no limit on how many, each keeping its own shape and style. The group's ceiling and its fusing, traded away for scale. Members must not overlap; `LiquidGlassBatch.exclude` keeps one subtree out. The view and the scaffold batch on their own (`batch: true`). |
+| **Batch** | `LiquidGlassBatch` | Wrap a subtree and every lens inside it shares **one** read of the backdrop — no limit on how many, each keeping its own shape and style. The group's ceiling and its fusing, traded away for scale. Members must not overlap; `LiquidGlassBatch.exclude` keeps one subtree out. The view and the scaffold batch on their own (`batch: true`). `LiquidGlassBatchMode` picks how an engine-blurred member shares the read: `separatePass` (the default) or `singlePass`. |
+| **Configuration** | `LiquidGlassConfiguration`, `LiquidGlassBlurMethod` | Package-wide settings. Where glass blurs (the engine's Gaussian, or the lens's own shader, which costs no extra read), in a batch and out of one; how a batch shares its read; the shape cache, which bakes a lens's outline once while it only moves; app-wide blur, dispersion and light/dark shadow colour overrides; and whether the glow lifts over dark backdrops (`rimLiftOnDark`). |
 | **Adapt** | `LiquidGlassAdaptivity` | Glass tint and content colour flip with the background actually behind each surface — smoked over a dark photo, milky over a white page, and the OS bars along with them. [Docs →](ADAPTIVITY.md) |
 | **Scroll edge** | `LiquidGlassScrollEdge` | iOS-style scroll edge treatment: a fading, blurred band pinned to a screen edge so floating chrome stays legible over whatever scrolls under it. Adapts with the background like everything else. |
 | **View** | `LiquidGlassView` | The Skia / web background pipeline. Not needed on Impeller. |
@@ -126,7 +132,7 @@ drawn, not what the tree around it does:
 | `touch`, `adaptivity`, the style's `shadow`, `LiquidGlassScrollEdge` | Work. The adaptive sampler is not a glass capture and keeps running. |
 | `LiquidGlassMorph` | Runs as `plain`: one lens, one spring, no second blob. |
 | `LiquidGlassBlender` | Does not blend — every member paints solo as its own lite surface. |
-| `LiquidGlassBatch` | Inert — there is no shader pass to share. |
+| `LiquidGlassBatch` | On Impeller the frost reads the batch's copy, like any member. On Skia it is inert. |
 | `refraction` | Gone, except `magnification`, which survives as a flat zoom in the frost. |
 
 ---
@@ -398,7 +404,7 @@ share:
 
 ```yaml
 dependencies:
-  liquid_glass_easy: ^5.0.0
+  liquid_glass_easy: ^5.2.0
 ```
 
 ```bash
@@ -503,6 +509,7 @@ You can find the demos shown above under the [`example/`](example/) folder.
 LiquidGlassLens({
   LiquidGlassStyle style = const LiquidGlassStyle(),
   bool visibility = true,        // instant show/hide; hidden = no backdrop cost
+  double opacity = 1,            // fades what the shader draws, still refracting; 0 = no backdrop cost
   bool? useImpellerBackdrop,     // override engine auto-detection
   Widget? child,                 // clipped to the lens shape
 })
@@ -677,6 +684,13 @@ transition:
 ```dart
 LiquidGlassLens(visibility: _visible, style: myStyle, child: content)
 ```
+
+To fade it, drive `opacity` (0 to 1): the refraction, tint, rim and an
+in-shader blur fade together and the glass keeps refracting the whole way,
+which an `Opacity` around the lens cannot do. At `0` it costs no backdrop
+pass. An engine blur, the shadow and the child are yours to scale by the same
+amount. `LiquidGlassBlender` takes the same `opacity`; `LiquidGlassMorph`'s
+fades its glass, blur, shadow and content together.
 
 ### Lenses inside scrollables
 
@@ -902,7 +916,8 @@ alignment: LiquidGlassMorph.alignmentFor(cardRect, pageRect),
 **Motion** is a preset:
 
 ```dart
-motion: LiquidGlassMorphMotion.fluid        // the default: leaps and drags a neck
+motion: LiquidGlassMorphMotion.plain        // the default: one lens, one spring, no neck
+motion: LiquidGlassMorphMotion.fluid        // leaps and drags a neck
 motion: LiquidGlassMorphMotion.anchoredPop  // pops open from the corner that holds
 motion: LiquidGlassMorphMotion.droplet      // born small, leaps hard, long neck
 motion: LiquidGlassMorphMotion.calm         // no bounce, for sheets and large cards
@@ -914,6 +929,27 @@ leading blob runs ahead of its own size) and `anchor` (the point the new shape
 grows around; `null` uses the widget's own `alignment`). Everything set once
 and left alone is in `LiquidGlassMorphAdvanced`, behind `advanced`.
 
+**Shared elements.** Something that appears on both sides — the artwork on a
+pill and on the card it opens into — can fly between them instead of
+cross-fading. Wrap it on both sides with the same `tag`:
+
+```dart
+LiquidGlassMorph(
+  child: open
+      ? Card(
+          key: const ValueKey('card'),
+          art: const LiquidGlassMorphShared(tag: 'art', child: Art(140)),
+        )
+      : Pill(
+          key: const ValueKey('pill'),
+          art: const LiquidGlassMorphShared(tag: 'art', child: Art(28)),
+        ),
+)
+```
+
+The copy travels on the morph's spring and scales between the two sizes, so
+the two sides should look alike — the same icon at two sizes, not two glyphs.
+
 Two things to know. A content-sized surface needs one frame to measure before
 it knows how big it is, so it is transparent for that frame; pin both axes and
 there is no warm-up frame. And bound the constraints — under unbounded ones
@@ -924,9 +960,12 @@ tint, blur and refraction pass through to the blender untouched.
 ### Tab bar — the moving glass pill
 
 `LiquidGlassTabBar`'s selection pill is real glass on **every renderer**
-by default: it lifts off the tab the moment you tap, travels on a spring
-— stretching as it launches, squashing as it brakes — and refracts the
-bar's own capsule as it passes. A settled bar costs no shader pass at
+by default: it lifts off the tab the moment you press and heads straight
+for it, travels on one spring — stretching as it launches, squashing as it
+brakes, with a small wobble as it lands — and refracts the bar's own capsule
+as it passes. Drag along the bar and the pill follows your finger; let go and
+the nearest tab is selected. The whole bar swells a little while the pill is
+lifted (`swell`, `null` to turn it off). A settled bar costs no shader pass at
 all. The tier is chosen by `LiquidGlassTabPillStyle.mode` (`both` /
 `impellerOnly` / `none`), and the pill's look, motion and contact shadow
 are tuned defaults — the shadow authored, like every lens's, on its glass
@@ -945,6 +984,15 @@ The tab **under** the pill is its own state: `underGlassIconSize` and
 label render bigger while the glass is over them. The enlargement is the
 glass's effect, not the selection's — it rides under the pill for the
 whole travel and glides back down through the landing.
+
+The pill's timing — lift, travel, drag and landing springs, each a duration
+and a bounce — lives in `LiquidGlassTabPillStyle.behavior`
+(`LiquidGlassTabPillBehavior`). The bar follows the theme: a milky capsule on
+a light theme, a smoked one (`LiquidGlassTabBar.defaultDarkStyle`) on a dark
+theme, with the selected tab in blue. `onReselected` fires when the selected
+tab is tapped again, `LiquidGlassTabBarItem.enabled: false` takes a tab out of
+both taps and drags, and `joinBatch: true` puts the capsule in an enclosing
+batch such as the scaffold's chrome batch.
 
 ### Custom icons & labels — SVG, PNG, rich text, anything
 
@@ -1010,9 +1058,9 @@ selection pill** when it's driven by a `LiquidGlassScaffold`, which owns the
 capture pipeline and hands the bar the page as its background.
 
 The same bar also works **on its own** — no `LiquidGlassScaffold` and no
-`body` to pass. With no host above it, it fills its parent and places itself
-from `alignment` and `margin`, and on Impeller the bar and its morph pill
-sample the live backdrop. Drop it as the last child of a `Stack` over your
+`body` to pass — or inside any `LiquidGlassView`. It fills its parent and
+places itself from `alignment` and `margin`, and on Impeller the bar and its
+morph pill sample the live backdrop. Drop it as the last child of a `Stack` over your
 page:
 
 ```dart
@@ -1082,6 +1130,14 @@ await viewController.captureOnce();
 ## License
 
 **MIT License**
+
+---
+
+## Acknowledgements
+
+The shape cache, which bakes a lens's outline into a texture once and reads it
+back, takes its approach from liquid_glass_renderer by Tim Lehmann
+(whynotmake.it).
 
 ---
 

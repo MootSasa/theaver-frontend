@@ -52,7 +52,7 @@ for ARCHIVE in "${TARGETS[@]}"; do
   (
     cd "$DIR"
     sha256sum "$BASE" > "${BASE}.sha256"
-    echo "✅ Generated SHA-256 checksum: ${BASE}.sha256"
+    echo "[OK] Generated SHA-256 checksum: ${BASE}.sha256"
     if [ "$HAS_GPG_KEY" -eq 1 ]; then
       rm -f "${BASE}.asc" "${BASE}.sha256.asc"
       gpg --homedir "$GNUPGHOME_TMP" --batch --yes --pinentry-mode loopback \
@@ -61,9 +61,9 @@ for ARCHIVE in "${TARGETS[@]}"; do
       gpg --homedir "$GNUPGHOME_TMP" --batch --yes --pinentry-mode loopback \
         --passphrase "$LINUX_GPG_PASSPHRASE" \
         --detach-sign --armor -o "${BASE}.sha256.asc" "${BASE}.sha256"
-      echo "✅ Signed Linux archive with GPG: ${BASE}.asc"
+      echo "[OK] Signed Linux archive with GPG: ${BASE}.asc"
     else
-      echo "ℹ️ GPG private key not configured; created ${BASE}.sha256 only."
+      echo "[INFO] GPG private key not configured; created ${BASE}.sha256 only."
     fi
   )
 done

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/theav_theme.dart';
@@ -7,6 +8,12 @@ import 'app_theme.dart';
 
 class ThemeProvider extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
+  bool _scheduleEnabled = false;
+  TimeOfDay _darkStart = const TimeOfDay(hour: 22, minute: 0);
+  TimeOfDay _darkEnd = const TimeOfDay(hour: 7, minute: 0);
+  double _messageFontSize = 16.0;
+  Timer? _scheduleTimer;
+
   final TheavThemeService _service = TheavThemeService();
   String? _currentUserId;
 
@@ -33,8 +40,27 @@ class ThemeProvider extends ChangeNotifier {
     }
   }
 
-  String _themeModeKey(String? uid) =>
-      uid != null && uid.isNotEmpty ? 'user_${uid}_theme_mode' : 'theme_mode';
+  String _userKey(String? uid, String suffix) =>
+      uid != null && uid.isNotEmpty ? 'user_${uid}_$suffix' : suffix;
+
+  String _themeModeKey(String? uid) => _userKey(uid, 'theme_mode');
+
+  /// Evaluates whether [now] falls inside the scheduled dark window `[start, end)`.
+  static bool isTimeInDarkSchedule(
+    DateTime now,
+    TimeOfDay start,
+    TimeOfDay end,
+  ) {
+    final nowMins = now.hour * 60 + now.minute;
+    final startMins = start.hour * 60 + start.minute;
+    final endMins = end.hour * 60 + end.minute;
+    if (startMins == endMins) return false;
+    if (startMins < endMins) {
+      return nowMins >= startMins && nowMins < endMins;
+    }
+    // Overnight window, e.g. 22:00 -> 07:00
+    return nowMins >= startMins || nowMins < endMins;
+  }
 
   Future<void> _switchUserThemeMode(String? userId) async {
     _currentUserId = userId;
@@ -43,22 +69,78 @@ class ThemeProvider extends ChangeNotifier {
 
     int? themeIndex = prefs.getInt(userKey);
     // Legacy migration: if user-scoped key is missing and legacy 'theme_mode' exists, migrate once
-    if (themeIndex == null && userId != null && userId.isNotEmpty && prefs.containsKey('theme_mode')) {
+    if (themeIndex == null &&
+        userId != null &&
+        userId.isNotEmpty &&
+        prefs.containsKey('theme_mode')) {
       themeIndex = prefs.getInt('theme_mode');
       if (themeIndex != null) {
         await prefs.setInt(userKey, themeIndex);
       }
     }
 
-    if (themeIndex != null && themeIndex >= 0 && themeIndex < ThemeMode.values.length) {
+    if (themeIndex != null &&
+        themeIndex >= 0 &&
+        themeIndex < ThemeMode.values.length) {
       _themeMode = ThemeMode.values[themeIndex];
     } else {
       _themeMode = ThemeMode.system;
     }
+
+    _scheduleEnabled =
+        prefs.getBool(_userKey(userId, 'theme_schedule_enabled')) ?? false;
+    final startMins =
+        prefs.getInt(_userKey(userId, 'theme_dark_start')) ?? (22 * 60);
+    final endMins =
+        prefs.getInt(_userKey(userId, 'theme_dark_end')) ?? (7 * 60);
+    _darkStart = TimeOfDay(
+      hour: (startMins ~/ 60) % 24,
+      minute: startMins % 60,
+    );
+    _darkEnd = TimeOfDay(
+      hour: (endMins ~/ 60) % 24,
+      minute: endMins % 60,
+    );
+
+    final fontSize = prefs.getDouble(_userKey(userId, 'message_font_size'));
+    _messageFontSize = (fontSize ?? 16.0).clamp(12.0, 24.0);
+
+    _syncScheduleTimer();
+    if (_scheduleEnabled) {
+      _applyScheduledMode(notify: false);
+    }
     notifyListeners();
   }
 
+  void _syncScheduleTimer() {
+    _scheduleTimer?.cancel();
+    _scheduleTimer = null;
+    if (_scheduleEnabled) {
+      _scheduleTimer = Timer.periodic(
+        const Duration(seconds: 60),
+        (_) => _applyScheduledMode(notify: true),
+      );
+    }
+  }
+
+  void _applyScheduledMode({required bool notify}) {
+    if (!_scheduleEnabled) return;
+    final target = isTimeInDarkSchedule(DateTime.now(), _darkStart, _darkEnd)
+        ? ThemeMode.dark
+        : ThemeMode.light;
+    if (_themeMode != target) {
+      _themeMode = target;
+      if (notify) {
+        notifyListeners();
+      }
+    }
+  }
+
   ThemeMode get themeMode => _themeMode;
+  bool get scheduleEnabled => _scheduleEnabled;
+  TimeOfDay get darkStart => _darkStart;
+  TimeOfDay get darkEnd => _darkEnd;
+  double get messageFontSize => _messageFontSize;
   TheavThemeService get service => _service;
 
   TheavTheme get activeLightTheme => _service.activeLightTheme;
@@ -67,19 +149,93 @@ class ThemeProvider extends ChangeNotifier {
   TheavTheme get activeTheme =>
       _themeMode == ThemeMode.dark ? activeDarkTheme : activeLightTheme;
 
-  ThemeData get lightThemeData => AppTheme.fromTheavTheme(activeLightTheme);
-  ThemeData get darkThemeData => AppTheme.fromTheavTheme(activeDarkTheme);
+  ThemeData get lightThemeData => AppTheme.fromTheavTheme(
+        activeLightTheme,
+        messageFontSize: _messageFontSize,
+      );
+
+  ThemeData get darkThemeData => AppTheme.fromTheavTheme(
+        activeDarkTheme,
+        messageFontSize: _messageFontSize,
+      );
 
   Future<void> setThemeMode(ThemeMode mode) async {
     _themeMode = mode;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_themeModeKey(_currentUserId), mode.index);
+    if (_scheduleEnabled) {
+      _scheduleEnabled = false;
+      _syncScheduleTimer();
+      await prefs.setBool(
+        _userKey(_currentUserId, 'theme_schedule_enabled'),
+        false,
+      );
+    }
     notifyListeners();
   }
 
-  Future<void> setActiveTheme(TheavTheme theme) async {
+  Future<void> setScheduleEnabled(bool enabled) async {
+    _scheduleEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(
+      _userKey(_currentUserId, 'theme_schedule_enabled'),
+      enabled,
+    );
+    _syncScheduleTimer();
+    if (enabled) {
+      _applyScheduledMode(notify: false);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setDarkSchedule({TimeOfDay? start, TimeOfDay? end}) async {
+    if (start != null) _darkStart = start;
+    if (end != null) _darkEnd = end;
+    final prefs = await SharedPreferences.getInstance();
+    if (start != null) {
+      await prefs.setInt(
+        _userKey(_currentUserId, 'theme_dark_start'),
+        start.hour * 60 + start.minute,
+      );
+    }
+    if (end != null) {
+      await prefs.setInt(
+        _userKey(_currentUserId, 'theme_dark_end'),
+        end.hour * 60 + end.minute,
+      );
+    }
+    if (_scheduleEnabled) {
+      _applyScheduledMode(notify: false);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setMessageFontSize(double size) async {
+    final clamped = size.clamp(12.0, 24.0);
+    _messageFontSize = clamped;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_userKey(_currentUserId, 'message_font_size'), clamped);
+  }
+
+  Future<void> setActiveTheme(
+    TheavTheme theme, {
+    bool syncCounterpart = false,
+    bool preserveSystemMode = false,
+  }) async {
     await _service.setActiveTheme(theme);
-    if (theme.isDark && _themeMode != ThemeMode.dark) {
+    if (syncCounterpart && theme.isBuiltIn) {
+      final counterpart = _service.resolveCounterpartWithOverrides(theme.id);
+      final oppositeActive = theme.isDark ? activeLightTheme : activeDarkTheme;
+      if (counterpart != null && oppositeActive.isBuiltIn) {
+        await _service.setActiveTheme(counterpart);
+      }
+    }
+    final bool keepAutoMode =
+        preserveSystemMode && (_themeMode == ThemeMode.system || _scheduleEnabled);
+    if (keepAutoMode) {
+      notifyListeners();
+    } else if (theme.isDark && _themeMode != ThemeMode.dark) {
       await setThemeMode(ThemeMode.dark);
     } else if (!theme.isDark && _themeMode != ThemeMode.light) {
       await setThemeMode(ThemeMode.light);
@@ -93,8 +249,50 @@ class ThemeProvider extends ChangeNotifier {
   Future<void> setToLight() => setThemeMode(ThemeMode.light);
   Future<void> setToDark() => setThemeMode(ThemeMode.dark);
 
+  /// Copies pre-login device theme mode preferences into [userId]'s namespace
+  /// if that user does not already have saved theme preferences.
+  static Future<void> adoptDeviceOnboardingAppearanceIfUnset(
+    String userId,
+  ) async {
+    if (userId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final dstModeKey = 'user_${userId}_theme_mode';
+    if (!prefs.containsKey(dstModeKey) && prefs.containsKey('theme_mode')) {
+      final modeIndex = prefs.getInt('theme_mode');
+      if (modeIndex != null) {
+        await prefs.setInt(dstModeKey, modeIndex);
+      }
+    }
+    const boolKeys = ['theme_schedule_enabled'];
+    for (final k in boolKeys) {
+      final dst = 'user_${userId}_$k';
+      if (!prefs.containsKey(dst) && prefs.containsKey(k)) {
+        final v = prefs.getBool(k);
+        if (v != null) await prefs.setBool(dst, v);
+      }
+    }
+    const intKeys = ['theme_dark_start', 'theme_dark_end'];
+    for (final k in intKeys) {
+      final dst = 'user_${userId}_$k';
+      if (!prefs.containsKey(dst) && prefs.containsKey(k)) {
+        final v = prefs.getInt(k);
+        if (v != null) await prefs.setInt(dst, v);
+      }
+    }
+    final dstFontKey = 'user_${userId}_message_font_size';
+    if (!prefs.containsKey(dstFontKey) &&
+        prefs.containsKey('message_font_size')) {
+      final v = prefs.getDouble('message_font_size');
+      if (v != null) await prefs.setDouble(dstFontKey, v);
+    }
+  }
+
+  /// Reloads theme mode preferences for [userId].
+  Future<void> reloadForUser(String? userId) => _switchUserThemeMode(userId);
+
   @override
   void dispose() {
+    _scheduleTimer?.cancel();
     AccountManager().removeListener(_onAccountManagerChanged);
     _service.removeListener(_onServiceChanged);
     super.dispose();

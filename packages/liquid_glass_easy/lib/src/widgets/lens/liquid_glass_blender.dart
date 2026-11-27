@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 // Flutter only re-exports `internal` from foundation.dart on newer SDKs.
 // ignore: unnecessary_import
 import 'package:meta/meta.dart';
@@ -16,8 +17,11 @@ import 'liquid_glass_shaders.dart';
 import '../liquid_glass_engine.dart';
 import '../utils/liquid_glass_adaptivity.dart';
 import '../utils/liquid_glass_adaptivity_driver.dart';
+import '../utils/liquid_glass_light.dart';
 import '../utils/liquid_glass_shape.dart';
 import 'liquid_glass_batch.dart';
+import '../liquid_glass_configuration.dart';
+import 'liquid_glass_shape_cache.dart';
 import 'liquid_glass_lens_scope.dart';
 import 'liquid_glass_transform_tracking.dart';
 
@@ -86,8 +90,10 @@ class LiquidGlassBlender extends StatefulWidget {
     this.useImpellerBackdrop,
     this.useEngineBlur = true,
     this.debugClipBounds = false,
+    this.opacity = 1,
     this.delegateToParentWhenIdle = false,
-  }) : assert(smoothness == null || smoothness >= 0);
+  })  : assert(smoothness == null || smoothness >= 0),
+        assert(opacity >= 0 && opacity <= 1);
 
   /// Any widget tree containing two to six `LiquidGlassLens` descendants.
   final Widget child;
@@ -138,6 +144,12 @@ class LiquidGlassBlender extends StatefulWidget {
   /// `false` in production; turn it on only while tuning to see where the
   /// costly pass runs.
   final bool debugClipBounds;
+
+  /// How much of the merged glass is drawn, from `0` to `1` (the default):
+  /// the shader's output is multiplied by it, as `LiquidGlassLens.opacity`
+  /// does for one lens. Scale the style's `blur` by the same amount when the
+  /// engine blurs (`useEngineBlur`), and fade the content yourself.
+  final double opacity;
 
   /// When `true` and an ancestor [LiquidGlassBlender] is active (`canBlend`),
   /// this blender delegates its member lenses to the ancestor's registry
@@ -356,8 +368,7 @@ class _LiquidGlassBlenderState extends State<LiquidGlassBlender>
     // nothing at all. Decided at BUILD time so members can see it.
     // Lite glass — by the engine switch or this style's pickup: no merged
     // pass at all, so members paint solo, each its own lite surface.
-    final bool lite =
-        LiquidGlassEngine.liteGlass || widget.style.liteGlass;
+    final bool lite = LiquidGlassEngine.liteGlass || widget.style.liteGlass;
     _ensureShader(useImpeller);
     final bool canBlend =
         (useImpeller || lensScope != null) && !lite && _shader != null;
@@ -434,7 +445,8 @@ class _LiquidGlassBlenderState extends State<LiquidGlassBlender>
     final LiquidGlassBlenderScope? parentScope = widget.delegateToParentWhenIdle
         ? LiquidGlassBlenderScope.maybeOf(context)
         : null;
-    final bool delegateToParent = parentScope != null && parentScope.canBlend;
+    final bool delegateToParent =
+        parentScope != null && parentScope.canBlend && widget.opacity >= 0.999;
 
     return Stack(
       fit: StackFit.passthrough,
@@ -445,7 +457,10 @@ class _LiquidGlassBlenderState extends State<LiquidGlassBlender>
             child: _LiquidGlassBlenderSurface(
               registry: _registry,
               shader: _shader!,
-              style: style,
+              style: LiquidGlassConfiguration.overrideStyle(
+                style,
+                brightness: Theme.of(context).brightness,
+              ),
               smoothness: widget.smoothness,
               useImpellerBackdrop: useImpeller,
               // Inside a LiquidGlassBatch the merged pass joins the batch's
@@ -454,13 +469,14 @@ class _LiquidGlassBlenderState extends State<LiquidGlassBlender>
                   useImpeller ? LiquidGlassBatch.backdropIdOf(context) : null,
               useEngineBlur: widget.useEngineBlur,
               debugClipBounds: widget.debugClipBounds,
+              opacity: widget.opacity,
               lensScope: lensScope,
               screenSize: MediaQuery.sizeOf(context),
               devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
             ),
           ),
         LiquidGlassBlenderScope(
-          registry: delegateToParent ? parentScope._registry : _registry,
+          registry: delegateToParent ? parentScope._registry! : _registry,
           canBlend: delegateToParent ? parentScope.canBlend : canBlend,
           // The solo fallback takes the same adapted material, so a
           // group that cannot merge still flips with the background.
@@ -481,9 +497,24 @@ class LiquidGlassBlenderScope extends InheritedWidget {
     required this.canBlend,
     required this.style,
     required super.child,
-  }) : _registry = registry;
+  })  : _registry = registry,
+        _excluded = false;
 
-  final _LiquidGlassBlenderRegistry _registry;
+  const LiquidGlassBlenderScope._excluded({required super.child})
+      : _registry = null,
+        canBlend = false,
+        style = const LiquidGlassStyle(),
+        _excluded = true;
+
+  /// [child]'s lenses keep their own glass under an enclosing blender:
+  /// they do not join its merged surface.
+  static Widget exclude({required Widget child}) =>
+      LiquidGlassBlenderScope._excluded(child: child);
+
+  final _LiquidGlassBlenderRegistry? _registry;
+
+  /// Set by [exclude]: [maybeOf] reports no blender below it.
+  final bool _excluded;
 
   /// Whether the merged surface can actually be drawn. False on Skia / web
   /// with no ancestor `LiquidGlassView`: there is no captured backdrop to
@@ -498,8 +529,9 @@ class LiquidGlassBlenderScope extends InheritedWidget {
   final LiquidGlassStyle style;
 
   static LiquidGlassBlenderScope? maybeOf(BuildContext context) {
-    return context
-        .dependOnInheritedWidgetOfExactType<LiquidGlassBlenderScope>();
+    final LiquidGlassBlenderScope? scope =
+        context.dependOnInheritedWidgetOfExactType<LiquidGlassBlenderScope>();
+    return scope == null || scope._excluded ? null : scope;
   }
 
   /// The style a member should paint itself with when [canBlend] is false.
@@ -531,10 +563,14 @@ class LiquidGlassBlenderScope extends InheritedWidget {
   /// something read off [style] because a member's appearance is otherwise
   /// never consulted, so there would be no way to tell "my verdict" from
   /// "the appearance I was declared with and which the group overrides".
+  ///
+  /// [opacity] is the member's own `LiquidGlassLens.opacity`; the merged
+  /// surface blends it across the bridge and multiplies the group's on top.
   Widget buildMember({
     required LiquidGlassStyle style,
     required bool visible,
     Color? tint,
+    double opacity = 1,
     Widget? child,
     Offset shapeScale = const Offset(1, 1),
   }) {
@@ -550,11 +586,12 @@ class LiquidGlassBlenderScope extends InheritedWidget {
           );
 
     return _LiquidGlassBlenderMember(
-      registry: _registry,
+      registry: _registry!,
       shape: shape,
       visible: visible,
       shapeScale: shapeScale,
       tint: tint,
+      opacity: opacity,
       child: visible ? clippedChild : null,
     );
   }
@@ -562,6 +599,7 @@ class LiquidGlassBlenderScope extends InheritedWidget {
   @override
   bool updateShouldNotify(LiquidGlassBlenderScope oldWidget) {
     return _registry != oldWidget._registry ||
+        _excluded != oldWidget._excluded ||
         canBlend != oldWidget.canBlend ||
         style != oldWidget.style;
   }
@@ -600,6 +638,7 @@ class _LiquidGlassBlenderMember extends SingleChildRenderObjectWidget {
     required this.visible,
     required this.shapeScale,
     required this.tint,
+    required this.opacity,
     super.child,
   });
 
@@ -611,6 +650,9 @@ class _LiquidGlassBlenderMember extends SingleChildRenderObjectWidget {
   /// This member's own verdict colour, or null to take the group's.
   final Color? tint;
 
+  /// This member's own opacity.
+  final double opacity;
+
   @override
   RenderObject createRenderObject(BuildContext context) {
     return _RenderLiquidGlassBlenderMember(
@@ -619,6 +661,7 @@ class _LiquidGlassBlenderMember extends SingleChildRenderObjectWidget {
       visible: visible,
       shapeScale: shapeScale,
       tint: tint,
+      opacity: opacity,
     );
   }
 
@@ -632,7 +675,8 @@ class _LiquidGlassBlenderMember extends SingleChildRenderObjectWidget {
       ..shape = shape
       ..visible = visible
       ..shapeScale = shapeScale
-      ..tint = tint;
+      ..tint = tint
+      ..opacity = opacity;
   }
 }
 
@@ -643,17 +687,20 @@ class _RenderLiquidGlassBlenderMember extends RenderProxyBox {
     required bool visible,
     Offset shapeScale = const Offset(1, 1),
     Color? tint,
+    double opacity = 1,
   })  : _registry = registry,
         _shape = shape,
         _visible = visible,
         _shapeScale = shapeScale,
-        _tint = tint;
+        _tint = tint,
+        _opacity = opacity;
 
   _LiquidGlassBlenderRegistry _registry;
   LiquidGlassShape _shape;
   bool _visible;
   Offset _shapeScale;
   Color? _tint;
+  double _opacity;
 
   /// This member's own adaptive verdict, or null to take the group's colour.
   /// It changes every frame of a flip, and the merged surface is what paints
@@ -662,6 +709,18 @@ class _RenderLiquidGlassBlenderMember extends RenderProxyBox {
   set tint(Color? value) {
     if (_tint == value) return;
     _tint = value;
+    _registry.memberChanged();
+    markNeedsPaint();
+  }
+
+  /// This member's own opacity. The merged surface paints it, as [tint].
+  ///
+  /// At `0` the member stays in the union, invisible, so its neighbours keep
+  /// their shape through a fade; set `visible` false to take it out.
+  double get opacity => _opacity;
+  set opacity(double value) {
+    if (_opacity == value) return;
+    _opacity = value;
     _registry.memberChanged();
     markNeedsPaint();
   }
@@ -734,6 +793,7 @@ class _LiquidGlassBlenderSurface extends LeafRenderObjectWidget {
     required this.backdropId,
     required this.useEngineBlur,
     required this.debugClipBounds,
+    required this.opacity,
     required this.lensScope,
     required this.screenSize,
     required this.devicePixelRatio,
@@ -747,6 +807,7 @@ class _LiquidGlassBlenderSurface extends LeafRenderObjectWidget {
   final int? backdropId;
   final bool useEngineBlur;
   final bool debugClipBounds;
+  final double opacity;
   final LiquidGlassLensScope? lensScope;
   final Size screenSize;
   final double devicePixelRatio;
@@ -762,6 +823,7 @@ class _LiquidGlassBlenderSurface extends LeafRenderObjectWidget {
       backdropId: backdropId,
       useEngineBlur: useEngineBlur,
       debugClipBounds: debugClipBounds,
+      opacity: opacity,
       lensScope: lensScope,
       screenSize: screenSize,
       devicePixelRatio: devicePixelRatio,
@@ -782,6 +844,7 @@ class _LiquidGlassBlenderSurface extends LeafRenderObjectWidget {
       ..backdropId = backdropId
       ..useEngineBlur = useEngineBlur
       ..debugClipBounds = debugClipBounds
+      ..opacity = opacity
       ..lensScope = lensScope
       ..screenSize = screenSize
       ..devicePixelRatio = devicePixelRatio;
@@ -799,6 +862,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     required int? backdropId,
     required bool useEngineBlur,
     required bool debugClipBounds,
+    required double opacity,
     required LiquidGlassLensScope? lensScope,
     required Size screenSize,
     required double devicePixelRatio,
@@ -810,6 +874,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
         _backdropId = backdropId,
         _useEngineBlur = useEngineBlur,
         _debugClipBounds = debugClipBounds,
+        _opacity = opacity,
         _lensScope = lensScope,
         _screenSize = screenSize,
         _devicePixelRatio = devicePixelRatio;
@@ -855,6 +920,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     if (attached) _registry.removeListener(markNeedsPaint);
     _registry = value;
     if (attached) _registry.addListener(markNeedsPaint);
+    _invalidateImpellerCache();
     markNeedsPaint();
   }
 
@@ -862,6 +928,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set shader(ui.FragmentShader value) {
     if (_shader == value) return;
     _shader = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
   }
 
@@ -877,6 +944,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set style(LiquidGlassStyle value) {
     if (_style == value) return;
     _style = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
   }
 
@@ -884,6 +952,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set smoothness(double? value) {
     if (_smoothness == value) return;
     _smoothness = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
   }
 
@@ -891,6 +960,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set useImpellerBackdrop(bool value) {
     if (_useImpellerBackdrop == value) return;
     _useImpellerBackdrop = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
     markNeedsCompositingBitsUpdate();
   }
@@ -899,6 +969,16 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set useEngineBlur(bool value) {
     if (_useEngineBlur == value) return;
     _useEngineBlur = value;
+    _invalidateImpellerCache();
+    markNeedsPaint();
+  }
+
+  /// The merged glass's opacity: every shader output is multiplied by it.
+  double _opacity;
+  set opacity(double value) {
+    if (_opacity == value) return;
+    _opacity = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
   }
 
@@ -926,6 +1006,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set screenSize(Size value) {
     if (_screenSize == value) return;
     _screenSize = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
   }
 
@@ -933,7 +1014,46 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   set devicePixelRatio(double value) {
     if (_devicePixelRatio == value) return;
     _devicePixelRatio = value;
+    _invalidateImpellerCache();
     markNeedsPaint();
+  }
+
+  bool _impellerUniformsDirty = true;
+  ui.ImageFilter? _cachedImpellerFilter;
+  Size? _lastPackedResolution;
+  Rect? _lastPackedGlassRectInSurface;
+  double? _lastPackedBlur;
+  bool? _lastPackedEngineBlur;
+  double? _lastPackedSmoothness;
+  double? _lastPackedOpacity;
+  double? _lastPackedScale;
+  LiquidGlassShapeBake? _lastPackedBake;
+  List<MetaballLensUniform>? _lastPackedLenses;
+
+  void _invalidateImpellerCache() {
+    _impellerUniformsDirty = true;
+    _cachedImpellerFilter = null;
+  }
+
+  static bool _sameLenses(
+    List<MetaballLensUniform>? a,
+    List<MetaballLensUniform> b,
+  ) {
+    if (a == null || a.length != b.length) return false;
+    for (int i = 0; i < b.length; i++) {
+      final MetaballLensUniform x = a[i];
+      final MetaballLensUniform y = b[i];
+      if (x.center != y.center ||
+          x.halfSize != y.halfSize ||
+          x.cornerRadius != y.cornerRadius ||
+          x.cornerStyle != y.cornerStyle ||
+          x.shapeScale != y.shapeScale ||
+          x.color != y.color ||
+          x.opacity != y.opacity) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @override
@@ -948,6 +1068,10 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
 
   @override
   void detach() {
+    _releaseBake();
+    _invalidateImpellerCache();
+    _lastPackedBake = null;
+    _lastPackedLenses = null;
     _registry.removeListener(markNeedsPaint);
     _lensScope?.captureRevision.removeListener(markNeedsPaint);
     _trackingLayer.layer
@@ -1010,7 +1134,9 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     if (members.length < LiquidGlassBlender.minLensCount || size.isEmpty) {
       return;
     }
-    _updateImpellerLayer(members, bumpRevision: false);
+    final Rect glassRect = _glassClipRect(members, this, Offset.zero & size);
+    if (glassRect.isEmpty) return;
+    _repackImpellerFilter(members, glassRect, bumpRevision: false);
   }
 
   @override
@@ -1031,37 +1157,61 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     if (_useImpellerBackdrop) {
       _paintImpeller(context, offset, members);
     } else {
+      _releaseBake();
       _paintSkiaCapture(context, offset, members);
     }
   }
 
-  LiquidGlassBatchBackdropLayer _updateImpellerLayer(
-    List<_RenderLiquidGlassBlenderMember> members, {
+  LiquidGlassBatchBackdropLayer _repackImpellerFilter(
+    List<_RenderLiquidGlassBlenderMember> members,
+    Rect glassRect, {
     required bool bumpRevision,
   }) {
     final double sigma = _blurSigma;
     final bool engineBlur = _useEngineBlur && sigma > 0;
-    final RenderObject? subpassAncestor = liquidGlassFilterSubpassAncestor(this);
+    final RenderObject? subpassAncestor =
+        liquidGlassFilterSubpassAncestor(this);
     final Size resolution = subpassAncestor is RenderBox
         ? subpassAncestor.size
         : _screenSize;
+    final Rect glassRectInSurface = MatrixUtils.transformRect(
+      getTransformTo(subpassAncestor),
+      glassRect,
+    );
+    final List<MetaballLensUniform> lenses =
+        _lensesIn(members, subpassAncestor);
+    _updateBake(lenses, glassRectInSurface);
 
-    final Rect glassRect = engineBlur
-        ? _glassClipRect(members, this, Offset.zero & size)
-        : Rect.zero;
-    final Rect glassRectInScreen = engineBlur
-        ? MatrixUtils.transformRect(getTransformTo(subpassAncestor), glassRect)
-        : Rect.zero;
+    final LiquidGlassBatchBackdropLayer? existingLayer = _shaderLayer.layer;
+    if (!_impellerUniformsDirty &&
+        existingLayer != null &&
+        _cachedImpellerFilter != null &&
+        identical(_lastPackedBake, _bake) &&
+        _lastPackedResolution == resolution &&
+        _lastPackedGlassRectInSurface == glassRectInSurface &&
+        _lastPackedBlur == sigma &&
+        _lastPackedEngineBlur == engineBlur &&
+        _lastPackedSmoothness == _smoothnessOrZero &&
+        _lastPackedOpacity == _opacity &&
+        _lastPackedScale == _devicePixelRatio &&
+        _sameLenses(_lastPackedLenses, lenses)) {
+      existingLayer
+        ..filter = _cachedImpellerFilter!
+        ..backdropId = _backdropId;
+      return existingLayer;
+    }
 
     _packShared(
       resolution: resolution,
-      lenses: _lensesIn(members, subpassAncestor),
+      lenses: lenses,
       scale: _devicePixelRatio,
+      bake: _bake,
+      bakeOrigin: glassRectInSurface.topLeft,
       // Engine blur runs before the shader → don't blur again in-shader.
       blur: engineBlur ? 0.0 : sigma,
-      imageOffset: engineBlur ? glassRectInScreen.topLeft : Offset.zero,
+      imageOffset: engineBlur ? glassRectInSurface.topLeft : Offset.zero,
       imageSize: engineBlur
-          ? Size(-glassRectInScreen.width, -glassRectInScreen.height)
+          ? Size(-glassRectInSurface.width, -glassRectInSurface.height)
           : null,
     );
 
@@ -1081,6 +1231,18 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
           )
         : shaderFilter;
 
+    _impellerUniformsDirty = false;
+    _lastPackedResolution = resolution;
+    _lastPackedGlassRectInSurface = glassRectInSurface;
+    _lastPackedBlur = sigma;
+    _lastPackedEngineBlur = engineBlur;
+    _lastPackedSmoothness = _smoothnessOrZero;
+    _lastPackedOpacity = _opacity;
+    _lastPackedScale = _devicePixelRatio;
+    _lastPackedBake = _bake;
+    _lastPackedLenses = lenses;
+    _cachedImpellerFilter = filter;
+
     final layer = _shaderLayer.layer ??= LiquidGlassBatchBackdropLayer();
     layer
       ..filter = filter
@@ -1092,6 +1254,23 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   }
 
   // ── Impeller: live backdrop via ImageFilter.shader ─────────────────
+  //
+  // FlutterFragCoord() is screen-space PHYSICAL px here, so lens geometry and
+  // resolution are global and scaled by dpr (exactly like
+  // RenderLiquidGlassLens). The merged silhouette is carved by the shader's
+  // shapeMask, so the surface clip is just the (full) bounds.
+  //
+  // Blur: with [_useEngineBlur] the backdrop is blurred by the engine's native
+  // Gaussian BEFORE the shader, via ImageFilter.compose — so the shader sees an
+  // already-blurred backdrop and masks it to the silhouette (no rectangular
+  // halo, since there's still just one BackdropFilter). The shader's own blur
+  // is switched off (blur: 0) on that path. Otherwise the shader blurs itself.
+  //
+  // Batch: inside a LiquidGlassBatch the pass carries the batch's backdrop
+  // key, so the engine hands it the copy it already took for the other
+  // members instead of reading the backdrop again. Both frames above work
+  // unchanged — the plain path samples the whole shared copy, the compose
+  // path a clip-sized crop of it, exactly as it did with a copy of its own.
   void _paintImpeller(
     PaintingContext context,
     Offset offset,
@@ -1099,8 +1278,35 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
   ) {
     final double sigma = _blurSigma;
     final bool engineBlur = _useEngineBlur && sigma > 0;
-    final layer = _updateImpellerLayer(members, bumpRevision: true);
-    final Rect clipRect = _glassClipRect(members, this, Offset.zero & size);
+
+    // ENGINE-BLUR COMPOSE PATH.
+    //
+    // Clipping the compose pass to the tight glass rect (`glassRect`) bounds the
+    // costly backdrop+blur to where the glass is. Where FlutterFragCoord counts
+    // from on that pass depends on the engine: some crop the shader's input to
+    // the clip and count from its top-left, newer ones keep the pass's frame.
+    // Dart cannot tell which, so the lenses stay GLOBAL and the pass clip goes
+    // down in the sampling window with its size negated; the shader compares it
+    // with the input size the engine wrote into u_resolution and picks the
+    // origin (see fragOrigin in metaball_glass.frag). Sampling is against that
+    // input size too, so the window always matches the texture 1:1.
+    final Rect glassRect = _glassClipRect(members, this, Offset.zero & size);
+    if (glassRect.isEmpty) {
+      _shaderLayer.layer = null;
+      _clipLayer.layer = null;
+      return;
+    }
+    final layer = _repackImpellerFilter(members, glassRect, bumpRevision: true);
+    // Clip region for the backdrop pass.
+    //
+    // Plain shader path: a tight clip (the union of the member rects) just
+    // limits where pixels land — the shader's backdrop sampler is the FULL
+    // screen regardless — so we keep it as a cost saver.
+    //
+    // Engine-blur COMPOSE path: clip to the tight `glassRect`, the same rect
+    // packed into the sampling window above — the costly backdrop+blur is
+    // bounded to the glass region instead of the whole surface.
+    final Rect clipRect = glassRect;
     _clipLayer.layer = context.pushClipRect(
       needsCompositing,
       offset,
@@ -1134,7 +1340,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     );
   }
 
-  // ── Skia / Web: sample the view's captured background ──────────────
+  // â”€â”€ Skia / Web: sample the view's captured background â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   //
   // Paint.shader evaluates FlutterFragCoord() in the draw's LOCAL space, so
   // (as in RenderLiquidGlassLens) we map the lenses into the captured
@@ -1160,6 +1366,15 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
 
     final Offset surfaceInView =
         MatrixUtils.transformPoint(getTransformTo(viewBox), Offset.zero);
+    // Draw only the glass region (in viewBox space) rather than the whole
+    // surface — fewer shaded fragments, same result (shapeMask still carves
+    // the silhouette).
+    final Rect drawRect =
+        _glassClipRect(members, viewBox, surfaceInView & size);
+    if (drawRect.isEmpty) {
+      return;
+    }
+
     _packShared(
       resolution: viewBox.size,
       lenses: _lensesIn(members, viewBox),
@@ -1169,12 +1384,6 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
       blur: _blurSigma,
     );
     _shader.setImageSampler(0, image);
-
-    // Draw only the glass region (in viewBox space) rather than the whole
-    // surface — fewer shaded fragments, same result (shapeMask still carves
-    // the silhouette).
-    final Rect drawRect =
-        _glassClipRect(members, viewBox, surfaceInView & size);
 
     final ui.Canvas canvas = context.canvas;
     canvas
@@ -1203,23 +1412,25 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
             ))
         .toList(growable: false);
 
-    // Optimization: when not merging (`!_merge`, e.g. LiquidGlassMorph at rest
-    // or delegated to an ancestor LiquidGlassBlender where collapsed and
-    // expanded members have identical bounds), skip coincident duplicate blobs
-    // so metaball_glass.frag evaluates fewer SDFs per fragment.
     final List<MetaballLensUniform> result = <MetaballLensUniform>[];
     for (int i = 0; i < members.length; i++) {
+      final member = members[i];
       final Rect rect = rects[i];
-      if (!_merge && i > 0) {
+      if (!_merge && result.isNotEmpty) {
+        final prevMember = members[i - 1];
         final Rect prev = rects[i - 1];
         if ((rect.left - prev.left).abs() < 0.5 &&
             (rect.top - prev.top).abs() < 0.5 &&
             (rect.width - prev.width).abs() < 0.5 &&
-            (rect.height - prev.height).abs() < 0.5) {
+            (rect.height - prev.height).abs() < 0.5 &&
+            member.opacity == prevMember.opacity &&
+            member.tint == prevMember.tint &&
+            member.shape.cornerRadius == prevMember.shape.cornerRadius &&
+            member.shape.cornerStyle == prevMember.shape.cornerStyle &&
+            member.shapeScale == prevMember.shapeScale) {
           continue;
         }
       }
-      final member = members[i];
       final double maxCorner = math.min(rect.width, rect.height) * 0.5;
 
       result.add(
@@ -1234,6 +1445,7 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
           // a tint and a group where nobody adapts blends back to exactly the
           // colour it would have painted before.
           color: member.tint ?? _style.appearance.color,
+          opacity: member.opacity,
         ),
       );
     }
@@ -1264,18 +1476,36 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     if (union == null) return fullRect;
 
     final LiquidGlassLitShape shape = _style.litShape();
+    // The 3-sigma term keeps the glass outline that far inside the blurred
+    // region, so every visible pixel is averaged from real backdrop rather
+    // than from the clip edge repeated. It does mean the costly pass grows
+    // with the frost — 120px a side at sigma 40 — so if that ever needs
+    // bounding, cap this term rather than dropping it.
+    // TEMPORARY (test): the blur tail and refraction band are OUT of the
+    // margin. Both are READ terms — they exist so the clip-sized snapshot
+    // holds the pixels the shader samples from beyond the outline — so
+    // without them expect edge-clamp smear at the rim, not a cropped shape.
+    // Restore by un-commenting the two lines.
     final double margin = shape.borderWidth * 2.0 + // rim
+        // 3.0 * _blurSigma + // gaussian tail
+        // _style.refraction.refractionWidth + // refraction band
         _smoothnessOrZero * 0.5 + // smin bridge bulge
         2.0; // AA
+    // Also clamped to the SCREEN. The engine-blur pass packs its geometry in
+    // a clip-local frame whose origin is the snapshot's top-left, and the
+    // snapshot can only cover what is on screen — so a clip that starts
+    // above or left of the screen would put the origin at the screen edge
+    // instead, and the whole silhouette would land that far down or right.
     final Rect clip = union
         .inflate(margin)
         .intersect(fullRect)
         .intersect(_screenRectIn(target));
-    // Degenerate (e.g. lenses fully off-surface): fall back to the full rect.
-    return (clip.isEmpty || !clip.isFinite) ? fullRect : clip;
+    // Completely off-surface or off-screen: return empty so callers skip
+    // pushing a full-surface backdrop pass (which shifts shader origin).
+    return (clip.isEmpty || !clip.isFinite) ? Rect.zero : clip;
   }
 
-  /// The screen's (or active subpass ancestor's) bounds in [target]'s space.
+  /// The screen's (or active subpass ancestor's) bounds in [target]'s coordinate space.
   Rect _screenRectIn(RenderObject target) {
     final RenderObject? subpassAncestor = liquidGlassFilterSubpassAncestor(this);
     final Size refSize = subpassAncestor is RenderBox
@@ -1307,13 +1537,19 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
     // into the blur's inflated snapshot instead of downscaling against it.
     Offset imageOffset = Offset.zero,
     Size? imageSize,
+    LiquidGlassShapeBake? bake,
+    Offset bakeOrigin = Offset.zero,
+    ui.FragmentShader? into,
+    double bakeOutput = 0,
+    Size? bakeSize,
+    bool? bakeOneTint,
   }) {
     final LiquidGlassLitShape shape = _style.litShape();
     final appearance = _style.appearance;
     final refraction = _style.refraction;
 
     packMetaballGlassUniforms(
-      _shader,
+      into ?? _shader,
       shape: shape,
       scale: scale,
       resolution: resolution,
@@ -1327,14 +1563,140 @@ class _RenderLiquidGlassBlenderSurface extends RenderBox
       dispersion: refraction.dispersion,
       saturation: appearance.saturation,
       blur: blur,
+      opacity: _opacity,
       lensColor: appearance.color,
       honorBackdropAlpha: false,
       imageOffset: imageOffset,
       imageSize: imageSize,
+      bake: bake,
+      bakeRange: _bakeRange,
+      bakeOrigin: bakeOrigin,
+      bakeOutput: bakeOutput,
+      bakeSize: bakeSize,
+      bakeOneTint: bakeOneTint,
     );
   }
 
   double get _blurSigma => _style.appearance.blur;
+
+  // ── The baked field ────────────────────────────────────────────────
+  //
+  // Baked against its own origin, so it is keyed on the members' shapes and
+  // their places relative to one another, never on where the group is:
+  // the whole blender moving keeps it, a member moving against the others
+  // bakes again.
+
+  LiquidGlassShapeBake? _bake;
+  double _bakeRange = 0;
+  String? _bakeWanted;
+  bool _settlePending = false;
+
+  void _releaseBake() {
+    LiquidGlassShapeCache.release(_bake);
+    _bake = null;
+  }
+
+  /// Paints once more after this frame, so a field that stopped changing
+  /// gets baked even when nothing else repaints the blender.
+  void _paintWhenSettled() {
+    if (_settlePending) return;
+    _settlePending = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _settlePending = false;
+      if (attached) markNeedsPaint();
+    });
+  }
+
+  /// Keeps [_bake] on the field of [lenses] over [rect], both global logical
+  /// px, baking it when no blender holds that field yet.
+  void _updateBake(List<MetaballLensUniform> lenses, Rect rect) {
+    final ui.FragmentShader? shader = LiquidGlassShaders.metaballBakeShader;
+    final double dpr = _devicePixelRatio;
+    final int width = (rect.width * dpr).ceil();
+    final int height = (rect.height * dpr).ceil();
+    if (!LiquidGlassShapeCache.enabled ||
+        shader == null ||
+        width < 2 ||
+        height < 2 ||
+        width * height > LiquidGlassShapeCache.maxTexels) {
+      _releaseBake();
+      return;
+    }
+    final LiquidGlassLitShape shape = _style.litShape();
+    final LiquidGlassLight? second = shape.secondSpecular;
+    final double reach = math.max(
+      _style.refraction.refractionWidth,
+      math.max(
+        1.4 * math.max(shape.specular.thickness, second?.thickness ?? 0),
+        shape.glow.thickness,
+      ),
+    );
+    final double range = LiquidGlassShapeCache.ceilTo((reach + 4) * dpr * 2, 8);
+    final Offset origin = rect.topLeft;
+    final List<MetaballLensUniform> local = <MetaballLensUniform>[
+      for (final MetaballLensUniform lens in lenses) lens.translated(-origin)
+    ];
+    final bool oneTint =
+        local.every((MetaballLensUniform l) => l.color == local.first.color);
+    // The bake carries no opacity: a group whose members differ in it (a
+    // fade under way, usually) is drawn per pixel. One shared opacity is
+    // read straight from the uniforms, so a whole-group fade keeps the bake.
+    if (local
+        .any((MetaballLensUniform l) => l.opacity != local.first.opacity)) {
+      _releaseBake();
+      return;
+    }
+    double snap(double v) => LiquidGlassShapeCache.snap(v * dpr);
+    final StringBuffer key = StringBuffer('metaball')
+      ..write(':$width:$height:$range:${snap(_smoothnessOrZero)}:$_merge')
+      ..write(':$oneTint');
+    for (final MetaballLensUniform l in local) {
+      key
+        ..write(':${snap(l.center.dx)},${snap(l.center.dy)}')
+        ..write(',${snap(l.halfSize.width)},${snap(l.halfSize.height)}')
+        ..write(',${snap(l.cornerRadius)},${l.cornerStyle}')
+        ..write(',${l.shapeScale.dx},${l.shapeScale.dy}')
+        ..write(oneTint ? '' : ',${l.color.toARGB32()}');
+    }
+    _bakeRange = range;
+    final String k = key.toString();
+    if (_bake?.key == k) return;
+    // Changed since the last frame: still animating, so drawn per pixel
+    // until it holds still, and a merge never bakes every frame.
+    if (k != _bakeWanted && !LiquidGlassShapeCache.holds(k)) {
+      _releaseBake();
+      _bakeWanted = k;
+      _paintWhenSettled();
+      return;
+    }
+    final LiquidGlassShapeBake next =
+        LiquidGlassShapeCache.acquire(k, width, height, () {
+      ui.Image pass(double output) {
+        _packShared(
+          resolution: _screenSize,
+          lenses: local,
+          scale: dpr,
+          blur: 0,
+          into: shader,
+          bakeOutput: output,
+          bakeSize: Size(width.toDouble(), height.toDouble()),
+          bakeOneTint: oneTint,
+        );
+        // Every declared sampler is bound, the backdrop's included.
+        shader.setImageSampler(0, LiquidGlassShapeCache.empty);
+        return LiquidGlassShapeCache.draw(shader, width, height);
+      }
+
+      return <ui.Image>[
+        pass(0),
+        pass(1),
+        pass(3),
+        if (!oneTint) pass(2),
+      ];
+    });
+    _releaseBake();
+    _bake = next;
+  }
 }
 
 /// A zero-content probe layer for the merged surface.

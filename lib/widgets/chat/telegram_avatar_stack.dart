@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/image_utils.dart';
 
 /// Telegram-style overlapping avatar stack using true boolean crescent cutouts
@@ -38,38 +39,81 @@ class TelegramAvatarStack extends StatelessWidget {
     final double totalWidth =
         size + (displayUsers.length - 1) * effectiveStep;
 
-    return SizedBox(
-      width: totalWidth,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (int i = displayUsers.length - 1; i >= 0; i--)
-            Positioned(
-              left: i * effectiveStep,
-              top: 0,
-              child: ClipPath(
-                clipper: _TelegramAvatarCrescentClipper(
-                  hasLeftNeighbor: i > 0,
-                  step: effectiveStep,
-                  gap: gap,
+    return ValueListenableBuilder<int>(
+      valueListenable: ContactsService.revisionNotifier,
+      builder: (context, _, __) {
+        return SizedBox(
+          width: totalWidth,
+          height: size,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              for (int i = displayUsers.length - 1; i >= 0; i--)
+                Positioned(
+                  left: i * effectiveStep,
+                  top: 0,
+                  child: ClipPath(
+                    clipper: _TelegramAvatarCrescentClipper(
+                      hasLeftNeighbor: i > 0,
+                      step: effectiveStep,
+                      gap: gap,
+                    ),
+                    child: _buildSingleAvatar(displayUsers[i], i),
+                  ),
                 ),
-                child: _buildSingleAvatar(displayUsers[i], i),
-              ),
-            ),
-        ],
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 
   Widget _buildSingleAvatar(Map<String, dynamic> user, int index) {
+    final rawUid = (user['user_id'] ?? user['id'] ?? '').toString().trim();
+    final peerType =
+        user['peer_type']?.toString().trim().toLowerCase() ?? '';
+    final chatId = user['chat_id']?.toString().trim() ?? '';
+    final senderChatId = user['sender_chat_id']?.toString().trim() ?? '';
+    final isAnon = user['is_from_anonymous_admin'] == true ||
+        user['is_from_anonymous_admin'] == 1;
+    final isBot = user['is_bot'] == true || user['is_bot'] == 1;
+    final bool isChannelOrGroup = peerType == 'channel' ||
+        peerType == 'chat' ||
+        peerType == 'group' ||
+        (chatId.isNotEmpty && chatId != '0');
+    final bool canResolveUser = !isChannelOrGroup &&
+        ContactsService.shouldResolveUserIdentity(
+          rawUid,
+          senderChatId: senderChatId,
+          isAnonymousAdmin: isAnon,
+          isBot: isBot,
+        );
+
     final rawAvatar = user['avatar_url']?.toString();
-    final validAvatar = getValidAvatarUrl(rawAvatar);
+    final resolvedAvatar = canResolveUser
+        ? ContactsService.resolvePeerAvatarUrl(
+            rawUid,
+            rawAvatar,
+            senderChatId: senderChatId,
+            isAnonymousAdmin: isAnon,
+            isBot: isBot,
+          )
+        : rawAvatar;
+    final validAvatar = getValidAvatarUrl(resolvedAvatar);
     final imgProvider =
         validAvatar != null ? avatarImageProvider(validAvatar) : null;
-    final name = (user['display_name'] ?? user['username'] ?? '?')
+    final rawName = (user['display_name'] ?? user['username'] ?? '?')
         .toString()
         .trim();
+    final name = canResolveUser
+        ? ContactsService.resolvePeerName(
+            rawUid,
+            rawName,
+            senderChatId: senderChatId,
+            isAnonymousAdmin: isAnon,
+            isBot: isBot,
+          ).trim()
+        : rawName;
     final initial =
         name.isNotEmpty ? name.characters.first.toUpperCase() : '?';
     final uidHash = (user['user_id'] ?? user['id'] ?? index).hashCode.abs();

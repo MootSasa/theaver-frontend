@@ -38,8 +38,11 @@ dependencies:
   web_socket_channel: ^3.0.1
   path: ^1.8.0
   url_launcher: ^6.2.0
+  webview_flutter: ^4.10.0
+  webview_flutter_android: ^4.10.0
+  webview_flutter_wkwebview: ^3.20.0
   open_file: ^3.3.2
-  liquid_glass_easy: ^5.0.0
+  liquid_glass_easy: ^5.2.0
   motor: ^1.1.0
   visibility_detector: ^0.4.0+2
   drift: ^2.22.1
@@ -84,6 +87,9 @@ dependencies:
   flutter_svg: ^2.0.10+1
   sensors_plus: ^5.0.1
   camera_windows: ^0.3.0
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+  geolocator: ^13.0.2
 
 
 
@@ -114,6 +120,7 @@ flutter:
     - assets/l10n/
     - assets/fonts/AppleColorEmoji.ttf
     - assets/animations/
+    - assets/sounds/
     - assets/wallpapers/christmas/
     - assets/wallpapers/flowers/
     - assets/wallpapers/love/

@@ -2,12 +2,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../design_system/theav_design_system.dart';
+import '../user/avatar_with_status.dart';
 import 'link_preview_input_bar.dart';
 import 'liquid_glass_input_field.dart';
 import 'reply_preview_bar.dart';
@@ -70,10 +71,27 @@ class ChatInputBar extends StatefulWidget {
   final bool showBotCommandsButton;
   final bool isBotCommandsOpen;
   final VoidCallback? onToggleBotCommands;
+  final String? botMenuWebAppLabel;
+  final VoidCallback? onOpenBotMenuWebApp;
   final bool hasReplyKeyboard;
   final bool isReplyKeyboardOpen;
   final VoidCallback? onToggleReplyKeyboard;
   final int slowmodeRemainingSeconds;
+  final bool showSilentBroadcastToggle;
+  final bool isSilentBroadcast;
+  final ValueChanged<bool>? onToggleSilentBroadcast;
+  final bool canSendMedia;
+  final bool canSendStickersGifs;
+  final bool canSendPolls;
+  final bool isAnonymousAdmin;
+  final String? anonymousGroupAvatarUrl;
+  final VoidCallback? onSendLongPress;
+  final Widget? forwardPreviewBanner;
+  final int scheduledCount;
+  final VoidCallback? onOpenScheduled;
+  final Widget? sendAsLeadingWidget;
+  final bool isChannelChat;
+  final String? replyFallbackAuthorName;
 
   const ChatInputBar({
     Key? key,
@@ -123,10 +141,27 @@ class ChatInputBar extends StatefulWidget {
     this.showBotCommandsButton = false,
     this.isBotCommandsOpen = false,
     this.onToggleBotCommands,
+    this.botMenuWebAppLabel,
+    this.onOpenBotMenuWebApp,
     this.hasReplyKeyboard = false,
     this.isReplyKeyboardOpen = false,
     this.onToggleReplyKeyboard,
     this.slowmodeRemainingSeconds = 0,
+    this.showSilentBroadcastToggle = false,
+    this.isSilentBroadcast = false,
+    this.onToggleSilentBroadcast,
+    this.canSendMedia = true,
+    this.canSendStickersGifs = true,
+    this.canSendPolls = true,
+    this.isAnonymousAdmin = false,
+    this.anonymousGroupAvatarUrl,
+    this.onSendLongPress,
+    this.forwardPreviewBanner,
+    this.scheduledCount = 0,
+    this.onOpenScheduled,
+    this.sendAsLeadingWidget,
+    this.isChannelChat = false,
+    this.replyFallbackAuthorName,
   }) : super(key: key);
 
   @override
@@ -330,7 +365,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
 
     if (glassEnabled) {
-      final glassProvider = context.watch<LiquidGlassProvider?>();
+      final glassProvider = LiquidGlassProvider.maybeOf(context);
       if (glassProvider != null) {
         final style = glassProvider.createStyle(
           context: context,
@@ -349,25 +384,192 @@ class _ChatInputBarState extends State<ChatInputBar> {
       }
     }
 
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = Theme.of(context).colorScheme.surface;
+    final bannerBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+    final Widget card = Container(
+      decoration: BoxDecoration(
+        color: bannerBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: content,
+    );
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.65)
-                  : Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: card,
+              )
+            : card,
+      ),
+    );
+  }
+
+  Widget _wrapContextualPill(
+    BuildContext context, {
+    required bool glassEnabled,
+    required bool isLite,
+    required Widget child,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (glassEnabled) {
+      final glassProvider = LiquidGlassProvider.maybeOf(context);
+      if (glassProvider != null) {
+        final style = glassProvider.createStyle(
+          context: context,
+          cornerRadius: 16,
+          refractionIndex: 1.1,
+          refractionWidth: 24,
+          isLiteOverride: isLite,
+        );
+        return Container(
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+          child: LiquidGlassLens(
+            style: style,
+            child: child,
+          ),
+        );
+      }
+    }
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = Theme.of(context).colorScheme.surface;
+    final pillBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+    final Widget card = Container(
+      decoration: BoxDecoration(
+        color: pillBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: child,
+    );
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: card,
+              )
+            : card,
+      ),
+    );
+  }
+
+  Widget _buildAnonymousAdminBanner(
+    BuildContext context,
+    bool glassEnabled,
+    bool isLite,
+  ) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final Color accentColor = isDark
+        ? const Color(0xFF66C7F4)
+        : theme.colorScheme.primary;
+    final Color textColor = theme.colorScheme.onSurface.withValues(alpha: 0.92);
+    final hasAvatar = widget.anonymousGroupAvatarUrl != null &&
+        widget.anonymousGroupAvatarUrl!.trim().isNotEmpty;
+
+    return _wrapContextualPill(
+      context,
+      glassEnabled: glassEnabled,
+      isLite: isLite,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hasAvatar) ...[
+              AvatarWithStatus(
+                avatarUrl: widget.anonymousGroupAvatarUrl,
+                name: 'G',
+                radius: 10,
+                isOnline: false,
+                showDecoration: false,
+                animateDecoration: false,
+              ),
+              const SizedBox(width: 6),
+            ],
+            iconoir.ShieldCheck(
+              width: 15,
+              height: 15,
+              color: accentColor,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'От имени группы',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: textColor,
+                ),
               ),
             ),
-            child: content,
-          ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRestrictedStickersBanner(
+    BuildContext context,
+    bool glassEnabled,
+    bool isLite,
+  ) {
+    final theme = Theme.of(context);
+    final Color textColor = theme.colorScheme.onSurface.withValues(alpha: 0.9);
+
+    return _wrapContextualPill(
+      context,
+      glassEnabled: glassEnabled,
+      isLite: isLite,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            iconoir.Lock(
+              width: 14,
+              height: 14,
+              color: textColor.withValues(alpha: 0.78),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'Стикеры и GIF ограничены',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -375,7 +577,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   @override
   Widget build(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 
@@ -420,7 +622,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
               : null,
         ),
 
-        // 3. Reply/Quote preview bar
+        // 3a. Staged forward preview bar
+        _GlassSafeAnimatedSection(
+          visible: widget.forwardPreviewBanner != null,
+          child: widget.forwardPreviewBanner,
+        ),
+
+        // 3b. Reply/Quote preview bar
         _GlassSafeAnimatedSection(
           visible: widget.replyToMessage != null,
           child: widget.replyToMessage != null
@@ -435,6 +643,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   enabled: glassEnabled,
                   isLite: isLite,
                   currentUserId: widget.currentUserId,
+                  isChannelPost: widget.isChannelChat,
+                  fallbackAuthorName: widget.replyFallbackAuthorName,
                 )
               : null,
         ),
@@ -519,20 +729,21 @@ class _ChatInputBarState extends State<ChatInputBar> {
               : null,
         ),
 
-        // 5. Upload progress
-        if (widget.isUploading)
-          widget.uploadProgressNotifier != null
-              ? ValueListenableBuilder<double>(
-                  valueListenable: widget.uploadProgressNotifier!,
-                  builder: (context, progress, _) => LinearProgressIndicator(
-                    value: progress > 0 ? progress : null,
-                    backgroundColor: Colors.grey[300],
-                  ),
-                )
-              : LinearProgressIndicator(
-                  value: widget.uploadProgress > 0 ? widget.uploadProgress : null,
-                  backgroundColor: Colors.grey[300],
-                ),
+        // 5b. Anonymous admin banner («От имени группы») — hidden when inline Send-As selector handles persona
+        _GlassSafeAnimatedSection(
+          visible: widget.isAnonymousAdmin && widget.sendAsLeadingWidget == null,
+          child: (widget.isAnonymousAdmin && widget.sendAsLeadingWidget == null)
+              ? _buildAnonymousAdminBanner(context, glassEnabled, isLite)
+              : null,
+        ),
+
+        // 5c. Stickers/GIFs restricted notice when emoji panel is open
+        _GlassSafeAnimatedSection(
+          visible: !widget.canSendStickersGifs && widget.isEmojiPanelOpen,
+          child: (!widget.canSendStickersGifs && widget.isEmojiPanelOpen)
+              ? _buildRestrictedStickersBanner(context, glassEnabled, isLite)
+              : null,
+        ),
 
         // 6. Input field row
         Row(
@@ -546,25 +757,35 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 focusNode: widget.focusNode,
                 hintText: widget.hintText ??
                     (widget.attachedFiles.isNotEmpty
-                        ? (AppLocalizations.of(context)
-                                ?.translate('chat_add_caption') ??
-                            'Add a caption...')
-                        : (AppLocalizations.of(context)
-                                ?.translate('chat_type_message') ??
-                            'Сообщение')),
+                        ? context.trOr('chat_add_caption', 'Добавить подпись...')
+                        : (widget.isAnonymousAdmin
+                            ? context.trOr(
+                                'send_as_anonymous_hint',
+                                'Написать анонимно...',
+                              )
+                            : context.trOr('chat_type_message', 'Сообщение'))),
                 onChanged: widget.onChanged,
                 onSend: widget.isSending ? null : _handleSend,
-                onAttach: widget.onAttach,
+                onSendLongPress: widget.isSending ? null : widget.onSendLongPress,
+                onAttach: widget.canSendMedia ? widget.onAttach : null,
                 onEmoji: widget.onEmoji,
-                onVoice: widget.onVoice,
-                onStartVoiceRecord: widget.onStartVoiceRecord,
-                onVoiceRecordMove: widget.onVoiceRecordMove,
-                onVoiceRecordEnd: widget.onVoiceRecordEnd,
-                onVoiceRecordCancel: widget.onVoiceRecordCancel,
-                onStartVideoRecord: widget.onStartVideoRecord,
-                onVideoRecordMove: widget.onVideoRecordMove,
-                onVideoRecordEnd: widget.onVideoRecordEnd,
-                onVideoRecordCancel: widget.onVideoRecordCancel,
+                onVoice: widget.canSendMedia ? widget.onVoice : null,
+                onStartVoiceRecord:
+                    widget.canSendMedia ? widget.onStartVoiceRecord : null,
+                onVoiceRecordMove:
+                    widget.canSendMedia ? widget.onVoiceRecordMove : null,
+                onVoiceRecordEnd:
+                    widget.canSendMedia ? widget.onVoiceRecordEnd : null,
+                onVoiceRecordCancel:
+                    widget.canSendMedia ? widget.onVoiceRecordCancel : null,
+                onStartVideoRecord:
+                    widget.canSendMedia ? widget.onStartVideoRecord : null,
+                onVideoRecordMove:
+                    widget.canSendMedia ? widget.onVideoRecordMove : null,
+                onVideoRecordEnd:
+                    widget.canSendMedia ? widget.onVideoRecordEnd : null,
+                onVideoRecordCancel:
+                    widget.canSendMedia ? widget.onVideoRecordCancel : null,
                 isSending: widget.isSending,
                 hasAttachments: widget.attachedFiles.isNotEmpty,
                 onEditLastMessage: widget.isEditing ? null : widget.onEditLastMessage,
@@ -573,12 +794,39 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 showBotCommandsButton: widget.showBotCommandsButton,
                 isBotCommandsOpen: widget.isBotCommandsOpen,
                 onToggleBotCommands: widget.onToggleBotCommands,
+                botMenuWebAppLabel: widget.botMenuWebAppLabel,
+                onOpenBotMenuWebApp: widget.onOpenBotMenuWebApp,
                 hasReplyKeyboard: widget.hasReplyKeyboard,
                 isReplyKeyboardOpen: widget.isReplyKeyboardOpen,
                 onToggleReplyKeyboard: widget.onToggleReplyKeyboard,
                 slowmodeRemainingSeconds: widget.slowmodeRemainingSeconds,
+                leadingIdentityWidget: widget.sendAsLeadingWidget,
+                showSilentBroadcastToggle: widget.showSilentBroadcastToggle,
+                isSilentBroadcast: widget.isSilentBroadcast,
+                onToggleSilentBroadcast: widget.onToggleSilentBroadcast != null
+                    ? () => widget.onToggleSilentBroadcast!(
+                          !widget.isSilentBroadcast,
+                        )
+                    : null,
+                isEditing: widget.isEditing,
               ),
             ),
+            if (widget.scheduledCount > 0 && widget.onOpenScheduled != null)
+              Padding(
+                padding: const EdgeInsets.only(right: 6, bottom: 10),
+                child: TheavHeaderIconButton(
+                  tooltip: 'Отложенные сообщения',
+                  badgeCount: widget.scheduledCount,
+                  onTap: widget.onOpenScheduled,
+                  icon: iconoir.Calendar(
+                    width: 20,
+                    height: 20,
+                    color: context.theav.appBarForeground != Colors.transparent
+                        ? context.theav.appBarForeground
+                        : context.theav.onSurface,
+                  ),
+                ),
+              ),
             if (widget.trailing != null) widget.trailing!,
           ],
         ),
@@ -586,14 +834,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     );
 
     if (glassEnabled && !isLite && glassProvider != null) {
-      return LiquidGlassBlender(
-        smoothness: 0,
-        style: glassProvider.createStyle(
-          context: context,
-          cornerRadius: 24,
-          refractionIndex: 1.1,
-          refractionWidth: 24,
-        ),
+      return LiquidGlassBatch(
         child: column,
       );
     }

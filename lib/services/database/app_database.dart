@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 import '../account_manager.dart';
+import '../contacts_service.dart';
 import 'connection/connection.dart' as impl;
 
 part 'app_database.g.dart';
@@ -41,6 +42,37 @@ class Chats extends Table {
   BoolColumn get isPublic => boolean().withDefault(const Constant(false))();
   BoolColumn get isBot => boolean().withDefault(const Constant(false))();
   BoolColumn get isVerified => boolean().withDefault(const Constant(false))();
+  BoolColumn get isArchived => boolean().withDefault(const Constant(false))();
+  TextColumn get peerCustomizationJson => text().nullable()();
+  BoolColumn get showAuthorProfiles =>
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get signMessages =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get linkedChatId => text().nullable()();
+  TextColumn get myRole => text().nullable()();
+  TextColumn get lastMessageSenderId => text().nullable()();
+  TextColumn get lastMessageSenderName => text().nullable()();
+  BoolColumn get hasActiveCall =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get chatPermissionsJson => text().nullable()();
+  TextColumn get reactionSettingsJson => text().nullable()();
+  BoolColumn get hasProtectedContent =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get pinnedMessageIdsJson => text().nullable()();
+  IntColumn get messageAutoDeleteTime =>
+      integer().withDefault(const Constant(0))();
+  TextColumn get appearanceJson => text().nullable()();
+  BoolColumn get isForum => boolean().withDefault(const Constant(false))();
+  BoolColumn get participantsHidden =>
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get hasAggressiveAntiSpamEnabled =>
+      boolean().withDefault(const Constant(false))();
+  IntColumn get maxReactionsPerPost =>
+      integer().withDefault(const Constant(11))();
+  IntColumn get unreadMentionsCount =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get unreadReactionsCount =>
+      integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {chatId};
@@ -81,6 +113,8 @@ class Messages extends Table {
   BoolColumn get isForward => boolean().withDefault(const Constant(false))();
   TextColumn get forwardFromId => text().nullable()();
   TextColumn get forwardFromName => text().nullable()();
+  TextColumn get forwardFromAvatarUrl => text().nullable()();
+  TextColumn get senderCustomizationJson => text().nullable()();
 
   // Entities & Album grouping
   TextColumn get groupedId => text().nullable()();
@@ -98,6 +132,36 @@ class Messages extends Table {
 
   // Dedicated media payload (waveform, duration, thumb, metadata)
   TextColumn get mediaPayload => text().nullable()();
+
+  // Channel posts, views, signatures, anonymous admins, silent posts & comments
+  IntColumn get viewsCount => integer().withDefault(const Constant(0))();
+  TextColumn get authorSignature => text().nullable()();
+  TextColumn get postAuthorId => text().nullable()();
+  TextColumn get senderRole => text().nullable()();
+  TextColumn get senderAdminTitle => text().nullable()();
+  BoolColumn get isFromAnonymousAdmin =>
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get isSilent => boolean().withDefault(const Constant(false))();
+  IntColumn get commentsCount => integer().withDefault(const Constant(0))();
+  TextColumn get recentRepliersJson => text().nullable()();
+  TextColumn get threadRootMessageId => text().nullable()();
+  BoolColumn get hasMediaSpoiler =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get expiresAt => text().nullable()();
+  IntColumn get ttlSeconds => integer().withDefault(const Constant(0))();
+  BoolColumn get isViewOnce => boolean().withDefault(const Constant(false))();
+  TextColumn get viewedAt => text().nullable()();
+  BoolColumn get isBurned => boolean().withDefault(const Constant(false))();
+  TextColumn get replyToChatId => text().nullable()();
+  TextColumn get replyToChatName => text().nullable()();
+  TextColumn get replyToChatType => text().nullable()();
+  TextColumn get effectId => text().nullable()();
+  TextColumn get savedTagsJson => text().nullable()();
+  IntColumn get topicId => integer().nullable()();
+  IntColumn get forwardsCount => integer().withDefault(const Constant(0))();
+  TextColumn get senderChatId => text().nullable()();
+  TextColumn get senderChatName => text().nullable()();
+  TextColumn get senderChatAvatarUrl => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {localId};
@@ -157,6 +221,15 @@ class AppDatabase extends _$AppDatabase {
 
   AppDatabase._internal(this.userId) : super(_openConnection(userId));
 
+  @visibleForTesting
+  AppDatabase.forTesting(QueryExecutor executor, {this.userId = 'test'})
+      : super(executor);
+
+  @visibleForTesting
+  static void setTestingInstance(String userId, AppDatabase db) {
+    _instances[userId] = db;
+  }
+
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
 
@@ -201,8 +274,22 @@ class AppDatabase extends _$AppDatabase {
     } catch (_) {}
   }
 
+  Future<void> _addColumnIfMissing(
+    String tableName,
+    String columnName,
+    String sqlDefinition,
+  ) async {
+    final cols = await customSelect('PRAGMA table_info($tableName)').get();
+    final exists = cols.any((row) => row.data['name'] == columnName);
+    if (!exists) {
+      await customStatement(
+        'ALTER TABLE $tableName ADD COLUMN $columnName $sqlDefinition',
+      );
+    }
+  }
+
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -220,6 +307,12 @@ class AppDatabase extends _$AppDatabase {
           );
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_messages_grouped_id ON messages(grouped_id) WHERE grouped_id IS NOT NULL',
+          );
+          await customStatement(
+            'CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(chat_id, thread_root_message_id, created_at) WHERE thread_root_message_id IS NOT NULL',
+          );
+          await customStatement(
+            'CREATE INDEX IF NOT EXISTS idx_messages_chat_topic ON messages(chat_id, topic_id, created_at) WHERE topic_id IS NOT NULL',
           );
         },
         onUpgrade: (Migrator m, int from, int to) async {
@@ -330,6 +423,172 @@ class AppDatabase extends _$AppDatabase {
               'ALTER TABLE chats ADD COLUMN is_verified INTEGER NOT NULL DEFAULT 0',
             );
           }
+          if (from < 11) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0',
+            );
+          }
+          if (from < 12) {
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN peer_customization_json TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE chats ADD COLUMN show_author_profiles INTEGER NOT NULL DEFAULT 1',
+            );
+            await customStatement(
+              'ALTER TABLE messages ADD COLUMN forward_from_avatar_url TEXT',
+            );
+            await customStatement(
+              'ALTER TABLE messages ADD COLUMN sender_customization_json TEXT',
+            );
+          }
+          if (from < 13) {
+            await _addColumnIfMissing(
+              'chats',
+              'sign_messages',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('chats', 'linked_chat_id', 'TEXT');
+            await _addColumnIfMissing('chats', 'my_role', 'TEXT');
+            await _addColumnIfMissing('chats', 'last_message_sender_id', 'TEXT');
+            await _addColumnIfMissing('chats', 'last_message_sender_name', 'TEXT');
+            await _addColumnIfMissing(
+              'chats',
+              'has_active_call',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('chats', 'chat_permissions_json', 'TEXT');
+            await _addColumnIfMissing('chats', 'reaction_settings_json', 'TEXT');
+            await customStatement(
+              "UPDATE chats SET show_author_profiles = 0 WHERE chat_type = 'channel'",
+            );
+
+            await _addColumnIfMissing(
+              'messages',
+              'views_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'author_signature', 'TEXT');
+            await _addColumnIfMissing('messages', 'post_author_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'sender_role', 'TEXT');
+            await _addColumnIfMissing('messages', 'sender_admin_title', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'is_from_anonymous_admin',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'is_silent',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'comments_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'recent_repliers_json', 'TEXT');
+            await _addColumnIfMissing('messages', 'thread_root_message_id', 'TEXT');
+
+            await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_messages_thread_root ON messages(chat_id, thread_root_message_id, created_at) WHERE thread_root_message_id IS NOT NULL',
+            );
+          }
+          if (from < 14) {
+            await _addColumnIfMissing(
+              'chats',
+              'has_protected_content',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'pinned_message_ids_json',
+              'TEXT',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'has_media_spoiler',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+          }
+          if (from < 15) {
+            await _addColumnIfMissing(
+              'chats',
+              'message_auto_delete_time',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('chats', 'appearance_json', 'TEXT');
+            await _addColumnIfMissing('messages', 'expires_at', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'ttl_seconds',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'messages',
+              'is_view_once',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'viewed_at', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'is_burned',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'reply_to_chat_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'reply_to_chat_name', 'TEXT');
+            await _addColumnIfMissing('messages', 'reply_to_chat_type', 'TEXT');
+            await _addColumnIfMissing('messages', 'effect_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'saved_tags_json', 'TEXT');
+          }
+          if (from < 16) {
+            await _addColumnIfMissing(
+              'chats',
+              'is_forum',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'participants_hidden',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'has_aggressive_anti_spam_enabled',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'max_reactions_per_post',
+              'INTEGER NOT NULL DEFAULT 11',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'unread_mentions_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing(
+              'chats',
+              'unread_reactions_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'topic_id', 'INTEGER');
+            await _addColumnIfMissing(
+              'messages',
+              'forwards_count',
+              'INTEGER NOT NULL DEFAULT 0',
+            );
+            await _addColumnIfMissing('messages', 'sender_chat_id', 'TEXT');
+            await _addColumnIfMissing('messages', 'sender_chat_name', 'TEXT');
+            await _addColumnIfMissing(
+              'messages',
+              'sender_chat_avatar_url',
+              'TEXT',
+            );
+            await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_messages_chat_topic ON messages(chat_id, topic_id, created_at) WHERE topic_id IS NOT NULL',
+            );
+          }
         },
       );
 
@@ -341,10 +600,17 @@ class AppDatabase extends _$AppDatabase {
       _isInitialized = true;
       debugPrint('AppDatabase: Initialized');
 
-      // 1. Очистка пустых приватных чатов-«призраков» (без сообщений, без черновиков, не закреплены, пустое имя)
+      // 1. Очистка пустых приватных чатов-«призраков» (без сообщений/медиа/даты, не закреплены, без непрочитанных, пустое имя)
       try {
         await customStatement(
-          "DELETE FROM chats WHERE chat_type = 'private' AND (name = '' OR name = '?' OR name IS NULL) AND (last_message IS NULL OR last_message = '') AND (is_pinned IS NULL OR is_pinned = 0)",
+          "DELETE FROM chats WHERE chat_type = 'private' "
+          "AND (name = '' OR name = '?' OR name IS NULL) "
+          "AND (last_message IS NULL OR last_message = '') "
+          "AND (last_message_type IS NULL OR last_message_type = '') "
+          "AND (last_message_file_url IS NULL OR last_message_file_url = '') "
+          "AND (last_message_time IS NULL OR last_message_time = '') "
+          "AND (is_pinned IS NULL OR is_pinned = 0) "
+          "AND (unread_count IS NULL OR unread_count = 0)",
         );
         await customStatement(
           "UPDATE chats SET name = 'Пользователь' WHERE (name = '' OR name = '?' OR name IS NULL) AND chat_type = 'private'",
@@ -382,17 +648,24 @@ class AppDatabase extends _$AppDatabase {
   /// 1) Избранное (saved) в самом верху
   /// 2) Закрепленные (isPinned == true)
   /// 3) По дате последнего сообщения / обновления (updatedAt DESC)
-  Stream<List<DbChat>> watchChats({int filter = 0}) {
+  Stream<List<DbChat>> watchChats({int filter = 0, bool includeArchived = false}) {
     final query = select(chats);
     // Исключаем сообщества и каналы сообществ из общего списка чатов
     query.where((t) =>
         t.chatType.isNotValue('community') &
         t.chatType.isNotValue('community_channel'));
-    // Скрываем пустые приватные чаты-«призраки» (должно быть сообщение или закрепление)
+    if (!includeArchived) {
+      query.where((t) => t.isArchived.equals(false));
+    }
+    // Скрываем пустые приватные чаты-«призраки» (сохраняем чаты с текстом, медиа без подписи, датой, закрепом или непрочитанными)
     query.where((t) =>
         t.chatType.isNotValue('private') |
         t.isPinned.equals(true) |
-        (t.lastMessage.isNotNull() & t.lastMessage.isNotValue('')));
+        t.unreadCount.isNotValue(0) |
+        (t.lastMessage.isNotNull() & t.lastMessage.isNotValue('')) |
+        (t.lastMessageType.isNotNull() & t.lastMessageType.isNotValue('')) |
+        (t.lastMessageFileUrl.isNotNull() & t.lastMessageFileUrl.isNotValue('')) |
+        (t.lastMessageTime.isNotNull() & t.lastMessageTime.isNotValue('')));
 
     if (filter == 1) {
       // Личные чаты (private и saved)
@@ -453,6 +726,49 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Реактивный поток архивированных чатов
+  Stream<List<DbChat>> watchArchivedChats() {
+    final query = select(chats)
+      ..where((t) =>
+          t.isArchived.equals(true) &
+          t.chatType.isNotValue('community') &
+          t.chatType.isNotValue('community_channel'))
+      ..orderBy([
+        (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+        (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+      ]);
+    return query.watch();
+  }
+
+  /// Получить все архивированные чаты
+  Future<List<DbChat>> getArchivedChats() async {
+    await ensureInitialized();
+    return (select(chats)
+          ..where((t) =>
+              t.isArchived.equals(true) &
+              t.chatType.isNotValue('community') &
+              t.chatType.isNotValue('community_channel'))
+          ..orderBy([
+            (t) => OrderingTerm(expression: t.isPinned, mode: OrderingMode.desc),
+            (t) => OrderingTerm(expression: t.updatedAt, mode: OrderingMode.desc),
+          ]))
+        .get();
+  }
+
+  /// Обновить статус архивирования чата
+  Future<void> setChatArchived(String chatId, bool archived) async {
+    await ensureInitialized();
+    final existing = await getChat(chatId);
+    final companion = (existing != null && existing.isArchived == archived)
+        ? ChatsCompanion(isArchived: Value(archived))
+        : ChatsCompanion(
+            isArchived: Value(archived),
+            isPinned: const Value(false),
+          );
+    await (update(chats)..where((t) => t.chatId.equals(chatId)))
+        .write(companion);
+  }
+
   /// Получить чат по server chatId
   Future<DbChat?> getChat(String chatId) async {
     await ensureInitialized();
@@ -462,19 +778,70 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
+  ChatsCompanion _resolveChatCompanionContacts(ChatsCompanion chat) {
+    final chatType = chat.chatType.present ? chat.chatType.value : null;
+    final otherUid = chat.otherUserId.present ? chat.otherUserId.value : null;
+    final isBot = chat.isBot.present ? chat.isBot.value : false;
+    var next = chat;
+    if (chatType == 'private' &&
+        !isBot &&
+        ContactsService.shouldResolveUserIdentity(otherUid, isBot: isBot)) {
+      if (next.name.present) {
+        final resolvedName = ContactsService.resolvePeerName(
+          otherUid,
+          next.name.value,
+          isBot: isBot,
+        );
+        if (resolvedName != next.name.value) {
+          next = next.copyWith(name: Value(resolvedName));
+        }
+      }
+      if (next.avatarUrl.present) {
+        final resolvedAvatar = ContactsService.resolvePeerAvatarUrl(
+          otherUid,
+          next.avatarUrl.value,
+          isBot: isBot,
+        );
+        if (resolvedAvatar != next.avatarUrl.value) {
+          next = next.copyWith(avatarUrl: Value(resolvedAvatar));
+        }
+      }
+    }
+    if (chatType != 'channel' &&
+        next.lastMessageSenderId.present &&
+        next.lastMessageSenderName.present &&
+        next.lastMessageSenderName.value != null) {
+      final lastSid = next.lastMessageSenderId.value;
+      final rawLastName = next.lastMessageSenderName.value!;
+      final resolvedLastName = ContactsService.resolvePeerName(
+        lastSid,
+        rawLastName,
+        isMirroredChannelPost: chatType == 'channel',
+      );
+      if (resolvedLastName != rawLastName) {
+        next = next.copyWith(lastMessageSenderName: Value(resolvedLastName));
+      }
+    }
+    return next;
+  }
+
   /// Сохранить/обновить чат (upsert)
   Future<void> saveChat(ChatsCompanion chat) async {
     await ensureInitialized();
-    await into(chats).insertOnConflictUpdate(chat);
+    await into(chats).insertOnConflictUpdate(
+      _resolveChatCompanionContacts(chat),
+    );
   }
 
   /// Сохранить список чатов (batch upsert)
   Future<void> saveChats(List<ChatsCompanion> chatCompanions) async {
     await ensureInitialized();
+    final resolved =
+        chatCompanions.map(_resolveChatCompanionContacts).toList();
     await batch((b) {
-      b.insertAllOnConflictUpdate(chats, chatCompanions);
+      b.insertAllOnConflictUpdate(chats, resolved);
     });
-    if (chatCompanions.any((c) => c.chatType.value == 'saved')) {
+    if (resolved.any((c) => c.chatType.present && c.chatType.value == 'saved')) {
       await _cleanupDuplicateSavedChats();
     }
   }
@@ -508,6 +875,26 @@ class AppDatabase extends _$AppDatabase {
         .write(const ChatsCompanion(unreadCount: Value(0)));
   }
 
+  /// Пакетное перемещение чатов в архив или из архива со сбросом закрепа
+  Future<void> batchSetArchived(List<String> chatIds, bool archived) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds))).write(
+      ChatsCompanion(
+        isArchived: Value(archived),
+        isPinned: const Value(false),
+      ),
+    );
+  }
+
+  /// Пакетная отметка чатов как непрочитанные
+  Future<void> batchMarkAsUnread(List<String> chatIds) async {
+    if (chatIds.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.isIn(chatIds)))
+        .write(const ChatsCompanion(unreadCount: Value(-1)));
+  }
+
   /// Пакетное удаление чатов и их сообщений
   Future<void> batchDeleteChats(List<String> chatIds) async {
     if (chatIds.isEmpty) return;
@@ -527,13 +914,15 @@ class AppDatabase extends _$AppDatabase {
     bool isRound = false,
     String? fileUrl,
     String? groupedId,
+    String? senderId,
+    String? senderName,
     bool incrementUnread = false,
   }) async {
     await ensureInitialized();
     final existing = await getChat(chatId);
     if (existing == null) return;
-    final newUnread =
-        incrementUnread ? existing.unreadCount + 1 : existing.unreadCount;
+    final baseUnread = existing.unreadCount < 0 ? 0 : existing.unreadCount;
+    final newUnread = incrementUnread ? baseUnread + 1 : existing.unreadCount;
     await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
       ChatsCompanion(
         lastMessage: Value(content),
@@ -542,6 +931,10 @@ class AppDatabase extends _$AppDatabase {
         lastMessageIsRound: Value(isRound),
         lastMessageFileUrl: Value(fileUrl),
         lastMessageGroupedId: Value(groupedId),
+        lastMessageSenderId:
+            senderId != null ? Value(senderId) : const Value.absent(),
+        lastMessageSenderName:
+            senderName != null ? Value(senderName) : const Value.absent(),
         updatedAt: Value(createdAt),
         unreadCount: Value(newUnread),
       ),
@@ -566,6 +959,8 @@ class AppDatabase extends _$AppDatabase {
           lastMessageIsRound: Value(isRound),
           lastMessageFileUrl: Value(lastMsg.fileUrl),
           lastMessageGroupedId: Value(lastMsg.groupedId),
+          lastMessageSenderId: Value(lastMsg.senderId),
+          lastMessageSenderName: Value(lastMsg.senderName),
           updatedAt: Value(lastMsg.createdAt),
         ),
       );
@@ -578,6 +973,8 @@ class AppDatabase extends _$AppDatabase {
           lastMessageIsRound: Value(false),
           lastMessageFileUrl: Value(null),
           lastMessageGroupedId: Value(null),
+          lastMessageSenderId: Value(null),
+          lastMessageSenderName: Value(null),
         ),
       );
     }
@@ -599,13 +996,122 @@ class AppDatabase extends _$AppDatabase {
 
   /// Обновить аватар пользователя в чатах и сообщениях
   Future<void> updateUserAvatarInChats(String userId, String? avatarUrl) async {
+    final uid = userId.trim();
+    if (uid.isEmpty ||
+        uid == '0' ||
+        uid == 'local' ||
+        uid.startsWith('chat:')) {
+      return;
+    }
     await ensureInitialized();
+    if (!_isInitialized) return;
+    final effectiveAvatar = ContactsService.resolveAvatarUrl(uid, avatarUrl);
+    final trimmedAvatar = effectiveAvatar?.trim();
+    final normalizedAvatar =
+        (trimmedAvatar != null && trimmedAvatar.isNotEmpty)
+            ? trimmedAvatar
+            : null;
     await (update(chats)
           ..where((t) =>
-              t.chatType.equals('private') & t.otherUserId.equals(userId)))
-        .write(ChatsCompanion(avatarUrl: Value(avatarUrl)));
-    await (update(messages)..where((t) => t.senderId.equals(userId)))
-        .write(MessagesCompanion(senderAvatarUrl: Value(avatarUrl)));
+              t.chatType.equals('private') & t.otherUserId.equals(uid)))
+        .write(ChatsCompanion(avatarUrl: Value(normalizedAvatar)));
+    await (update(messages)
+          ..where((t) =>
+              t.senderId.equals(uid) &
+              t.isFromAnonymousAdmin.equals(false) &
+              (t.senderChatId.isNull() |
+                  t.senderChatId.equals('') |
+                  t.senderChatId.equals('0'))))
+        .write(MessagesCompanion(senderAvatarUrl: Value(normalizedAvatar)));
+    await (update(messages)..where((t) => t.forwardFromId.equals(uid))).write(
+      MessagesCompanion(forwardFromAvatarUrl: Value(normalizedAvatar)),
+    );
+  }
+
+  /// Applies local contact name and custom avatar overrides for [userId] across
+  /// private chats, last-message previews, senders, replies, and forwards.
+  Future<void> applyContactOverrideInDb(
+    String userId, {
+    String? effectiveName,
+    String? effectiveAvatarUrl,
+    bool updateAvatar = true,
+  }) async {
+    final uid = userId.trim();
+    if (uid.isEmpty ||
+        uid == '0' ||
+        uid == 'local' ||
+        uid.startsWith('chat:') ||
+        !ContactsService.shouldResolveUserIdentity(uid)) {
+      return;
+    }
+    await ensureInitialized();
+    if (!_isInitialized) return;
+
+    final trimmedName = effectiveName?.trim();
+    final hasName = trimmedName != null && trimmedName.isNotEmpty;
+    final trimmedAvatar = effectiveAvatarUrl?.trim();
+    final normalizedAvatar =
+        (trimmedAvatar != null && trimmedAvatar.isNotEmpty)
+            ? trimmedAvatar
+            : null;
+
+    if (!hasName && !updateAvatar) return;
+
+    await (update(chats)
+          ..where((t) =>
+              t.chatType.equals('private') & t.otherUserId.equals(uid)))
+        .write(
+      ChatsCompanion(
+        name: hasName ? Value(trimmedName) : const Value.absent(),
+        avatarUrl:
+            updateAvatar ? Value(normalizedAvatar) : const Value.absent(),
+      ),
+    );
+
+    if (hasName) {
+      await (update(chats)
+            ..where((t) =>
+                t.lastMessageSenderId.equals(uid) &
+                t.lastMessageSenderId.isNotValue('0') &
+                t.chatType.isNotValue('channel')))
+          .write(
+        ChatsCompanion(lastMessageSenderName: Value(trimmedName)),
+      );
+    }
+
+    await (update(messages)
+          ..where((t) =>
+              t.senderId.equals(uid) &
+              t.isFromAnonymousAdmin.equals(false) &
+              (t.senderChatId.isNull() |
+                  t.senderChatId.equals('') |
+                  t.senderChatId.equals('0'))))
+        .write(
+      MessagesCompanion(
+        senderName: hasName ? Value(trimmedName) : const Value.absent(),
+        senderAvatarUrl:
+            updateAvatar ? Value(normalizedAvatar) : const Value.absent(),
+      ),
+    );
+
+    if (hasName) {
+      await (update(messages)
+            ..where((t) =>
+                t.replyToSenderId.equals(uid) &
+                (t.replyToChatType.isNull() |
+                    t.replyToChatType.isNotValue('channel'))))
+          .write(
+        MessagesCompanion(replyToSenderName: Value(trimmedName)),
+      );
+    }
+
+    await (update(messages)..where((t) => t.forwardFromId.equals(uid))).write(
+      MessagesCompanion(
+        forwardFromName: hasName ? Value(trimmedName) : const Value.absent(),
+        forwardFromAvatarUrl:
+            updateAvatar ? Value(normalizedAvatar) : const Value.absent(),
+      ),
+    );
   }
 
   /// Обновить статус онлайн и время последнего визита собеседника во всех личных чатах с этим пользователем
@@ -733,26 +1239,119 @@ class AppDatabase extends _$AppDatabase {
 
   // === СООБЩЕНИЯ ===
 
-  /// Получить сообщения чата с пагинацией
+  /// Получить сообщения чата с пагинацией (исключая комментарии тредов по умолчанию)
   /// [beforeCreatedAt] — курсор (ISO 8601), загружать сообщения старше этого
   /// [limit] — количество
   Future<List<DbMessage>> getMessages(
     String chatId, {
     String? beforeCreatedAt,
     int limit = 50,
+    bool includeThreadComments = false,
+    int? topicId,
   }) async {
     await ensureInitialized();
     final stmt = select(messages);
-    if (beforeCreatedAt != null) {
-      stmt.where((t) =>
-          t.chatId.equals(chatId) &
-          t.createdAt.isSmallerThanValue(beforeCreatedAt));
-    } else {
-      stmt.where((t) => t.chatId.equals(chatId));
-    }
-    stmt.orderBy([(t) => OrderingTerm.desc(t.createdAt), (t) => OrderingTerm.desc(t.localId)]);
+    stmt.where((t) {
+      Expression<bool> cond = t.chatId.equals(chatId);
+      if (topicId != null) {
+        cond = cond & t.topicId.equals(topicId);
+      }
+      if (!includeThreadComments) {
+        cond = cond &
+            (t.threadRootMessageId.isNull() | t.threadRootMessageId.equals(''));
+      }
+      if (beforeCreatedAt != null) {
+        cond = cond & t.createdAt.isSmallerThanValue(beforeCreatedAt);
+      }
+      return cond;
+    });
+    stmt.orderBy([
+      (t) => OrderingTerm.desc(t.createdAt),
+      (t) => OrderingTerm.desc(t.localId),
+    ]);
     stmt.limit(limit);
     return stmt.get();
+  }
+
+  /// Получить сообщения чата (алиас с опциональным фильтром по теме форума)
+  Future<List<DbMessage>> getMessagesForChat(
+    String chatId, {
+    String? beforeCreatedAt,
+    int limit = 50,
+    bool includeThreadComments = false,
+    int? topicId,
+  }) =>
+      getMessages(
+        chatId,
+        beforeCreatedAt: beforeCreatedAt,
+        limit: limit,
+        includeThreadComments: includeThreadComments,
+        topicId: topicId,
+      );
+
+  /// Реактивный поток сообщений основной ленты чата (включая зеркалированные посты канала, но без комментариев внутри тредов)
+  Stream<List<DbMessage>> watchMessagesForChat(
+    String chatId, {
+    int limit = 50,
+    bool includeThreadComments = false,
+    int? topicId,
+  }) {
+    final stmt = select(messages)
+      ..where((t) {
+        Expression<bool> cond = t.chatId.equals(chatId);
+        if (topicId != null) {
+          cond = cond & t.topicId.equals(topicId);
+        }
+        if (!includeThreadComments) {
+          cond = cond &
+              (t.threadRootMessageId.isNull() |
+                  t.threadRootMessageId.equals(''));
+        }
+        return cond;
+      })
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.createdAt),
+        (t) => OrderingTerm.desc(t.localId),
+      ])
+      ..limit(limit);
+    return stmt.watch();
+  }
+
+  /// Реактивный поток комментариев под постом канала в группе обсуждения
+  Stream<List<DbMessage>> watchThreadComments(
+    String chatId,
+    String rootMessageId, {
+    int limit = 100,
+  }) {
+    final stmt = select(messages)
+      ..where((t) =>
+          t.chatId.equals(chatId) &
+          t.threadRootMessageId.equals(rootMessageId))
+      ..orderBy([
+        (t) => OrderingTerm.asc(t.createdAt),
+        (t) => OrderingTerm.asc(t.localId),
+      ])
+      ..limit(limit);
+    return stmt.watch();
+  }
+
+  /// Получить комментарии к посту канала в группе обсуждения
+  Future<List<DbMessage>> getThreadComments(
+    String chatId,
+    String rootMessageId, {
+    int limit = 100,
+  }) async {
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              t.threadRootMessageId.equals(rootMessageId))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.localId),
+          ])
+          ..limit(limit))
+        .get();
   }
 
   /// Получить сообщение по localId
@@ -773,13 +1372,189 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
+  MessagesCompanion _resolveMessageCompanionContacts(
+    MessagesCompanion message,
+  ) {
+    var next = message;
+    final senderId = next.senderId.present ? next.senderId.value : '';
+    final senderChatId =
+        next.senderChatId.present ? next.senderChatId.value : null;
+    final isAnon = next.isFromAnonymousAdmin.present
+        ? next.isFromAnonymousAdmin.value
+        : false;
+    final msgType = next.messageType.present ? next.messageType.value : 'text';
+
+    bool isMirrored = false;
+    if (msgType != 'system' &&
+        next.mediaPayload.present &&
+        next.mediaPayload.value != null &&
+        next.mediaPayload.value!.contains('channel_post_id')) {
+      try {
+        final decoded = jsonDecode(next.mediaPayload.value!);
+        if (decoded is Map) {
+          final cp = decoded['channel_post_id']?.toString().trim() ?? '';
+          if (cp.isNotEmpty) isMirrored = true;
+        }
+      } catch (_) {}
+    }
+
+    if (ContactsService.shouldResolveUserIdentity(
+      senderId,
+      senderChatId: senderChatId,
+      isAnonymousAdmin: isAnon,
+      isMirroredChannelPost: isMirrored,
+    )) {
+      if (next.senderName.present && next.senderName.value != null) {
+        final resolvedSenderName = ContactsService.resolvePeerName(
+          senderId,
+          next.senderName.value!,
+          senderChatId: senderChatId,
+          isAnonymousAdmin: isAnon,
+          isMirroredChannelPost: isMirrored,
+        );
+        if (resolvedSenderName != next.senderName.value) {
+          next = next.copyWith(senderName: Value(resolvedSenderName));
+        }
+      }
+      if (next.senderAvatarUrl.present) {
+        final resolvedSenderAvatar = ContactsService.resolvePeerAvatarUrl(
+          senderId,
+          next.senderAvatarUrl.value,
+          senderChatId: senderChatId,
+          isAnonymousAdmin: isAnon,
+          isMirroredChannelPost: isMirrored,
+        );
+        if (resolvedSenderAvatar != next.senderAvatarUrl.value) {
+          next = next.copyWith(senderAvatarUrl: Value(resolvedSenderAvatar));
+        }
+      }
+    }
+
+    final replySenderId =
+        next.replyToSenderId.present ? next.replyToSenderId.value : null;
+    final replyChatType =
+        next.replyToChatType.present ? next.replyToChatType.value : null;
+    if (next.replyToSenderName.present &&
+        next.replyToSenderName.value != null) {
+      final resolvedReplyName = ContactsService.resolvePeerName(
+        replySenderId,
+        next.replyToSenderName.value!,
+        isMirroredChannelPost: replyChatType == 'channel',
+      );
+      if (resolvedReplyName != next.replyToSenderName.value) {
+        next = next.copyWith(replyToSenderName: Value(resolvedReplyName));
+      }
+    }
+
+    final fwdId =
+        next.forwardFromId.present ? (next.forwardFromId.value?.trim() ?? '') : '';
+    if (fwdId.isNotEmpty &&
+        !fwdId.startsWith('chat:') &&
+        ContactsService.shouldResolveUserIdentity(fwdId)) {
+      if (next.forwardFromName.present && next.forwardFromName.value != null) {
+        final resolvedFwdName = ContactsService.resolvePeerName(
+          fwdId,
+          next.forwardFromName.value!,
+        );
+        if (resolvedFwdName != next.forwardFromName.value) {
+          next = next.copyWith(forwardFromName: Value(resolvedFwdName));
+        }
+      }
+      if (next.forwardFromAvatarUrl.present) {
+        final resolvedFwdAvatar = ContactsService.resolvePeerAvatarUrl(
+          fwdId,
+          next.forwardFromAvatarUrl.value,
+        );
+        if (resolvedFwdAvatar != next.forwardFromAvatarUrl.value) {
+          next = next.copyWith(forwardFromAvatarUrl: Value(resolvedFwdAvatar));
+        }
+      }
+    }
+
+    if (next.recentRepliersJson.present &&
+        next.recentRepliersJson.value != null &&
+        next.recentRepliersJson.value!.isNotEmpty &&
+        next.recentRepliersJson.value != '[]') {
+      try {
+        final decoded = jsonDecode(next.recentRepliersJson.value!);
+        if (decoded is List) {
+          bool changed = false;
+          final updatedList = <dynamic>[];
+          for (final item in decoded) {
+            if (item is Map) {
+              final map = Map<String, dynamic>.from(item);
+              final pt = map['peer_type']?.toString().trim().toLowerCase() ?? '';
+              final cid = map['chat_id']?.toString().trim() ?? '';
+              final scid = map['sender_chat_id']?.toString().trim() ?? '';
+              final rAnon = map['is_from_anonymous_admin'] == true ||
+                  map['is_from_anonymous_admin'] == 1;
+              final rBot = map['is_bot'] == true || map['is_bot'] == 1;
+              final uid =
+                  (map['user_id'] ?? map['id'] ?? '').toString().trim();
+              final isPersona = pt == 'channel' ||
+                  pt == 'chat' ||
+                  pt == 'group' ||
+                  (cid.isNotEmpty && cid != '0') ||
+                  (scid.isNotEmpty && scid != '0') ||
+                  rAnon;
+              if (!isPersona &&
+                  ContactsService.shouldResolveUserIdentity(
+                    uid,
+                    senderChatId: scid,
+                    isAnonymousAdmin: rAnon,
+                    isBot: rBot,
+                  )) {
+                final rawName =
+                    (map['display_name'] ?? map['name'] ?? '').toString();
+                final nextName = ContactsService.resolvePeerName(
+                  uid,
+                  rawName,
+                  senderChatId: scid,
+                  isAnonymousAdmin: rAnon,
+                  isBot: rBot,
+                );
+                if (nextName != rawName) {
+                  map['display_name'] = nextName;
+                  changed = true;
+                }
+                final rawAv = map['avatar_url']?.toString();
+                final nextAv = ContactsService.resolvePeerAvatarUrl(
+                  uid,
+                  rawAv,
+                  senderChatId: scid,
+                  isAnonymousAdmin: rAnon,
+                  isBot: rBot,
+                );
+                if (nextAv != rawAv) {
+                  map['avatar_url'] = nextAv;
+                  changed = true;
+                }
+              }
+              updatedList.add(map);
+            } else {
+              updatedList.add(item);
+            }
+          }
+          if (changed) {
+            next = next.copyWith(
+              recentRepliersJson: Value(jsonEncode(updatedList)),
+            );
+          }
+        }
+      } catch (_) {}
+    }
+
+    return next;
+  }
+
   /// Сохранить сообщение (upsert по localId — primary key)
   /// Если у сообщения есть serverId, сначала проверяет существующую запись
   /// по serverId и переиспользует её localId для корректного обновления
   Future<void> saveMessage(MessagesCompanion message) async {
     await ensureInitialized();
+    final resolvedMessage = _resolveMessageCompanionContacts(message);
     // Если есть serverId (не absent и не null), проверить существующее сообщение
-    final serverIdValue = message.serverId;
+    final serverIdValue = resolvedMessage.serverId;
     final hasServerId = serverIdValue.present &&
         serverIdValue.value != null &&
         serverIdValue.value!.isNotEmpty;
@@ -801,12 +1576,12 @@ class AppDatabase extends _$AppDatabase {
         }
         // Переиспользовать существующий localId для корректного upsert
         await into(messages).insertOnConflictUpdate(
-          message.copyWith(localId: Value(canonical.localId)),
+          resolvedMessage.copyWith(localId: Value(canonical.localId)),
         );
         return;
       }
     }
-    await into(messages).insertOnConflictUpdate(message);
+    await into(messages).insertOnConflictUpdate(resolvedMessage);
   }
 
   /// Сохранить список сообщений (batch upsert с проверкой serverId)
@@ -820,7 +1595,7 @@ class AppDatabase extends _$AppDatabase {
   /// Обновить статус отправки: заменить localId на serverId
   Future<void> updateMessageSendStatus(
       String localId, String serverId, int status,
-      {String? fileUrl}) async {
+      {String? fileUrl, String? mediaPayload}) async {
     await ensureInitialized();
     if (serverId.isNotEmpty) {
       // Удаляем возможный дубликат, если сообщение уже успело прийти по WebSocket/Sync с localId == serverId
@@ -835,7 +1610,64 @@ class AppDatabase extends _$AppDatabase {
       serverId: Value(serverId),
       sendStatus: Value(status),
       fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
+      mediaPayload:
+          mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
     ));
+  }
+
+  /// Update pending/failed local message fields (e.g. saving remote URL of a completed
+  /// album item, downgrading an album when siblings are cancelled, or transferring caption).
+  Future<void> updateLocalMessageFields(
+    String localId, {
+    String? fileUrl,
+    String? mediaPayload,
+    Value<String?> groupedId = const Value.absent(),
+    int? sendStatus,
+    String? content,
+  }) async {
+    await ensureInitialized();
+    await (update(messages)..where((t) => t.localId.equals(localId))).write(
+      MessagesCompanion(
+        fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
+        mediaPayload:
+            mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
+        groupedId: groupedId,
+        sendStatus:
+            sendStatus != null ? Value(sendStatus) : const Value.absent(),
+        content: content != null ? Value(content) : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Returns all DB rows belonging to [groupedId] inside [chatId], ordered oldest-first.
+  Future<List<DbMessage>> getMessagesByGroupedId(
+    String chatId,
+    String groupedId,
+  ) async {
+    await ensureInitialized();
+    return (select(messages)
+          ..where(
+            (t) => t.chatId.equals(chatId) & t.groupedId.equals(groupedId),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .get();
+  }
+
+  /// Marks leftover unsent (`sendStatus == 0`) rows from prior killed sessions as
+  /// failed (`sendStatus == 2`) so the user can retry or cancel them.
+  Future<void> markInterruptedPendingMessagesFailed({
+    Set<String> activeLocalIds = const {},
+  }) async {
+    await ensureInitialized();
+    final query = update(messages)
+      ..where((t) {
+        var pred = t.sendStatus.equals(0) & t.serverId.isNull();
+        if (activeLocalIds.isNotEmpty) {
+          pred = pred & t.localId.isNotIn(activeLocalIds);
+        }
+        return pred;
+      });
+    await query.write(const MessagesCompanion(sendStatus: Value(2)));
   }
 
   /// Обновить только статус отправки (без serverId)
@@ -852,7 +1684,13 @@ class AppDatabase extends _$AppDatabase {
     String? entities,
     String? mediaPayload,
     bool isEdited = true,
+    bool? hasMediaSpoiler,
+    String? fileUrl,
+    String? fileName,
+    String? messageType,
+    bool? invertMedia,
   ]) async {
+    await ensureInitialized();
     await (update(messages)..where((t) => t.serverId.equals(serverId)))
         .write(MessagesCompanion(
       content: Value(content),
@@ -860,7 +1698,67 @@ class AppDatabase extends _$AppDatabase {
       mediaPayload:
           mediaPayload != null ? Value(mediaPayload) : const Value.absent(),
       isEdited: Value(isEdited),
+      hasMediaSpoiler: hasMediaSpoiler != null
+          ? Value(hasMediaSpoiler)
+          : const Value.absent(),
+      fileUrl: fileUrl != null ? Value(fileUrl) : const Value.absent(),
+      fileName: fileName != null ? Value(fileName) : const Value.absent(),
+      messageType:
+          messageType != null ? Value(messageType) : const Value.absent(),
+      invertMedia:
+          invertMedia != null ? Value(invertMedia) : const Value.absent(),
     ));
+  }
+
+  /// Обновить таймер автоудаления сообщений в чате
+  Future<void> updateChatAutoDeleteTime(String chatId, int ttlSeconds) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(messageAutoDeleteTime: Value(ttlSeconds)),
+    );
+  }
+
+  /// Обновить сохранённое оформление (тема/обои) чата
+  Future<void> updateChatAppearanceJson(
+      String chatId, String? appearanceJson) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(appearanceJson: Value(appearanceJson)),
+    );
+  }
+
+  /// Пометить одноразовое или TTL-сообщение как просмотренное/сгоревшее
+  Future<void> markMessageBurned(
+    String serverId, {
+    String? viewedAt,
+    String? expiresAt,
+    bool isBurned = true,
+  }) async {
+    if (serverId.isEmpty) return;
+    await ensureInitialized();
+    await (update(messages)
+          ..where((t) => t.serverId.equals(serverId) | t.localId.equals(serverId)))
+        .write(
+      MessagesCompanion(
+        isBurned: Value(isBurned),
+        viewedAt: viewedAt != null ? Value(viewedAt) : const Value.absent(),
+        expiresAt: expiresAt != null ? Value(expiresAt) : const Value.absent(),
+        fileUrl: isBurned ? const Value('') : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Обновить список тегов сообщения в Избранном
+  Future<void> updateMessageSavedTags(
+      String serverId, List<String> tags) async {
+    if (serverId.isEmpty) return;
+    await ensureInitialized();
+    final encoded = jsonEncode(tags);
+    await (update(messages)
+          ..where((t) => t.serverId.equals(serverId) | t.localId.equals(serverId)))
+        .write(MessagesCompanion(savedTagsJson: Value(encoded)));
   }
 
   /// Обновить реакции на сообщении по serverId или localId
@@ -881,6 +1779,92 @@ class AppDatabase extends _$AppDatabase {
     ));
   }
 
+  /// Обновить счётчик просмотров одного сообщения
+  Future<void> updateMessageViews(String messageId, int viewsCount) async {
+    if (messageId.isEmpty) return;
+    await ensureInitialized();
+    await (update(messages)
+          ..where((t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId)))
+        .write(MessagesCompanion(viewsCount: Value(viewsCount)));
+  }
+
+  /// Пакетно обновить счётчики просмотров сообщений
+  Future<void> updateMessagesViews(Map<String, int> viewsByMessageId) async {
+    if (viewsByMessageId.isEmpty) return;
+    await ensureInitialized();
+    await batch((b) {
+      viewsByMessageId.forEach((messageId, viewsCount) {
+        if (messageId.isEmpty) return;
+        b.update(
+          messages,
+          MessagesCompanion(viewsCount: Value(viewsCount)),
+          where: (t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId),
+        );
+      });
+    });
+  }
+
+  /// Пакетно обновить счётчики пересылок сообщений
+  Future<void> updateMessagesForwards(
+    Map<String, int> forwardsByServerId,
+  ) async {
+    if (forwardsByServerId.isEmpty) return;
+    await ensureInitialized();
+    await batch((b) {
+      forwardsByServerId.forEach((messageId, forwardsCount) {
+        if (messageId.isEmpty) return;
+        b.update(
+          messages,
+          MessagesCompanion(forwardsCount: Value(forwardsCount)),
+          where: (t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId),
+        );
+      });
+    });
+  }
+
+  /// Обновить счётчики непрочитанных упоминаний и реакций в чате
+  Future<void> updateChatUnreadBadges(
+    String chatId, {
+    required int unreadMentionsCount,
+    required int unreadReactionsCount,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        unreadMentionsCount:
+            Value(unreadMentionsCount < 0 ? 0 : unreadMentionsCount),
+        unreadReactionsCount:
+            Value(unreadReactionsCount < 0 ? 0 : unreadReactionsCount),
+      ),
+    );
+  }
+
+  /// Обновить количество комментариев и список последних комментаторов поста канала
+  Future<void> updatePostCommentsMeta({
+    required String messageId,
+    int? commentsCount,
+    String? recentRepliersJson,
+  }) async {
+    if (messageId.isEmpty) return;
+    await ensureInitialized();
+    await (update(messages)
+          ..where((t) =>
+              t.serverId.equals(messageId) | t.localId.equals(messageId)))
+        .write(
+      MessagesCompanion(
+        commentsCount:
+            commentsCount != null ? Value(commentsCount) : const Value.absent(),
+        recentRepliersJson: recentRepliersJson != null
+            ? Value(recentRepliersJson)
+            : const Value.absent(),
+      ),
+    );
+  }
+
   /// Удалить сообщение по serverId или localId
   Future<void> deleteMessage(String messageId) async {
     await (delete(messages)
@@ -888,7 +1872,17 @@ class AppDatabase extends _$AppDatabase {
         .go();
   }
 
-  /// Получить последнее сообщение чата
+  /// Пакетно удалить сообщения по списку serverId или localId
+  Future<void> deleteMessagesBatch(List<String> messageIds) async {
+    if (messageIds.isEmpty) return;
+    await ensureInitialized();
+    await (delete(messages)
+          ..where((t) =>
+              t.serverId.isIn(messageIds) | t.localId.isIn(messageIds)))
+        .go();
+  }
+
+  /// Получить последнее сообщение основной ленты чата (включая ответы/комментарии в группе обсуждений)
   Future<DbMessage?> getLastMessageForChat(String chatId) async {
     return (select(messages)
           ..where((t) => t.chatId.equals(chatId))
@@ -1018,17 +2012,159 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  /// Обновить ID закреплённого сообщения в чате
+  /// Обновить ID закреплённого сообщения (и список закрепов) в чате
   Future<void> updateChatPinnedMessageId(
     String chatId,
-    int? pinnedMessageId,
-  ) async {
+    int? pinnedMessageId, {
+    List<int>? pinnedMessageIds,
+    bool updatePinnedMessageIds = false,
+  }) async {
     if (chatId.isEmpty) return;
     await ensureInitialized();
     await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
       ChatsCompanion(
         pinnedMessageId: Value(pinnedMessageId),
+        pinnedMessageIdsJson: updatePinnedMessageIds
+            ? Value(pinnedMessageIds != null
+                ? jsonEncode(pinnedMessageIds)
+                : null)
+            : const Value.absent(),
       ),
+    );
+  }
+
+  /// Обновить флаг отображения профилей авторов в канале/группе
+  Future<void> updateChatShowAuthorProfiles(
+    String chatId,
+    bool showAuthorProfiles,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        showAuthorProfiles: Value(showAuthorProfiles),
+      ),
+    );
+  }
+
+  /// Обновить привязанный чат обсуждений (канал <-> группа)
+  Future<void> updateChatLinkedChatId(
+    String chatId,
+    String? linkedChatId,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        linkedChatId: Value(
+          (linkedChatId != null && linkedChatId.isNotEmpty)
+              ? linkedChatId
+              : null,
+        ),
+      ),
+    );
+  }
+
+  /// Обновить статус активного звонка / видеочата в чате
+  Future<void> updateChatActiveCall(
+    String chatId,
+    bool hasActiveCall,
+  ) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(hasActiveCall: Value(hasActiveCall)),
+    );
+  }
+
+  /// Обновить настройки группы/канала в локальной БД
+  Future<void> updateChatSettings(
+    String chatId, {
+    String? name,
+    String? avatarUrl,
+    bool updateAvatarUrl = false,
+    String? username,
+    bool updateUsername = false,
+    bool? isPublic,
+    bool? showAuthorProfiles,
+    bool? signMessages,
+    String? linkedChatId,
+    bool updateLinkedChatId = false,
+    String? myRole,
+    bool? hasActiveCall,
+    String? chatPermissionsJson,
+    String? reactionSettingsJson,
+    bool? hasProtectedContent,
+    String? pinnedMessageIdsJson,
+    bool updatePinnedMessageIds = false,
+    bool? isForum,
+    bool? participantsHidden,
+    bool? hasAggressiveAntiSpamEnabled,
+    int? maxReactionsPerPost,
+  }) async {
+    if (chatId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)..where((t) => t.chatId.equals(chatId))).write(
+      ChatsCompanion(
+        name: name != null ? Value(name) : const Value.absent(),
+        avatarUrl: updateAvatarUrl ? Value(avatarUrl) : const Value.absent(),
+        username: updateUsername ? Value(username) : const Value.absent(),
+        isPublic: isPublic != null ? Value(isPublic) : const Value.absent(),
+        showAuthorProfiles: showAuthorProfiles != null
+            ? Value(showAuthorProfiles)
+            : const Value.absent(),
+        signMessages:
+            signMessages != null ? Value(signMessages) : const Value.absent(),
+        linkedChatId: updateLinkedChatId
+            ? Value((linkedChatId != null && linkedChatId.isNotEmpty)
+                ? linkedChatId
+                : null)
+            : const Value.absent(),
+        myRole: myRole != null ? Value(myRole) : const Value.absent(),
+        hasActiveCall: hasActiveCall != null
+            ? Value(hasActiveCall)
+            : const Value.absent(),
+        chatPermissionsJson: chatPermissionsJson != null
+            ? Value(chatPermissionsJson)
+            : const Value.absent(),
+        reactionSettingsJson: reactionSettingsJson != null
+            ? Value(reactionSettingsJson)
+            : const Value.absent(),
+        hasProtectedContent: hasProtectedContent != null
+            ? Value(hasProtectedContent)
+            : const Value.absent(),
+        pinnedMessageIdsJson: updatePinnedMessageIds
+            ? Value(pinnedMessageIdsJson)
+            : const Value.absent(),
+        isForum: isForum != null ? Value(isForum) : const Value.absent(),
+        participantsHidden: participantsHidden != null
+            ? Value(participantsHidden)
+            : const Value.absent(),
+        hasAggressiveAntiSpamEnabled: hasAggressiveAntiSpamEnabled != null
+            ? Value(hasAggressiveAntiSpamEnabled)
+            : const Value.absent(),
+        maxReactionsPerPost: maxReactionsPerPost != null
+            ? Value(maxReactionsPerPost)
+            : const Value.absent(),
+      ),
+    );
+  }
+
+  /// Обновить кэшированную кастомизацию пользователя в личных чатах и сообщениях
+  Future<void> updateUserCustomizationJson(
+    String userId,
+    String? customizationJson,
+  ) async {
+    if (userId.isEmpty) return;
+    await ensureInitialized();
+    await (update(chats)
+          ..where((t) =>
+              t.chatType.equals('private') & t.otherUserId.equals(userId)))
+        .write(
+      ChatsCompanion(peerCustomizationJson: Value(customizationJson)),
+    );
+    await (update(messages)..where((t) => t.senderId.equals(userId))).write(
+      MessagesCompanion(senderCustomizationJson: Value(customizationJson)),
     );
   }
 
@@ -1150,6 +2286,21 @@ class AppDatabase extends _$AppDatabase {
               t.chatId.equals(chatId) &
               (t.messageType.equals('image') | t.messageType.equals('video')) &
               t.isRound.equals(false) &
+              t.fileUrl.isNotNull() &
+              t.fileUrl.isNotValue(''))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Получить GIF-анимации чата
+  Future<List<DbMessage>> getSharedGifsForChat(String chatId, {int limit = 300}) async {
+    if (chatId.isEmpty) return [];
+    await ensureInitialized();
+    return (select(messages)
+          ..where((t) =>
+              t.chatId.equals(chatId) &
+              (t.messageType.equals('gif') | t.messageType.equals('animation')) &
               t.fileUrl.isNotNull() &
               t.fileUrl.isNotValue(''))
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)])

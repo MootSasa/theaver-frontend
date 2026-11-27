@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- APNs: "development" for debug builds, Xcode switches to "production" on archive/export. -->
+	<key>aps-environment</key>
+	<string>development</string>
+	<!-- Time Sensitive Notifications capability (incoming calls break through Focus modes). -->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
+	<!-- Communication Notifications (chat pushes with sender/chat avatar). -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+	<!-- App Group shared with the NotificationService extension (base URLs, auth token). -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.app.theaver.messenger</string>
+	</array>
+</dict>
+</plist>

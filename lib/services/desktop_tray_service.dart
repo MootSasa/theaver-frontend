@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
+import 'notification_service.dart';
 
 /// Сервис управления окном и системным треем для Desktop (Windows, Linux, macOS).
 /// 
@@ -144,15 +145,37 @@ class DesktopTrayService with TrayListener, WindowListener {
       }
       await windowManager.show();
       await windowManager.focus();
+      NotificationService().onAppResume();
     } catch (e) {
       debugPrint('DesktopTrayService: showAndFocusWindow error: $e');
     }
   }
 
   @override
+  void onWindowMinimize() {
+    NotificationService().onAppPause();
+  }
+
+  @override
+  void onWindowRestore() {
+    NotificationService().onAppResume();
+  }
+
+  @override
+  void onWindowFocus() {
+    NotificationService().onAppResume();
+  }
+
+  @override
+  void onWindowBlur() {
+    NotificationService().onAppPause();
+  }
+
+  @override
   void onWindowClose() async {
     final isPreventClose = await windowManager.isPreventClose();
     if (isPreventClose) {
+      NotificationService().onAppPause();
       // Сворачиваем в трей вместо закрытия
       await windowManager.hide();
     }
@@ -162,10 +185,12 @@ class DesktopTrayService with TrayListener, WindowListener {
   void onTrayIconMouseDown() async {
     final isVisible = await windowManager.isVisible();
     if (isVisible) {
+      NotificationService().onAppPause();
       await windowManager.hide();
     } else {
       await windowManager.show();
       await windowManager.focus();
+      NotificationService().onAppResume();
     }
   }
 

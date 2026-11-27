@@ -2,31 +2,46 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../config/app_config.dart';
+import '../../models/theav_media_item.dart';
 import '../../services/media_cache_manager.dart';
+import '../media_viewer/theav_media_viewer.dart';
 import 'blurred_media_placeholder.dart';
 import 'media_download_button.dart';
+import 'telegram_upload_progress.dart';
 
 /// Widget for displaying photo and video message previews with blurred
 /// preview placeholder, managed progressive download, and size pill.
 class MediaMessageWidget extends StatefulWidget {
   final String mediaType; // 'photo' or 'video'
   final String url; // URL to the media file
+  final String? localId;
+  final String? chatId;
+  final int sendStatus;
   final String? thumbnailUrl; // Optional thumbnail URL for videos
   final String? thumbBase64;
   final int? fileSize;
   final int? duration;
   final double? aspectRatio;
+  final String? heroTag;
+  final VoidCallback? onCancelUpload;
+  final VoidCallback? onRetry;
   final VoidCallback? onTap; // Callback when the media is tapped
 
   const MediaMessageWidget({
     Key? key,
     required this.mediaType,
     required this.url,
+    this.localId,
+    this.chatId,
+    this.sendStatus = 1,
     this.thumbnailUrl,
     this.thumbBase64,
     this.fileSize,
     this.duration,
     this.aspectRatio,
+    this.heroTag,
+    this.onCancelUpload,
+    this.onRetry,
     this.onTap,
   }) : super(key: key);
 
@@ -70,16 +85,43 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
     return '$m:${s.toString().padLeft(2, '0')}';
   }
 
+  void _handleMediaTap(BuildContext context) {
+    if (widget.onTap != null) {
+      widget.onTap!.call();
+      return;
+    }
+    final resolvedUrl = AppConfig.resolveMediaUrl(widget.url) ?? widget.url;
+    final tag = widget.heroTag ?? 'media_$resolvedUrl';
+    final isVideo = widget.mediaType == 'video';
+    TheavMediaViewer.open<void>(
+      context,
+      items: <TheavMediaItem>[
+        TheavMediaItem(
+          id: tag,
+          kind: isVideo ? TheavMediaKind.video : TheavMediaKind.photo,
+          url: resolvedUrl,
+          localFilePath: _cachedFile?.path,
+          thumbUrl: widget.thumbnailUrl,
+          thumbBase64: widget.thumbBase64,
+          durationSeconds: widget.duration,
+          fileSize: widget.fileSize,
+          heroTag: tag,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isCached = _cachedFile != null;
+    final isUploadingOrFailed = widget.sendStatus != 1;
     return GestureDetector(
       onTap: () {
-        if (!isCached) {
+        if (!isUploadingOrFailed && !isCached) {
           _downloadButtonKey.currentState?.handleTap();
           return;
         }
-        widget.onTap?.call();
+        _handleMediaTap(context);
       },
       child: _buildMediaPreview(),
     );
@@ -100,6 +142,7 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
     final resolvedUrl = AppConfig.resolveMediaUrl(widget.url) ?? widget.url;
     final ratio = widget.aspectRatio ?? 1.33;
     final isCached = _cachedFile != null;
+    final isUploadingOrFailed = widget.sendStatus != 1;
     final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
       messageType: 'image',
       fileSize: widget.fileSize,
@@ -118,16 +161,37 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
               aspectRatio: ratio,
             ),
 
-            // 2. Full local image ONLY after cached
+            // 2. Full local image
             if (_cachedFile != null)
-              Image.file(
-                _cachedFile!,
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-              ),
+              if (widget.heroTag != null && widget.heroTag!.isNotEmpty)
+                Hero(
+                  tag: widget.heroTag!,
+                  child: Image.file(
+                    _cachedFile!,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                )
+              else
+                Image.file(
+                  _cachedFile!,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
 
+            if (isUploadingOrFailed &&
+                widget.localId != null &&
+                widget.localId!.isNotEmpty)
+              TelegramMediaUploadOverlay(
+                localId: widget.localId!,
+                chatId: widget.chatId,
+                fileSize: widget.fileSize,
+                sendStatus: widget.sendStatus,
+                onCancel: widget.onCancelUpload,
+                onRetry: widget.onRetry,
+              )
             // 3. Download button with size pill if needed
-            if (resolvedUrl.isNotEmpty && !isCached)
+            else if (!isUploadingOrFailed && resolvedUrl.isNotEmpty && !isCached)
               MediaDownloadButton(
                 key: _downloadButtonKey,
                 url: resolvedUrl,
@@ -148,7 +212,7 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
         ? (AppConfig.resolveMediaUrl(widget.thumbnailUrl!) ?? widget.thumbnailUrl!)
         : null;
     final ratio = widget.aspectRatio ?? 1.33;
-    final isCached = _cachedFile != null;
+    final isUploadingOrFailed = widget.sendStatus != 1;
     final autoDownload = MediaCacheManager.instance.shouldAutoDownload(
       messageType: 'video',
       fileSize: widget.fileSize,
@@ -167,17 +231,24 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
               aspectRatio: ratio,
             ),
 
-            // 2. Video thumbnail ONLY after video is cached
-            if (isCached && resolvedThumbUrl != null && resolvedThumbUrl.isNotEmpty)
-              Image.network(
-                resolvedThumbUrl,
-                cacheWidth: 800,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-              ),
+            // 2. Video thumbnail rendered immediately (including authenticated fallback)
+            RemoteVideoThumbnailImage(
+              thumbUrl: resolvedThumbUrl,
+              cacheWidth: 800,
+            ),
 
-            // 3. Download button with size pill & play button
-            if (resolvedUrl.isNotEmpty)
+            if (isUploadingOrFailed &&
+                widget.localId != null &&
+                widget.localId!.isNotEmpty)
+              TelegramMediaUploadOverlay(
+                localId: widget.localId!,
+                chatId: widget.chatId,
+                fileSize: widget.fileSize,
+                sendStatus: widget.sendStatus,
+                onCancel: widget.onCancelUpload,
+                onRetry: widget.onRetry,
+              )
+            else if (!isUploadingOrFailed && resolvedUrl.isNotEmpty)
               MediaDownloadButton(
                 key: _downloadButtonKey,
                 url: resolvedUrl,
@@ -185,11 +256,13 @@ class _MediaMessageWidgetState extends State<MediaMessageWidget> {
                 isVideo: true,
                 autoDownload: autoDownload,
                 onDownloaded: _checkCache,
-                onPlayVideo: widget.onTap,
+                onPlayVideo: () => _handleMediaTap(context),
               ),
 
             // 4. Video duration pill in top-left
-            if (widget.duration != null && widget.duration! > 0)
+            if (!isUploadingOrFailed &&
+                widget.duration != null &&
+                widget.duration! > 0)
               Positioned(
                 top: 8,
                 left: 8,

@@ -4,11 +4,15 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/emoji_utils.dart';
+import '../profile/reply_background_emoji_layer.dart';
 import '../profile/reply_strip_painter.dart';
 import 'message_reply_info.dart';
 
@@ -25,6 +29,8 @@ class ReplyPreviewBar extends StatelessWidget {
   final bool enabled;
   final bool isLite;
   final String? currentUserId;
+  final bool isChannelPost;
+  final String? fallbackAuthorName;
 
   const ReplyPreviewBar({
     Key? key,
@@ -38,6 +44,8 @@ class ReplyPreviewBar extends StatelessWidget {
     this.enabled = false,
     this.isLite = false,
     this.currentUserId,
+    this.isChannelPost = false,
+    this.fallbackAuthorName,
   }) : super(key: key);
 
   /// Get icon for message type
@@ -74,33 +82,45 @@ class ReplyPreviewBar extends StatelessWidget {
   Widget _buildClassicBar(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final baseBg = theme.colorScheme.surface;
+    final barBg = BlurUtils.resolveMaterialHudColor(
+      baseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+
+    final Widget container = Container(
+      decoration: BoxDecoration(
+        color: barBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white12 : Colors.black12,
+          width: blurEnabled ? 0.6 : 0.5,
+        ),
+      ),
+      child: _buildAnimatedContent(context),
+    );
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter.grouped(
-          filter: BlurUtils.createDownsampledBlur(15),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark
-                  ? Colors.black.withValues(alpha: 0.65)
-                  : Colors.white.withValues(alpha: 0.65),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black12,
-                width: 0.5,
-              ),
-            ),
-            child: _buildAnimatedContent(context),
-          ),
-        ),
+        child: blurEnabled
+            ? BackdropFilter.grouped(
+                filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                child: container,
+              )
+            : container,
       ),
     );
   }
 
   Widget _buildGlassBar(BuildContext context) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    if (glassProvider == null || !glassProvider.enabled) {
+      return _buildClassicBar(context);
+    }
 
     final style = glassProvider.createStyle(
       context: context,
@@ -150,10 +170,30 @@ class ReplyPreviewBar extends StatelessWidget {
     final theme = Theme.of(context);
     final profileTheme = context.watch<ProfileThemeProvider>();
 
-    final isSenderMe = currentUserId != null && replyToMessage.senderId == currentUserId;
-    final displayName = isSenderMe
+    final bool isPersonaOrChannel =
+        isChannelPost ||
+        replyToMessage.isChannelOrPersonaAuthored ||
+        replyToMessage.isMirroredChannelPost;
+    final bool isSenderMe = !isPersonaOrChannel &&
+        currentUserId != null &&
+        currentUserId!.isNotEmpty &&
+        replyToMessage.senderId.isNotEmpty &&
+        replyToMessage.senderId != '0' &&
+        replyToMessage.senderId == currentUserId;
+    final String rawDisplayName = isSenderMe
         ? context.l10n.translate('chat_reply_you')
-        : (replyToMessage.senderName.isNotEmpty ? replyToMessage.senderName : 'Сообщение');
+        : replyToMessage.resolveEffectiveAuthorTitle(
+            chatName: fallbackAuthorName,
+            chatType: isChannelPost ? 'channel' : null,
+          );
+    final bool canResolveContact = !isSenderMe &&
+        !isPersonaOrChannel &&
+        ContactsService.shouldResolveUserIdentity(
+          replyToMessage.senderId,
+          senderChatId: replyToMessage.senderChatId,
+          isAnonymousAdmin: replyToMessage.isFromAnonymousAdmin,
+          isMirroredChannelPost: replyToMessage.isMirroredChannelPost,
+        );
 
     // Telegram-style: Color and style of original message in reply preview match what that user selected in their settings
     final NameColorPreset authorPreset;
@@ -161,19 +201,34 @@ class ReplyPreviewBar extends StatelessWidget {
     if (isSenderMe) {
       authorPreset = profileTheme.currentNameColorPreset;
       authorStripStyle = profileTheme.currentStripStyle;
-    } else if (replyToMessage.senderNameColorId != null && replyToMessage.senderNameColorId!.isNotEmpty) {
+    } else if (!isPersonaOrChannel &&
+        replyToMessage.senderNameColorId != null &&
+        replyToMessage.senderNameColorId!.isNotEmpty) {
       authorPreset = NameColorPresets.getById(replyToMessage.senderNameColorId!);
       authorStripStyle = ReplyStripStyle.values.firstWhere(
         (s) => s.name == replyToMessage.senderReplyStripStyle,
         orElse: () => ReplyStripStyle.solid,
       );
     } else {
-      // Replying to another user whose preset is not explicitly set: use default author preset, NOT viewer's preset
+      // Replying to a channel/persona or user without explicit preset: use default preset, NOT viewer's or admin's preset
       authorPreset = NameColorPresets.getById('name_red');
       authorStripStyle = ReplyStripStyle.solid;
     }
 
     final accentColor = authorPreset.primaryColor;
+    final ReplyEmojiData? authorReplyEmoji;
+    if (isSenderMe) {
+      authorReplyEmoji = profileTheme.currentReplyEmoji;
+    } else if (isPersonaOrChannel ||
+        replyToMessage.senderId.isEmpty ||
+        replyToMessage.senderId == '0') {
+      authorReplyEmoji = null;
+    } else {
+      final cachedPeer =
+          PeerCustomizationCache.instance.getSync(replyToMessage.senderId);
+      authorReplyEmoji =
+          cachedPeer?.replyEmoji ?? replyToMessage.senderCustomization?.replyEmoji;
+    }
 
     final isDark = theme.brightness == Brightness.dark;
     final basePreviewStyle = TextStyle(
@@ -250,7 +305,7 @@ class ReplyPreviewBar extends StatelessWidget {
       );
     }
 
-    return Padding(
+    final paddedRow = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -303,15 +358,38 @@ class ReplyPreviewBar extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             Flexible(
-                              child: Text(
-                                displayName,
-                                style: TextStyle(
-                                  color: theme.colorScheme.onSurface,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                              child: canResolveContact
+                                  ? ValueListenableBuilder<int>(
+                                      valueListenable:
+                                          ContactsService.revisionNotifier,
+                                      builder: (_, __, ___) => Text(
+                                        ContactsService.resolvePeerName(
+                                          replyToMessage.senderId,
+                                          rawDisplayName,
+                                          senderChatId:
+                                              replyToMessage.senderChatId,
+                                          isAnonymousAdmin: replyToMessage
+                                              .isFromAnonymousAdmin,
+                                          isMirroredChannelPost: replyToMessage
+                                              .isMirroredChannelPost,
+                                        ),
+                                        style: TextStyle(
+                                          color: theme.colorScheme.onSurface,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    )
+                                  : Text(
+                                      rawDisplayName,
+                                      style: TextStyle(
+                                        color: theme.colorScheme.onSurface,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                             ),
                           ],
                         ),
@@ -368,6 +446,25 @@ class ReplyPreviewBar extends StatelessWidget {
           ),
         ],
       ),
+    );
+    if (authorReplyEmoji == null) {
+      return paddedRow;
+    }
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: ReplyBackgroundEmojiLayer(
+              emoji: authorReplyEmoji,
+              color: accentColor,
+              maxSlots: 5,
+              opacityScale: 0.85,
+            ),
+          ),
+        ),
+        paddedRow,
+      ],
     );
   }
 }

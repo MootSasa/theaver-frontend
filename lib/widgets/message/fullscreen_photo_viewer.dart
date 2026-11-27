@@ -1,150 +1,61 @@
-import 'dart:io' show File;
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:photo_view/photo_view.dart';
-import '../../config/app_config.dart';
-import '../../services/media_cache_manager.dart';
 
-/// Full-screen photo viewer with pinch-to-zoom, swipe-to-dismiss, and disk cache support
-class FullscreenPhotoViewer extends StatefulWidget {
+import '../../models/theav_media_item.dart';
+import '../media_viewer/theav_media_viewer.dart';
+import '../media_viewer/theav_media_viewer_route.dart';
+
+/// Fullscreen photo viewer powered by [TheavMediaViewer].
+class FullscreenPhotoViewer extends StatelessWidget {
   final String url;
   final String? tag;
   final String? localFilePath;
+  final bool hasProtectedContent;
 
   const FullscreenPhotoViewer({
-    Key? key,
+    super.key,
     required this.url,
     this.tag,
     this.localFilePath,
-  }) : super(key: key);
+    this.hasProtectedContent = false,
+  });
 
-  /// Open the viewer as a full-screen dialog
   static Future<void> open(
     BuildContext context,
     String url, {
     String? tag,
     String? localFilePath,
+    bool hasProtectedContent = false,
   }) {
-    return Navigator.of(context, rootNavigator: true).push(
-      PageRouteBuilder(
-        opaque: false,
-        fullscreenDialog: true,
-        transitionDuration: const Duration(milliseconds: 250),
-        reverseTransitionDuration: const Duration(milliseconds: 200),
-        pageBuilder: (context, animation, secondaryAnimation) =>
-            FullscreenPhotoViewer(url: url, tag: tag, localFilePath: localFilePath),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(
-            opacity: animation,
-            child: child,
-          );
-        },
+    if (url.isEmpty) return Future<void>.value();
+    return Navigator.of(context, rootNavigator: true).push<void>(
+      TheavMediaViewerRoute<void>(
+        capturedThemes: InheritedTheme.capture(
+          from: context,
+          to: Navigator.of(context, rootNavigator: true).context,
+        ),
+        builder: (_) => FullscreenPhotoViewer(
+          url: url,
+          tag: tag,
+          localFilePath: localFilePath,
+          hasProtectedContent: hasProtectedContent,
+        ),
       ),
     );
   }
 
   @override
-  State<FullscreenPhotoViewer> createState() => _FullscreenPhotoViewerState();
-}
-
-class _FullscreenPhotoViewerState extends State<FullscreenPhotoViewer> {
-  File? _cachedFile;
-
-  @override
-  void initState() {
-    super.initState();
-    if (!kIsWeb && widget.localFilePath != null && widget.localFilePath!.isNotEmpty) {
-      final f = File(widget.localFilePath!);
-      if (f.existsSync()) {
-        _cachedFile = f;
-      }
-    }
-    if (!kIsWeb && _cachedFile == null) {
-      _checkLocalCache();
-    }
-  }
-
-  Future<void> _checkLocalCache() async {
-    if (kIsWeb) return;
-    final f = await MediaCacheManager.instance.getCachedFile(widget.url);
-    if (f != null && mounted) {
-      setState(() => _cachedFile = f);
-    }
-  }
-
-  ImageProvider _imageProvider() {
-    if (!kIsWeb && _cachedFile != null && _cachedFile!.existsSync()) {
-      return FileImage(_cachedFile!);
-    }
-
-    final url = widget.url;
-
-    // Support data: URLs (base64)
-    if (url.startsWith('data:')) {
-      try {
-        final commaIndex = url.indexOf(',');
-        final base64Str = url.substring(commaIndex + 1);
-        final bytes = Uri.parse('data:;base64,$base64Str')
-            .data!
-            .contentAsBytes();
-        return MemoryImage(bytes);
-      } catch (_) {
-        return CachedNetworkImageProvider(url);
-      }
-    }
-    if (!kIsWeb && url.startsWith('file://')) {
-      return FileImage(File(Uri.parse(url).toFilePath()));
-    }
-    if (!kIsWeb && url.startsWith('/') && !url.startsWith('//') && File(url).existsSync()) {
-      return FileImage(File(url));
-    }
-
-    final resolved = AppConfig.resolveMediaUrl(url) ?? url;
-    return CachedNetworkImageProvider(resolved);
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        backgroundColor: Colors.black.withValues(alpha: 0.5),
-        elevation: 0,
-        leading: IconButton(
-          icon: const iconoir.Xmark(color: Colors.white, width: 24, height: 24),
-          onPressed: () => Navigator.pop(context),
-        ),
-      ),
-      body: GestureDetector(
-        onVerticalDragEnd: (details) {
-          // Swipe down to dismiss
-          if (details.primaryVelocity != null && details.primaryVelocity! > 500) {
-            Navigator.pop(context);
-          }
-        },
-        child: PhotoView(
-          imageProvider: _imageProvider(),
-          backgroundDecoration: const BoxDecoration(color: Colors.black),
-          minScale: PhotoViewComputedScale.contained,
-          maxScale: PhotoViewComputedScale.covered * 3.0,
-          heroAttributes: widget.tag != null ? PhotoViewHeroAttributes(tag: widget.tag!) : null,
-          loadingBuilder: (context, event) => Center(
-            child: CircularProgressIndicator(
-              value: event?.cumulativeBytesLoaded != null &&
-                      event?.expectedTotalBytes != null
-                  ? event!.cumulativeBytesLoaded / event.expectedTotalBytes!
-                  : null,
-              color: Colors.white,
-            ),
-          ),
-          errorBuilder: (context, error, stackTrace) => const Center(
-            child: iconoir.MediaImage(color: Colors.white54, width: 64, height: 64),
-          ),
-        ),
-      ),
+    final item = TheavMediaItem(
+      id: 'photo_${tag ?? url}',
+      kind: TheavMediaKind.photo,
+      url: url,
+      localFilePath: localFilePath,
+      heroTag: tag ?? 'photo_$url',
+      hasProtectedContent: hasProtectedContent,
+    );
+    return TheavMediaViewer(
+      items: <TheavMediaItem>[item],
+      initialIndex: 0,
     );
   }
 }

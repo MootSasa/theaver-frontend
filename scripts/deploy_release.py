@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deploy compiled release artifacts to Theaver API and MinIO storage,
+Deploy compiled release artifacts to Theaver API and SeaweedFS storage,
 and register them in the PostgreSQL database.
 Can be executed in GitHub Actions or locally.
 """
@@ -192,7 +192,7 @@ def _stream_multipart_once(url, file_path, fields, headers, chunk_size=CHUNK_SIZ
     # 3. Send closing boundary suffix
     conn.send(suffix)
 
-    # 4. Wait for server response (MinIO finalize / web tar extraction)
+    # 4. Wait for server response (SeaweedFS finalize / web tar extraction)
     if conn.sock is not None:
         conn.sock.settimeout(RESPONSE_TIMEOUT_SEC)
 
@@ -223,7 +223,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
             _discard_active_conn()
             last_res, last_status = res, status
             print(
-                f"[Deploy] ⚠️ Attempt {attempt}/{max_retries} for {file_name} returned HTTP {status}: {res}",
+                f"[Deploy] [WARN] Attempt {attempt}/{max_retries} for {file_name} returned HTTP {status}: {res}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -234,7 +234,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
             last_res = {"error": str(e)}
             last_status = 500
             print(
-                f"[Deploy] ⚡ Attempt {attempt}/{max_retries} for {file_name}: {e} -> switching SNAT port...",
+                f"[Deploy] [RETRY] Attempt {attempt}/{max_retries} for {file_name}: {e} -> switching SNAT port...",
                 file=sys.stderr,
                 flush=True,
             )
@@ -244,7 +244,7 @@ def post_multipart(url, file_path, fields, headers, max_retries=MAX_RETRIES):
             last_res = {"error": str(e)}
             last_status = 500
             print(
-                f"[Deploy] ⚠️ Attempt {attempt}/{max_retries} for {file_name} failed with exception: {e}",
+                f"[Deploy] [WARN] Attempt {attempt}/{max_retries} for {file_name} failed with exception: {e}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -301,6 +301,7 @@ def main():
     parser.add_argument("--channel", default="stable", choices=["stable", "beta", "alpha"], help="Release channel.")
     parser.add_argument("--release-notes-file", default=None, help="Path to changelog / release notes file.")
     parser.add_argument("--force-update", action="store_true", help="Mark release as mandatory force update.")
+    parser.add_argument("--no-notify", action="store_true", help="Do not send push/WebSocket update notifications after deployment.")
     parser.add_argument("--strict", action="store_true", help="Fail if secrets are missing.")
 
     args = parser.parse_args()
@@ -353,6 +354,7 @@ def main():
 
     success_count = 0
     fail_count = 0
+    notifiable_targets = set()
 
     # Deploy web bundle first (smallest and updates live web frontend immediately), then sort remaining files
     ordered_files = sorted(
@@ -366,13 +368,13 @@ def main():
             fsize = os.path.getsize(file_path)
             print(f"\n[Deploy] Processing {fname} ({fsize} bytes)...", flush=True)
 
-            # 1. Stream release binary to MinIO via API in 256 KB chunks
+            # 1. Stream release binary to SeaweedFS via API in 256 KB chunks
             upload_endpoint = f"{api_url}/api/admin/upload-release"
             fields = {"channel": args.channel}
 
             upload_res, status = post_multipart(upload_endpoint, file_path, fields, headers)
             if status != 200 or not upload_res.get("success"):
-                print(f"[Deploy] ❌ Failed to upload {fname}: {upload_res}", file=sys.stderr, flush=True)
+                print(f"[Deploy] [ERROR] Failed to upload {fname}: {upload_res}", file=sys.stderr, flush=True)
                 fail_count += 1
                 continue
 
@@ -382,10 +384,10 @@ def main():
             sha256 = upload_res.get("sha256") or ""
             size_bytes = upload_res.get("size_bytes") or upload_res.get("file_size_bytes") or fsize
 
-            print(f"[Deploy] ✅ Uploaded successfully: {download_url}", flush=True)
+            print(f"[Deploy] [OK] Uploaded successfully: {download_url}", flush=True)
             print(f"[Deploy] Metadata: Platform={platform}, Arch={arch}, Channel={args.channel}, Size={size_bytes}", flush=True)
 
-            # 2. Register release in DB
+            # 2. Register release in DB (defer push/WS dispatch until all ABIs are registered)
             version_endpoint = f"{api_url}/api/admin/version"
             version_payload = {
                 "platform": platform,
@@ -398,17 +400,36 @@ def main():
                 "download_url": download_url,
                 "apk_size_bytes": size_bytes,
                 "sha256": sha256,
-                "release_notes": release_notes
+                "release_notes": release_notes,
+                "notify_users": False,
             }
 
             ver_res, ver_status = post_json(version_endpoint, version_payload, headers)
             if ver_status != 200 or not ver_res.get("success"):
-                print(f"[Deploy] ❌ Failed to register {platform}/{arch}/{args.channel} in database: {ver_res}", file=sys.stderr, flush=True)
+                print(f"[Deploy] [ERROR] Failed to register {platform}/{arch}/{args.channel} in database: {ver_res}", file=sys.stderr, flush=True)
                 fail_count += 1
                 continue
 
-            print(f"[Deploy] ✅ Registered in database successfully!", flush=True)
+            print(f"[Deploy] [OK] Registered in database successfully!", flush=True)
             success_count += 1
+            notifiable_targets.add((platform, args.channel))
+
+        if not args.no_notify and notifiable_targets:
+            notify_endpoint = f"{api_url}/api/admin/version/notify"
+            for plat, ch in sorted(notifiable_targets):
+                print(f"\n[Deploy] Dispatching update notification for {plat}/{ch}...", flush=True)
+                try:
+                    n_res, n_status = post_json(notify_endpoint, {"platform": plat, "channel": ch}, headers)
+                    if n_status == 200 and n_res.get("success"):
+                        print(
+                            f"[Deploy] [NOTIFY] Notified {plat}/{ch}: targeted={n_res.get('targeted_devices', 0)}, "
+                            f"push_sent={n_res.get('push_sent', 0)}, ws_sent={n_res.get('ws_sent', 0)}",
+                            flush=True,
+                        )
+                    else:
+                        print(f"[Deploy] [WARN] Notification dispatch warning ({plat}/{ch}, status={n_status}): {n_res}", flush=True)
+                except Exception as exc:
+                    print(f"[Deploy] [WARN] Notification dispatch failed ({plat}/{ch}): {exc}", flush=True)
     finally:
         _cleanup_all_conns()
 

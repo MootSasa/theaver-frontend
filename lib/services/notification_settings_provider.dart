@@ -55,6 +55,18 @@ class NotificationSettingsProvider extends ChangeNotifier {
     loadExceptionsFromServer();
   }
 
+  /// Перезагрузить настройки при смене аккаунта
+  Future<void> reloadForUser() async {
+    _globalSettings = _settingsService.notificationSettings;
+    _chatSettings = Map<String, ChatNotificationSettings>.from(
+      _settingsService.allChatNotificationSettings,
+    );
+    _exceptions = [];
+    notifyListeners();
+    await loadSettingsFromServer();
+    await loadExceptionsFromServer();
+  }
+
   /// Включить / выключить постоянное фоновое соединение (Keep-Alive для VPN)
   Future<void> updateBackgroundConnection(bool enabled) async {
     _backgroundConnection = enabled;
@@ -164,12 +176,10 @@ class NotificationSettingsProvider extends ChangeNotifier {
     bool? contentPreview,
     bool? includeMutedChats,
     bool? accountNotifications,
-    bool? inAppSounds,
-    bool? inAppVibrate,
-    bool? inAppPreview,
-    bool? inAppChatSounds,
-    bool? disableInAppNotifications,
+    bool? foregroundNotifications,
     int? repeatNotifications,
+    bool? keepArchivedUnmuted,
+    List<String>? globalKeywords,
   }) async {
     final updated = _globalSettings.copyWith(
       notificationsEnabled: notificationsEnabled,
@@ -200,12 +210,10 @@ class NotificationSettingsProvider extends ChangeNotifier {
       contentPreview: contentPreview,
       includeMutedChats: includeMutedChats,
       accountNotifications: accountNotifications,
-      inAppSounds: inAppSounds,
-      inAppVibrate: inAppVibrate,
-      inAppPreview: inAppPreview,
-      inAppChatSounds: inAppChatSounds,
-      disableInAppNotifications: disableInAppNotifications,
+      foregroundNotifications: foregroundNotifications,
       repeatNotifications: repeatNotifications,
+      keepArchivedUnmuted: keepArchivedUnmuted,
+      globalKeywords: globalKeywords,
     );
     await saveGlobalSettings(updated);
   }
@@ -217,9 +225,20 @@ class NotificationSettingsProvider extends ChangeNotifier {
     return _chatSettings[chatId];
   }
 
-  /// Получить эффективные настройки для чата (per-chat или глобальные)
-  EffectiveChatSettings getEffectiveSettings(String chatId) {
-    return _settingsService.getEffectiveChatSettings(chatId);
+  /// Получить эффективные настройки для чата (per-chat или категории/глобальные)
+  EffectiveChatSettings getEffectiveSettings(
+    String chatId, {
+    String? chatType,
+  }) {
+    return _settingsService.getEffectiveChatSettings(
+      chatId,
+      chatType: chatType,
+    );
+  }
+
+  /// Проверяет, заглушен ли чат с учётом наследования от категории.
+  bool isChatMuted(String chatId, {String? chatType}) {
+    return getEffectiveSettings(chatId, chatType: chatType).isMuted;
   }
 
   /// Сохранить per-chat настройки
@@ -304,9 +323,14 @@ class NotificationSettingsProvider extends ChangeNotifier {
     try {
       final token = await AuthService.getToken();
       if (token != null && token.isNotEmpty) {
+        final headers = await _authHeaders();
         await _dio.post(
           '${AppConfig.baseUrl}/api/settings/notifications/reset',
-          options: Options(headers: await _authHeaders()),
+          options: Options(headers: headers),
+        );
+        await _dio.delete(
+          '${AppConfig.baseUrl}/api/settings/notifications/exceptions',
+          options: Options(headers: headers),
         );
       }
     } catch (e) {
@@ -324,13 +348,8 @@ class NotificationSettingsProvider extends ChangeNotifier {
     try {
       final token = await AuthService.getToken();
       if (token != null && token.isNotEmpty) {
-        await _dio.post(
-          '${AppConfig.baseUrl}/api/settings/notifications/reset',
-          options: Options(headers: await _authHeaders()),
-        );
-        await _dio.put(
-          '${AppConfig.baseUrl}/api/settings/notifications',
-          data: _globalSettings.toServerJson(),
+        await _dio.delete(
+          '${AppConfig.baseUrl}/api/settings/notifications/exceptions',
           options: Options(headers: await _authHeaders()),
         );
       }
@@ -340,13 +359,25 @@ class NotificationSettingsProvider extends ChangeNotifier {
   }
 
   /// Проверить, нужно ли показывать уведомление для чата
-  bool shouldShowNotification(String chatId, {bool isMention = false}) {
+  bool shouldShowNotification(
+    String chatId, {
+    bool isMention = false,
+    String? messageText,
+    String? chatType,
+  }) {
     if (!_globalSettings.notificationsEnabled) return false;
 
-    final effective = getEffectiveSettings(chatId);
+    final effective = getEffectiveSettings(chatId, chatType: chatType);
+    final textLower = (messageText ?? '').trim().toLowerCase();
+    final hasKeywordMatch = _globalSettings.keywordsNotifications &&
+        textLower.isNotEmpty &&
+        effective.keywords.any((kw) {
+          final clean = kw.trim().toLowerCase();
+          return clean.isNotEmpty && textLower.contains(clean);
+        });
 
-    if (effective.isMuted) return false;
-    if (effective.mentionsOnly && !isMention) return false;
+    if (effective.isMuted && !hasKeywordMatch) return false;
+    if (effective.mentionsOnly && !isMention && !hasKeywordMatch) return false;
 
     return true;
   }

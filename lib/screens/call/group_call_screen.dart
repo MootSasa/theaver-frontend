@@ -8,13 +8,16 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import '../../config/app_config.dart';
 import '../../models/call_models.dart';
-import '../../models/theav_theme.dart';
 import '../../services/call_state_provider.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/image_utils.dart';
 import '../../widgets/call/call_fullscreen_video_modal.dart';
 import '../../widgets/call/desktop_source_picker_modal.dart';
 import '../../widgets/call/soundboard_sheet.dart';
 import '../../widgets/call/stream_quality_sheet.dart';
+import '../../widgets/common/adaptive_switch.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/whiteboard/interactive_whiteboard.dart';
 
 /// Group Voice/Video Call, Go Live Screen Share Stage, and Community Stage Room Screen.
@@ -51,6 +54,40 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   bool _showingTransferDialog = false;
   bool _hadActiveCall = false;
   bool _isLeavingCall = false;
+
+  String _resolvedParticipantName(
+    CallStateProvider callProvider,
+    CallParticipant p,
+  ) {
+    final isSelf = p.userId == callProvider.currentUserId || p.userId == 'local';
+    if (isSelf || !ContactsService.shouldResolveUserIdentity(p.userId)) {
+      return p.displayName;
+    }
+    return ContactsService.resolvePeerName(p.userId, p.displayName);
+  }
+
+  String? _resolvedParticipantAvatar(
+    CallStateProvider callProvider,
+    CallParticipant p,
+  ) {
+    final isSelf = p.userId == callProvider.currentUserId || p.userId == 'local';
+    final raw = (isSelf || !ContactsService.shouldResolveUserIdentity(p.userId))
+        ? p.avatarUrl
+        : ContactsService.resolvePeerAvatarUrl(p.userId, p.avatarUrl);
+    return AppConfig.resolveMediaUrl(raw) ?? raw;
+  }
+
+  String _resolvedStreamerName(
+    CallStateProvider callProvider,
+    CallStream s,
+  ) {
+    final isMine =
+        s.streamerId == callProvider.currentUserId || s.streamerId == 'local';
+    if (isMine || !ContactsService.shouldResolveUserIdentity(s.streamerId)) {
+      return s.streamerName;
+    }
+    return ContactsService.resolvePeerName(s.streamerId, s.streamerName);
+  }
 
   void _leaveGroupCall(CallStateProvider callProvider) {
     if (_isLeavingCall) return;
@@ -162,7 +199,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    isMine ? 'Ваш экран' : s.streamerName,
+                    isMine ? 'Ваш экран' : _resolvedStreamerName(callProvider, s),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
@@ -228,7 +265,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                     const Icon(Icons.screen_share_rounded, size: 36, color: Color(0xFF5865F2)),
                     const SizedBox(height: 6),
                     Text(
-                      isMine ? 'Ваш стрим' : s.streamerName,
+                      isMine ? 'Ваш стрим' : _resolvedStreamerName(callProvider, s),
                       style: const TextStyle(fontSize: 12, color: Colors.white70),
                     ),
                   ],
@@ -260,7 +297,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  isMine ? 'Ваш экран' : s.streamerName,
+                  isMine ? 'Ваш экран' : _resolvedStreamerName(callProvider, s),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
@@ -276,6 +313,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   @override
   void initState() {
     super.initState();
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final provider = context.read<CallStateProvider>();
@@ -294,6 +332,16 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
         );
       }
     });
+  }
+
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    super.dispose();
   }
 
   Future<void> _onTapGoLive(CallStateProvider provider) async {
@@ -333,78 +381,115 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     CallStateProvider provider,
     CallParticipant participant,
   ) {
-    final p = context.theav;
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) {
         int vol = participant.volume;
         return StatefulBuilder(
-          builder: (ctx, setModalState) => Container(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
-            decoration: BoxDecoration(
-              color: const Color(0xFF161A24),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border(
-                top: BorderSide(color: p.borderSubtle, width: 0.8),
-              ),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.white24,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 22,
-                      backgroundColor:
-                          Theme.of(context).colorScheme.primary.withValues(alpha: 0.25),
-                      child: Text(
-                        participant.displayName.isNotEmpty
-                            ? participant.displayName[0].toUpperCase()
-                            : '?',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
+          builder: (ctx, setModalState) => Align(
+            alignment: Alignment.bottomCenter,
+            heightFactor: 1.0,
+            child: TheavSheetSurface(
+              cornerRadius: 24.0,
+              matteColor: const Color(0xFF161A24),
+              glassTintOverride: const Color(0x9E161A24),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 28),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onVerticalDragEnd: (d) {
+                            if ((d.primaryVelocity ?? 0.0) > 650.0) {
+                              Navigator.of(ctx).maybePop();
+                            }
+                          },
+                          child: Container(
+                            width: 112,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            alignment: Alignment.center,
+                            child: Container(
+                              width: 36,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: Colors.white24,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            participant.displayName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                      const SizedBox(height: 12),
+                ValueListenableBuilder<int>(
+                  valueListenable: ContactsService.revisionNotifier,
+                  builder: (_, __, ___) {
+                    final resolvedName =
+                        _resolvedParticipantName(provider, participant);
+                    final resolvedAvatar =
+                        _resolvedParticipantAvatar(provider, participant);
+                    final avatarProvider = (resolvedAvatar != null &&
+                            resolvedAvatar.isNotEmpty)
+                        ? avatarImageProvider(
+                            resolvedAvatar,
+                            maxDecodeDimension: 240,
+                          )
+                        : null;
+                    return Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 22,
+                          backgroundColor: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.25),
+                          backgroundImage: avatarProvider,
+                          onBackgroundImageError:
+                              avatarProvider != null ? (_, __) {} : null,
+                          child: avatarProvider == null
+                              ? Text(
+                                  resolvedName.isNotEmpty
+                                      ? resolvedName[0].toUpperCase()
+                                      : '?',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                resolvedName,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                'Роль: ${participant.role}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white60,
+                                ),
+                              ),
+                            ],
                           ),
-                          Text(
-                            'Роль: ${participant.role}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white60,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 18),
                 if (participant.userId != provider.currentUserId &&
@@ -430,7 +515,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       ),
                     ],
                   ),
-                  Slider(
+                  AdaptiveSlider(
                     value: vol.toDouble(),
                     min: 0,
                     max: 200,
@@ -538,7 +623,10 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                     },
                   ),
                 ],
-              ],
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         );
@@ -547,50 +635,59 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 
   void _showReactionsSheet(BuildContext context, CallStateProvider provider) {
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-        decoration: const BoxDecoration(
-          color: Color(0xFF161A24),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Отправить реакцию или звук (Soundboard)',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => Align(
+        alignment: Alignment.bottomCenter,
+        heightFactor: 1.0,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          matteColor: const Color(0xFF161A24),
+          glassTintOverride: const Color(0x9E161A24),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'Отправить реакцию или звук (Soundboard)',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: _quickReactions.map((emoji) {
+                      return GestureDetector(
+                        onTap: () {
+                          HapticFeedback.lightImpact();
+                          provider.sendReaction(emoji);
+                          Navigator.of(ctx).pop();
+                        },
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            shape: BoxShape.circle,
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(emoji, style: const TextStyle(fontSize: 24)),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: _quickReactions.map((emoji) {
-                return GestureDetector(
-                  onTap: () {
-                    HapticFeedback.lightImpact();
-                    provider.sendReaction(emoji);
-                    Navigator.of(ctx).pop();
-                  },
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      shape: BoxShape.circle,
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(emoji, style: const TextStyle(fontSize: 24)),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -822,13 +919,18 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   onTap: () {
                     final streamRenderer = callProvider.rendererForStream(stream.streamerId) ??
                         callProvider.screenShareRenderer;
+                    final streamerName =
+                        _resolvedStreamerName(callProvider, stream);
                     CallFullscreenVideoModal.show(
                       context,
                       title: callProvider.isSelfScreenShare
                           ? 'Ваша трансляция экрана'
-                          : 'Трансляция ${stream.streamerName}',
+                          : 'Трансляция $streamerName',
                       subtitle:
                           '${stream.resolutionWidth}×${stream.resolutionHeight} @ ${stream.fps} FPS • ${stream.codec}',
+                      participantUserId: callProvider.isSelfScreenShare
+                          ? null
+                          : stream.streamerId,
                       isScreenShare: true,
                       fallbackRenderer: streamRenderer,
                     );
@@ -879,7 +981,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                     Text(
                                       callProvider.isSelfScreenShare
                                           ? 'Вы делитесь экраном'
-                                          : 'Трансляция ${stream.streamerName}',
+                                          : 'Трансляция ${_resolvedStreamerName(callProvider, stream)}',
                                       style: const TextStyle(
                                         fontSize: 15,
                                         fontWeight: FontWeight.w700,
@@ -1193,8 +1295,11 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   final canOpenScreenShare = participant.isScreenSharing &&
                       (callProvider.hasScreenShareStream ||
                           (isSelf && callProvider.isScreenSharing));
+                  final participantName =
+                      _resolvedParticipantName(callProvider, participant);
                   final resolvedAvatar =
-                      AppConfig.resolveMediaUrl(participant.avatarUrl) ?? '';
+                      _resolvedParticipantAvatar(callProvider, participant) ??
+                          '';
                   final isSpeaking =
                       participant.isSpeaking && !participant.isMuted;
                   return GestureDetector(
@@ -1202,7 +1307,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       if (showVideo) {
                         CallFullscreenVideoModal.show(
                           context,
-                          title: participant.displayName,
+                          title: participantName,
                           subtitle: callProvider.formattedDuration,
                           participantUserId: participant.userId,
                           mirror: isSelf,
@@ -1213,7 +1318,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                           context,
                           title: isSelf
                               ? 'Ваша трансляция экрана'
-                              : 'Трансляция ${participant.displayName}',
+                              : 'Трансляция $participantName',
+                          participantUserId: isSelf ? null : participant.userId,
                           isScreenShare: true,
                           fallbackRenderer: callProvider.screenShareRenderer,
                         );
@@ -1387,7 +1493,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                     ),
                                   ),
                                   child: Text(
-                                    participant.displayName,
+                                    participantName,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
@@ -1403,27 +1509,40 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    CircleAvatar(
-                                      radius: 30,
-                                      backgroundColor:
-                                          primaryColor.withValues(alpha: 0.26),
-                                      backgroundImage:
-                                          resolvedAvatar.isNotEmpty
-                                              ? NetworkImage(resolvedAvatar)
+                                    Builder(
+                                      builder: (_) {
+                                        final ImageProvider? participantAvatarProvider =
+                                            resolvedAvatar.isNotEmpty
+                                                ? avatarImageProvider(
+                                                    resolvedAvatar,
+                                                    maxDecodeDimension: 240,
+                                                  )
+                                                : null;
+                                        return CircleAvatar(
+                                          radius: 30,
+                                          backgroundColor:
+                                              primaryColor.withValues(alpha: 0.26),
+                                          backgroundImage:
+                                              participantAvatarProvider,
+                                          onBackgroundImageError:
+                                              participantAvatarProvider != null
+                                                  ? (_, __) {}
+                                                  : null,
+                                          child: participantAvatarProvider == null
+                                              ? Text(
+                                                  participantName.isNotEmpty
+                                                      ? participantName[0]
+                                                          .toUpperCase()
+                                                      : '?',
+                                                  style: const TextStyle(
+                                                    fontSize: 22,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: Colors.white,
+                                                  ),
+                                                )
                                               : null,
-                                      child: resolvedAvatar.isEmpty
-                                          ? Text(
-                                              participant.displayName.isNotEmpty
-                                                  ? participant.displayName[0]
-                                                      .toUpperCase()
-                                                  : '?',
-                                              style: const TextStyle(
-                                                fontSize: 22,
-                                                fontWeight: FontWeight.w700,
-                                                color: Colors.white,
-                                              ),
-                                            )
-                                          : null,
+                                        );
+                                      },
                                     ),
                                     const SizedBox(height: 10),
                                     Padding(
@@ -1431,7 +1550,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                                         horizontal: 10,
                                       ),
                                       child: Text(
-                                        participant.displayName,
+                                        participantName,
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(

@@ -260,8 +260,8 @@ class EmojiUtils {
     final int len = text.length;
 
     for (final ent in sorted) {
-      final int start = ent.offset.clamp(0, len);
-      final int end = (ent.offset + ent.length).clamp(start, len);
+      final int start = _snapUtf16Offset(text, ent.offset);
+      final int end = _snapUtf16Offset(text, ent.offset + ent.length).clamp(start, len);
       if (start < pos) continue;
 
       if (start > pos) {
@@ -311,25 +311,67 @@ class EmojiUtils {
   /// Pre-bakes a single frame ([progress] in 0.0..1.0) of [composition] at [targetPx]x[targetPx]
   /// into a GPU-backed [ui.Image] texture so stopped animated emojis / dice don't re-rasterize
   /// hundreds of vector paths on every scroll frame.
+  ///
+  /// When [ensureVisible] is `true` and the requested [progress] renders almost entirely transparent
+  /// (common for `.tgs` animations that fade or scale in from 0 at frame 0), probes representative
+  /// mid-animation timestamps to bake a visible preview frame instead.
   static Future<ui.Image?> bakeLottieFrame({
     required String cacheKey,
     required LottieComposition composition,
     required double progress,
     required int targetPx,
+    bool ensureVisible = false,
   }) {
-    final existing = _settledLottieFrameCache[cacheKey];
+    final effectiveKey = ensureVisible ? '$cacheKey:vis' : cacheKey;
+    final existing = _settledLottieFrameCache[effectiveKey];
     if (existing != null) return Future<ui.Image?>.value(existing);
-    final inFlight = _settledLottieInFlight[cacheKey];
+    final inFlight = _settledLottieInFlight[effectiveKey];
     if (inFlight != null) return inFlight;
 
     final future = _doBakeLottieFrame(
-      cacheKey: cacheKey,
+      cacheKey: effectiveKey,
       composition: composition,
       progress: progress,
       targetPx: targetPx.clamp(32, 512),
+      ensureVisible: ensureVisible,
     );
-    _settledLottieInFlight[cacheKey] = future;
+    _settledLottieInFlight[effectiveKey] = future;
     return future;
+  }
+
+  static Future<ui.Image> _renderLottieProgress(
+    LottieComposition composition,
+    double progress,
+    int targetPx,
+  ) async {
+    final recorder = ui.PictureRecorder();
+    final rect = Rect.fromLTWH(0, 0, targetPx.toDouble(), targetPx.toDouble());
+    final canvas = Canvas(recorder, rect);
+    final drawable = LottieDrawable(composition)
+      ..setProgress(progress.clamp(0.0, 1.0));
+    drawable.draw(canvas, rect, fit: BoxFit.contain);
+    final picture = recorder.endRecording();
+    try {
+      return await picture.toImage(targetPx, targetPx);
+    } finally {
+      picture.dispose();
+    }
+  }
+
+  static Future<double> _visibleAlphaFraction(ui.Image image) async {
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (bytes == null || bytes.lengthInBytes < 4) return 0.0;
+    final int totalPixels = bytes.lengthInBytes ~/ 4;
+    final int step = totalPixels > 4096 ? 4 : 1;
+    int sampled = 0;
+    int visible = 0;
+    for (int px = 0; px < totalPixels; px += step) {
+      sampled++;
+      if (bytes.getUint8(px * 4 + 3) >= 24) {
+        visible++;
+      }
+    }
+    return sampled == 0 ? 0.0 : visible / sampled;
   }
 
   static Future<ui.Image?> _doBakeLottieFrame({
@@ -337,23 +379,40 @@ class EmojiUtils {
     required LottieComposition composition,
     required double progress,
     required int targetPx,
+    required bool ensureVisible,
   }) async {
     try {
-      final recorder = ui.PictureRecorder();
-      final rect = Rect.fromLTWH(0, 0, targetPx.toDouble(), targetPx.toDouble());
-      final canvas = Canvas(recorder, rect);
-      final drawable = LottieDrawable(composition)..setProgress(progress.clamp(0.0, 1.0));
-      drawable.draw(canvas, rect, fit: BoxFit.contain);
-      final picture = recorder.endRecording();
-      final image = await picture.toImage(targetPx, targetPx);
-      picture.dispose();
+      ui.Image bestImage =
+          await _renderLottieProgress(composition, progress, targetPx);
+      if (ensureVisible) {
+        double bestFraction = await _visibleAlphaFraction(bestImage);
+        if (bestFraction < 0.005) {
+          const candidates = <double>[0.5, 0.25, 0.75, 0.12, 0.9];
+          for (final candProgress in candidates) {
+            final candidate = await _renderLottieProgress(
+              composition,
+              candProgress,
+              targetPx,
+            );
+            final candFraction = await _visibleAlphaFraction(candidate);
+            if (candFraction > bestFraction) {
+              bestImage.dispose();
+              bestImage = candidate;
+              bestFraction = candFraction;
+            } else {
+              candidate.dispose();
+            }
+            if (bestFraction >= 0.015) break;
+          }
+        }
+      }
 
       if (_settledLottieFrameCache.length >= _kMaxSettledLottieCacheSize) {
         final oldestKey = _settledLottieFrameCache.keys.first;
         _settledLottieFrameCache.remove(oldestKey);
       }
-      _settledLottieFrameCache[cacheKey] = image;
-      return image;
+      _settledLottieFrameCache[cacheKey] = bestImage;
+      return bestImage;
     } catch (_) {
       return null;
     } finally {
@@ -947,8 +1006,8 @@ class EmojiUtils {
     }
 
     for (final ent in customEntities) {
-      final int start = ent.offset.clamp(0, len);
-      final int end = (ent.offset + ent.length).clamp(start, len);
+      final int start = _snapUtf16Offset(text, ent.offset);
+      final int end = _snapUtf16Offset(text, ent.offset + ent.length).clamp(start, len);
       if (start < pos) continue;
 
       if (start > pos) {
@@ -1022,8 +1081,9 @@ class EmojiUtils {
     int pos = 0;
 
     for (final ent in customEntities) {
-      final int start = ent.offset.clamp(0, len);
-      final int end = (ent.offset + ent.length).clamp(start, len);
+      final int start = _snapUtf16Offset(singleLine, ent.offset);
+      final int end =
+          _snapUtf16Offset(singleLine, ent.offset + ent.length).clamp(start, len);
       if (start < pos) continue;
 
       if (start > pos) {
@@ -1067,6 +1127,18 @@ class EmojiUtils {
     }
 
     return TextSpan(style: style, children: children);
+  }
+
+  static int _snapUtf16Offset(String text, int index) {
+    final clamped = index.clamp(0, text.length);
+    if (clamped > 0 && clamped < text.length) {
+      final cu = text.codeUnitAt(clamped);
+      final prev = text.codeUnitAt(clamped - 1);
+      if (cu >= 0xDC00 && cu <= 0xDFFF && prev >= 0xD800 && prev <= 0xDBFF) {
+        return clamped - 1;
+      }
+    }
+    return clamped;
   }
 
   /// Builds a [TextSpan] where inline emojis use the local/compact Apple Emoji font.

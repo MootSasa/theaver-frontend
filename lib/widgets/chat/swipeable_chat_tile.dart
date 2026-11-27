@@ -5,6 +5,7 @@ import '../../services/chat_service.dart';
 import '../../services/chat_swipe_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/swipe_back_route.dart';
 
 /// A swipeable chat item wrapper that tracks the user's finger in real time,
 /// limits movement to a bounded distance (never sliding across the entire screen),
@@ -15,19 +16,25 @@ class SwipeableChatTile extends StatefulWidget {
   final Widget child;
   final Chat chat;
   final Future<void> Function(ChatSwipeAction action) onAction;
+  final Future<void> Function(ChatSwipeAction action)? onRightSwipe;
+  final ChatSwipeAction? rightSwipeAction;
   final DraggingChatPayload Function(Rect initialRect, Offset globalPosition)?
       onCreateDragPayload;
   final GestureTapUpCallback? onSecondaryTapUp;
   final bool enabled;
+  final ChatSwipeAction? overrideAction;
 
   const SwipeableChatTile({
     super.key,
     required this.child,
     required this.chat,
     required this.onAction,
+    this.onRightSwipe,
+    this.rightSwipeAction,
     this.onCreateDragPayload,
     this.onSecondaryTapUp,
     this.enabled = true,
+    this.overrideAction,
   });
 
   @override
@@ -99,6 +106,14 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
         tiling.windowSize.width >= TilingLayoutController.kTwoColumnBreakpoint;
   }
 
+  bool _hasAncestorRouteSwipeBack() {
+    if (!mounted) return false;
+    return hasActiveSwipeBackAncestor(context);
+  }
+
+  bool _canSwipeRight() =>
+      widget.onRightSwipe != null || !_hasAncestorRouteSwipeBack();
+
   void _promoteToWorkspaceDrag(Offset globalPosition, Offset delta) {
     final createPayload = widget.onCreateDragPayload;
     if (createPayload == null) return;
@@ -151,7 +166,8 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
 
     // On wide desktop screens, dragging a chat item rightward with a mouse or
     // dragging it across the right boundary of the left tile detaches it into a workspace tile drag.
-    if (_canDragToWorkspace() && _rawDragOffset > 0) {
+    final canWorkspaceDrag = _canDragToWorkspace();
+    if (canWorkspaceDrag && _rawDragOffset > 0) {
       final tiling = TilingLayoutController.instance;
       final isMouseDragRight =
           _lastPointerKind == PointerDeviceKind.mouse && _rawDragOffset > 20.0;
@@ -162,6 +178,12 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
         _promoteToWorkspaceDrag(details.globalPosition, details.delta);
         return;
       }
+    }
+
+    if (!_canSwipeRight() &&
+        (!canWorkspaceDrag || _hasAncestorRouteSwipeBack()) &&
+        _rawDragOffset > 0.0) {
+      _rawDragOffset = 0.0;
     }
 
     final sign = _rawDragOffset >= 0 ? 1.0 : -1.0;
@@ -203,9 +225,15 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
     _animateBack(from: fromOffset);
 
     if (shouldTrigger) {
-      HapticUtils.impact();
-      final action = ChatSwipeService().action;
-      widget.onAction(action);
+      final defaultAction = widget.overrideAction ?? ChatSwipeService().action;
+      if (fromOffset > 0) {
+        final handler = widget.onRightSwipe ?? widget.onAction;
+        HapticUtils.impact();
+        handler(widget.rightSwipeAction ?? defaultAction);
+      } else {
+        HapticUtils.impact();
+        widget.onAction(defaultAction);
+      }
     }
   }
 
@@ -230,12 +258,27 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
             ? iconoir.Check(color: color, width: size, height: size)
             : iconoir.ChatBubble(color: color, width: size, height: size);
       case ChatSwipeAction.archive:
-        return iconoir.Archive(color: color, width: size, height: size);
+        return widget.chat.isArchived
+            ? Icon(Icons.unarchive_outlined, color: color, size: size)
+            : iconoir.Archive(color: color, width: size, height: size);
       case ChatSwipeAction.mute:
         return iconoir.BellOff(color: color, width: size, height: size);
       case ChatSwipeAction.delete:
         return iconoir.Trash(color: color, width: size, height: size);
     }
+  }
+
+  String _resolveActionLabel(ChatSwipeAction action) {
+    if (action == ChatSwipeAction.read) {
+      return widget.chat.hasUnread ? 'Прочитать' : 'Не прочитано';
+    }
+    if (action == ChatSwipeAction.pin) {
+      return widget.chat.isPinned ? 'Открепить' : 'Закрепить';
+    }
+    if (action == ChatSwipeAction.archive) {
+      return widget.chat.isArchived ? 'Разархивировать' : action.label;
+    }
+    return action.label;
   }
 
   @override
@@ -244,26 +287,23 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
       return widget.child;
     }
 
-    final action = ChatSwipeService().action;
+    final leftAction = widget.overrideAction ?? ChatSwipeService().action;
     final isDragging = _dragOffset != 0.0;
     final isRight = _dragOffset > 0;
+    final activeAction =
+        isRight ? (widget.rightSwipeAction ?? leftAction) : leftAction;
     final progress = (_dragOffset.abs() / _threshold).clamp(0.0, 1.0);
     final isCrossed = _dragOffset.abs() >= _threshold;
+    final String actionLabel = _resolveActionLabel(activeAction);
 
-    final String actionLabel = action == ChatSwipeAction.read
-        ? (widget.chat.hasUnread ? 'Прочитать' : 'Не прочитано')
-        : (action == ChatSwipeAction.pin
-            ? (widget.chat.isPinned ? 'Открепить' : 'Закрепить')
-            : action.label);
-
-    return Stack(
+    Widget content = Stack(
       clipBehavior: Clip.hardEdge,
       children: [
         // Background action badge
         if (isDragging)
           Positioned.fill(
             child: Container(
-              color: action.color,
+              color: activeAction.color,
               alignment: isRight ? Alignment.centerLeft : Alignment.centerRight,
               padding: const EdgeInsets.symmetric(horizontal: 22),
               child: AnimatedScale(
@@ -276,7 +316,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
                     mainAxisSize: MainAxisSize.min,
                     children: isRight
                         ? [
-                            _buildActionIcon(action, Colors.white, 24),
+                            _buildActionIcon(activeAction, Colors.white, 24),
                             const SizedBox(width: 10),
                             Text(
                               actionLabel,
@@ -299,7 +339,7 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
                               ),
                             ),
                             const SizedBox(width: 10),
-                            _buildActionIcon(action, Colors.white, 24),
+                            _buildActionIcon(activeAction, Colors.white, 24),
                           ],
                   ),
                 ),
@@ -308,22 +348,167 @@ class _SwipeableChatTileState extends State<SwipeableChatTile>
           ),
 
         // Foreground tile moving with finger
-        GestureDetector(
-          onSecondaryTapUp: widget.onSecondaryTapUp,
-          onHorizontalDragStart: _onHorizontalDragStart,
-          onHorizontalDragUpdate: _onHorizontalDragUpdate,
-          onHorizontalDragEnd: _onHorizontalDragEnd,
-          onHorizontalDragCancel: _onHorizontalDragCancel,
+        RawGestureDetector(
+          gestures: <Type, GestureRecognizerFactory>{
+            _ChatTileHorizontalDragRecognizer:
+                GestureRecognizerFactoryWithHandlers<
+                    _ChatTileHorizontalDragRecognizer>(
+              () => _ChatTileHorizontalDragRecognizer(
+                canSwipeRightGetter: _canSwipeRight,
+                canWorkspaceDragGetter: _canDragToWorkspace,
+                hasAncestorRouteSwipeBackGetter: _hasAncestorRouteSwipeBack,
+              ),
+              (_ChatTileHorizontalDragRecognizer instance) {
+                instance.canSwipeRightGetter = _canSwipeRight;
+                instance.canWorkspaceDragGetter = _canDragToWorkspace;
+                instance.hasAncestorRouteSwipeBackGetter =
+                    _hasAncestorRouteSwipeBack;
+                instance.onStart = _onHorizontalDragStart;
+                instance.onUpdate = _onHorizontalDragUpdate;
+                instance.onEnd = _onHorizontalDragEnd;
+                instance.onCancel = _onHorizontalDragCancel;
+              },
+            ),
+          },
           behavior: HitTestBehavior.opaque,
-          child: Transform.translate(
-            offset: Offset(_dragOffset, 0),
-            child: Material(
-              color: Theme.of(context).scaffoldBackgroundColor,
-              child: widget.child,
+          child: GestureDetector(
+            onSecondaryTapUp: widget.onSecondaryTapUp,
+            behavior: HitTestBehavior.translucent,
+            child: Transform.translate(
+              offset: Offset(_dragOffset, 0),
+              child: Material(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                child: widget.child,
+              ),
             ),
           ),
         ),
       ],
     );
+
+    if (widget.onRightSwipe != null) {
+      content = SwipeBackBlocker(child: content);
+    }
+
+    return content;
+  }
+}
+
+/// Directional horizontal drag recognizer for chat list rows:
+/// - Always accepts leftward swipes (`dx < 0`) for row actions (read, pin, archive, etc.).
+/// - Only claims rightward touch swipes (`dx > 0`) when [canSwipeRightGetter] is `true`
+///   (or when detaching a chat into a desktop multi-pane workspace with no poppable route),
+///   yielding cleanly to route/tab rightward swipe-back everywhere else.
+class _ChatTileHorizontalDragRecognizer
+    extends HorizontalDragGestureRecognizer {
+  bool Function() canSwipeRightGetter;
+  bool Function() canWorkspaceDragGetter;
+  bool Function() hasAncestorRouteSwipeBackGetter;
+
+  int? _trackedPointer;
+  Offset _downGlobalPos = Offset.zero;
+  double _cumDx = 0.0;
+  double _cumDy = 0.0;
+  bool _gestureAccepted = false;
+
+  _ChatTileHorizontalDragRecognizer({
+    required this.canSwipeRightGetter,
+    required this.canWorkspaceDragGetter,
+    required this.hasAncestorRouteSwipeBackGetter,
+  }) {
+    onlyAcceptDragOnThreshold = true;
+  }
+
+  bool _allowRightwardForKind(PointerDeviceKind kind) {
+    if (canSwipeRightGetter()) return true;
+    if (canWorkspaceDragGetter()) {
+      if (kind == PointerDeviceKind.mouse) return true;
+      if (!hasAncestorRouteSwipeBackGetter()) return true;
+    }
+    return false;
+  }
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    _trackedPointer = event.pointer;
+    _downGlobalPos = event.position;
+    _cumDx = 0.0;
+    _cumDy = 0.0;
+    _gestureAccepted = false;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void acceptGesture(int pointer) {
+    if (pointer == _trackedPointer) {
+      _gestureAccepted = true;
+    }
+    super.acceptGesture(pointer);
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    if (pointer == _trackedPointer) {
+      _gestureAccepted = false;
+      _trackedPointer = null;
+    }
+    super.rejectGesture(pointer);
+  }
+
+  @override
+  bool hasSufficientGlobalDistanceToAccept(
+    PointerDeviceKind pointerDeviceKind,
+    double? deviceTouchSlop,
+  ) {
+    if (_cumDx < 0) {
+      return _cumDx <= -10.0 && _cumDx.abs() > _cumDy.abs() * 1.5;
+    }
+    if (!_allowRightwardForKind(pointerDeviceKind)) {
+      return false;
+    }
+    return _cumDx >= 10.0 && _cumDx > _cumDy.abs() * 1.5;
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event.pointer == _trackedPointer &&
+        !_gestureAccepted &&
+        event is PointerMoveEvent) {
+      _cumDx = event.position.dx - _downGlobalPos.dx;
+      _cumDy = event.position.dy - _downGlobalPos.dy;
+
+      // Reject predominantly vertical scrolling
+      if (_cumDy.abs() > 10.0 && _cumDy.abs() > _cumDx.abs()) {
+        _trackedPointer = null;
+        resolve(GestureDisposition.rejected);
+        stopTrackingPointer(event.pointer);
+        return;
+      }
+
+      // Reject rightward swipes when no right-swipe action is configured so
+      // ancestor SwipeBackPageRoute / InteractiveSwipeBackGestureDetector wins.
+      if (_cumDx > 3.0 && !_allowRightwardForKind(event.kind)) {
+        _trackedPointer = null;
+        resolve(GestureDisposition.rejected);
+        stopTrackingPointer(event.pointer);
+        return;
+      }
+
+      if (_cumDx <= -10.0 && _cumDx.abs() > _cumDy.abs() * 1.5) {
+        _gestureAccepted = true;
+        resolve(GestureDisposition.accepted);
+      } else if (_cumDx >= 10.0 &&
+          _cumDx > _cumDy.abs() * 1.5 &&
+          _allowRightwardForKind(event.kind)) {
+        _gestureAccepted = true;
+        resolve(GestureDisposition.accepted);
+      }
+    }
+    if (event is PointerUpEvent || event is PointerCancelEvent) {
+      if (event.pointer == _trackedPointer) {
+        _trackedPointer = null;
+      }
+    }
+    super.handleEvent(event);
   }
 }

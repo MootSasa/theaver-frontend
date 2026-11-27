@@ -4,11 +4,16 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/name_color_preset.dart';
+import '../../models/profile_customization.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/emoji_utils.dart';
 import '../../utils/entity_parser.dart';
+import '../../utils/image_utils.dart';
+import '../profile/reply_background_emoji_layer.dart';
 import '../profile/reply_strip_painter.dart';
 
 /// Displays a compact reply/quote preview above a message bubble.
@@ -51,6 +56,24 @@ class MessageReplyInfo extends StatelessWidget {
   /// Optional explicit entities override for the original message
   final List<MessageEntity> entitiesOverride;
 
+  /// Optional override for the forward author avatar URL
+  final String? authorAvatarUrl;
+
+  /// Optional human user ID for forwarded messages (NEVER `'chat:...'`)
+  final String? authorUserId;
+
+  /// Optional sender chat ID for replies to send-as-channel messages
+  final String? replySenderChatId;
+
+  /// Whether the replied-to message was sent by an anonymous admin
+  final bool replyIsFromAnonymousAdmin;
+
+  /// Whether the replied-to sender is a bot
+  final bool replyIsBot;
+
+  /// Whether this header represents a forwarded message rather than a reply
+  final bool isForwarded;
+
   const MessageReplyInfo({
     Key? key,
     this.replyInfo,
@@ -64,20 +87,31 @@ class MessageReplyInfo extends StatelessWidget {
     this.titleOverride,
     this.contentOverride,
     this.entitiesOverride = const [],
+    this.authorAvatarUrl,
+    this.authorUserId,
+    this.replySenderChatId,
+    this.replyIsFromAnonymousAdmin = false,
+    this.replyIsBot = false,
+    this.isForwarded = false,
   }) : super(key: key);
 
   /// Helper to create a forwarded message header
   factory MessageReplyInfo.forwarded({
     required String authorName,
+    String? authorAvatarUrl,
+    String? authorUserId,
     String? content,
     bool isMe = false,
     VoidCallback? onTap,
   }) {
     return MessageReplyInfo(
       titleOverride: authorName,
+      authorAvatarUrl: authorAvatarUrl,
+      authorUserId: authorUserId,
       contentOverride: content,
       isMe: isMe,
       onTap: onTap,
+      isForwarded: true,
     );
   }
 
@@ -134,8 +168,9 @@ class MessageReplyInfo extends StatelessWidget {
       if (quoteLength > 0 &&
           quoteOffset >= 0 &&
           quoteOffset + quoteLength <= origText.length) {
-        sliceStart = quoteOffset;
-        sliceEnd = quoteOffset + quoteLength;
+        sliceStart = EntityParser.snapUtf16Offset(origText, quoteOffset);
+        sliceEnd =
+            EntityParser.snapUtf16Offset(origText, quoteOffset + quoteLength);
       } else if (origText.isNotEmpty) {
         final cleanQuote = EntityParser.parseMarkdown(quoteText).cleanText;
         if (cleanQuote.isNotEmpty) {
@@ -217,7 +252,8 @@ class MessageReplyInfo extends StatelessWidget {
     String singleLine = sb.toString().trimRight();
     final bool isTruncated = singleLine.length > effectiveMaxLen;
     if (isTruncated) {
-      singleLine = singleLine.substring(0, effectiveMaxLen);
+      final cut = EntityParser.snapUtf16Offset(singleLine, effectiveMaxLen);
+      singleLine = singleLine.substring(0, cut);
     }
     for (int i = 0; i <= sourceText.length; i++) {
       if (indexMap[i] > singleLine.length) {
@@ -227,8 +263,14 @@ class MessageReplyInfo extends StatelessWidget {
 
     final mappedEntities = <MessageEntity>[];
     for (final e in sourceEntities) {
-      final s = indexMap[e.offset.clamp(0, sourceText.length)];
-      final end = indexMap[(e.offset + e.length).clamp(0, sourceText.length)];
+      final s = EntityParser.snapUtf16Offset(
+        singleLine,
+        indexMap[e.offset.clamp(0, sourceText.length)],
+      );
+      final end = EntityParser.snapUtf16Offset(
+        singleLine,
+        indexMap[(e.offset + e.length).clamp(0, sourceText.length)],
+      );
       if (s < end) {
         mappedEntities.add(e.copyWith(offset: s, length: end - s));
       }
@@ -360,20 +402,29 @@ class MessageReplyInfo extends StatelessWidget {
     // Check if original message was deleted.
     final isDeleted = replyInfo == null ? false : replyInfo!.messageId.isEmpty;
 
-    // Retrieve profile theme for fallback
-    final profileTheme = context.watch<ProfileThemeProvider>();
+    // Retrieve profile theme safely (optional in isolated tests)
+    ProfileThemeProvider? profileTheme;
+    try {
+      profileTheme = context.watch<ProfileThemeProvider>();
+    } on ProviderNotFoundException {
+      profileTheme = null;
+    }
 
-    final bool isReplyingToMe =
-        (replyInfo != null && currentUserId != null && replyInfo!.senderId == currentUserId) ||
-        (replyInfo == null && isMe);
+    final bool isReplyingToMe = (replyInfo != null &&
+            currentUserId != null &&
+            currentUserId!.isNotEmpty &&
+            replyInfo!.senderId.isNotEmpty &&
+            replyInfo!.senderId != '0' &&
+            replyInfo!.senderId == currentUserId) ||
+        (replyInfo == null && titleOverride == null && isMe);
 
     // Telegram-style: Color and style of original message in reply preview match what that user selected in their settings
     final NameColorPreset preset;
     final ReplyStripStyle stripStyle;
 
     if (isReplyingToMe) {
-      preset = profileTheme.currentNameColorPreset;
-      stripStyle = profileTheme.currentStripStyle;
+      preset = profileTheme?.currentNameColorPreset ?? NameColorPresets.blue;
+      stripStyle = profileTheme?.currentStripStyle ?? ReplyStripStyle.solid;
     } else if (replyInfo?.nameColorPresetId != null && replyInfo!.nameColorPresetId!.isNotEmpty) {
       preset = NameColorPresets.getById(replyInfo!.nameColorPresetId!);
       stripStyle = ReplyStripStyle.values.firstWhere(
@@ -385,8 +436,8 @@ class MessageReplyInfo extends StatelessWidget {
       preset = NameColorPresets.getById('name_red');
       stripStyle = ReplyStripStyle.solid;
     } else {
-      preset = profileTheme.currentNameColorPreset;
-      stripStyle = profileTheme.currentStripStyle;
+      preset = profileTheme?.currentNameColorPreset ?? NameColorPresets.blue;
+      stripStyle = profileTheme?.currentStripStyle ?? ReplyStripStyle.solid;
     }
 
     // Accent and vibrant opaque background color derived from preset and theme palette
@@ -438,8 +489,10 @@ class MessageReplyInfo extends StatelessWidget {
         isDark: isDark,
       );
     } else if (replyInfo != null && replyInfo!.isUnsupported) {
-      final unsupportedLabel =
-          context.l10n.translate('message_unsupported_preview');
+      final unsupportedLabel = context.trOr(
+        'message_unsupported_preview',
+        'Сообщение не поддерживается',
+      );
       previewSpan = EmojiUtils.buildEmojiTextSpan(
         unsupportedLabel,
         style: basePreviewStyle,
@@ -478,7 +531,7 @@ class MessageReplyInfo extends StatelessWidget {
           mediaLabel = '🎭 Стикер';
           break;
         case 'poll':
-          final pollLabel = context.l10n.translate('chat_poll');
+          final pollLabel = context.trOr('chat_poll', 'Опрос');
           mediaLabel = hasCaption ? '📊 ' : '📊 $pollLabel';
           break;
         default:
@@ -520,32 +573,271 @@ class MessageReplyInfo extends StatelessWidget {
     final bool hasPreview =
         previewSpan != null && previewSpan.toPlainText().trim().isNotEmpty;
 
-    final youTitle = context.l10n.translate('chat_reply_you');
-    String title = titleOverride ?? '';
-    if (title.isEmpty) {
-      if (isReplyingToMe) {
-        title = youTitle;
-      } else if (replyInfo != null && replyInfo!.senderName.isNotEmpty) {
-        title = replyInfo!.senderName;
-      } else {
-        title = 'Сообщение';
+    final youTitle = context.trOr('chat_reply_you', 'Вы');
+    final String? replySenderId =
+        (!isReplyingToMe && replyInfo != null) ? replyInfo!.senderId.trim() : null;
+    final String? effectiveReplySenderChatId =
+        replySenderChatId ?? replyInfo?.senderChatId;
+    final bool effectiveReplyIsAnon =
+        replyIsFromAnonymousAdmin || (replyInfo?.isFromAnonymousAdmin ?? false);
+    final bool canResolveContactReplyName = titleOverride == null &&
+        ContactsService.shouldResolveUserIdentity(
+          replySenderId,
+          senderChatId: effectiveReplySenderChatId,
+          isAnonymousAdmin: effectiveReplyIsAnon,
+          isBot: replyIsBot,
+        );
+    final bool canResolveForwardAuthor = titleOverride != null &&
+        ContactsService.shouldResolveUserIdentity(authorUserId);
+    final bool shouldListenContacts =
+        canResolveContactReplyName || canResolveForwardAuthor;
+
+    String resolveTitleText() {
+      String resolvedTitle = titleOverride ?? '';
+      if (resolvedTitle.isEmpty) {
+        if (isReplyingToMe) {
+          resolvedTitle = youTitle;
+        } else if (replyInfo != null) {
+          final rawSenderName = replyInfo!.senderName;
+          final contactResolved = canResolveContactReplyName
+              ? ContactsService.resolvePeerName(
+                  replySenderId,
+                  rawSenderName,
+                  senderChatId: effectiveReplySenderChatId,
+                  isAnonymousAdmin: effectiveReplyIsAnon,
+                  isBot: replyIsBot,
+                )
+              : rawSenderName;
+          resolvedTitle =
+              contactResolved.isNotEmpty ? contactResolved : 'Сообщение';
+        } else {
+          resolvedTitle = 'Сообщение';
+        }
+      } else if (canResolveForwardAuthor) {
+        resolvedTitle = ContactsService.resolvePeerName(
+          authorUserId,
+          resolvedTitle,
+        );
       }
+      if (resolvedTitle == 'Вы' || resolvedTitle == 'You') {
+        resolvedTitle = youTitle;
+      }
+      return resolvedTitle;
     }
-    if (title == 'Вы' || title == 'You') {
-      title = youTitle;
+
+    String? resolveForwardAvatarUrl() {
+      if (!canResolveForwardAuthor) return authorAvatarUrl;
+      return ContactsService.resolvePeerAvatarUrl(
+        authorUserId,
+        authorAvatarUrl,
+      );
+    }
+
+    final String title = resolveTitleText();
+
+    if (isForwarded && replyInfo == null) {
+      final Color authorColor;
+      final Color labelColor;
+      final Color fwdPreviewTextColor;
+      if (isMe) {
+        authorColor = p?.chatBubbleOutgoingText ?? theme.colorScheme.onPrimary;
+        labelColor =
+            p?.chatBubbleOutgoingSubtext ?? authorColor.withValues(alpha: 0.78);
+        fwdPreviewTextColor = authorColor.withValues(alpha: 0.9);
+      } else {
+        final Color incomingBg =
+            p?.chatBubbleIncoming ?? theme.colorScheme.surface;
+        final cachedPeer = (authorUserId != null &&
+                authorUserId!.isNotEmpty &&
+                authorUserId != '0')
+            ? PeerCustomizationCache.instance.getSync(authorUserId!)
+            : null;
+        final Color rawAuthorAccent = (cachedPeer?.nameColorPresetId != null &&
+                cachedPeer!.nameColorPresetId!.isNotEmpty)
+            ? NameColorPresets.getById(cachedPeer.nameColorPresetId!)
+                .primaryColor
+            : (p?.primary ?? theme.colorScheme.primary);
+        authorColor = NameColorPreset.resolveReadableAccentColor(
+          incomingBg,
+          rawAuthorAccent,
+        );
+        labelColor = authorColor.withValues(alpha: 0.82);
+        fwdPreviewTextColor = p?.chatBubbleIncomingSubtext ??
+            theme.colorScheme.onSurface.withValues(alpha: 0.7);
+      }
+
+      Widget buildForwardedAuthorRow(
+        String displayTitle,
+        String? displayAvatarUrl,
+      ) {
+        final avatarProvider =
+            (displayAvatarUrl != null && displayAvatarUrl.isNotEmpty)
+                ? avatarImageProvider(displayAvatarUrl)
+                : null;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (avatarProvider != null) ...[
+              CircleAvatar(
+                radius: 8,
+                backgroundColor: authorColor.withValues(alpha: 0.2),
+                backgroundImage: avatarProvider,
+              ),
+              const SizedBox(width: 5),
+            ],
+            Flexible(
+              child: Text(
+                displayTitle,
+                style: TextStyle(
+                  color: authorColor,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        );
+      }
+
+      final TextSpan? fwdPreviewSpan =
+          (contentOverride != null && contentOverride!.trim().isNotEmpty)
+              ? buildFormattedPreviewSpan(
+                  rawText: contentOverride!,
+                  entities: effectiveEntities,
+                  baseStyle: TextStyle(
+                    color: fwdPreviewTextColor,
+                    fontSize: 12,
+                  ),
+                  accentColor: authorColor,
+                  isDark: isDark,
+                )
+              : null;
+
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: isDeleted ? null : onTap,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                context.trOr('chat_forwarded_from', 'Переслано от'),
+                style: TextStyle(
+                  color: labelColor,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (!isDeleted && title.isNotEmpty) ...[
+                const SizedBox(height: 1.5),
+                shouldListenContacts
+                    ? ValueListenableBuilder<int>(
+                        valueListenable: ContactsService.revisionNotifier,
+                        builder: (_, __, ___) => buildForwardedAuthorRow(
+                          resolveTitleText(),
+                          resolveForwardAvatarUrl(),
+                        ),
+                      )
+                    : buildForwardedAuthorRow(title, authorAvatarUrl),
+              ],
+              if (fwdPreviewSpan != null &&
+                  fwdPreviewSpan.toPlainText().trim().isNotEmpty) ...[
+                const SizedBox(height: 1.5),
+                RichText(
+                  text: fwdPreviewSpan,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    final ReplyEmojiData? effectiveReplyEmoji;
+    if (!isDeleted && replyInfo != null) {
+      if (isReplyingToMe) {
+        effectiveReplyEmoji = profileTheme?.currentReplyEmoji;
+      } else {
+        final bool hasReplySenderChat = effectiveReplySenderChatId != null &&
+            effectiveReplySenderChatId.trim().isNotEmpty &&
+            effectiveReplySenderChatId.trim() != '0';
+        final cachedPeer = (!effectiveReplyIsAnon &&
+                !hasReplySenderChat &&
+                replyInfo!.senderId.isNotEmpty &&
+                replyInfo!.senderId != '0')
+            ? PeerCustomizationCache.instance.getSync(replyInfo!.senderId)
+            : null;
+        effectiveReplyEmoji = cachedPeer?.replyEmoji ?? replyInfo!.replyEmoji;
+      }
+    } else {
+      effectiveReplyEmoji = null;
+    }
+
+    Widget buildHeaderRow(String displayTitle, String? displayAvatarUrl) {
+      final avatarProvider =
+          (displayAvatarUrl != null && displayAvatarUrl.isNotEmpty)
+              ? avatarImageProvider(displayAvatarUrl)
+              : null;
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (avatarProvider != null) ...[
+            CircleAvatar(
+              radius: 8,
+              backgroundColor: accentColor.withValues(alpha: 0.2),
+              backgroundImage: avatarProvider,
+            ),
+            const SizedBox(width: 5),
+          ],
+          Flexible(
+            child: Text(
+              displayTitle,
+              style: TextStyle(
+                color: accentColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      );
     }
 
     return GestureDetector(
       onTap: isDeleted ? null : onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: bgColor,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Stack(
           children: [
+            if (effectiveReplyEmoji != null)
+              Positioned.fill(
+                child: ReplyBackgroundEmojiLayer(
+                  emoji: effectiveReplyEmoji,
+                  color: accentColor,
+                  avoidTopRightCorner: isQuote && !isDeleted,
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Stack(
+                children: [
             Positioned(
               top: 0,
               bottom: 0,
@@ -576,18 +868,17 @@ class MessageReplyInfo extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Sender name / Title
+                  // Sender name / Title (with optional 16dp forwarded author mini-avatar)
                   if (!isDeleted && title.isNotEmpty)
-                    Text(
-                      title,
-                      style: TextStyle(
-                        color: accentColor,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    shouldListenContacts
+                        ? ValueListenableBuilder<int>(
+                            valueListenable: ContactsService.revisionNotifier,
+                            builder: (_, __, ___) => buildHeaderRow(
+                              resolveTitleText(),
+                              resolveForwardAvatarUrl(),
+                            ),
+                          )
+                        : buildHeaderRow(title, authorAvatarUrl),
                   if (!isDeleted && title.isNotEmpty && hasPreview)
                     const SizedBox(height: 2),
                   // Preview text
@@ -618,6 +909,9 @@ class MessageReplyInfo extends StatelessWidget {
                       ),
                 ],
               ),
+            ),
+          ],
+        ),
             ),
           ],
         ),

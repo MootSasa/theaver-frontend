@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:draggable_scrollbar/draggable_scrollbar.dart';
 import 'package:flutter/foundation.dart';
@@ -10,9 +10,11 @@ import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
+import '../../services/bot_service.dart';
 import '../../services/liquid_glass_provider.dart';
+import '../../utils/image_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 enum AttachmentPickerAction {
   camera,
@@ -22,6 +24,7 @@ enum AttachmentPickerAction {
   poll,
   contact,
   music,
+  miniApp,
 }
 
 class AttachmentPickerResult {
@@ -29,38 +32,54 @@ class AttachmentPickerResult {
   final List<File>? files;
   final bool asDocument;
   final bool sendImmediately;
+  final Map<String, dynamic>? miniAppShortcut;
 
   const AttachmentPickerResult.action(this.action)
       : files = null,
         asDocument = false,
-        sendImmediately = false;
+        sendImmediately = false,
+        miniAppShortcut = null;
 
   const AttachmentPickerResult.files(
     this.files, {
     this.asDocument = false,
     this.sendImmediately = false,
-  }) : action = null;
+  })  : action = null,
+        miniAppShortcut = null;
+
+  const AttachmentPickerResult.miniApp(this.miniAppShortcut)
+      : action = AttachmentPickerAction.miniApp,
+        files = null,
+        asDocument = false,
+        sendImmediately = false;
 }
 
 class AttachmentPickerBottomSheet extends StatefulWidget {
   final bool allowPoll;
+  final List<Map<String, dynamic>>? miniAppShortcuts;
+  final ValueChanged<Map<String, dynamic>>? onMiniAppSelected;
 
   const AttachmentPickerBottomSheet({
     Key? key,
     this.allowPoll = true,
+    this.miniAppShortcuts,
+    this.onMiniAppSelected,
   }) : super(key: key);
 
   static Future<AttachmentPickerResult?> show(
     BuildContext context, {
     bool allowPoll = true,
+    List<Map<String, dynamic>>? miniAppShortcuts,
+    ValueChanged<Map<String, dynamic>>? onMiniAppSelected,
   }) {
-    return showModalBottomSheet<AttachmentPickerResult>(
+    return showTheavModalSheet<AttachmentPickerResult>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
-      builder: (ctx) => AttachmentPickerBottomSheet(
+      enableDrag: false,
+      builder: (_) => const SizedBox.shrink(),
+      customSheetBuilder: (ctx) => AttachmentPickerBottomSheet(
         allowPoll: allowPoll,
+        miniAppShortcuts: miniAppShortcuts,
+        onMiniAppSelected: onMiniAppSelected,
       ),
     );
   }
@@ -70,8 +89,23 @@ class AttachmentPickerBottomSheet extends StatefulWidget {
       _AttachmentPickerBottomSheetState();
 }
 
-class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomSheet> {
+class _AttachmentPickerBottomSheetState
+    extends State<AttachmentPickerBottomSheet>
+    with SingleTickerProviderStateMixin {
   static const int _pageSize = 60;
+  static const double _initialSheetFraction = 0.58;
+  static const double _minSheetFraction = 0.28;
+  static const double _maxSheetFraction = 0.94;
+
+  final ScrollController _gridScrollController = ScrollController();
+  late final AnimationController _snapController;
+  double _sheetFraction = _initialSheetFraction;
+  double _snapFrom = _initialSheetFraction;
+  double _snapTo = _initialSheetFraction;
+  double _rawStretchPull = 0.0;
+  double _overscrollStretch = 0.0;
+  double _stretchFrom = 0.0;
+  bool _isDismissing = false;
 
   List<AssetPathEntity> _albums = [];
   AssetPathEntity? _selectedAlbum;
@@ -91,17 +125,166 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
 
+  // Mini App / attach-menu shortcuts
+  List<Map<String, dynamic>> _miniAppShortcuts = const [];
+
   @override
   void initState() {
     super.initState();
+    _snapController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..addListener(() {
+        if (!mounted) return;
+        final t = Curves.easeOutCubic.transform(_snapController.value);
+        setState(() {
+          _sheetFraction = _snapFrom + (_snapTo - _snapFrom) * t;
+          _overscrollStretch = _stretchFrom * (1.0 - t);
+        });
+      });
+    _initMiniAppShortcuts();
     _loadAlbumsAndAssets();
     _initLiveCamera();
   }
 
+  Map<String, dynamic> _botInfoToShortcut(BotInfo bot) {
+    final title = bot.menuButton.text.isNotEmpty
+        ? bot.menuButton.text
+        : (bot.displayName.isNotEmpty
+            ? bot.displayName
+            : (bot.username ?? 'Mini App'));
+    return {
+      'bot_id': bot.userId,
+      'bot_username': bot.username ?? '',
+      'bot_name': bot.displayName.isNotEmpty
+          ? bot.displayName
+          : (bot.username ?? title),
+      'title': title,
+      'avatar_url': bot.avatarUrl ?? '',
+      'url': bot.effectiveWebAppUrl ??
+          (bot.webApps.isNotEmpty ? bot.webApps.first.url : ''),
+      if (bot.webApps.isNotEmpty)
+        'app_short_name': bot.webApps.first.shortName
+      else if (bot.shortName.isNotEmpty)
+        'app_short_name': bot.shortName,
+      'is_verified': bot.isVerified,
+      'mode': 'attach',
+    };
+  }
+
+  List<Map<String, dynamic>> _mergeShortcuts(
+    List<Map<String, dynamic>>? explicit,
+    List<BotInfo> bots,
+  ) {
+    final merged = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    void addItem(Map<String, dynamic> raw) {
+      final bid = (raw['bot_id'] ?? '').toString().trim();
+      final uname = (raw['bot_username'] ?? '').toString().trim().toLowerCase();
+      final shortName = (raw['app_short_name'] ?? '').toString().trim().toLowerCase();
+      final key = '${bid.isNotEmpty ? bid : uname}|$shortName';
+      if (key == '|' || !seen.add(key)) return;
+      merged.add(Map<String, dynamic>.from(raw));
+    }
+
+    if (explicit != null) {
+      for (final s in explicit) {
+        addItem(s);
+      }
+    }
+    for (final b in bots) {
+      addItem(_botInfoToShortcut(b));
+    }
+    return merged;
+  }
+
+  void _initMiniAppShortcuts() {
+    _miniAppShortcuts = _mergeShortcuts(
+      widget.miniAppShortcuts,
+      BotService.getCachedAttachMenuBots(),
+    );
+    unawaited(_loadAttachMenuBots());
+  }
+
+  Future<void> _loadAttachMenuBots() async {
+    try {
+      final bots = await BotService.getAttachMenuBots(limit: 12);
+      if (!mounted || bots.isEmpty) return;
+      final merged = _mergeShortcuts(widget.miniAppShortcuts, bots);
+      if (merged.length != _miniAppShortcuts.length) {
+        setState(() => _miniAppShortcuts = merged);
+      }
+    } catch (_) {}
+  }
+
+  void _selectMiniAppShortcut(Map<String, dynamic> shortcut) {
+    HapticFeedback.selectionClick();
+    if (widget.onMiniAppSelected != null) {
+      Navigator.pop(context);
+      widget.onMiniAppSelected!(shortcut);
+    } else {
+      Navigator.pop(context, AttachmentPickerResult.miniApp(shortcut));
+    }
+  }
+
   @override
   void dispose() {
+    _snapController.dispose();
+    _gridScrollController.dispose();
     _cameraController?.dispose();
     super.dispose();
+  }
+
+  void _onHandleDragStart() {
+    if (_isDismissing) return;
+    _snapController.stop();
+  }
+
+  void _onHandleDragUpdate(double deltaY, double screenHeight) {
+    if (_isDismissing || screenHeight <= 0) return;
+    setState(() {
+      final double nextFrac = _sheetFraction - deltaY / screenHeight;
+      if (nextFrac > _maxSheetFraction) {
+        _sheetFraction = _maxSheetFraction;
+        final double overflowPx = (nextFrac - _maxSheetFraction) * screenHeight;
+        _rawStretchPull = (_rawStretchPull + overflowPx).clamp(0.0, 240.0);
+        _overscrollStretch = 28.0 * (1.0 - math.exp(-_rawStretchPull / 75.0));
+      } else if (_rawStretchPull > 0 && deltaY > 0) {
+        _rawStretchPull = math.max(0.0, _rawStretchPull - deltaY);
+        _overscrollStretch = _rawStretchPull > 0
+            ? 28.0 * (1.0 - math.exp(-_rawStretchPull / 75.0))
+            : 0.0;
+        if (_rawStretchPull == 0.0) {
+          _sheetFraction =
+              nextFrac.clamp(_minSheetFraction, _maxSheetFraction);
+        }
+      } else {
+        _rawStretchPull = 0.0;
+        _overscrollStretch = 0.0;
+        _sheetFraction = nextFrac.clamp(_minSheetFraction, _maxSheetFraction);
+      }
+    });
+  }
+
+  void _onHandleDragEnd(double velocityY) {
+    if (_isDismissing) return;
+    _rawStretchPull = 0.0;
+    if (_sheetFraction < 0.40 ||
+        (velocityY > 750 && _sheetFraction < 0.72) ||
+        velocityY > 1400) {
+      _isDismissing = true;
+      Navigator.of(context).maybePop();
+      return;
+    }
+
+    final double target =
+        (velocityY < -500 || (_sheetFraction > 0.76 && velocityY <= 500))
+            ? _maxSheetFraction
+            : _initialSheetFraction;
+    _snapFrom = _sheetFraction;
+    _snapTo = target;
+    _stretchFrom = _overscrollStretch;
+    _snapController.forward(from: 0.0);
   }
 
   Future<void> _initLiveCamera() async {
@@ -282,131 +465,91 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   }
 
   void _showAlbumSelector() {
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+      title: context.l10n.translate('chat_all_photos'),
+      showCloseButton: true,
+      maxHeightFactor: 0.72,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        return Container(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(ctx).size.height * 0.65,
-          ),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E1E24) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 10),
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: isDark ? Colors.white30 : Colors.black26,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Row(
-                  children: [
-                    Text(
-                      context.l10n.translate('chat_all_photos'),
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : Colors.black87,
+        final palette = ctx.theav;
+        return ListView.builder(
+          shrinkWrap: true,
+          itemCount: _albums.length,
+          itemBuilder: (context, index) {
+            final album = _albums[index];
+            final isSelected = album.id == _selectedAlbum?.id;
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
+              child: TheavInsetGroup(
+                margin: EdgeInsets.zero,
+                showDividers: false,
+                children: [
+                  TheavListRow(
+                    leading: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: palette.onSurface.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
-                  ],
-                ),
-              ),
-              Divider(
-                height: 1,
-                color: isDark ? Colors.white10 : Colors.black12,
-              ),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: _albums.length,
-                  itemBuilder: (context, index) {
-                    final album = _albums[index];
-                    final isSelected = album.id == _selectedAlbum?.id;
-                    return ListTile(
-                      leading: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF2C2C34) : const Color(0xFFF0F2F5),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: FutureBuilder<List<AssetEntity>>(
-                          future: album.getAssetListRange(start: 0, end: 1),
-                          builder: (context, snapshot) {
-                            if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                              return ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: AssetEntityImage(
-                                  snapshot.data!.first,
-                                  isOriginal: false,
-                                  thumbnailSize: const ThumbnailSize.square(120),
-                                  fit: BoxFit.cover,
-                                ),
-                              );
-                            }
-                            return Icon(
-                              Icons.folder_outlined,
-                              color: isDark ? Colors.white70 : Colors.black54,
-                            );
-                          },
-                        ),
-                      ),
-                      title: Text(
-                        album.isAll ? context.l10n.translate('chat_recent_photos') : album.name,
-                        style: TextStyle(
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                          color: isSelected
-                              ? const Color(0xFF2AABEE)
-                              : (isDark ? Colors.white : Colors.black87),
-                        ),
-                      ),
-                      subtitle: FutureBuilder<int>(
-                        future: album.assetCountAsync,
+                      child: FutureBuilder<List<AssetEntity>>(
+                        future: album.getAssetListRange(start: 0, end: 1),
                         builder: (context, snapshot) {
-                          return Text(
-                            snapshot.hasData ? '${snapshot.data}' : '...',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white54 : Colors.black54,
-                            ),
+                          if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: AssetEntityImage(
+                                snapshot.data!.first,
+                                isOriginal: false,
+                                thumbnailSize: const ThumbnailSize.square(120),
+                                fit: BoxFit.cover,
+                              ),
+                            );
+                          }
+                          return iconoir.Folder(
+                            width: 20,
+                            height: 20,
+                            color: palette.subtext,
                           );
                         },
                       ),
-                      trailing: isSelected
-                          ? const Icon(Icons.check, color: Color(0xFF2AABEE))
-                          : null,
+                    ),
+                    title: album.isAll
+                        ? context.l10n.translate('chat_recent_photos')
+                        : album.name,
+                    subtitleWidget: FutureBuilder<int>(
+                      future: album.assetCountAsync,
+                      builder: (context, snapshot) {
+                        return Text(
+                          snapshot.hasData ? '${snapshot.data}' : '...',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: palette.subtext,
+                          ),
+                        );
+                      },
+                    ),
+                    trailing: TheavCheckCircle(
+                      selected: isSelected,
                       onTap: () {
                         Navigator.pop(ctx);
                         if (album.id != _selectedAlbum?.id) {
                           _selectAlbum(album);
                         }
                       },
-                    );
-                  },
-                ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      if (album.id != _selectedAlbum?.id) {
+                        _selectAlbum(album);
+                      }
+                    },
+                  ),
+                ],
               ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -504,163 +647,172 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlassEnabled = glassProvider.enabled;
-    final effectiveBlur = isGlassEnabled ? (glassProvider.blur * 2.0).clamp(8.0, 30.0) : 24.0;
+    final surfaceStyle = TheavSurfaceStyle.of(context);
+    final isDark = surfaceStyle.isDark;
+    final double screenHeight = MediaQuery.sizeOf(context).height;
+    final albumTitle = _selectedAlbum != null
+        ? (_selectedAlbum!.isAll
+            ? context.l10n.translate('chat_recent_photos')
+            : _selectedAlbum!.name)
+        : context.l10n.translate('chat_recent_photos');
 
-    final backgroundColor = isDark
-        ? const Color(0xFF1E1E24).withValues(alpha: isGlassEnabled ? 0.85 : 0.96)
-        : Colors.white.withValues(alpha: isGlassEnabled ? 0.88 : 0.97);
+    final double sheetHeight = math.min(
+      screenHeight * 0.97,
+      screenHeight * _sheetFraction + _overscrollStretch,
+    );
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.58,
-      minChildSize: 0.35,
-      maxChildSize: 0.94,
-      snap: true,
-      snapSizes: const [0.58, 0.94],
-      builder: (context, scrollController) {
-        final albumTitle = _selectedAlbum != null
-            ? (_selectedAlbum!.isAll
-                ? context.l10n.translate('chat_recent_photos')
-                : _selectedAlbum!.name)
-            : context.l10n.translate('chat_recent_photos');
-
-        return ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur),
-            child: Container(
-              decoration: BoxDecoration(
-                color: backgroundColor,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.black.withValues(alpha: 0.06),
-                  width: 0.8,
-                ),
-              ),
-              child: SafeArea(
-                top: false,
-                child: Column(
-                  children: [
-                    const SizedBox(height: 10),
-                    // Drag Handle Pill
-                    Center(
-                      child: Container(
-                        width: 38,
-                        height: 4.5,
-                        decoration: BoxDecoration(
-                          color: isDark ? Colors.white30 : Colors.black26,
-                          borderRadius: BorderRadius.circular(3),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: SizedBox(
+        height: sheetHeight,
+        child: TheavSheetSurface(
+          cornerRadius: 24.0,
+          stretchPx: _overscrollStretch,
+          maxStretch: 28.0,
+          child: SafeArea(
+            top: false,
+            child: Column(
+              children: [
+                // Drag Handle Pill (stretches/drags ONLY when pulling the top handle bar)
+                Center(
+                  child: GestureDetector(
+                    key: const ValueKey('attachment_sheet_drag_handle'),
+                    behavior: HitTestBehavior.opaque,
+                    onVerticalDragStart: (_) => _onHandleDragStart(),
+                    onVerticalDragUpdate: (d) =>
+                        _onHandleDragUpdate(d.delta.dy, screenHeight),
+                    onVerticalDragEnd: (d) =>
+                        _onHandleDragEnd(d.velocity.pixelsPerSecond.dy),
+                    onVerticalDragCancel: () => _onHandleDragEnd(0.0),
+                    child: SizedBox(
+                      width: 112,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Center(
+                          child: Container(
+                            width: 38,
+                            height: 4.5,
+                            decoration: BoxDecoration(
+                              color: isDark ? Colors.white30 : Colors.black26,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(height: 10),
-
-                    // Top Section Bar: Folder/Album Selector + "Галерея" shortcut
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Album / Folder dropdown selector
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _albums.length > 1 ? _showAlbumSelector : null,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: isDark
-                                    ? Colors.white.withValues(alpha: 0.08)
-                                    : Colors.black.withValues(alpha: 0.05),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    albumTitle,
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: theme.textTheme.titleMedium?.color,
-                                      letterSpacing: -0.2,
-                                    ),
-                                  ),
-                                  if (_albums.length > 1) ...[
-                                    const SizedBox(width: 4),
-                                    Icon(
-                                      Icons.keyboard_arrow_down_rounded,
-                                      size: 18,
-                                      color: theme.textTheme.titleMedium?.color?.withValues(alpha: 0.7),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
-
-                          // Quick Gallery Button
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.pop(
-                                context,
-                                const AttachmentPickerResult.action(
-                                  AttachmentPickerAction.gallery,
-                                ),
-                              );
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    context.l10n.translate('chat_gallery'),
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: Color(0xFF2AABEE),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 2),
-                                  const Icon(
-                                    Icons.chevron_right_rounded,
-                                    size: 18,
-                                    color: Color(0xFF2AABEE),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Media Grid Section with DraggableScrollbar
-                    Expanded(
-                      child: _buildMediaGrid(scrollController, isDark, theme),
-                    ),
-
-                    // Floating Oval Dock (Action Buttons or Send Bar)
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 220),
-                      switchInCurve: Curves.easeOutCubic,
-                      switchOutCurve: Curves.easeInCubic,
-                      child: _selectedAssets.isNotEmpty
-                          ? _buildSendBar(isDark, theme)
-                          : _buildActionsRow(isDark, theme),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+
+                // Top Section Bar: Folder/Album Selector + "Галерея" shortcut
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // Album / Folder dropdown selector
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _albums.length > 1 ? _showAlbumSelector : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.white.withValues(alpha: 0.08)
+                                : Colors.black.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                albumTitle,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.textTheme.titleMedium?.color,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                              if (_albums.length > 1) ...[
+                                const SizedBox(width: 4),
+                                Icon(
+                                  Icons.keyboard_arrow_down_rounded,
+                                  size: 18,
+                                  color: theme.textTheme.titleMedium?.color?.withValues(alpha: 0.7),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // Quick Gallery Button
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(
+                            context,
+                            const AttachmentPickerResult.action(
+                              AttachmentPickerAction.gallery,
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                context.l10n.translate('chat_gallery'),
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF2AABEE),
+                                ),
+                              ),
+                              const SizedBox(width: 2),
+                              const Icon(
+                                Icons.chevron_right_rounded,
+                                size: 18,
+                                color: Color(0xFF2AABEE),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                if (_miniAppShortcuts.isNotEmpty) ...[
+                  _buildMiniAppShortcutsStrip(isDark, theme),
+                  const SizedBox(height: 6),
+                ],
+
+                // Media Grid Section with DraggableScrollbar
+                Expanded(
+                  child: _buildMediaGrid(_gridScrollController, isDark, theme),
+                ),
+
+                // Floating Oval Dock (keep LiquidGlassLens persistent, animate inner content only)
+                _wrapWithGlassDock(
+                  context,
+                  isDark: isDark,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    child: _selectedAssets.isNotEmpty
+                        ? _buildSendBarContent(isDark, theme)
+                        : _buildActionsRowContent(isDark, theme),
+                  ),
+                ),
+              ],
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -755,6 +907,9 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
       labelConstraints: const BoxConstraints.tightFor(width: 120.0, height: 28.0),
       child: GridView.builder(
         controller: scrollController,
+        physics: const BouncingScrollPhysics(
+          parent: AlwaysScrollableScrollPhysics(),
+        ),
         cacheExtent: 600,
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -1032,10 +1187,111 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
     );
   }
 
-  Widget _buildActionsRow(bool isDark, ThemeData theme) {
+  Widget _buildMiniAppShortcutsStrip(bool isDark, ThemeData theme) {
+    final textColor = theme.textTheme.bodyMedium?.color ??
+        (isDark ? Colors.white : Colors.black87);
+    return SizedBox(
+      height: 38,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        itemCount: _miniAppShortcuts.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final shortcut = _miniAppShortcuts[index];
+          final label = (shortcut['title'] ??
+                  shortcut['bot_name'] ??
+                  shortcut['bot_username'] ??
+                  'Mini App')
+              .toString()
+              .trim();
+          final avatarUrl = shortcut['avatar_url']?.toString();
+          final avatarImg = (avatarUrl != null && avatarUrl.isNotEmpty)
+              ? avatarImageProvider(avatarUrl)
+              : null;
+
+          return Material(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => _selectMiniAppShortcut(shortcut),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (avatarImg != null)
+                      CircleAvatar(
+                        radius: 10,
+                        backgroundImage: avatarImg,
+                      )
+                    else
+                      const iconoir.AppWindow(
+                        width: 15,
+                        height: 15,
+                        color: Color(0xFF2AABEE),
+                      ),
+                    const SizedBox(width: 6),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 140),
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildActionsRowContent(bool isDark, ThemeData theme) {
     final iconColor = isDark ? Colors.white : Colors.black87;
 
-    final items = [
+    final items = <_PickerItem>[
+      for (final shortcut in _miniAppShortcuts)
+        () {
+          final avatarUrl = shortcut['avatar_url']?.toString();
+          final avatarImg = (avatarUrl != null && avatarUrl.isNotEmpty)
+              ? avatarImageProvider(avatarUrl)
+              : null;
+          final label = (shortcut['title'] ??
+                  shortcut['bot_name'] ??
+                  shortcut['bot_username'] ??
+                  'Mini App')
+              .toString()
+              .trim();
+          return _PickerItem(
+            action: AttachmentPickerAction.miniApp,
+            label: label,
+            fallbackLabel: 'Mini App',
+            icon: avatarImg != null
+                ? CircleAvatar(
+                    radius: 14,
+                    backgroundImage: avatarImg,
+                  )
+                : const iconoir.AppWindow(
+                    color: Color(0xFF2AABEE),
+                    width: 22,
+                    height: 22,
+                  ),
+            onTap: () => _selectMiniAppShortcut(shortcut),
+          );
+        }(),
       _PickerItem(
         action: AttachmentPickerAction.gallery,
         label: context.l10n.translate('chat_gallery'),
@@ -1075,134 +1331,127 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
         ),
     ];
 
-    return _wrapWithGlassDock(
-      context,
-      isDark: isDark,
+    return SingleChildScrollView(
       key: const ValueKey('actions_dock'),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: items.map((item) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: _AnimatedPickerButton(
-                item: item,
-                onTap: () => Navigator.pop(
-                  context,
-                  AttachmentPickerResult.action(item.action),
-                ),
-              ),
-            );
-          }).toList(),
-        ),
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: items.map((item) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: _AnimatedPickerButton(
+              item: item,
+              onTap: item.onTap ??
+                  () => Navigator.pop(
+                        context,
+                        AttachmentPickerResult.action(item.action),
+                      ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildSendBar(bool isDark, ThemeData theme) {
+  Widget _buildSendBarContent(bool isDark, ThemeData theme) {
     final count = _selectedAssets.length;
 
-    return _wrapWithGlassDock(
-      context,
-      isDark: isDark,
+    return Row(
       key: const ValueKey('send_dock'),
-      child: Row(
-              children: [
-                // "Без сжатия" toggle
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    setState(() => _sendAsDocument = !_sendAsDocument);
-                  },
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 150),
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(6),
-                          color: _sendAsDocument
-                              ? const Color(0xFF2AABEE)
-                              : Colors.transparent,
-                          border: Border.all(
-                            color: _sendAsDocument
-                                ? const Color(0xFF2AABEE)
-                                : (isDark ? Colors.white38 : Colors.black38),
-                            width: 1.8,
-                          ),
-                        ),
-                        child: _sendAsDocument
-                            ? const Icon(Icons.check, size: 16, color: Colors.white)
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        context.l10n.translate('chat_send_without_compression'),
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: theme.textTheme.bodyMedium?.color,
-                        ),
-                      ),
-                    ],
+      children: [
+        // "Без сжатия" toggle
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            HapticFeedback.selectionClick();
+            setState(() => _sendAsDocument = !_sendAsDocument);
+          },
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  color: _sendAsDocument
+                      ? const Color(0xFF2AABEE)
+                      : Colors.transparent,
+                  border: Border.all(
+                    color: _sendAsDocument
+                        ? const Color(0xFF2AABEE)
+                        : (isDark ? Colors.white38 : Colors.black38),
+                    width: 1.8,
                   ),
                 ),
-
-                const Spacer(),
-
-                // Selected count badge
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2AABEE).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: const TextStyle(
-                      color: Color(0xFF2AABEE),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
+                child: _sendAsDocument
+                    ? const Icon(Icons.check, size: 16, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                context.l10n.translate('chat_send_without_compression'),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: theme.textTheme.bodyMedium?.color,
                 ),
-                const SizedBox(width: 10),
+              ),
+            ],
+          ),
+        ),
 
-                // Send Button (flat solid Telegram blue)
-                GestureDetector(
-                  onTap: _isConverting ? null : _sendSelected,
-                  child: Container(
-                    width: 44,
-                    height: 44,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Color(0xFF2AABEE),
-                    ),
-                    child: Center(
-                      child: _isConverting
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            )
-                          : const iconoir.Send(
-                              color: Colors.white,
-                              width: 20,
-                              height: 20,
-                            ),
-                    ),
-                  ),
-                ),
-              ],
+        const Spacer(),
+
+        // Selected count badge
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF2AABEE).withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            '$count',
+            style: const TextStyle(
+              color: Color(0xFF2AABEE),
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
             ),
+          ),
+        ),
+        const SizedBox(width: 10),
+
+        // Send Button (flat solid Telegram blue)
+        GestureDetector(
+          onTap: _isConverting ? null : _sendSelected,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0xFF2AABEE),
+            ),
+            child: Center(
+              child: _isConverting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : const iconoir.Send(
+                      color: Colors.white,
+                      width: 20,
+                      height: 20,
+                    ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1210,43 +1459,35 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
     BuildContext context, {
     required Widget child,
     required bool isDark,
-    required Key key,
   }) {
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlassEnabled = glassProvider.enabled;
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final isGlassEnabled = glassProvider?.enabled ?? false;
 
-    if (!isGlassEnabled) {
+    if (!isGlassEnabled || glassProvider == null) {
       return Padding(
         padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(36),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-            child: Container(
-              key: key,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xFF24242C).withValues(alpha: 0.92)
-                    : Colors.white.withValues(alpha: 0.94),
-                borderRadius: BorderRadius.circular(36),
-                border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.1)
-                      : Colors.black.withValues(alpha: 0.08),
-                  width: 0.8,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
-                    blurRadius: 16,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: child,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xFF24242C).withValues(alpha: 0.96)
+                : Colors.white.withValues(alpha: 0.98),
+            borderRadius: BorderRadius.circular(36),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withValues(alpha: 0.1)
+                  : Colors.black.withValues(alpha: 0.08),
+              width: 0.8,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
+          child: child,
         ),
       );
     }
@@ -1264,7 +1505,6 @@ class _AttachmentPickerBottomSheetState extends State<AttachmentPickerBottomShee
     return Padding(
       padding: const EdgeInsets.only(left: 12, right: 12, bottom: 10, top: 4),
       child: LiquidGlassLens(
-        key: key,
         style: style,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
@@ -1364,11 +1604,13 @@ class _PickerItem {
   final String label;
   final String fallbackLabel;
   final Widget icon;
+  final VoidCallback? onTap;
 
   const _PickerItem({
     required this.action,
     required this.label,
     required this.fallbackLabel,
     required this.icon,
+    this.onTap,
   });
 }

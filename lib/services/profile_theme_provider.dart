@@ -1,12 +1,16 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/name_color_preset.dart';
+import '../models/profile_customization.dart';
 import 'account_manager.dart';
 import 'auth_service.dart';
+import 'peer_customization_cache.dart';
 import 'profile_instant_cache.dart';
+import 'sticker_service.dart';
 
 /// Модель палитры фона профиля
 class ProfileColorPreset {
@@ -263,11 +267,13 @@ class ProfileThemeProvider extends ChangeNotifier {
   static String _prefPresetKey(String uid) => '${uid}_profile_color_preset_id';
   static String _prefNameColorKey(String uid) => '${uid}_user_name_color_preset_id';
   static String _prefStripStyleKey(String uid) => '${uid}_user_reply_strip_style';
+  static String _prefCustomizationKey(String uid) => '${uid}_profile_customization_v1';
 
   String? _currentUserId;
   ProfileColorPreset? _currentPreset = ProfileColorPresets.blue;
   NameColorPreset _currentNameColorPreset = NameColorPresets.red;
   ReplyStripStyle _currentStripStyle = ReplyStripStyle.solid;
+  PeerCustomization _ownCustomization = const PeerCustomization();
 
   String? get currentUserId => _currentUserId;
   ProfileColorPreset? get currentPreset => _currentPreset;
@@ -279,6 +285,16 @@ class ProfileThemeProvider extends ChangeNotifier {
   NameColorPreset get currentNameColorPreset => _currentNameColorPreset;
   ReplyStripStyle get currentStripStyle => _currentStripStyle;
   Color get activeNameColor => _currentNameColorPreset.primaryColor;
+
+  PeerCustomization get ownCustomization => _ownCustomization;
+  AvatarDecorationPreset? get currentAvatarDecoration => _ownCustomization.avatarDecoration;
+  EmojiStatusData? get currentEmojiStatus => _ownCustomization.activeEmojiStatus;
+  ReplyEmojiData? get currentReplyEmoji => _ownCustomization.replyEmoji;
+  String? get currentBannerUrl => _ownCustomization.profileBannerUrl;
+  ProfileBannerLayout get currentBannerLayout => _ownCustomization.bannerLayout;
+  UserBadge? get currentOwnBadge => _ownCustomization.badge;
+  UserBadge? get currentVisibleBadge => _ownCustomization.visibleBadge;
+  bool get isBadgeDisplayed => _ownCustomization.badgeIsDisplayed;
 
   Future<void> init() async {
     final accountManager = AccountManager();
@@ -337,30 +353,47 @@ class ProfileThemeProvider extends ChangeNotifier {
               orElse: () => ReplyStripStyle.solid,
             )
           : ReplyStripStyle.solid;
+
+      final savedCustRaw = prefs.getString(_prefCustomizationKey(userId));
+      _ownCustomization = PeerCustomization.tryParseJsonString(savedCustRaw) ??
+          PeerCustomization(
+            nameColorPresetId: _currentNameColorPreset.id,
+            replyStripStyle: _currentStripStyle.name,
+            profileColorPresetId: _currentPreset?.id,
+          );
+      PeerCustomizationCache.instance.put(userId, _ownCustomization, notify: false);
     } else {
       _currentPreset = ProfileColorPresets.blue;
       _currentNameColorPreset = NameColorPresets.red;
       _currentStripStyle = ReplyStripStyle.solid;
+      _ownCustomization = const PeerCustomization();
     }
 
     notifyListeners();
 
-    // Фоновая синхронизация с сервера для активного пользователя
+    // Фоновая синхронизация с сервера для активного пользователя и каталогов
     _fetchFromServer(userId);
+    PeerCustomizationCache.instance.refreshCatalogs();
+  }
+
+  /// Принудительно обновить оформление текущего пользователя с сервера.
+  Future<void> refresh() => _fetchFromServer(_currentUserId);
+
+  Future<String?> _resolveTokenForUser(String? userId) async {
+    final accountManager = AccountManager();
+    if (userId != null) {
+      final matching = accountManager.accounts.where((a) => a.userId == userId);
+      if (matching.isNotEmpty) {
+        return matching.first.token;
+      }
+    }
+    return AuthService.getToken();
   }
 
   Future<void> _fetchFromServer([String? targetUserId]) async {
     final userId = targetUserId ?? _currentUserId;
     try {
-      final accountManager = AccountManager();
-      String? token;
-      if (userId != null) {
-        final matching = accountManager.accounts.where((a) => a.userId == userId);
-        if (matching.isNotEmpty) {
-          token = matching.first.token;
-        }
-      }
-      token ??= await AuthService.getToken();
+      final token = await _resolveTokenForUser(userId);
       if (token == null) return;
 
       final response = await http.get(
@@ -373,40 +406,381 @@ class ProfileThemeProvider extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true && data['appearance'] is Map) {
-          final app = data['appearance'] as Map<String, dynamic>;
-          final pcId = app['profile_color_preset_id']?.toString();
-          final ncId = app['name_color_preset_id']?.toString();
-          final rs = app['reply_strip_style']?.toString();
-
-          final prefs = await SharedPreferences.getInstance();
-          final bool isStillActive = (_currentUserId == userId);
-
-          if (userId != null && userId.isNotEmpty) {
-            if (pcId != null && pcId.isNotEmpty) {
-              await prefs.setString(_prefPresetKey(userId), pcId);
-              if (isStillActive) _currentPreset = ProfileColorPresets.getById(pcId);
-            }
-            if (ncId != null && ncId.isNotEmpty) {
-              await prefs.setString(_prefNameColorKey(userId), ncId);
-              if (isStillActive) _currentNameColorPreset = NameColorPresets.getById(ncId);
-            }
-            if (rs != null && rs.isNotEmpty) {
-              await prefs.setString(_prefStripStyleKey(userId), rs);
-              if (isStillActive) {
-                _currentStripStyle = ReplyStripStyle.values.firstWhere(
-                  (s) => s.name == rs,
-                  orElse: () => ReplyStripStyle.solid,
-                );
-              }
-            }
-          }
-          if (isStillActive) {
-            notifyListeners();
-          }
+          final app = Map<String, dynamic>.from(data['appearance'] as Map);
+          await applyAppearanceUpdateMap(app, targetUserId: userId);
         }
       }
     } catch (e) {
       debugPrint('[ProfileThemeProvider] Error fetching appearance: $e');
+    }
+  }
+
+  /// Применить частичное или полное обновление appearance (из REST или WebSocket `user_appearance_updated`).
+  Future<void> applyAppearanceUpdateMap(
+    Map<String, dynamic> app, {
+    String? targetUserId,
+  }) async {
+    final userId = targetUserId ?? app['user_id']?.toString() ?? _currentUserId;
+    if (userId == null || userId.isEmpty) return;
+
+    final pcId = app['profile_color_preset_id']?.toString();
+    final ncId = app['name_color_preset_id']?.toString();
+    final rs = app['reply_strip_style']?.toString();
+
+    PeerCustomizationCache.instance.mergeFromJson(userId, app);
+
+    if (userId != _currentUserId) {
+      if (pcId != null && pcId.isNotEmpty) {
+        final preset = ProfileColorPresets.getById(pcId);
+        _peerPresetCache[userId] = preset;
+        ProfileInstantCache.instance.putUserColorPreset(userId, preset);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_prefPresetKey(userId), pcId);
+      }
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    if (pcId != null && pcId.isNotEmpty) {
+      await prefs.setString(_prefPresetKey(userId), pcId);
+      _currentPreset = ProfileColorPresets.getById(pcId);
+    }
+    if (ncId != null && ncId.isNotEmpty) {
+      await prefs.setString(_prefNameColorKey(userId), ncId);
+      _currentNameColorPreset = NameColorPresets.getById(ncId);
+    }
+    if (rs != null && rs.isNotEmpty) {
+      await prefs.setString(_prefStripStyleKey(userId), rs);
+      _currentStripStyle = ReplyStripStyle.values.firstWhere(
+        (s) => s.name == rs,
+        orElse: () => ReplyStripStyle.solid,
+      );
+    }
+
+    _ownCustomization = _ownCustomization.mergeAppearanceMap(app);
+    await prefs.setString(_prefCustomizationKey(userId), _ownCustomization.toJsonString());
+    PeerCustomizationCache.instance.put(userId, _ownCustomization);
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void seedOwnCustomizationForTest(
+    PeerCustomization value, {
+    String? userId,
+  }) {
+    if (userId != null) {
+      _currentUserId = userId;
+    }
+    _ownCustomization = value;
+    final uid = _currentUserId;
+    if (uid != null && uid.isNotEmpty) {
+      PeerCustomizationCache.instance.put(uid, value);
+    }
+    notifyListeners();
+  }
+
+  AvatarDecorationPreset? _resolveDecorationById(String id) {
+    for (final preset in PeerCustomizationCache.instance.decorationsCatalog) {
+      if (preset.id == id) return preset;
+    }
+    for (final preset in AvatarDecorationPreset.builtInDefaults) {
+      if (preset.id == id) return preset;
+    }
+    return null;
+  }
+
+  Future<bool> updateCustomization({
+    String? avatarDecorationId,
+    AvatarDecorationPreset? optimisticDecoration,
+    bool clearAvatarDecoration = false,
+    String? emojiStatusUnicode,
+    int? emojiStatusStickerId,
+    EmojiStatusData? optimisticEmojiStatus,
+    String? emojiStatusNote,
+    DateTime? emojiStatusUntil,
+    bool clearEmojiStatus = false,
+    bool clearEmojiStatusUntil = false,
+    bool clearProfileBanner = false,
+    ProfileBannerLayout? bannerLayout,
+    bool? badgeIsDisplayed,
+    String? profileColorPresetId,
+    String? nameColorPresetId,
+    String? replyStripStyle,
+    int? replyEmojiStickerId,
+    ReplyEmojiData? optimisticReplyEmoji,
+    bool clearReplyEmoji = false,
+  }) async {
+    final previous = _ownCustomization;
+
+    final AvatarDecorationPreset? nextDecoration = clearAvatarDecoration
+        ? null
+        : (optimisticDecoration ??
+            (avatarDecorationId != null
+                ? _resolveDecorationById(avatarDecorationId)
+                : previous.avatarDecoration));
+
+    EmojiStatusData? nextStatus = previous.activeEmojiStatus;
+    if (clearEmojiStatus) {
+      nextStatus = null;
+    } else if (optimisticEmojiStatus != null) {
+      nextStatus = optimisticEmojiStatus.activeOrNull;
+    } else if (emojiStatusUnicode != null) {
+      nextStatus = EmojiStatusData(
+        type: 'unicode',
+        emoji: emojiStatusUnicode,
+        note: emojiStatusNote ?? nextStatus?.note ?? '',
+        expiresAt: clearEmojiStatusUntil
+            ? null
+            : (emojiStatusUntil ?? nextStatus?.expiresAt),
+      ).activeOrNull;
+    } else if (emojiStatusStickerId != null) {
+      nextStatus = EmojiStatusData(
+        type: 'sticker',
+        stickerId: emojiStatusStickerId,
+        stickerUrl: nextStatus?.stickerId == emojiStatusStickerId
+            ? nextStatus?.stickerUrl
+            : null,
+        thumbnailUrl: nextStatus?.stickerId == emojiStatusStickerId
+            ? nextStatus?.thumbnailUrl
+            : null,
+        stickerFormat: nextStatus?.stickerId == emojiStatusStickerId
+            ? nextStatus?.stickerFormat
+            : null,
+        note: emojiStatusNote ?? nextStatus?.note ?? '',
+        expiresAt: clearEmojiStatusUntil
+            ? null
+            : (emojiStatusUntil ?? nextStatus?.expiresAt),
+      ).activeOrNull;
+    } else if (nextStatus != null &&
+        (emojiStatusNote != null ||
+            emojiStatusUntil != null ||
+            clearEmojiStatusUntil)) {
+      nextStatus = EmojiStatusData(
+        type: nextStatus.type,
+        emoji: nextStatus.emoji,
+        stickerId: nextStatus.stickerId,
+        stickerUrl: nextStatus.stickerUrl,
+        thumbnailUrl: nextStatus.thumbnailUrl,
+        stickerFormat: nextStatus.stickerFormat,
+        note: emojiStatusNote ?? nextStatus.note,
+        expiresAt: clearEmojiStatusUntil
+            ? null
+            : (emojiStatusUntil ?? nextStatus.expiresAt),
+      ).activeOrNull;
+    }
+
+    ReplyEmojiData? nextReplyEmoji = previous.replyEmoji;
+    if (clearReplyEmoji) {
+      nextReplyEmoji = null;
+    } else if (optimisticReplyEmoji != null) {
+      nextReplyEmoji = optimisticReplyEmoji;
+    } else if (replyEmojiStickerId != null && replyEmojiStickerId > 0) {
+      final cached = StickerService.instance.getStickerByIdSync(replyEmojiStickerId);
+      nextReplyEmoji = cached != null
+          ? ReplyEmojiData.fromStickerItem(cached)
+          : ReplyEmojiData(
+              stickerId: replyEmojiStickerId,
+              stickerUrl: nextReplyEmoji?.stickerId == replyEmojiStickerId
+                  ? nextReplyEmoji?.stickerUrl
+                  : null,
+              thumbnailUrl: nextReplyEmoji?.stickerId == replyEmojiStickerId
+                  ? nextReplyEmoji?.thumbnailUrl
+                  : null,
+              stickerFormat: nextReplyEmoji?.stickerId == replyEmojiStickerId
+                  ? (nextReplyEmoji?.stickerFormat ?? 'webp')
+                  : 'webp',
+            );
+    }
+
+    final next = PeerCustomization(
+      nameColorPresetId: nameColorPresetId ?? previous.nameColorPresetId,
+      replyStripStyle: replyStripStyle ?? previous.replyStripStyle,
+      profileColorPresetId:
+          profileColorPresetId ?? previous.profileColorPresetId,
+      avatarDecoration: nextDecoration,
+      emojiStatus: nextStatus,
+      badge: previous.badge,
+      badgeIsDisplayed: badgeIsDisplayed ?? previous.badgeIsDisplayed,
+      profileBannerUrl: clearProfileBanner ? null : previous.profileBannerUrl,
+      bannerLayout: clearProfileBanner
+          ? const ProfileBannerLayout()
+          : (bannerLayout ?? previous.bannerLayout),
+      replyEmoji: nextReplyEmoji,
+    );
+
+    _ownCustomization = next;
+    final uid = _currentUserId;
+    if (uid != null && uid.isNotEmpty) {
+      PeerCustomizationCache.instance.put(uid, next);
+    }
+    notifyListeners();
+
+    Future<void> persistLocal(PeerCustomization value) async {
+      if (uid == null || uid.isEmpty) return;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefCustomizationKey(uid), value.toJsonString());
+    }
+
+    try {
+      await persistLocal(next);
+      final token = await _resolveTokenForUser(uid);
+      if (token == null) return true;
+
+      final body = <String, dynamic>{};
+      if (clearAvatarDecoration) {
+        body['clear_avatar_decoration'] = true;
+      } else if (avatarDecorationId != null) {
+        body['avatar_decoration_id'] = avatarDecorationId;
+      }
+
+      if (clearEmojiStatus) {
+        body['clear_emoji_status'] = true;
+      } else {
+        if (emojiStatusUnicode != null) body['emoji_status_unicode'] = emojiStatusUnicode;
+        if (emojiStatusStickerId != null) body['emoji_status_sticker_id'] = emojiStatusStickerId;
+        if (emojiStatusNote != null) body['emoji_status_note'] = emojiStatusNote;
+        if (clearEmojiStatusUntil) {
+          body['clear_emoji_status_until'] = true;
+        } else if (emojiStatusUntil != null) {
+          body['emoji_status_until'] = emojiStatusUntil.toUtc().toIso8601String();
+        }
+      }
+
+      if (clearProfileBanner) {
+        body['clear_profile_banner'] = true;
+      } else if (bannerLayout != null) {
+        body.addAll(bannerLayout.toAppearanceFields());
+      }
+      if (badgeIsDisplayed != null) body['badge_is_displayed'] = badgeIsDisplayed;
+      if (profileColorPresetId != null) body['profile_color_preset_id'] = profileColorPresetId;
+      if (nameColorPresetId != null) body['name_color_preset_id'] = nameColorPresetId;
+      if (replyStripStyle != null) body['reply_strip_style'] = replyStripStyle;
+      if (clearReplyEmoji) {
+        body['clear_reply_emoji'] = true;
+      } else if (replyEmojiStickerId != null && replyEmojiStickerId > 0) {
+        body['reply_emoji_sticker_id'] = replyEmojiStickerId;
+      } else if (optimisticReplyEmoji != null && optimisticReplyEmoji.stickerId > 0) {
+        body['reply_emoji_sticker_id'] = optimisticReplyEmoji.stickerId;
+      }
+
+      final response = await http.put(
+        Uri.parse('${AppConfig.baseUrl}/api/user/appearance'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(body),
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map && data['appearance'] is Map) {
+          await applyAppearanceUpdateMap(
+            Map<String, dynamic>.from(data['appearance'] as Map),
+            targetUserId: uid,
+          );
+        }
+        return true;
+      }
+      debugPrint('[ProfileThemeProvider] updateCustomization HTTP ${response.statusCode}: ${response.body}');
+      if (identical(_ownCustomization, next)) {
+        _ownCustomization = previous;
+        if (uid != null && uid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(uid, previous);
+        }
+        await persistLocal(previous);
+        notifyListeners();
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[ProfileThemeProvider] updateCustomization failed: $e');
+      if (identical(_ownCustomization, next)) {
+        _ownCustomization = previous;
+        if (uid != null && uid.isNotEmpty) {
+          PeerCustomizationCache.instance.put(uid, previous);
+        }
+        await persistLocal(previous);
+        notifyListeners();
+      }
+      return false;
+    }
+  }
+
+  /// Загружает баннер профиля (`POST /api/user/banner`) из файла или байтов.
+  Future<String?> uploadBanner({
+    String? filePath,
+    Uint8List? bytes,
+    String fileName = 'banner.jpg',
+    ProfileBannerLayout? layout,
+  }) async {
+    try {
+      final token = await _resolveTokenForUser(_currentUserId);
+      if (token == null) return null;
+
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('${AppConfig.baseUrl}/api/user/banner'),
+      );
+      request.headers['Authorization'] = 'Bearer $token';
+
+      if (layout != null) {
+        request.fields['scale'] = layout.scale.toStringAsFixed(3);
+        request.fields['pos_x'] = layout.posX.toStringAsFixed(3);
+        request.fields['pos_y'] = layout.posY.toStringAsFixed(3);
+        request.fields['dim'] = layout.dim.toStringAsFixed(3);
+        request.fields['blur'] = layout.blur.toStringAsFixed(2);
+        request.fields['height'] = layout.heightMode.wireValue;
+      }
+
+      if (bytes != null) {
+        request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: fileName));
+      } else if (filePath != null && filePath.isNotEmpty) {
+        request.files.add(await http.MultipartFile.fromPath('file', filePath));
+      } else {
+        return null;
+      }
+
+      final streamed = await request.send();
+      final bodyStr = await streamed.stream.bytesToString();
+      if (streamed.statusCode == 200) {
+        final decoded = jsonDecode(bodyStr);
+        if (decoded is Map) {
+          if (decoded['appearance'] is Map) {
+            await applyAppearanceUpdateMap(
+              Map<String, dynamic>.from(decoded['appearance'] as Map),
+              targetUserId: _currentUserId,
+            );
+          }
+          return decoded['profile_banner_url']?.toString();
+        }
+      }
+      debugPrint('[ProfileThemeProvider] uploadBanner failed HTTP ${streamed.statusCode}: $bodyStr');
+      return null;
+    } catch (e) {
+      debugPrint('[ProfileThemeProvider] uploadBanner error: $e');
+      return null;
+    }
+  }
+
+  /// Удаляет баннер профиля (`DELETE /api/user/banner`).
+  Future<bool> deleteBanner() async {
+    try {
+      final token = await _resolveTokenForUser(_currentUserId);
+      if (token == null) return false;
+      final response = await http.delete(
+        Uri.parse('${AppConfig.baseUrl}/api/user/banner'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        await applyAppearanceUpdateMap(
+          {'profile_banner_url': null},
+          targetUserId: _currentUserId,
+        );
+        return true;
+      }
+      return false;
+    } catch (e) {
+      debugPrint('[ProfileThemeProvider] deleteBanner error: $e');
+      return false;
     }
   }
 
@@ -514,7 +888,8 @@ class ProfileThemeProvider extends ChangeNotifier {
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
           if (data['success'] == true && data['appearance'] is Map) {
-            final app = data['appearance'] as Map<String, dynamic>;
+            final app = Map<String, dynamic>.from(data['appearance'] as Map);
+            PeerCustomizationCache.instance.mergeFromJson(userId, app);
             final pcId = app['profile_color_preset_id']?.toString();
             if (pcId != null && pcId.isNotEmpty) {
               await prefs.setString(_prefPresetKey(userId), pcId);
@@ -533,9 +908,22 @@ class ProfileThemeProvider extends ChangeNotifier {
         ProfileInstantCache.instance.getUserColorPresetSync(userId);
   }
 
+  Future<bool> setReplyBackgroundEmoji(StickerItem? sticker) {
+    if (sticker == null) {
+      return updateCustomization(clearReplyEmoji: true);
+    }
+    return updateCustomization(
+      replyEmojiStickerId: sticker.id,
+      optimisticReplyEmoji: ReplyEmojiData.fromStickerItem(sticker),
+    );
+  }
+
   Future<void> resetToDefault() async {
     await setPreset(ProfileColorPresets.blue);
     await setNameColorAndStyle(NameColorPresets.red, ReplyStripStyle.solid);
+    if (_ownCustomization.replyEmoji != null) {
+      await updateCustomization(clearReplyEmoji: true);
+    }
   }
 
   @override

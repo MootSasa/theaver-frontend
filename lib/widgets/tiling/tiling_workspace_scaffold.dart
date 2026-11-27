@@ -11,12 +11,13 @@ import '../../screens/call/voice_call_screen.dart';
 import '../../screens/chat/channel_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
-import '../../screens/chat/system_notifications_screen.dart';
 import '../../screens/chat/user_profile_screen.dart';
 import '../../screens/community/community_screen.dart';
 import '../../screens/main/main_screen.dart';
 import '../../screens/search/search_screen.dart';
+import '../../services/chat_instant_cache.dart';
 import '../../services/community_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/sticker_service.dart';
 import '../../services/tiling_layout_controller.dart';
@@ -62,6 +63,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
   late final AnimationController _singlePaneChatController;
   bool _wasShowingSinglePaneChat = false;
+  String? _lastSinglePaneChatSignature;
   bool _isSinglePaneInteractiveDrag = false;
   bool _isClosingSinglePaneAnimated = false;
 
@@ -73,11 +75,17 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   @override
   void initState() {
     super.initState();
-    _wasShowingSinglePaneChat = _controller.singlePaneShowingChat;
+    final initialActive = _controller.focusedChatTile;
+    final bool hasInitialSinglePane =
+        _controller.singlePaneShowingChat && initialActive != null;
+    _wasShowingSinglePaneChat = hasInitialSinglePane;
+    _lastSinglePaneChatSignature = hasInitialSinglePane
+        ? '${initialActive.tileId}_${initialActive.chatId}_${initialActive.revision}'
+        : null;
     _singlePaneChatController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 250),
-      reverseDuration: const Duration(milliseconds: 250),
+      duration: const Duration(milliseconds: 300),
+      reverseDuration: const Duration(milliseconds: 260),
       value: _wasShowingSinglePaneChat ? 1.0 : 0.0,
     );
     _controller.attachWorkspace(
@@ -105,8 +113,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
   }
 
   bool _isCurrentlySinglePaneMode() {
-    final double w =
-        _lastReportedWindowSize?.width ?? _controller.windowSize.width;
+    final double w = _lastReportedWindowSize?.width ??
+        (mounted ? MediaQuery.maybeSizeOf(context)?.width : null) ??
+        _controller.windowSize.width;
     return w < TilingLayoutController.kTwoColumnBreakpoint &&
         _controller.chatTiles.length < 2;
   }
@@ -120,7 +129,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     try {
       await _singlePaneChatController.animateTo(
         0.0,
-        duration: const Duration(milliseconds: 250),
+        duration: const Duration(milliseconds: 260),
         curve: Curves.easeOutCubic,
       );
     } finally {
@@ -141,16 +150,27 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       _chatTileHeroControllers.remove(id)?.dispose();
     }
 
+    final activeChat = _controller.focusedChatTile;
     final bool nowShowingChat =
-        _controller.singlePaneShowingChat && _controller.focusedChatTile != null;
-    if (nowShowingChat && !_wasShowingSinglePaneChat) {
+        _controller.singlePaneShowingChat && activeChat != null;
+    final String? nextChatSig = nowShowingChat
+        ? '${activeChat.tileId}_${activeChat.chatId}_${activeChat.revision}'
+        : null;
+    final bool chatReplacedInSinglePane = nowShowingChat &&
+        _wasShowingSinglePaneChat &&
+        _lastSinglePaneChatSignature != null &&
+        _lastSinglePaneChatSignature != nextChatSig;
+
+    if ((nowShowingChat && !_wasShowingSinglePaneChat) ||
+        chatReplacedInSinglePane) {
       _isClosingSinglePaneAnimated = false;
       _isSinglePaneInteractiveDrag = false;
       if (_isCurrentlySinglePaneMode()) {
+        _singlePaneChatController.value = 0.0;
         _singlePaneChatController.animateTo(
           1.0,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
+          duration: const Duration(milliseconds: 300),
+          curve: const Cubic(0.22, 0.82, 0.24, 1.0),
         );
       } else {
         _singlePaneChatController.value = 1.0;
@@ -162,6 +182,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
       }
     }
     _wasShowingSinglePaneChat = nowShowingChat;
+    _lastSinglePaneChatSignature = nextChatSig;
 
     setState(() {});
   }
@@ -332,6 +353,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     ChatTileDescriptor descriptor, {
     bool hasTopNeighbor = false,
     bool hasBottomNeighbor = false,
+    bool enableMultiPaneSwipeClose = true,
   }) {
     final subtreeKey = _chatTileSubtreeKeys.putIfAbsent(
       descriptor.tileId,
@@ -358,24 +380,29 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           isChatTile: true,
           hasTopNeighbor: hasTopNeighbor,
           hasBottomNeighbor: hasBottomNeighbor,
-          child: HeroControllerScope(
-            controller: heroController,
-            child: Navigator(
-              key: descriptor.navigatorKey,
-              observers: [backObserver],
-              onGenerateRoute: (settings) {
-                final sub = _onGenerateSubRoute(settings);
-                if (sub != null) return sub;
-                final route = MaterialPageRoute(
-                  builder: (_) => KeyedSubtree(
-                    key: descriptor.contentKey,
-                    child: _buildChatRootScreen(descriptor),
-                  ),
-                  settings: settings,
-                );
-                descriptor.rootRoute = route;
-                return route;
-              },
+          child: _MultiPaneChatTileSwipeCloser(
+            descriptor: descriptor,
+            controller: _controller,
+            enabled: enableMultiPaneSwipeClose,
+            child: HeroControllerScope(
+              controller: heroController,
+              child: Navigator(
+                key: descriptor.navigatorKey,
+                observers: [backObserver],
+                onGenerateRoute: (settings) {
+                  final sub = _onGenerateSubRoute(settings);
+                  if (sub != null) return sub;
+                  final route = MaterialPageRoute(
+                    builder: (_) => KeyedSubtree(
+                      key: descriptor.contentKey,
+                      child: _buildChatRootScreen(descriptor),
+                    ),
+                    settings: settings,
+                  );
+                  descriptor.rootRoute = route;
+                  return route;
+                },
+              ),
             ),
           ),
         ),
@@ -415,17 +442,45 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           highlightMessageId: descriptor.initialMessageId,
         );
       case 'system':
-        return SystemNotificationsScreen(
-          chatId: descriptor.chatId,
-          chatName: descriptor.chatName,
-        );
-      case 'saved':
-      case 'private':
-      default:
         return PrivateChatScreen(
           chatId: descriptor.chatId,
           otherUserName: descriptor.chatName,
           otherUserAvatar: descriptor.avatarUrl,
+          otherUserOnline: descriptor.isOnline,
+          otherUserLastSeen: descriptor.lastSeen,
+          otherUserId: descriptor.otherUserId,
+          initialMessageId: descriptor.initialMessageId,
+          initialChatType: 'system',
+        );
+      case 'saved':
+      case 'private':
+      default:
+        final isPrivate = descriptor.chatType == 'private';
+        final snap = ChatInstantCache.instance.getSync(descriptor.chatId);
+        final bool isBot = (snap?.isBot ?? snap?.chat?.isBot) == true;
+        final bool canResolvePeer = isPrivate &&
+            ContactsService.shouldResolveUserIdentity(
+              descriptor.otherUserId,
+              isBot: isBot,
+            );
+        final effectiveOtherName = canResolvePeer
+            ? ContactsService.resolvePeerName(
+                descriptor.otherUserId,
+                descriptor.chatName,
+                isBot: isBot,
+              )
+            : descriptor.chatName;
+        final effectiveOtherAvatar = canResolvePeer
+            ? ContactsService.resolvePeerAvatarUrl(
+                descriptor.otherUserId,
+                descriptor.avatarUrl,
+                isBot: isBot,
+              )
+            : descriptor.avatarUrl;
+        return PrivateChatScreen(
+          chatId: descriptor.chatId,
+          otherUserName: effectiveOtherName,
+          otherUserAvatar: effectiveOtherAvatar,
           otherUserOnline: descriptor.isOnline,
           otherUserLastSeen: descriptor.lastSeen,
           otherUserId: descriptor.otherUserId,
@@ -522,6 +577,7 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     final chatRootRoute = activeChat.rootRoute;
     if (chatRootRoute != null) {
       if (!chatRootRoute.isCurrent) return false;
+      if (!SwipeBackPopScope.isEnabledForRoute(chatRootRoute)) return false;
       final secAnim = chatRootRoute.secondaryAnimation;
       if (secAnim != null &&
           (secAnim.status != AnimationStatus.dismissed ||
@@ -540,8 +596,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
     final activeChat = _controller.focusedChatTile;
     final showChat = _controller.singlePaneShowingChat && activeChat != null;
     final leftMainTile = _buildLeftMainTile();
-    final chatTileWidget =
-        activeChat != null ? _buildChatTileWidget(activeChat) : null;
+    final chatTileWidget = activeChat != null
+        ? _buildChatTileWidget(activeChat, enableMultiPaneSwipeClose: false)
+        : null;
 
     return AnimatedBuilder(
       animation: _singlePaneChatController,
@@ -553,61 +610,84 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
 
         return Stack(
           fit: StackFit.expand,
+          clipBehavior: Clip.none,
           children: [
-            Offstage(
-              offstage: hideMain,
-              child: FractionalTranslation(
-                translation: Offset(-0.3 * t, 0.0),
-                child: leftMainTile,
+            IgnorePointer(
+              ignoring: showChat || t > 0.02,
+              child: ExcludeSemantics(
+                excluding: hideMain,
+                child: TickerMode(
+                  enabled: !hideMain && t < 0.02,
+                  child: FractionalTranslation(
+                    translation: Offset(hideMain ? -1.05 : -0.28 * t, 0.0),
+                    child: RepaintBoundary(child: leftMainTile),
+                  ),
+                ),
               ),
             ),
-            if (t > 0.0 && !hideMain)
+            if (t > 0.001 && !hideMain)
               IgnorePointer(
                 child: ColoredBox(
-                  color: Colors.black.withValues(alpha: 0.4 * t),
+                  color: Colors.black.withValues(alpha: 0.28 * t),
                 ),
               ),
             if (activeChat != null && chatTileWidget != null)
               Offstage(
                 offstage: hideChat,
-                child: FractionalTranslation(
-                  translation: Offset(1.0 - t, 0.0),
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      boxShadow: t > 0.0 && t < 1.0
-                          ? [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.15 * t),
-                                blurRadius: 20,
-                                spreadRadius: 2,
-                                offset: const Offset(-5, 0),
+                child: TickerMode(
+                  enabled: !hideChat,
+                  child: FractionalTranslation(
+                    translation: Offset(1.0 - t, 0.0),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      clipBehavior: Clip.none,
+                      children: [
+                        if (t > 0.002 && t < 0.998)
+                          Positioned(
+                            left: -16.0,
+                            top: 0.0,
+                            bottom: 0.0,
+                            width: 16.0,
+                            child: IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                    colors: [
+                                      Colors.transparent,
+                                      Colors.black.withValues(alpha: 0.14 * t),
+                                    ],
+                                  ),
+                                ),
                               ),
-                            ]
-                          : const [],
-                    ),
-                    child: InteractiveSwipeBackGestureDetector(
-                      animationController: _singlePaneChatController,
-                      viewportSizeOverride: viewportSize,
-                      canSwipeBack: () => _canSinglePaneSwipeBack(activeChat),
-                      isPopBlocked: () =>
-                          activeChat.rootRoute?.popDisposition ==
-                          RoutePopDisposition.doNotPop,
-                      onDragStart: () {
-                        if (!_isSinglePaneInteractiveDrag) {
-                          setState(() => _isSinglePaneInteractiveDrag = true);
-                        }
-                      },
-                      onRestored: () {
-                        if (_isSinglePaneInteractiveDrag) {
-                          setState(() => _isSinglePaneInteractiveDrag = false);
-                        }
-                      },
-                      onDismissed: () {
-                        _isSinglePaneInteractiveDrag = false;
-                        _controller.recordBackTransition();
-                        _controller.closeChatTile(activeChat.tileId);
-                      },
-                      child: chatTileWidget,
+                            ),
+                          ),
+                        InteractiveSwipeBackGestureDetector(
+                          animationController: _singlePaneChatController,
+                          viewportSizeOverride: viewportSize,
+                          canSwipeBack: () => _canSinglePaneSwipeBack(activeChat),
+                          isPopBlocked: () =>
+                              activeChat.rootRoute?.popDisposition ==
+                              RoutePopDisposition.doNotPop,
+                          onDragStart: () {
+                            if (!_isSinglePaneInteractiveDrag) {
+                              setState(() => _isSinglePaneInteractiveDrag = true);
+                            }
+                          },
+                          onRestored: () {
+                            if (_isSinglePaneInteractiveDrag) {
+                              setState(() => _isSinglePaneInteractiveDrag = false);
+                            }
+                          },
+                          onDismissed: () {
+                            _isSinglePaneInteractiveDrag = false;
+                            _controller.recordInteractiveSwipePopCompleted();
+                            _controller.closeChatTile(activeChat.tileId);
+                          },
+                          child: RepaintBoundary(child: chatTileWidget),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -746,6 +826,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -809,6 +892,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -892,6 +978,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -979,6 +1068,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   child: GlassDropPlaceholder(
                     slot: TilingDropSlot.replace,
                     chatName: drag.chatName,
+                    chatId: drag.chatId,
+                    chatType: drag.chatType,
+                    otherUserId: drag.otherUserId,
                   ),
                 ),
             ],
@@ -1033,26 +1125,65 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
               ),
             ),
             child: ListenableBuilder(
-              listenable: StickerService.instance,
+              listenable: Listenable.merge([
+                StickerService.instance,
+                ContactsService.revisionNotifier,
+              ]),
               builder: (context, _) {
+                final currentActiveTile =
+                    _controller.focusedChatTile ?? activeTile;
                 final activeInput = StickerService.instance.activeInputTarget;
-                final targetName = activeTile?.chatName.isNotEmpty == true
-                    ? activeTile!.chatName
-                    : (activeInput?.chatName.isNotEmpty == true
-                        ? activeInput!.chatName
-                        : 'Активный чат');
-                final targetAvatarUrl =
-                    (activeTile?.avatarUrl?.isNotEmpty == true)
-                        ? activeTile!.avatarUrl
+                final rawTargetName =
+                    currentActiveTile?.chatName.isNotEmpty == true
+                        ? currentActiveTile!.chatName
+                        : (activeInput?.chatName.isNotEmpty == true
+                            ? activeInput!.chatName
+                            : 'Активный чат');
+                final rawTargetAvatarUrl =
+                    (currentActiveTile?.avatarUrl?.isNotEmpty == true)
+                        ? currentActiveTile!.avatarUrl
                         : activeInput?.chatAvatarUrl;
+
+                final effectiveChatId =
+                    currentActiveTile?.chatId ?? activeInput?.chatId ?? '';
+                final snap = effectiveChatId.isNotEmpty
+                    ? ChatInstantCache.instance.getSync(effectiveChatId)
+                    : null;
+                final bool isBot =
+                    (snap?.isBot ?? snap?.chat?.isBot) == true;
+                final bool isPrivateTile =
+                    currentActiveTile?.chatType == 'private';
+                final String? targetUserId =
+                    isPrivateTile ? currentActiveTile?.otherUserId : null;
+                final bool canResolvePeer = isPrivateTile &&
+                    ContactsService.shouldResolveUserIdentity(
+                      targetUserId,
+                      isBot: isBot,
+                    );
+                final targetName = canResolvePeer
+                    ? ContactsService.resolvePeerName(
+                        targetUserId,
+                        rawTargetName,
+                        isBot: isBot,
+                      )
+                    : rawTargetName;
+                final targetAvatarUrl = canResolvePeer
+                    ? ContactsService.resolvePeerAvatarUrl(
+                        targetUserId,
+                        rawTargetAvatarUrl,
+                        isBot: isBot,
+                      )
+                    : rawTargetAvatarUrl;
 
                 return Row(
                   children: [
                     AvatarWithStatus(
+                      userId: canResolvePeer ? targetUserId : null,
                       avatarUrl: targetAvatarUrl,
                       name: targetName,
                       radius: 12,
                       isOnline: false,
+                      resolveContactOverride: canResolvePeer,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -1173,6 +1304,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           child: GlassDropPlaceholder(
             slot: dropSlot,
             chatName: drag.chatName,
+            chatId: drag.chatId,
+            chatType: drag.chatType,
+            otherUserId: drag.otherUserId,
           ),
         ),
       ],
@@ -1204,6 +1338,9 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
             child: GlassDropPlaceholder(
               slot: dropSlot,
               chatName: drag.chatName,
+              chatId: drag.chatId,
+              chatType: drag.chatType,
+              otherUserId: drag.otherUserId,
             ),
           ),
       ],
@@ -1262,18 +1399,161 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
                   ),
                 ),
               )
-            : Container(
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? Colors.black.withValues(alpha: 0.42)
-                      : Colors.white.withValues(alpha: 0.78),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: isDark ? Colors.white12 : Colors.black12,
+              : Container(
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.black.withValues(alpha: 0.42)
+                        : Colors.white.withValues(alpha: 0.78),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: isDark ? Colors.white12 : Colors.black12,
+                    ),
                   ),
+                  child: badgeContent,
                 ),
-                child: badgeContent,
+      ),
+    );
+  }
+}
+
+class _MultiPaneChatTileSwipeCloser extends StatefulWidget {
+  final ChatTileDescriptor descriptor;
+  final TilingLayoutController controller;
+  final bool enabled;
+  final Widget child;
+
+  const _MultiPaneChatTileSwipeCloser({
+    required this.descriptor,
+    required this.controller,
+    required this.enabled,
+    required this.child,
+  });
+
+  @override
+  State<_MultiPaneChatTileSwipeCloser> createState() =>
+      _MultiPaneChatTileSwipeCloserState();
+}
+
+class _MultiPaneChatTileSwipeCloserState
+    extends State<_MultiPaneChatTileSwipeCloser>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _closeController;
+  late String _lastChatSig;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastChatSig =
+        '${widget.descriptor.chatId}_${widget.descriptor.revision}';
+    _closeController = AnimationController(
+      vsync: this,
+      value: 1.0,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _MultiPaneChatTileSwipeCloser oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextSig =
+        '${widget.descriptor.chatId}_${widget.descriptor.revision}';
+    if (nextSig != _lastChatSig) {
+      _lastChatSig = nextSig;
+      _closeController.value = 1.0;
+    } else if (!widget.enabled && _closeController.value < 1.0) {
+      _closeController.value = 1.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _closeController.dispose();
+    super.dispose();
+  }
+
+  bool _canSwipeCloseTile() {
+    if (!mounted || !widget.enabled) return false;
+    if (widget.controller.isDragging ||
+        widget.controller.isResizingDivider ||
+        widget.controller.isPopTransitionActive) {
+      return false;
+    }
+    final chatNav = widget.descriptor.navigatorKey.currentState;
+    if (chatNav != null && (chatNav.canPop() || chatNav.userGestureInProgress)) {
+      return false;
+    }
+    final chatRootRoute = widget.descriptor.rootRoute;
+    if (chatRootRoute != null) {
+      if (!chatRootRoute.isCurrent) return false;
+      if (!SwipeBackPopScope.isEnabledForRoute(chatRootRoute)) return false;
+      final secAnim = chatRootRoute.secondaryAnimation;
+      if (secAnim != null &&
+          (secAnim.status != AnimationStatus.dismissed ||
+              secAnim.value > 0.001)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _closeController,
+      builder: (context, child) {
+        final double t =
+            widget.enabled ? _closeController.value.clamp(0.0, 1.0) : 1.0;
+        return Stack(
+          fit: StackFit.expand,
+          clipBehavior: Clip.none,
+          children: [
+            if (t < 0.999)
+              ColoredBox(
+                color: Theme.of(context)
+                    .scaffoldBackgroundColor
+                    .withValues(alpha: 0.65),
               ),
+            FractionalTranslation(
+              translation: Offset(1.0 - t, 0.0),
+              child: Stack(
+                fit: StackFit.expand,
+                clipBehavior: Clip.none,
+                children: [
+                  if (t > 0.002 && t < 0.998)
+                    Positioned(
+                      left: -16.0,
+                      top: 0.0,
+                      bottom: 0.0,
+                      width: 16.0,
+                      child: IgnorePointer(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.centerLeft,
+                              end: Alignment.centerRight,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black.withValues(alpha: 0.14 * t),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  child!,
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+      child: InteractiveSwipeBackGestureDetector(
+        animationController: _closeController,
+        canSwipeBack: _canSwipeCloseTile,
+        onDismissed: () {
+          widget.controller.recordInteractiveSwipePopCompleted();
+          widget.controller.closeChatTile(widget.descriptor.tileId);
+        },
+        child: widget.child,
       ),
     );
   }

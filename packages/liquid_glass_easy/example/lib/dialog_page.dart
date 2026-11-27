@@ -206,7 +206,6 @@ class _DialogPageState extends State<DialogPage> {
   @override
   Widget build(BuildContext context) {
     return LiquidGlassScaffold(
-      batch: true,
       // The same black the photo shows while it loads.
       backgroundColor: Colors.black,
       appBar: const DemoHeader(title: 'Alert Dialog'),

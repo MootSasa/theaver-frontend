@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../models/theav_theme.dart';
+import '../../services/contacts_service.dart';
 import '../../utils/emoji_utils.dart';
+import '../design_system/theav_design_system.dart';
+import '../user/avatar_with_status.dart';
 import 'sticker_item_widget.dart';
 
 /// Панель реакций — появляется при длинном нажатии на сообщение.
@@ -275,87 +278,72 @@ class _MessageReactionsRowState extends State<MessageReactionsRow>
 
   void _showReactionUsersSheet(BuildContext context, _ReactionItemEntry item) {
     HapticFeedback.selectionClick();
-    final theme = Theme.of(context);
     final users = widget.reactionUsers?[item.emoji] ?? const [];
     final isCustom = item.emoji.startsWith('custom:');
     final customId = isCustom ? item.emoji.substring('custom:'.length) : '';
 
-    showModalBottomSheet<void>(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: theme.colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
+      title: 'Реакции: ${item.count}',
+      trailing: isCustom
+          ? InlineCustomEmojiWidget(customEmojiId: customId, size: 22)
+          : EmojiUtils.appleEmoji(item.emoji, size: 22),
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    isCustom
-                        ? InlineCustomEmojiWidget(
-                            customEmojiId: customId,
-                            size: 22,
-                          )
-                        : EmojiUtils.appleEmoji(item.emoji, size: 22),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Реакции: ${item.count}',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    ),
-                  ],
-                ),
-                if (users.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  const Divider(height: 1),
-                  const SizedBox(height: 6),
-                  ...users.take(15).map((u) {
-                    final name =
-                        (u['display_name'] ?? u['username'] ?? 'Пользователь')
-                            .toString();
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 12,
-                            backgroundColor:
-                                theme.colorScheme.primary.withValues(alpha: 0.2),
-                            child: Text(
-                              name.isNotEmpty ? name[0].toUpperCase() : '?',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              name,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: theme.colorScheme.onSurface,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-                ],
-              ],
+        final palette = ctx.theav;
+        if (users.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Text(
+              'Нет данных об участниках',
+              style: TextStyle(fontSize: 14, color: palette.subtext),
             ),
-          ),
+          );
+        }
+        return ValueListenableBuilder<int>(
+          valueListenable: ContactsService.revisionNotifier,
+          builder: (_, __, ___) {
+            return SingleChildScrollView(
+              child: TheavInsetGroup(
+                children: [
+                  for (final u in users.take(25))
+                    () {
+                      final uid =
+                          (u['user_id'] ?? u['id'] ?? '').toString().trim();
+                      final isBot = u['is_bot'] == true || u['is_bot'] == 1;
+                      final rawName = (u['display_name'] ??
+                              u['username'] ??
+                              'Пользователь')
+                          .toString();
+                      final name = ContactsService.resolvePeerName(
+                        uid,
+                        rawName,
+                        isBot: isBot,
+                      );
+                      final rawAvatar = u['avatar_url']?.toString();
+                      final avatarUrl = ContactsService.resolvePeerAvatarUrl(
+                        uid,
+                        rawAvatar,
+                        isBot: isBot,
+                      );
+                      return TheavListRow(
+                        leading: AvatarWithStatus(
+                          userId: uid.isNotEmpty && uid != '0' ? uid : null,
+                          avatarUrl: avatarUrl,
+                          name: name,
+                          radius: 14,
+                          isOnline: false,
+                          showDecoration: false,
+                          resolveContactOverride: false,
+                        ),
+                        title: name,
+                      );
+                    }(),
+                ],
+              ),
+            );
+          },
         );
       },
     );

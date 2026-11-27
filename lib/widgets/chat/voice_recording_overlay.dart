@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:just_audio/just_audio.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
@@ -337,9 +336,9 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     final primaryColor = theme.colorScheme.primary;
     final isDark = theme.brightness == Brightness.dark;
     final p = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final useGlass = glassProvider.enabled;
-    final isFullGlass = glassProvider.isFull;
+    final glassProvider = LiquidGlassProvider.maybeOf(context);
+    final useGlass = glassProvider?.enabled ?? false;
+    final isFullGlass = glassProvider?.isFull ?? false;
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     final elapsedText = _formatDuration(widget.recorderService.elapsed);
 
@@ -406,7 +405,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
               scale: Tween<double>(begin: 0.7, end: 1.0).animate(entranceCurve),
               child: Transform.scale(
                 scale: 0.75 + 0.25 * lockDismissFactor,
-                child: useGlass
+                child: useGlass && glassProvider != null
                     ? SizedBox(
                         width: 40,
                         height: 56,
@@ -494,7 +493,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
                   SizedBox(
                     height: 52,
                     width: double.infinity,
-                    child: useGlass
+                    child: useGlass && glassProvider != null
                         ? LiquidGlassLens(
                             style: glassProvider.createStyle(
                               context: context,
@@ -554,9 +553,12 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
     bool useGlass,
     bool isFullGlass,
     TheavPalette p,
-    LiquidGlassProvider glassProvider,
+    LiquidGlassProvider? glassProvider,
   ) {
-    final senderName = widget.replyToMessage?.senderName ?? 'User';
+    final replyMsg = widget.replyToMessage;
+    final senderName = replyMsg != null
+        ? replyMsg.resolveEffectiveAuthorTitle()
+        : 'Сообщение';
     final preview = widget.isQuote && widget.quoteText != null
         ? widget.quoteText!
         : (widget.replyToMessage?.content ?? '');
@@ -614,7 +616,7 @@ class VoiceRecordingOverlayState extends State<VoiceRecordingOverlay>
       child: SizedBox(
         height: 44,
         width: double.infinity,
-        child: useGlass
+        child: useGlass && glassProvider != null
             ? LiquidGlassLens(
                 style: glassProvider.createStyle(
                   context: context,

@@ -55,6 +55,14 @@ class EntityParser {
   /// Regular expression for detecting URLs (both with scheme and bare domains).
   static RegExp get urlRegex => _urlRegex;
 
+  static final RegExp _mentionRegex =
+      RegExp(r'(?<![a-zA-Z0-9_./])@([a-zA-Z][a-zA-Z0-9_]{2,31})\b');
+  static final RegExp _botCommandRegex = RegExp(
+    r'(?<![a-zA-Z0-9_./:])(/[a-zA-Z][a-zA-Z0-9_]{0,31}(?:@[a-zA-Z][a-zA-Z0-9_]{3,31})?)(?![a-zA-Z0-9_/])',
+  );
+  static final RegExp _hashtagRegex =
+      RegExp(r'(?<![a-zA-Z0-9_&#/])#([\p{L}\p{N}_]{1,64})', unicode: true);
+
   /// Ensures the URL starts with http:// or https://.
   static String normalizeUrl(String raw) {
     var u = cleanUrl(raw);
@@ -91,8 +99,8 @@ class EntityParser {
     return cleaned;
   }
 
-  /// Returns whether a URL points to an internal object storage or media CDN host (MinIO/S3),
-  /// such as storage.theaver.app, AppConfig.storageUrl, or local MinIO instances.
+  /// Returns whether a URL points to an internal object storage or protected API media route,
+  /// such as storage.theaver.app, AppConfig.storageUrl, `/api/files/...`, or local SeaweedFS/MinIO instances.
   /// Internal storage URLs must not generate chat link preview banners or cards.
   static bool isInternalStorageUrl(String? url) {
     if (url == null || url.trim().isEmpty) return false;
@@ -117,8 +125,22 @@ class EntityParser {
         return true;
       }
 
-      // Localhost / Docker MinIO storage
-      if ((host == 'localhost' || host == '127.0.0.1') && uri.port == 9000) {
+      // Protected /api/files/... proxy routes on API host
+      if (uri.path.contains('/api/files/')) {
+        final configApi = Uri.tryParse(AppConfig.baseUrl);
+        if (configApi != null &&
+            configApi.host.isNotEmpty &&
+            host == configApi.host.toLowerCase()) {
+          return true;
+        }
+      }
+
+      // Localhost / Docker SeaweedFS (:8333) or legacy MinIO (:9000) storage
+      if ((host == 'localhost' ||
+              host == '127.0.0.1' ||
+              host == 'seaweedfs' ||
+              host == 'minio') &&
+          (uri.port == 8333 || uri.port == 9000)) {
         return true;
       }
 
@@ -778,8 +800,8 @@ class EntityParser {
     final rawInlineEntities = <MessageEntity>[];
 
     for (final e in validEntities) {
-      int start = e.offset.clamp(0, cleanText.length);
-      int end = (e.offset + e.length).clamp(start, cleanText.length);
+      int start = _snapUtf16Offset(cleanText, e.offset);
+      int end = _snapUtf16Offset(cleanText, e.offset + e.length);
       if (start >= end) continue;
 
       if (_isBlockType(e.type)) {
@@ -1151,10 +1173,10 @@ class EntityParser {
       case 'url':
       case 'text_link':
       case 'link':
+        final safeStart = _snapUtf16Offset(cleanText, entity.offset);
+        final safeEnd = _snapUtf16Offset(cleanText, entity.offset + entity.length);
         final rawUrl = entity.url ??
-            (entity.offset + entity.length <= cleanText.length
-                ? cleanText.substring(entity.offset, entity.offset + entity.length)
-                : '');
+            (safeStart < safeEnd ? cleanText.substring(safeStart, safeEnd) : '');
         final targetUrl = normalizeUrl(rawUrl);
         return ']($targetUrl)';
       default:
@@ -1180,13 +1202,13 @@ class EntityParser {
       end = text.length;
       selectedText = '';
     } else if (selection.isCollapsed) {
-      start = selection.baseOffset.clamp(0, text.length);
+      start = _snapUtf16Offset(text, selection.baseOffset);
       end = start;
       selectedText = '';
     } else {
-      start = selection.start;
-      end = selection.end;
-      selectedText = text.substring(start, end);
+      start = _snapUtf16Offset(text, selection.start);
+      end = _snapUtf16Offset(text, selection.end);
+      selectedText = start < end ? text.substring(start, end) : '';
     }
 
     String prefix = '';
@@ -1285,11 +1307,26 @@ class EntityParser {
   static final Map<int, ParsedMessage> _resolvedMessageCache =
       <int, ParsedMessage>{};
 
+  /// Snaps a UTF-16 offset to a safe boundary inside [text] so a surrogate pair
+  /// (`0xD800..0xDBFF` followed by `0xDC00..0xDFFF`) is never split in half.
+  static int snapUtf16Offset(String text, int index) =>
+      _snapUtf16Offset(text, index);
+
+  /// Safely extracts a UTF-16 boundary-aligned substring from [text].
+  static String safeSubstring(String text, int start, [int? end]) {
+    if (text.isEmpty) return '';
+    final s = _snapUtf16Offset(text, start);
+    final e = end != null ? _snapUtf16Offset(text, end) : text.length;
+    if (e <= s) return '';
+    return text.substring(s, e);
+  }
+
   static int _snapUtf16Offset(String text, int index) {
     final clamped = index.clamp(0, text.length);
     if (clamped > 0 && clamped < text.length) {
       final cu = text.codeUnitAt(clamped);
-      if (cu >= 0xDC00 && cu <= 0xDFFF) {
+      final prev = text.codeUnitAt(clamped - 1);
+      if (cu >= 0xDC00 && cu <= 0xDFFF && prev >= 0xD800 && prev <= 0xDBFF) {
         return clamped - 1;
       }
     }
@@ -1334,8 +1371,9 @@ class EntityParser {
       // Guard against edge-case callers that passed Markdown-serialized text
       // alongside cleanText entity offsets.
       final bool looksLikeUnstrippedMarkdown = existingEntities.any((e) {
-        if (e.offset < 0 || e.offset >= candidateText.length) return false;
-        final tail = candidateText.substring(e.offset);
+        final safeOffset = _snapUtf16Offset(candidateText, e.offset);
+        if (safeOffset < 0 || safeOffset >= candidateText.length) return false;
+        final tail = candidateText.substring(safeOffset);
         if (_isQuoteType(e.type) &&
             (tail.startsWith('> ') || tail.startsWith('**>'))) {
           return true;
@@ -1406,7 +1444,10 @@ class EntityParser {
     } else {
       final normalized = rawText.replaceAll('\r\n', '\n').trimRight();
       if (!_formattingSyntaxCheck.hasMatch(normalized) &&
-          !_urlRegex.hasMatch(normalized)) {
+          !_urlRegex.hasMatch(normalized) &&
+          !normalized.contains('@') &&
+          !normalized.contains('/') &&
+          !normalized.contains('#')) {
         final plainRes = ParsedMessage(cleanText: normalized, entities: const []);
         if (_resolvedMessageCache.length >= _kMaxResolvedCacheSize) {
           _resolvedMessageCache.remove(_resolvedMessageCache.keys.first);
@@ -1451,6 +1492,8 @@ class EntityParser {
       }
     }
 
+    _appendAutoDetectedEntities(cleanText, baseEntities);
+
     baseEntities.sort((a, b) {
       if (a.offset != b.offset) return a.offset.compareTo(b.offset);
       if (a.length != b.length) return b.length.compareTo(a.length);
@@ -1466,5 +1509,66 @@ class EntityParser {
     }
     _resolvedMessageCache[cacheKey] = result;
     return result;
+  }
+
+  static void _appendAutoDetectedEntities(
+    String cleanText,
+    List<MessageEntity> baseEntities,
+  ) {
+    if (cleanText.isEmpty) return;
+
+    bool isProtectedRange(int start, int end, String ownType) {
+      for (final e in baseEntities) {
+        final eEnd = e.offset + e.length;
+        if (start >= eEnd || end <= e.offset) continue;
+        if (e.type == 'pre' ||
+            e.type == 'code' ||
+            e.type == 'url' ||
+            e.type == 'link' ||
+            e.type == 'text_link' ||
+            e.type == 'latex_inline' ||
+            e.type == 'latex_block' ||
+            e.type == ownType) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (cleanText.contains('@')) {
+      for (final m in _mentionRegex.allMatches(cleanText)) {
+        if (!isProtectedRange(m.start, m.end, 'mention')) {
+          baseEntities.add(MessageEntity(
+            type: 'mention',
+            offset: m.start,
+            length: m.end - m.start,
+          ));
+        }
+      }
+    }
+
+    if (cleanText.contains('/')) {
+      for (final m in _botCommandRegex.allMatches(cleanText)) {
+        if (!isProtectedRange(m.start, m.end, 'bot_command')) {
+          baseEntities.add(MessageEntity(
+            type: 'bot_command',
+            offset: m.start,
+            length: m.end - m.start,
+          ));
+        }
+      }
+    }
+
+    if (cleanText.contains('#')) {
+      for (final m in _hashtagRegex.allMatches(cleanText)) {
+        if (!isProtectedRange(m.start, m.end, 'hashtag')) {
+          baseEntities.add(MessageEntity(
+            type: 'hashtag',
+            offset: m.start,
+            length: m.end - m.start,
+          ));
+        }
+      }
+    }
   }
 }

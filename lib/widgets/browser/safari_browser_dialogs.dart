@@ -1,0 +1,1967 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+
+import '../../l10n/app_localizations.dart';
+import '../../services/browser_site_settings_service.dart';
+import '../../services/browser_vault_service.dart';
+import '../../utils/blur_utils.dart';
+import '../../utils/haptic_utils.dart';
+import '../../utils/safari_url_safety.dart';
+import '../design_system/theav_design_system.dart';
+
+/// Tracks the number of currently presented [showSafariWebAlert] dialogs so
+/// underlying WebView sheets can freeze page scrolling, focus, and input.
+final ValueNotifier<int> activeSafariWebAlertCount = ValueNotifier<int>(0);
+
+void _adjustSafariWebAlertCount(int delta) {
+  final int next = (activeSafariWebAlertCount.value + delta).clamp(0, 999);
+  if (activeSafariWebAlertCount.value == next) return;
+  final phase = SchedulerBinding.instance.schedulerPhase;
+  if (phase == SchedulerPhase.persistentCallbacks ||
+      phase == SchedulerPhase.midFrameMicrotasks) {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      activeSafariWebAlertCount.value = next;
+    });
+  } else {
+    activeSafariWebAlertCount.value = next;
+  }
+}
+
+/// Semantic tone driving badge icon and accent color inside Safari iOS 26
+/// browser and Mini App alerts.
+enum SafariAlertTone {
+  neutral,
+  info,
+  securityWarning,
+  permission,
+  externalApp,
+  auth,
+}
+
+/// Action capsule descriptor for [showSafariWebAlert] and [SafariWebAlertCard].
+class SafariAlertAction<T> {
+  final String label;
+  final T? result;
+  final VoidCallback? onPressed;
+  final bool isPrimary;
+  final bool isDestructive;
+  final Key? buttonKey;
+
+  const SafariAlertAction({
+    required this.label,
+    this.result,
+    this.onPressed,
+    this.isPrimary = false,
+    this.isDestructive = false,
+    this.buttonKey,
+  });
+}
+
+class _SafariAlertDismissScope extends StatefulWidget {
+  final bool barrierDismissible;
+  final Widget child;
+
+  const _SafariAlertDismissScope({
+    required this.barrierDismissible,
+    required this.child,
+  });
+
+  @override
+  State<_SafariAlertDismissScope> createState() =>
+      _SafariAlertDismissScopeState();
+}
+
+class _SafariAlertDismissScopeState extends State<_SafariAlertDismissScope> {
+  bool _didRequestDismiss = false;
+  ModalRoute<dynamic>? _enclosingRoute;
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _enclosingRoute = ModalRoute.of(context);
+  }
+
+  @override
+  void deactivate() {
+    _enclosingRoute = null;
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
+    super.dispose();
+  }
+
+  bool _handleHardwareKey(KeyEvent event) {
+    if (!mounted ||
+        !context.mounted ||
+        !widget.barrierDismissible ||
+        _didRequestDismiss) {
+      return false;
+    }
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    final route = _enclosingRoute;
+    if (route != null && (!route.isCurrent || !route.isActive)) {
+      return false;
+    }
+    _didRequestDismiss = true;
+    Navigator.of(context).maybePop();
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+/// Presents a centered Safari iOS 26 style alert (`LiquidGlassLens` when Glass
+/// mode is active, or frosted single-pass Material 3 fallback).
+///
+/// Uses spring [ScaleTransition] without any enclosing `Opacity`/`FadeTransition`
+/// so real-time backdrop refraction stays intact during transitions.
+Future<T?> showSafariWebAlert<T>({
+  required BuildContext context,
+  String? title,
+  String? message,
+  Widget? customBody,
+  SafariAlertTone tone = SafariAlertTone.neutral,
+  IconData? iconOverride,
+  String? originLabel,
+  bool originIsSecure = true,
+  required List<SafariAlertAction<T>> actions,
+  bool barrierDismissible = true,
+  Key? dialogKey,
+}) async {
+  final bool isGlass = TheavSurfaceStyle.of(context, listen: false).isGlass;
+  _adjustSafariWebAlertCount(1);
+  try {
+    return await showGeneralDialog<T>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: barrierDismissible,
+      barrierLabel: Localizations.of<MaterialLocalizations>(
+            context,
+            MaterialLocalizations,
+          )?.modalBarrierDismissLabel ??
+          'Dismiss',
+      barrierColor: Colors.black.withValues(alpha: 0.36),
+      transitionDuration: const Duration(milliseconds: 230),
+      pageBuilder: (ctx, animation, __) {
+        final bool disableAnim =
+            MediaQuery.maybeDisableAnimationsOf(ctx) ?? false;
+        Widget buildCard(double op) {
+          final Widget card = SafariWebAlertCard<T>(
+            key: dialogKey,
+            title: title,
+            message: message,
+            customBody: customBody,
+            tone: tone,
+            iconOverride: iconOverride,
+            originLabel: originLabel,
+            originIsSecure: originIsSecure,
+            actions: actions,
+            opacity: op,
+          );
+          final Widget centered = Center(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                24,
+                24,
+                24 + MediaQuery.viewInsetsOf(ctx).bottom,
+              ),
+              child: SingleChildScrollView(
+                clipBehavior: Clip.none,
+                child: card,
+              ),
+            ),
+          );
+          final Widget scoped = _SafariAlertDismissScope(
+            barrierDismissible: barrierDismissible,
+            child: centered,
+          );
+          return isGlass ? scoped : BackdropGroup(child: scoped);
+        }
+
+        if (disableAnim) {
+          return buildCard(1.0);
+        }
+        return AnimatedBuilder(
+          animation: animation,
+          builder: (animCtx, _) {
+            final bool isReversing =
+                animation.status == AnimationStatus.reverse;
+            final double op = (isReversing
+                    ? Curves.easeInCubic
+                    : Curves.easeOutCubic)
+                .transform(animation.value)
+                .clamp(0.0, 1.0);
+            return buildCard(op);
+          },
+        );
+      },
+      transitionBuilder: (ctx, animation, _, child) {
+        if (MediaQuery.maybeDisableAnimationsOf(ctx) ?? false) {
+          return child;
+        }
+        final bool isReversing = animation.status == AnimationStatus.reverse;
+        final Animation<double> curved = CurvedAnimation(
+          parent: animation,
+          curve: isReversing ? Curves.easeInCubic : Curves.easeOutBack,
+        );
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.88, end: 1.0).animate(curved),
+          child: child,
+        );
+      },
+    );
+  } finally {
+    _adjustSafariWebAlertCount(-1);
+  }
+}
+
+/// Dual-mode Safari iOS 26 card container shared by modal alerts and the
+/// anchored "Site Info" popover.
+class _SafariGlassSurface extends StatelessWidget {
+  final Widget child;
+  final double maxWidth;
+  final double borderRadius;
+  final EdgeInsetsGeometry padding;
+  final double opacity;
+
+  const _SafariGlassSurface({
+    super.key,
+    required this.child,
+    required this.maxWidth,
+    required this.borderRadius,
+    required this.padding,
+    this.opacity = 1.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final double op = opacity.clamp(0.0, 1.0);
+    final Widget body = Material(
+      type: MaterialType.transparency,
+      child: Padding(padding: padding, child: child),
+    );
+
+    if (style.isGlass && style.glassProvider != null) {
+      final baseGlassStyle = style.glassProvider!.createStyle(
+        context: context,
+        cornerRadius: borderRadius,
+        refractionIndex: 1.1,
+        refractionWidth: 20.0,
+        borderWidth: 1.1,
+        color: style.hudFill.withValues(alpha: style.isDark ? 0.82 : 0.88),
+      );
+      return ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: LiquidGlassLens(
+          opacity: op,
+          style: style.glassProvider!.scaleStyleForLensOpacity(
+            baseGlassStyle,
+            op,
+          ),
+          child: op < 0.999 ? Opacity(opacity: op, child: body) : body,
+        ),
+      );
+    }
+
+    final blurFilter = style.getMaterialHudBlurFilter(sigma: 14.0);
+    final Color fill = BlurUtils.resolveMaterialHudColor(
+      style.overlayFill,
+      isDark: style.isDark,
+      blurEnabled: blurFilter != null,
+      darkAlpha: 0.86,
+      lightAlpha: 0.90,
+    );
+    final Color borderColor = blurFilter != null
+        ? (style.isDark
+            ? Colors.white.withValues(alpha: 0.14)
+            : Colors.black.withValues(alpha: 0.08))
+        : style.hairlineBorder;
+
+    Widget surface = DecoratedBox(
+      decoration: BoxDecoration(
+        color: fill,
+        borderRadius: BorderRadius.circular(borderRadius),
+        border: Border.all(
+          color: borderColor,
+          width: blurFilter != null ? 0.7 : 0.55,
+        ),
+      ),
+      child: body,
+    );
+
+    if (blurFilter != null) {
+      surface = BackdropFilter.grouped(
+        filter: blurFilter,
+        child: surface,
+      );
+    }
+
+    Widget wrapped = ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(borderRadius),
+          boxShadow: style.floatingShadow,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(borderRadius),
+          child: surface,
+        ),
+      ),
+    );
+    if (op < 0.999) {
+      wrapped = Opacity(opacity: op, child: wrapped);
+    }
+    return wrapped;
+  }
+}
+
+/// Centered Safari iOS 26 alert surface with optional origin pill, icon badge,
+/// scrollable body text, and capsule pill actions.
+class SafariWebAlertCard<T> extends StatelessWidget {
+  final String? title;
+  final String? message;
+  final Widget? customBody;
+  final SafariAlertTone tone;
+  final IconData? iconOverride;
+  final String? originLabel;
+  final bool originIsSecure;
+  final List<SafariAlertAction<T>> actions;
+  final double opacity;
+
+  const SafariWebAlertCard({
+    super.key,
+    this.title,
+    this.message,
+    this.customBody,
+    this.tone = SafariAlertTone.neutral,
+    this.iconOverride,
+    this.originLabel,
+    this.originIsSecure = true,
+    required this.actions,
+    this.opacity = 1.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+    final IconData? resolvedIcon = iconOverride ?? _defaultIconForTone(tone);
+    final Color badgeTint = _badgeColorForTone(tone, palette);
+    final bool hasOrigin = originLabel != null && originLabel!.trim().isNotEmpty;
+    final bool hasTitle = title != null && title!.trim().isNotEmpty;
+    final bool hasMessage = message != null && message!.trim().isNotEmpty;
+
+    final bool sideBySide = actions.length == 2 &&
+        actions.every((a) => a.label.trim().length <= 15);
+
+    return _SafariGlassSurface(
+      maxWidth: 312.0,
+      borderRadius: 28.0,
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+      opacity: opacity,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (resolvedIcon != null) ...[
+            Center(
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: badgeTint.withValues(alpha: style.isDark ? 0.22 : 0.14),
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Icon(resolvedIcon, size: 21, color: badgeTint),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (hasOrigin) ...[
+            Center(
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: palette.onSurface
+                      .withValues(alpha: style.isDark ? 0.10 : 0.06),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      originIsSecure
+                          ? Icons.lock_rounded
+                          : Icons.warning_amber_rounded,
+                      size: 12,
+                      color: originIsSecure ? palette.primary : palette.error,
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        originLabel!.trim(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: palette.onSurface.withValues(alpha: 0.82),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (hasTitle)
+            Text(
+              title!,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: palette.onSurface,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                height: 1.24,
+                letterSpacing: -0.25,
+              ),
+            ),
+          if (hasMessage) ...[
+            if (hasTitle) const SizedBox(height: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: SingleChildScrollView(
+                child: Text(
+                  message!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: palette.subtext,
+                    fontSize: 13.5,
+                    height: 1.38,
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (customBody != null) ...[
+            if (hasTitle || hasMessage) const SizedBox(height: 14),
+            customBody!,
+          ],
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            if (sideBySide)
+              Row(
+                children: [
+                  Expanded(
+                    child: _SafariCapsuleActionButton<T>(action: actions[0]),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _SafariCapsuleActionButton<T>(action: actions[1]),
+                  ),
+                ],
+              )
+            else
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (int i = 0; i < actions.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 8),
+                    _SafariCapsuleActionButton<T>(action: actions[i]),
+                  ],
+                ],
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static IconData? _defaultIconForTone(SafariAlertTone tone) {
+    switch (tone) {
+      case SafariAlertTone.neutral:
+        return null;
+      case SafariAlertTone.info:
+        return Icons.info_outline_rounded;
+      case SafariAlertTone.securityWarning:
+        return Icons.gpp_maybe_rounded;
+      case SafariAlertTone.permission:
+        return Icons.videocam_rounded;
+      case SafariAlertTone.externalApp:
+        return Icons.open_in_new_rounded;
+      case SafariAlertTone.auth:
+        return Icons.key_rounded;
+    }
+  }
+
+  static Color _badgeColorForTone(SafariAlertTone tone, TheavPalette palette) {
+    switch (tone) {
+      case SafariAlertTone.securityWarning:
+        return palette.error;
+      case SafariAlertTone.neutral:
+      case SafariAlertTone.info:
+      case SafariAlertTone.permission:
+      case SafariAlertTone.externalApp:
+      case SafariAlertTone.auth:
+        return palette.primary;
+    }
+  }
+}
+
+class _SafariCapsuleActionButton<T> extends StatelessWidget {
+  final SafariAlertAction<T> action;
+
+  const _SafariCapsuleActionButton({required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+
+    final Color bgColor;
+    final Color fgColor;
+    if (action.isDestructive) {
+      bgColor = palette.error.withValues(alpha: style.isDark ? 0.22 : 0.14);
+      fgColor = palette.error;
+    } else if (action.isPrimary) {
+      bgColor = palette.primary;
+      fgColor = palette.onPrimary;
+    } else {
+      bgColor = palette.onSurface.withValues(alpha: style.isDark ? 0.11 : 0.07);
+      fgColor = palette.onSurface;
+    }
+
+    return SizedBox(
+      height: 42,
+      child: Material(
+        key: action.buttonKey,
+        color: bgColor,
+        borderRadius: BorderRadius.circular(21),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(21),
+          onTap: () {
+            HapticUtils.tap();
+            if (action.onPressed != null) {
+              action.onPressed!();
+            } else {
+              Navigator.of(context).pop(action.result);
+            }
+          },
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Text(
+                action.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: fgColor,
+                  fontSize: 14.5,
+                  fontWeight: (action.isPrimary || action.isDestructive)
+                      ? FontWeight.w600
+                      : FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shows a Safari-style SSL certificate warning dialog when a site presents an
+/// untrusted, expired, or mismatched TLS certificate.
+Future<bool> showSafariSslWarningDialog(
+  BuildContext context, {
+  required String host,
+}) async {
+  final String displayHost =
+      SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim());
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_ssl_warning_dialog'),
+    tone: SafariAlertTone.securityWarning,
+    originLabel: displayHost.isNotEmpty ? displayHost : null,
+    originIsSecure: false,
+    title: context.trOr('browser_ssl_warning_title', 'Соединение не защищено'),
+    message: context.trOr(
+      'browser_ssl_warning_message',
+      'Сертификат безопасности этого сайта не прошёл проверку. Злоумышленники могут перехватить или подменить передаваемые данные.',
+    ),
+    actions: [
+      SafariAlertAction<bool>(
+        label: context.trOr('browser_ssl_go_back', 'Вернуться назад'),
+        result: false,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_ssl_go_back_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: context.trOr(
+          'browser_ssl_proceed',
+          'Посетить сайт (небезопасно)',
+        ),
+        result: true,
+        isDestructive: true,
+        buttonKey: const ValueKey('safari_ssl_proceed_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
+}
+
+/// Shows a Safari-style warning before opening a suspicious mixed-script or
+/// homograph Punycode domain.
+Future<bool> showSafariSuspiciousLinkDialog(
+  BuildContext context, {
+  required SafariHostSafetyInfo info,
+}) async {
+  final String hostDetails = info.asciiHost != info.unicodeHost
+      ? '${info.displayHost} (${info.asciiHost})'
+      : info.displayHost;
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_suspicious_link_dialog'),
+    tone: SafariAlertTone.securityWarning,
+    originLabel: hostDetails,
+    originIsSecure: info.securityLevel == SafariConnectionSecurityLevel.secureHttps,
+    title: context.trOr(
+      'browser_suspicious_link_title',
+      'Подозрительный адрес сайта',
+    ),
+    message: context.trOr(
+      'browser_suspicious_link_message',
+      'Домен содержит смешанные символы разных алфавитов и может имитировать известный сайт.\n\nРеальный адрес: {host}',
+      {'host': info.asciiHost},
+    ),
+    actions: [
+      SafariAlertAction<bool>(
+        label: context.trOr('common_cancel', 'Отмена'),
+        result: false,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_suspicious_cancel_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: context.trOr(
+          'browser_suspicious_open_anyway',
+          'Всё равно открыть',
+        ),
+        result: true,
+        isDestructive: true,
+        buttonKey: const ValueKey('safari_suspicious_proceed_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
+}
+
+/// Shows a Safari-style confirmation before launching an external application
+/// (such as `tel:`, `mailto:`, `tg:`, or `intent:` links).
+Future<bool> showSafariExternalAppDialog(
+  BuildContext context, {
+  required Uri uri,
+  String? sourceHost,
+}) async {
+  final schemeInfo = SafariUrlSafetyAnalyzer.classifyExternalUri(uri);
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_external_app_dialog'),
+    tone: SafariAlertTone.externalApp,
+    originLabel: (sourceHost != null && sourceHost.trim().isNotEmpty)
+        ? sourceHost.trim()
+        : null,
+    originIsSecure: true,
+    title: schemeInfo.title,
+    message: schemeInfo.message,
+    actions: [
+      SafariAlertAction<bool>(
+        label: context.trOr('common_cancel', 'Отмена'),
+        result: false,
+        buttonKey: const ValueKey('safari_external_cancel_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: schemeInfo.confirmLabel,
+        result: true,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_external_confirm_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
+}
+
+/// Decision returned by [showSafariSitePermissionDialog].
+enum SafariSitePermissionChoice {
+  allowAlways,
+  allowSession,
+  deny,
+}
+
+({IconData icon, String resourcePhrase}) _resolvePermissionUiInfo(
+  BuildContext context,
+  Set<WebViewPermissionResourceType> types,
+) {
+  final bool wantsCam = types.contains(WebViewPermissionResourceType.camera);
+  final bool wantsMic =
+      types.contains(WebViewPermissionResourceType.microphone);
+  if (wantsCam && wantsMic) {
+    return (
+      icon: Icons.videocam_rounded,
+      resourcePhrase: context.trOr(
+        'browser_perm_resource_cam_mic',
+        'камере и микрофону',
+      ),
+    );
+  }
+  if (wantsMic) {
+    return (
+      icon: Icons.mic_rounded,
+      resourcePhrase: context.trOr('browser_perm_resource_mic', 'микрофону'),
+    );
+  }
+  if (wantsCam) {
+    return (
+      icon: Icons.camera_alt_rounded,
+      resourcePhrase: context.trOr('browser_perm_resource_cam', 'камере'),
+    );
+  }
+  return (
+    icon: Icons.sensors_rounded,
+    resourcePhrase: context.trOr(
+      'browser_perm_resource_protected',
+      'защищённым функциям устройства',
+    ),
+  );
+}
+
+/// Shows a Safari-style permission request when a website requests access to
+/// the device camera or microphone, offering persistent site approval when
+/// [offerPersistentAlways] is enabled.
+Future<SafariSitePermissionChoice> showSafariSitePermissionDialog(
+  BuildContext context, {
+  required String host,
+  required Set<WebViewPermissionResourceType> types,
+  bool offerPersistentAlways = true,
+}) async {
+  final info = _resolvePermissionUiInfo(context, types);
+  final cleanHost = host.trim().isNotEmpty
+      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
+      : context.trOr('browser_this_site', 'этот сайт');
+  final res = await showSafariWebAlert<SafariSitePermissionChoice>(
+    context: context,
+    dialogKey: const ValueKey('safari_permission_dialog'),
+    tone: SafariAlertTone.permission,
+    iconOverride: info.icon,
+    originLabel: cleanHost,
+    originIsSecure: true,
+    title: context.trOr(
+      'browser_perm_dialog_title',
+      'Доступ к {resource}',
+      {'resource': info.resourcePhrase},
+    ),
+    message: context.trOr(
+      'browser_perm_dialog_message',
+      'Разрешить сайту «{host}» использовать доступ к {resource}?',
+      {'host': cleanHost, 'resource': info.resourcePhrase},
+    ),
+    actions: [
+      if (offerPersistentAlways) ...[
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: context.trOr(
+            'browser_perm_allow_site',
+            'Разрешить для этого сайта',
+          ),
+          result: SafariSitePermissionChoice.allowAlways,
+          isPrimary: true,
+          buttonKey: const ValueKey('safari_permission_allow_always_btn'),
+        ),
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: context.trOr(
+            'browser_perm_allow_session',
+            'Только в этой сессии',
+          ),
+          result: SafariSitePermissionChoice.allowSession,
+          buttonKey: const ValueKey('safari_permission_allow_btn'),
+        ),
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: context.trOr('browser_perm_deny', 'Не разрешать'),
+          result: SafariSitePermissionChoice.deny,
+          isDestructive: true,
+          buttonKey: const ValueKey('safari_permission_deny_btn'),
+        ),
+      ] else ...[
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: context.trOr('browser_perm_deny', 'Не разрешать'),
+          result: SafariSitePermissionChoice.deny,
+          buttonKey: const ValueKey('safari_permission_deny_btn'),
+        ),
+        SafariAlertAction<SafariSitePermissionChoice>(
+          label: context.trOr('browser_perm_allow', 'Разрешить'),
+          result: SafariSitePermissionChoice.allowSession,
+          isPrimary: true,
+          buttonKey: const ValueKey('safari_permission_allow_btn'),
+        ),
+      ],
+    ],
+  );
+  return res ?? SafariSitePermissionChoice.deny;
+}
+
+/// Shows a Safari-style permission request when a website requests access to
+/// the device camera or microphone (boolean wrapper around two-button mode).
+Future<bool> showSafariPermissionDialog(
+  BuildContext context, {
+  required String host,
+  required Set<WebViewPermissionResourceType> types,
+}) async {
+  final choice = await showSafariSitePermissionDialog(
+    context,
+    host: host,
+    types: types,
+    offerPersistentAlways: false,
+  );
+  return choice != SafariSitePermissionChoice.deny;
+}
+
+/// Shows an informational Safari alert when OS-level camera/microphone
+/// permission is blocked and directs the user to system settings.
+Future<void> showSafariSystemPermissionDeniedDialog(
+  BuildContext context, {
+  required String resourceLabel,
+  VoidCallback? onOpenSettings,
+}) async {
+  await showSafariWebAlert<void>(
+    context: context,
+    dialogKey: const ValueKey('safari_os_permission_denied_dialog'),
+    tone: SafariAlertTone.securityWarning,
+    iconOverride: Icons.settings_rounded,
+    title: context.trOr(
+      'browser_os_perm_denied_title',
+      'Доступ запрещён системой',
+    ),
+    message: context.trOr(
+      'browser_os_perm_denied_message',
+      'Для использования {resource} включите разрешение для приложения Theaver в системных настройках.',
+      {'resource': resourceLabel},
+    ),
+    actions: [
+      SafariAlertAction<void>(
+        label: context.trOr('browser_got_it', 'Понятно'),
+        result: null,
+      ),
+      if (onOpenSettings != null)
+        SafariAlertAction<void>(
+          label: context.trOr('browser_open_settings', 'Настройки'),
+          isPrimary: true,
+          onPressed: () {
+            Navigator.of(context).pop();
+            onOpenSettings();
+          },
+        ),
+    ],
+  );
+}
+
+class _MuteCheckboxBody extends StatefulWidget {
+  final ValueChanged<bool> onChanged;
+  final Widget? upperContent;
+
+  const _MuteCheckboxBody({
+    required this.onChanged,
+    this.upperContent,
+  });
+
+  @override
+  State<_MuteCheckboxBody> createState() => _MuteCheckboxBodyState();
+}
+
+class _MuteCheckboxBodyState extends State<_MuteCheckboxBody> {
+  bool _checked = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.theav;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.upperContent != null) ...[
+          widget.upperContent!,
+          const SizedBox(height: 10),
+        ],
+        InkWell(
+          key: const ValueKey('safari_js_mute_checkbox'),
+          borderRadius: BorderRadius.circular(12),
+          onTap: () {
+            setState(() => _checked = !_checked);
+            widget.onChanged(_checked);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            child: Row(
+              children: [
+                Icon(
+                  _checked
+                      ? Icons.check_box_rounded
+                      : Icons.check_box_outline_blank_rounded,
+                  size: 20,
+                  color: _checked ? palette.primary : palette.subtext,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    context.trOr(
+                      'browser_js_mute_checkbox',
+                      'Блокировать повторные окна от этого сайта',
+                    ),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: palette.onSurface.withValues(alpha: 0.85),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Shows a Safari-style JavaScript `window.alert()` dialog.
+Future<({bool muteHost})> showSafariJsAlertDialog(
+  BuildContext context, {
+  required String originHost,
+  required bool isSecure,
+  required String message,
+  bool offerMuteOption = false,
+}) async {
+  bool mute = false;
+  await showSafariWebAlert<void>(
+    context: context,
+    dialogKey: const ValueKey('safari_js_alert_dialog'),
+    tone: SafariAlertTone.info,
+    iconOverride: Icons.chat_bubble_outline_rounded,
+    originLabel: originHost.isNotEmpty
+        ? originHost
+        : context.trOr('browser_web_page', 'Веб-страница'),
+    originIsSecure: isSecure,
+    title: context.trOr('browser_js_alert_title', 'Сообщение со страницы'),
+    message: message,
+    customBody: offerMuteOption
+        ? _MuteCheckboxBody(onChanged: (v) => mute = v)
+        : null,
+    actions: [
+      SafariAlertAction<void>(
+        label: context.trOr('browser_ok', 'ОК'),
+        result: null,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_js_alert_ok_btn'),
+      ),
+    ],
+  );
+  return (muteHost: mute);
+}
+
+/// Shows a Safari-style JavaScript `window.confirm()` dialog.
+Future<({bool confirmed, bool muteHost})> showSafariJsConfirmDialog(
+  BuildContext context, {
+  required String originHost,
+  required bool isSecure,
+  required String message,
+  bool offerMuteOption = false,
+}) async {
+  bool mute = false;
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_js_confirm_dialog'),
+    tone: SafariAlertTone.info,
+    iconOverride: Icons.help_outline_rounded,
+    originLabel: originHost.isNotEmpty
+        ? originHost
+        : context.trOr('browser_web_page', 'Веб-страница'),
+    originIsSecure: isSecure,
+    title: context.trOr('browser_js_confirm_title', 'Подтвердите действие'),
+    message: message,
+    customBody: offerMuteOption
+        ? _MuteCheckboxBody(onChanged: (v) => mute = v)
+        : null,
+    actions: [
+      SafariAlertAction<bool>(
+        label: context.trOr('common_cancel', 'Отмена'),
+        result: false,
+        buttonKey: const ValueKey('safari_js_confirm_cancel_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: context.trOr('browser_ok', 'ОК'),
+        result: true,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_js_confirm_ok_btn'),
+      ),
+    ],
+  );
+  return (confirmed: res ?? false, muteHost: mute);
+}
+
+InputDecoration _buildSafariDialogInputDecoration(
+  TheavSurfaceStyle style, {
+  required String hintText,
+  Widget? suffixIcon,
+}) {
+  final palette = style.palette;
+  return InputDecoration(
+    filled: true,
+    fillColor: palette.onSurface.withValues(alpha: style.isDark ? 0.10 : 0.06),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+    hintText: hintText,
+    hintStyle: TextStyle(color: palette.subtext, fontSize: 14),
+    suffixIcon: suffixIcon,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: BorderSide.none,
+    ),
+  );
+}
+
+class _SafariJsPromptBody extends StatefulWidget {
+  final String initialText;
+  final bool offerMuteOption;
+  final ValueChanged<String> onTextChanged;
+  final ValueChanged<bool> onMuteChanged;
+
+  const _SafariJsPromptBody({
+    required this.initialText,
+    required this.offerMuteOption,
+    required this.onTextChanged,
+    required this.onMuteChanged,
+  });
+
+  @override
+  State<_SafariJsPromptBody> createState() => _SafariJsPromptBodyState();
+}
+
+class _SafariJsPromptBodyState extends State<_SafariJsPromptBody> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialText)
+      ..addListener(() => widget.onTextChanged(_ctrl.text));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final Widget inputField = TextField(
+      key: const ValueKey('safari_js_prompt_input'),
+      controller: _ctrl,
+      autofocus: true,
+      style: TextStyle(fontSize: 14.5, color: style.palette.onSurface),
+      decoration: _buildSafariDialogInputDecoration(
+        style,
+        hintText: context.trOr('browser_js_prompt_hint', 'Введите ответ...'),
+      ),
+      onSubmitted: (_) => Navigator.of(context).pop(true),
+    );
+    return widget.offerMuteOption
+        ? _MuteCheckboxBody(
+            upperContent: inputField,
+            onChanged: widget.onMuteChanged,
+          )
+        : inputField;
+  }
+}
+
+class SafariHttpAuthResult {
+  final String user;
+  final String password;
+  final bool saveCredential;
+
+  const SafariHttpAuthResult({
+    required this.user,
+    required this.password,
+    this.saveCredential = false,
+  });
+}
+
+class _SafariHttpAuthBody extends StatefulWidget {
+  final List<BrowserCredentialHint> savedHints;
+  final Future<BrowserSavedCredential?> Function(BrowserCredentialHint hint)?
+      onUnlockSavedHint;
+  final bool offerSaveOption;
+  final bool initialSaveOption;
+  final ValueChanged<String> onUserChanged;
+  final ValueChanged<String> onPasswordChanged;
+  final ValueChanged<bool> onSaveChanged;
+
+  const _SafariHttpAuthBody({
+    this.savedHints = const [],
+    this.onUnlockSavedHint,
+    this.offerSaveOption = false,
+    this.initialSaveOption = true,
+    required this.onUserChanged,
+    required this.onPasswordChanged,
+    required this.onSaveChanged,
+  });
+
+  @override
+  State<_SafariHttpAuthBody> createState() => _SafariHttpAuthBodyState();
+}
+
+class _SafariHttpAuthBodyState extends State<_SafariHttpAuthBody> {
+  late final TextEditingController _userCtrl;
+  late final TextEditingController _passCtrl;
+  bool _obscure = true;
+  late bool _saveChecked;
+  bool _unlocking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _saveChecked = widget.initialSaveOption;
+    _userCtrl = TextEditingController()
+      ..addListener(() => widget.onUserChanged(_userCtrl.text));
+    _passCtrl = TextEditingController()
+      ..addListener(() => widget.onPasswordChanged(_passCtrl.text));
+  }
+
+  @override
+  void dispose() {
+    _userCtrl.dispose();
+    _passCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _autofillHint(BrowserCredentialHint hint) async {
+    if (_unlocking || widget.onUnlockSavedHint == null) return;
+    HapticUtils.tap();
+    setState(() => _unlocking = true);
+    try {
+      final unlocked = await widget.onUnlockSavedHint!(hint);
+      if (!mounted || unlocked == null) return;
+      _userCtrl.text = unlocked.username;
+      _passCtrl.text = unlocked.password;
+      _saveChecked = false;
+      widget.onSaveChanged(false);
+    } finally {
+      if (mounted) {
+        setState(() => _unlocking = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.savedHints.isNotEmpty && widget.onUnlockSavedHint != null) ...[
+          Material(
+            color: palette.primary.withValues(alpha: style.isDark ? 0.18 : 0.10),
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              key: const ValueKey('safari_http_auth_autofill_btn'),
+              borderRadius: BorderRadius.circular(14),
+              onTap: _unlocking ? null : () => _autofillHint(widget.savedHints.first),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.key_rounded, size: 17, color: palette.primary),
+                    const SizedBox(width: 7),
+                    Flexible(
+                      child: Text(
+                        context.trOr(
+                          'browser_http_auth_autofill',
+                          'Подставить: {account}',
+                          {
+                            'account': widget.savedHints.first.username.isNotEmpty
+                                ? widget.savedHints.first.username
+                                : widget.savedHints.first.displayHost,
+                          },
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: palette.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        TextField(
+          key: const ValueKey('safari_http_auth_user'),
+          controller: _userCtrl,
+          autofocus: true,
+          textInputAction: TextInputAction.next,
+          style: TextStyle(fontSize: 14.5, color: palette.onSurface),
+          decoration: _buildSafariDialogInputDecoration(
+            style,
+            hintText: context.trOr(
+              'browser_http_auth_username_hint',
+              'Имя пользователя',
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          key: const ValueKey('safari_http_auth_password'),
+          controller: _passCtrl,
+          obscureText: _obscure,
+          textInputAction: TextInputAction.done,
+          style: TextStyle(fontSize: 14.5, color: palette.onSurface),
+          decoration: _buildSafariDialogInputDecoration(
+            style,
+            hintText: context.trOr(
+              'browser_http_auth_password_hint',
+              'Пароль',
+            ),
+            suffixIcon: IconButton(
+              icon: Icon(
+                _obscure
+                    ? Icons.visibility_rounded
+                    : Icons.visibility_off_rounded,
+                size: 19,
+                color: palette.subtext,
+              ),
+              onPressed: () => setState(() => _obscure = !_obscure),
+            ),
+          ),
+          onSubmitted: (_) => Navigator.of(context).pop(true),
+        ),
+        if (widget.offerSaveOption) ...[
+          const SizedBox(height: 8),
+          InkWell(
+            key: const ValueKey('safari_http_auth_save_toggle'),
+            borderRadius: BorderRadius.circular(10),
+            onTap: () {
+              setState(() => _saveChecked = !_saveChecked);
+              widget.onSaveChanged(_saveChecked);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: Checkbox(
+                      value: _saveChecked,
+                      onChanged: (v) {
+                        final next = v ?? false;
+                        setState(() => _saveChecked = next);
+                        widget.onSaveChanged(next);
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      context.trOr(
+                        'browser_http_auth_save_checkbox',
+                        'Сохранить пароль в Theaver',
+                      ),
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: palette.onSurface.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Shows a Safari-style JavaScript `window.prompt()` dialog with a capsule text
+/// field. Returns `value == null` when dismissed/cancelled.
+Future<({String? value, bool muteHost})> showSafariJsPromptDialog(
+  BuildContext context, {
+  required String originHost,
+  required bool isSecure,
+  required String message,
+  String? defaultText,
+  bool offerMuteOption = false,
+}) async {
+  String currentValue = defaultText ?? '';
+  bool mute = false;
+  final bool submitted = await showSafariWebAlert<bool>(
+        context: context,
+        dialogKey: const ValueKey('safari_js_prompt_dialog'),
+        tone: SafariAlertTone.info,
+        iconOverride: Icons.edit_rounded,
+        originLabel: originHost.isNotEmpty
+            ? originHost
+            : context.trOr('browser_web_page', 'Веб-страница'),
+        originIsSecure: isSecure,
+        title: context.trOr(
+          'browser_js_prompt_title',
+          'Запрос данных со страницы',
+        ),
+        message: message,
+        customBody: _SafariJsPromptBody(
+          initialText: defaultText ?? '',
+          offerMuteOption: offerMuteOption,
+          onTextChanged: (v) => currentValue = v,
+          onMuteChanged: (v) => mute = v,
+        ),
+        actions: [
+          SafariAlertAction<bool>(
+            label: context.trOr('common_cancel', 'Отмена'),
+            result: false,
+            buttonKey: const ValueKey('safari_js_prompt_cancel_btn'),
+          ),
+          SafariAlertAction<bool>(
+            label: context.trOr('browser_ok', 'ОК'),
+            result: true,
+            isPrimary: true,
+            buttonKey: const ValueKey('safari_js_prompt_ok_btn'),
+          ),
+        ],
+      ) ??
+      false;
+  return (
+    value: submitted ? currentValue : null,
+    muteHost: mute,
+  );
+}
+
+/// Shows a Safari-style HTTP Basic/Digest Authentication prompt returning
+/// [SafariHttpAuthResult] or `null` when cancelled.
+Future<SafariHttpAuthResult?> showSafariHttpAuthDialog(
+  BuildContext context, {
+  required String host,
+  String? realm,
+  bool originIsSecure = true,
+  List<BrowserCredentialHint> savedHints = const [],
+  Future<BrowserSavedCredential?> Function(BrowserCredentialHint hint)?
+      onUnlockSavedHint,
+  bool offerSaveOption = false,
+}) async {
+  String userValue = '';
+  String passValue = '';
+  bool saveCredential = offerSaveOption;
+  final cleanHost = SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim());
+  final String realmSuffix = (realm != null && realm.trim().isNotEmpty)
+      ? '\n${context.trOr('browser_http_auth_realm', 'Область: {realm}', {'realm': realm.trim()})}'
+      : '';
+
+  final bool confirmed = await showSafariWebAlert<bool>(
+        context: context,
+        dialogKey: const ValueKey('safari_http_auth_dialog'),
+        tone: SafariAlertTone.auth,
+        originLabel: cleanHost.isNotEmpty ? cleanHost : null,
+        originIsSecure: originIsSecure,
+        title: context.trOr('browser_http_auth_title', 'Требуется вход'),
+        message: context.trOr(
+          'browser_http_auth_message',
+          'Введите имя пользователя и пароль для входа.{realm}',
+          {'realm': realmSuffix},
+        ),
+        customBody: _SafariHttpAuthBody(
+          savedHints: savedHints,
+          onUnlockSavedHint: onUnlockSavedHint,
+          offerSaveOption: offerSaveOption,
+          initialSaveOption: saveCredential,
+          onUserChanged: (v) => userValue = v,
+          onPasswordChanged: (v) => passValue = v,
+          onSaveChanged: (v) => saveCredential = v,
+        ),
+        actions: [
+          SafariAlertAction<bool>(
+            label: context.trOr('common_cancel', 'Отмена'),
+            result: false,
+            buttonKey: const ValueKey('safari_http_auth_cancel_btn'),
+          ),
+          SafariAlertAction<bool>(
+            label: context.trOr('browser_http_auth_submit', 'Войти'),
+            result: true,
+            isPrimary: true,
+            buttonKey: const ValueKey('safari_http_auth_submit_btn'),
+          ),
+        ],
+      ) ??
+      false;
+  if (!confirmed) return null;
+  return SafariHttpAuthResult(
+    user: userValue,
+    password: passValue,
+    saveCredential: saveCredential,
+  );
+}
+
+/// Anchored Safari iOS 26 "Site Info" popover shown below the floating domain
+/// capsule when tapping the lock/warning icon or choosing Site Info.
+class SafariSiteInfoPopover extends StatelessWidget {
+  final SafariHostSafetyInfo safetyInfo;
+  final bool isDesktopMode;
+  final List<String> grantedPermissionLabels;
+  final bool hasMutedJsDialogs;
+  final bool hasAcceptedSslWarning;
+  final int savedPasswordCount;
+  final BrowserCookiePolicy? cookiePolicy;
+  final VoidCallback onCopyUrl;
+  final VoidCallback? onUpgradeToHttps;
+  final VoidCallback? onResetPermissions;
+  final VoidCallback? onOpenSitePasswords;
+  final VoidCallback onToggleDesktopMode;
+  final VoidCallback onClearSiteDataAndReload;
+  final bool bareContent;
+
+  const SafariSiteInfoPopover({
+    super.key,
+    required this.safetyInfo,
+    required this.isDesktopMode,
+    this.grantedPermissionLabels = const [],
+    this.hasMutedJsDialogs = false,
+    this.hasAcceptedSslWarning = false,
+    this.savedPasswordCount = 0,
+    this.cookiePolicy,
+    required this.onCopyUrl,
+    this.onUpgradeToHttps,
+    this.onResetPermissions,
+    this.onOpenSitePasswords,
+    required this.onToggleDesktopMode,
+    required this.onClearSiteDataAndReload,
+    this.bareContent = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+
+    final IconData statusIcon;
+    final Color statusColor;
+    final String statusTitle;
+    final String statusDesc;
+
+    switch (safetyInfo.securityLevel) {
+      case SafariConnectionSecurityLevel.secureHttps:
+        statusIcon = Icons.lock_rounded;
+        statusColor = palette.primary;
+        statusTitle = context.trOr(
+          'browser_site_info_secure_title',
+          'Соединение защищено',
+        );
+        final hostOrPage = safetyInfo.displayHost.isNotEmpty
+            ? safetyInfo.displayHost
+            : context.trOr('browser_site_info_this_page', 'этой страницы');
+        statusDesc = context.trOr(
+          'browser_site_info_secure_desc',
+          'Шифрование HTTPS активно для {host}.',
+          {'host': hostOrPage},
+        );
+        break;
+      case SafariConnectionSecurityLevel.sslCertificateWarning:
+        statusIcon = Icons.gpp_bad_rounded;
+        statusColor = palette.error;
+        statusTitle = context.trOr(
+          'browser_site_info_ssl_warn_title',
+          'Сертификат не проверен',
+        );
+        statusDesc = context.trOr(
+          'browser_site_info_ssl_warn_desc',
+          'Вы продолжили просмотр, несмотря на ошибку сертификата безопасности.',
+        );
+        break;
+      case SafariConnectionSecurityLevel.insecureHttp:
+      case SafariConnectionSecurityLevel.externalScheme:
+        statusIcon = Icons.warning_amber_rounded;
+        statusColor = palette.error;
+        statusTitle = context.trOr(
+          'browser_site_info_insecure_title',
+          'Соединение не защищено',
+        );
+        statusDesc = context.trOr(
+          'browser_site_info_insecure_desc',
+          'Страница загружена по открытому протоколу HTTP. Передаваемые данные не шифруются.',
+        );
+        break;
+    }
+
+    final bool showCustomStateReset = grantedPermissionLabels.isNotEmpty ||
+        hasMutedJsDialogs ||
+        hasAcceptedSslWarning;
+
+    final Widget contentColumn = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      safetyInfo.displayHost.isNotEmpty
+                          ? safetyInfo.displayHost
+                          : context.trOr(
+                              'browser_current_page',
+                              'Текущая страница',
+                            ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w700,
+                        color: palette.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      safetyInfo.rawUrl,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: palette.subtext,
+                      ),
+                    ),
+                    if (safetyInfo.isInternationalized &&
+                        safetyInfo.asciiHost != safetyInfo.unicodeHost)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Punycode: ${safetyInfo.asciiHost}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                            color: safetyInfo.isSuspiciousHomograph
+                                ? palette.error
+                                : palette.subtext,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 36,
+                height: 36,
+                child: Material(
+                  color: palette.onSurface
+                      .withValues(alpha: style.isDark ? 0.10 : 0.06),
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    key: const ValueKey('safari_site_info_copy_url'),
+                    customBorder: const CircleBorder(),
+                    onTap: onCopyUrl,
+                    child: Icon(
+                      Icons.copy_rounded,
+                      size: 17,
+                      color: palette.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: style.isDark ? 0.16 : 0.10),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(statusIcon, size: 19, color: statusColor),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            statusTitle,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                              color: statusColor,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            statusDesc,
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.35,
+                              color: palette.onSurface.withValues(alpha: 0.85),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                if (onUpgradeToHttps != null &&
+                    safetyInfo.securityLevel ==
+                        SafariConnectionSecurityLevel.insecureHttp) ...[
+                  const SizedBox(height: 10),
+                  _SafariPopoverPillButton(
+                    key: const ValueKey('safari_site_info_upgrade_https'),
+                    icon: Icons.lock_rounded,
+                    label: context.trOr(
+                      'browser_site_info_upgrade_https',
+                      'Открыть по защищённому HTTPS',
+                    ),
+                    isAccent: true,
+                    onTap: onUpgradeToHttps!,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (cookiePolicy != null &&
+              cookiePolicy != BrowserCookiePolicy.allowAll) ...[
+            const SizedBox(height: 8),
+            Text(
+              cookiePolicy == BrowserCookiePolicy.blockAll
+                  ? context.trOr(
+                      'browser_site_info_cookie_block_all',
+                      'Политика cookie: все cookie заблокированы',
+                    )
+                  : context.trOr(
+                      'browser_site_info_cookie_block_third_party',
+                      'Политика cookie: без сторонних cookie',
+                    ),
+              style: TextStyle(
+                fontSize: 11.5,
+                color: palette.subtext,
+              ),
+            ),
+          ],
+          if (showCustomStateReset && onResetPermissions != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: palette.onSurface
+                    .withValues(alpha: style.isDark ? 0.08 : 0.05),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    [
+                      if (grantedPermissionLabels.isNotEmpty)
+                        context.trOr(
+                          'browser_site_info_permissions_list',
+                          'Разрешения: {list}',
+                          {'list': grantedPermissionLabels.join(', ')},
+                        ),
+                      if (hasMutedJsDialogs)
+                        context.trOr(
+                          'browser_site_info_js_muted',
+                          'JS-окна заблокированы',
+                        ),
+                      if (hasAcceptedSslWarning)
+                        context.trOr(
+                          'browser_site_info_ssl_exception',
+                          'Исключение SSL активно',
+                        ),
+                    ].join(' • '),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: palette.onSurface.withValues(alpha: 0.82),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _SafariPopoverPillButton(
+                    key: const ValueKey('safari_site_info_reset_permissions'),
+                    icon: Icons.restart_alt_rounded,
+                    label: context.trOr(
+                      'browser_site_info_reset_permissions',
+                      'Сбросить разрешения',
+                    ),
+                    onTap: onResetPermissions!,
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (savedPasswordCount > 0 && onOpenSitePasswords != null) ...[
+            const SizedBox(height: 10),
+            _SafariPopoverPillButton(
+              key: const ValueKey('safari_site_info_passwords_btn'),
+              icon: Icons.key_rounded,
+              label: context.trOr(
+                'browser_site_info_saved_passwords',
+                'Сохранённые пароли ({count})',
+                {'count': '$savedPasswordCount'},
+              ),
+              onTap: onOpenSitePasswords!,
+            ),
+          ],
+          const SizedBox(height: 10),
+          _SafariPopoverPillButton(
+            key: const ValueKey('safari_site_info_toggle_desktop'),
+            icon: isDesktopMode
+                ? Icons.phone_android_rounded
+                : Icons.desktop_windows_rounded,
+            label: isDesktopMode
+                ? context.trOr('browser_mobile_version', 'Мобильная версия')
+                : context.trOr('browser_desktop_version', 'Версия для ПК'),
+            onTap: onToggleDesktopMode,
+          ),
+          const SizedBox(height: 6),
+          _SafariPopoverPillButton(
+            key: const ValueKey('safari_site_info_clear_site_data'),
+            icon: Icons.delete_sweep_rounded,
+            label: context.trOr(
+              'browser_site_info_clear_and_reload',
+              'Очистить данные сайта и обновить',
+            ),
+            isDestructive: true,
+            onTap: onClearSiteDataAndReload,
+          ),
+        ],
+    );
+
+    if (bareContent) {
+      return ConstrainedBox(
+        key: const ValueKey('in_app_browser_site_info_popover'),
+        constraints: const BoxConstraints(maxWidth: 328.0),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+            child: contentColumn,
+          ),
+        ),
+      );
+    }
+
+    return _SafariGlassSurface(
+      key: const ValueKey('in_app_browser_site_info_popover'),
+      maxWidth: 328.0,
+      borderRadius: 26.0,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: contentColumn,
+    );
+  }
+}
+
+class _SafariPopoverPillButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isAccent;
+  final bool isDestructive;
+
+  const _SafariPopoverPillButton({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isAccent = false,
+    this.isDestructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+
+    final Color bgColor;
+    final Color fgColor;
+    if (isDestructive) {
+      bgColor = palette.error.withValues(alpha: style.isDark ? 0.16 : 0.10);
+      fgColor = palette.error;
+    } else if (isAccent) {
+      bgColor = palette.primary;
+      fgColor = palette.onPrimary;
+    } else {
+      bgColor = palette.onSurface.withValues(alpha: style.isDark ? 0.10 : 0.06);
+      fgColor = palette.onSurface;
+    }
+
+    return SizedBox(
+      height: 38,
+      child: Material(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(19),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(19),
+          onTap: () {
+            HapticUtils.tap();
+            onTap();
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 17, color: fgColor),
+                const SizedBox(width: 7),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: fgColor,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shows a Safari-style confirmation dialog when a website requests device
+/// geolocation access.
+Future<bool> showSafariGeolocationPermissionDialog(
+  BuildContext context, {
+  required String host,
+  bool isSecure = true,
+}) async {
+  final cleanHost = host.trim().isNotEmpty
+      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
+      : context.trOr('browser_this_site', 'этот сайт');
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_geolocation_dialog'),
+    tone: SafariAlertTone.permission,
+    iconOverride: Icons.location_on_rounded,
+    originLabel: cleanHost,
+    originIsSecure: isSecure,
+    title: context.trOr('browser_geo_perm_title', 'Доступ к геопозиции'),
+    message: context.trOr(
+      'browser_geo_perm_message',
+      'Разрешить сайту «{host}» определять ваше текущее местоположение?',
+      {'host': cleanHost},
+    ),
+    actions: [
+      SafariAlertAction<bool>(
+        label: context.trOr('browser_perm_deny', 'Не разрешать'),
+        result: false,
+        buttonKey: const ValueKey('safari_geolocation_deny_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: context.trOr('browser_perm_allow', 'Разрешить'),
+        result: true,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_geolocation_allow_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
+}
+
+/// Shows a Safari-style confirmation dialog before downloading or opening an
+/// external file from a web page.
+Future<bool> showSafariDownloadConfirmDialog(
+  BuildContext context, {
+  required String host,
+  required String filenameOrUrl,
+  bool isSecure = true,
+}) async {
+  final cleanHost = host.trim().isNotEmpty
+      ? SafariUrlSafetyAnalyzer.decodePunycodeHost(host.trim())
+      : '';
+  final trimmedTarget = filenameOrUrl.trim();
+  final String displayTarget = trimmedTarget.length > 140
+      ? '${trimmedTarget.substring(0, 140)}…'
+      : trimmedTarget;
+  final String message = displayTarget.isNotEmpty
+      ? context.trOr(
+          'browser_download_confirm_file',
+          'Загрузить «{file}»?',
+          {'file': displayTarget},
+        )
+      : context.trOr(
+          'browser_download_confirm_generic',
+          'Загрузить выбранный файл с этого сайта?',
+        );
+  final res = await showSafariWebAlert<bool>(
+    context: context,
+    dialogKey: const ValueKey('safari_download_confirm_dialog'),
+    tone: SafariAlertTone.info,
+    iconOverride: Icons.download_rounded,
+    originLabel: cleanHost.isNotEmpty ? cleanHost : null,
+    originIsSecure: isSecure,
+    title: context.trOr('browser_download_confirm_title', 'Загрузить файл?'),
+    message: message,
+    actions: [
+      SafariAlertAction<bool>(
+        label: context.trOr('common_cancel', 'Отмена'),
+        result: false,
+        buttonKey: const ValueKey('safari_download_cancel_btn'),
+      ),
+      SafariAlertAction<bool>(
+        label: context.trOr('browser_download_action', 'Скачать'),
+        result: true,
+        isPrimary: true,
+        buttonKey: const ValueKey('safari_download_confirm_btn'),
+      ),
+    ],
+  );
+  return res ?? false;
+}

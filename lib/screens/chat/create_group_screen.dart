@@ -1,27 +1,24 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:dio/dio.dart';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
-import 'package:image_picker/image_picker.dart';
-import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 
-import '../../config/app_config.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/theav_theme.dart';
-import '../../services/auth_service.dart';
+import '../../models/avatar_editor_models.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/database/app_database.dart';
 import '../../services/file_service.dart';
 import '../../services/glass_toast_service.dart';
-import '../../services/liquid_glass_provider.dart';
+import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../services/search_service.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
 import '../../utils/swipe_back_route.dart';
-import '../../widgets/common/adaptive_switch.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import 'group_chat_screen.dart';
@@ -34,6 +31,8 @@ class CreateGroupScreen extends StatefulWidget {
 }
 
 class _CreateGroupScreenState extends State<CreateGroupScreen> {
+  static final RegExp _usernameRegex = RegExp(r'^[a-zA-Z][a-zA-Z0-9_]{2,63}$');
+
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
@@ -41,12 +40,17 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   Timer? _searchDebounce;
 
   File? _pickedAvatarFile;
+  Uint8List? _pickedAvatarBytes;
+  Uint8List? _pickedAvatarPreviewBytes;
+  String? _pickedAvatarFileName;
+  String? _pickedAvatarCrop;
   List<SearchResultUser> _allUsers = [];
   List<SearchResultUser> _filteredUsers = [];
   final List<SearchResultUser> _selectedMembers = [];
   bool _isLoadingUsers = false;
   bool _isCreating = false;
   String _searchQuery = '';
+  String? _usernameServerError;
 
   // Group settings
   bool _isPublic = false;
@@ -54,18 +58,77 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   bool _enableHistory = true;
   int _slowModeInterval = 0;
 
+  String get _cleanUsername =>
+      _usernameController.text.trim().replaceAll('@', '');
+
+  bool get _isUsernameValid {
+    if (!_isPublic) return true;
+    final clean = _cleanUsername;
+    return clean.isEmpty || _usernameRegex.hasMatch(clean);
+  }
+
+  String? get _usernameValidationMessage {
+    if (!_isPublic) return null;
+    if (_usernameServerError != null) return _usernameServerError;
+    final clean = _cleanUsername;
+    if (clean.isEmpty) return null;
+    if (!_usernameRegex.hasMatch(clean)) {
+      return 'От 3 до 64 символов: латинские буквы, цифры и _, начинается с буквы';
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
     _nameController.addListener(() {
       if (mounted) setState(() {});
     });
+    _usernameController.addListener(() {
+      if (!mounted) return;
+      if (_usernameServerError != null) {
+        setState(() => _usernameServerError = null);
+      } else {
+        setState(() {});
+      }
+    });
     _searchController.addListener(_onSearchChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     _loadInitialUsers();
   }
 
+  void _onContactsRevisionChanged() {
+    if (!mounted) return;
+    final q = _searchQuery.trim().toLowerCase();
+    setState(() {
+      if (q.isNotEmpty) {
+        _filteredUsers = _allUsers
+            .where((u) =>
+                _resolvedUserName(u).toLowerCase().contains(q) ||
+                u.name.toLowerCase().contains(q) ||
+                u.username.toLowerCase().contains(q))
+            .toList();
+      }
+    });
+  }
+
+  String _resolvedUserName(SearchResultUser user) =>
+      ContactsService.resolvePeerName(
+        user.id,
+        user.name,
+        isBot: user.isBot,
+      );
+
+  String? _resolvedUserAvatar(SearchResultUser user) =>
+      ContactsService.resolvePeerAvatarUrl(
+        user.id,
+        user.avatarUrl,
+        isBot: user.isBot,
+      );
+
   @override
   void dispose() {
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
     _searchDebounce?.cancel();
     _nameController.dispose();
     _descriptionController.dispose();
@@ -82,18 +145,52 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     return fallback;
   }
 
+  bool get _hasPickedAvatar =>
+      _pickedAvatarFile != null ||
+      (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty);
+
+  ImageProvider? get _pickedAvatarProvider {
+    if (_pickedAvatarPreviewBytes != null &&
+        _pickedAvatarPreviewBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarPreviewBytes!);
+    }
+    if (_pickedAvatarBytes != null && _pickedAvatarBytes!.isNotEmpty) {
+      return MemoryImage(_pickedAvatarBytes!);
+    }
+    if (_pickedAvatarFile != null) {
+      return FileImage(_pickedAvatarFile!);
+    }
+    return null;
+  }
+
   Future<void> _pickAvatar() async {
     HapticUtils.tap();
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1024,
-      maxHeight: 1024,
-      imageQuality: 88,
+    final trimmedName = _nameController.text.trim();
+    final picked = await TheavAvatarPickerSheet.pickAndEdit(
+      context: context,
+      maskShape: AvatarShapeMask.circle,
+      ctaMode: AvatarEditorCtaMode.done,
+      subjectName: trimmedName.isNotEmpty ? trimmedName : null,
+      canDeleteCurrent: _pickedAvatarFile != null || _pickedAvatarBytes != null,
     );
-    if (picked != null && mounted) {
+    if (picked == null || !mounted) return;
+    if (picked.deletedCurrent) {
       setState(() {
-        _pickedAvatarFile = File(picked.path);
+        _pickedAvatarFile = null;
+        _pickedAvatarBytes = null;
+        _pickedAvatarPreviewBytes = null;
+        _pickedAvatarFileName = null;
+        _pickedAvatarCrop = null;
+      });
+      return;
+    }
+    if (picked.hasMedia) {
+      setState(() {
+        _pickedAvatarFile = picked.file;
+        _pickedAvatarBytes = picked.bytes;
+        _pickedAvatarPreviewBytes = picked.effectivePreviewBytes;
+        _pickedAvatarFileName = picked.fileName;
+        _pickedAvatarCrop = picked.miniCrop?.toCompactParam();
       });
     }
   }
@@ -113,6 +210,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         setState(() {
           _filteredUsers = _allUsers
               .where((u) =>
+                  _resolvedUserName(u).toLowerCase().contains(q) ||
                   u.name.toLowerCase().contains(q) ||
                   u.username.toLowerCase().contains(q))
               .toList();
@@ -245,65 +343,33 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   }
 
   void _showSlowModeSheet() {
-    final palette = context.theav;
-    final primaryColor = Theme.of(context).colorScheme.primary;
     const options = [0, 10, 30, 60, 300, 900];
 
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      backgroundColor: palette.surfaceElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
+      title: 'Медленный режим',
+      showCloseButton: true,
+      padding: const EdgeInsets.fromLTRB(0, 10, 0, 20),
       builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+        return SingleChildScrollView(
+          child: TheavInsetGroup(
+            dividerIndent: 16,
             children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: palette.textTertiary.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Медленный режим',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: palette.textPrimary,
-                ),
-              ),
-              const SizedBox(height: 6),
               for (final opt in options)
-                ListTile(
-                  title: Text(
-                    _slowModeLabel(opt),
-                    style: TextStyle(
-                      color: palette.textPrimary,
-                      fontWeight: _slowModeInterval == opt
-                          ? FontWeight.w600
-                          : FontWeight.w400,
-                    ),
+                TheavListRow(
+                  title: _slowModeLabel(opt),
+                  trailing: TheavCheckCircle(
+                    selected: _slowModeInterval == opt,
+                    onTap: () {
+                      setState(() => _slowModeInterval = opt);
+                      Navigator.pop(ctx);
+                    },
                   ),
-                  trailing: _slowModeInterval == opt
-                      ? iconoir.Check(
-                          width: 20,
-                          height: 20,
-                          color: primaryColor,
-                        )
-                      : null,
                   onTap: () {
-                    HapticUtils.selection();
                     setState(() => _slowModeInterval = opt);
                     Navigator.pop(ctx);
                   },
                 ),
-              const SizedBox(height: 8),
             ],
           ),
         );
@@ -322,17 +388,35 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       return;
     }
 
+    final cleanUsername = _cleanUsername;
+    if (_isPublic && !_isUsernameValid) {
+      GlassToastService().showError(
+        context,
+        _usernameValidationMessage ?? 'Некорректный формат @username',
+      );
+      return;
+    }
+
     HapticUtils.tap();
     setState(() => _isCreating = true);
 
     try {
       String? uploadedAvatarUrl;
-      if (_pickedAvatarFile != null) {
+      if (_hasPickedAvatar) {
         try {
-          final uploadRes = await FileService().uploadFile(_pickedAvatarFile!);
-          if (uploadRes.url.isNotEmpty) {
-            uploadedAvatarUrl = uploadRes.url;
-          }
+          final uploadFile = _pickedAvatarFile ??
+              File(
+                (_pickedAvatarFileName != null &&
+                        _pickedAvatarFileName!.trim().isNotEmpty)
+                    ? _pickedAvatarFileName!.trim()
+                    : 'avatar.jpg',
+              );
+          uploadedAvatarUrl = await FileService().uploadPublicAvatar(
+            uploadFile,
+            bytes: _pickedAvatarBytes,
+            fileName: _pickedAvatarFileName,
+            avatarCrop: _pickedAvatarCrop,
+          );
         } catch (e) {
           debugPrint('[CreateGroupScreen] Avatar upload error: $e');
         }
@@ -340,49 +424,51 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
       final participantIds = _selectedMembers.map((u) => u.id).toList();
       final desc = _descriptionController.text.trim();
-      final cleanUsername =
-          _usernameController.text.trim().replaceAll('@', '');
 
       final result = await ChatService.createChat(
         chatType: 'group',
         name: name,
         description: desc.isNotEmpty ? desc : null,
         username: _isPublic && cleanUsername.isNotEmpty ? cleanUsername : null,
+        avatarUrl: uploadedAvatarUrl,
         isPublic: _isPublic,
+        historyForNewMembers: _enableHistory,
+        allowInvites: _allowInvites,
         participantIds: participantIds,
       );
 
       if (!mounted) return;
       if (result['success'] == true) {
         Chat chat = result['chat'] as Chat;
+        final needsAvatarFallback = uploadedAvatarUrl != null &&
+            uploadedAvatarUrl.isNotEmpty &&
+            (chat.avatarUrl == null || chat.avatarUrl!.isEmpty);
 
-        // Сохраняем аватар, историю и медленный режим через group-settings
-        if (uploadedAvatarUrl != null ||
-            !_enableHistory ||
-            _slowModeInterval > 0) {
-          try {
-            final token = await AuthService.getToken();
-            final dio = Dio();
-            await dio.put(
-              '${AppConfig.baseUrl}/api/chats/${chat.id}/group-settings',
-              data: {
-                'name': name,
-                'description': desc,
-                if (uploadedAvatarUrl != null) 'avatar_url': uploadedAvatarUrl,
-                'is_public': _isPublic,
-                'username': _isPublic ? cleanUsername : '',
-                'history_for_new': _enableHistory,
-                'slow_mode_interval': _slowModeInterval,
-              },
-              options: Options(headers: {'Authorization': 'Bearer $token'}),
+        // Сохраняем историю, медленный режим и (при необходимости) fallback-аватар через ChatService
+        if (needsAvatarFallback || !_enableHistory || _slowModeInterval > 0) {
+          final settingsRes = await ChatService.updateGroupSettings(chat.id, {
+            'name': name,
+            'description': desc,
+            if (needsAvatarFallback) 'avatar_url': uploadedAvatarUrl,
+            'is_public': _isPublic,
+            'username': _isPublic ? cleanUsername : '',
+            'history_for_new': _enableHistory,
+            'slow_mode_interval': _slowModeInterval,
+          });
+          if (settingsRes['success'] == true && needsAvatarFallback) {
+            await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+            chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
+          } else if (settingsRes['success'] != true && mounted) {
+            GlassToastService().showError(
+              context,
+              settingsRes['message']?.toString() ??
+                  'Часть настроек группы не удалось сохранить',
             );
-            if (uploadedAvatarUrl != null) {
-              await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
-              chat = chat.copyWith(avatarUrl: uploadedAvatarUrl);
-            }
-          } catch (e) {
-            debugPrint('[CreateGroupScreen] Update group settings error: $e');
           }
+        } else if (uploadedAvatarUrl != null && uploadedAvatarUrl.isNotEmpty) {
+          try {
+            await AppDatabase().updateChatAvatar(chat.id, uploadedAvatarUrl);
+          } catch (_) {}
         }
 
         if (!mounted) return;
@@ -407,15 +493,23 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
           ),
         );
       } else {
-        GlassToastService().show(
-          context,
-          result['message']?.toString() ?? 'Не удалось создать группу',
-        );
-        setState(() => _isCreating = false);
+        final errMsg =
+            result['message']?.toString() ?? 'Не удалось создать группу';
+        final errCode = result['error_code']?.toString().toLowerCase() ?? '';
+        if (errMsg.toLowerCase().contains('username') ||
+            errCode.contains('username')) {
+          setState(() {
+            _usernameServerError = errMsg;
+            _isCreating = false;
+          });
+        } else {
+          setState(() => _isCreating = false);
+        }
+        GlassToastService().showError(context, errMsg);
       }
     } catch (e) {
       if (mounted) {
-        GlassToastService().show(context, 'Ошибка: $e');
+        GlassToastService().showError(context, 'Ошибка: $e');
         setState(() => _isCreating = false);
       }
     }
@@ -423,73 +517,45 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final palette = context.theav;
-    final glassProvider = context.watch<LiquidGlassProvider>();
-    final isGlass = glassProvider.enabled;
-    final isLite = glassProvider.isLite;
-    final primaryColor = theme.colorScheme.primary;
+    final primaryColor = palette.primary;
     final trimmedName = _nameController.text.trim();
+    final avatarProvider = _pickedAvatarProvider;
 
-    return Scaffold(
+    return SettingsFloatingScaffold(
+      title: _tr('chat_new_group', 'Новая группа'),
       backgroundColor: palette.bgBase,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.maybePop(context),
-          icon: iconoir.NavArrowLeft(
-            width: 24,
-            height: 24,
-            color: palette.textPrimary,
-          ),
-        ),
-        title: Text(
-          _tr('chat_new_group', 'Новая группа'),
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: palette.textPrimary,
-            letterSpacing: -0.2,
-          ),
-        ),
-        actions: [
-          if (_isCreating)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            )
-          else
-            IconButton(
-              onPressed: _createGroup,
-              tooltip: _tr('create', 'Создать'),
-              icon: iconoir.Check(
-                width: 24,
-                height: 24,
+      actions: [
+        if (_isCreating)
+          SettingsHeaderAction(
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
                 color: primaryColor,
               ),
             ),
-        ],
-      ),
-      body: Column(
+          )
+        else
+          SettingsHeaderAction(
+            tooltip: _tr('create', 'Создать'),
+            foregroundColor: primaryColor,
+            icon: iconoir.Check(width: 22, height: 22, color: primaryColor),
+            onTap: _createGroup,
+          ),
+      ],
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          SettingsFloatingHeader.topClearanceOf(context) + 12,
+          16,
+          MediaQuery.paddingOf(context).bottom + 28,
+        ),
         children: [
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-              children: [
                 // 1. Профиль группы (аватар + название + описание)
                 _buildSurfaceCard(
                   context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -506,7 +572,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                     height: 68,
                                     decoration: BoxDecoration(
                                       shape: BoxShape.circle,
-                                      gradient: _pickedAvatarFile == null
+                                      gradient: avatarProvider == null
                                           ? LinearGradient(
                                               begin: Alignment.topLeft,
                                               end: Alignment.bottomRight,
@@ -518,16 +584,15 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                               ],
                                             )
                                           : null,
-                                      image: _pickedAvatarFile != null
+                                      image: avatarProvider != null
                                           ? DecorationImage(
-                                              image:
-                                                  FileImage(_pickedAvatarFile!),
+                                              image: avatarProvider,
                                               fit: BoxFit.cover,
                                             )
                                           : null,
                                     ),
                                     alignment: Alignment.center,
-                                    child: _pickedAvatarFile == null
+                                    child: avatarProvider == null
                                         ? (trimmedName.isNotEmpty
                                             ? Text(
                                                 trimmedName[0].toUpperCase(),
@@ -571,274 +636,150 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                             ),
                             const SizedBox(width: 14),
                             Expanded(
-                              child: TextField(
+                              child: TheavInlineTextField(
                                 controller: _nameController,
                                 autofocus: true,
+                                padding: EdgeInsets.zero,
+                                label: _tr(
+                                  'group_name_hint',
+                                  'Название группы',
+                                ),
+                                placeholder: 'Например: Друзья / Команда',
                                 style: TextStyle(
                                   fontSize: 16.5,
                                   fontWeight: FontWeight.w600,
-                                  color: palette.textPrimary,
-                                ),
-                                decoration: InputDecoration(
-                                  labelText: _tr(
-                                    'group_name_hint',
-                                    'Название группы',
-                                  ),
-                                  hintText: 'Например: Друзья / Команда',
-                                  hintStyle:
-                                      TextStyle(color: palette.textTertiary),
-                                  border: InputBorder.none,
+                                  color: palette.onSurface,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        Divider(height: 16, color: palette.borderSubtle),
-                        TextField(
+                        const SizedBox(height: 10),
+                        Divider(height: 0.5, color: palette.divider),
+                        const SizedBox(height: 6),
+                        TheavInlineTextField(
                           controller: _descriptionController,
                           maxLines: 3,
                           minLines: 1,
-                          style: TextStyle(
-                            fontSize: 14.5,
-                            color: palette.textPrimary,
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          label: _tr(
+                            'group_description_hint',
+                            'Описание группы (необязательно)',
                           ),
-                          decoration: InputDecoration(
-                            labelText: _tr(
-                              'group_description_hint',
-                              'Описание группы (необязательно)',
-                            ),
-                            hintText: 'О чём эта группа и правила общения',
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            border: InputBorder.none,
-                          ),
+                          placeholder: 'О чём эта группа и правила общения',
                         ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
 
                 // 2. Настройки группы
-                _buildSectionHeader('НАСТРОЙКИ И ДОСТУП', palette),
-                const SizedBox(height: 8),
-                _buildSurfaceCard(
-                  context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
-                  child: Column(
-                    children: [
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.public_rounded,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr('group_public', 'Публичная группа'),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'group_public_desc',
-                            'Доступна в глобальном поиске по @username',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: 'НАСТРОЙКИ И ДОСТУП',
+                  footer: _usernameValidationMessage,
+                  children: [
+                    TheavListRow(
+                      leading: iconoir.Globe(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr('group_public', 'Публичная группа'),
+                      subtitle: _tr(
+                        'group_public_desc',
+                        'Доступна в глобальном поиске по @username',
+                      ),
+                      trailing: TheavSwitch(
                         value: _isPublic,
                         onChanged: (v) => setState(() => _isPublic = v),
                       ),
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        child: _isPublic
-                            ? Column(
-                                children: [
-                                  Divider(
-                                    height: 1,
-                                    indent: 56,
-                                    color: palette.borderSubtle,
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 6,
-                                    ),
-                                    child: TextField(
-                                      controller: _usernameController,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w500,
-                                        color: palette.textPrimary,
-                                      ),
-                                      decoration: InputDecoration(
-                                        labelText:
-                                            'Публичная ссылка (@username)',
-                                        hintText: 'group_username',
-                                        hintStyle: TextStyle(
-                                          color: palette.textTertiary,
-                                        ),
-                                        prefixText: '@',
-                                        prefixIcon: Icon(
-                                          Icons.alternate_email_rounded,
-                                          size: 20,
-                                          color: primaryColor,
-                                        ),
-                                        border: InputBorder.none,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
-                      ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.history_rounded,
+                      onTap: () => setState(() => _isPublic = !_isPublic),
+                    ),
+                    if (_isPublic)
+                      TheavInlineTextField(
+                        controller: _usernameController,
+                        label: 'Публичная ссылка (@username)',
+                        placeholder: 'group_username',
+                        prefix: iconoir.AtSign(
+                          width: 19,
+                          height: 19,
                           color: primaryColor,
                         ),
-                        title: Text(
-                          _tr(
-                            'group_enable_history',
-                            'История для новых участников',
-                          ),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'group_enable_history_desc',
-                            'Показывать предыдущие сообщения при вступлении',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
+                        suffix: _cleanUsername.isNotEmpty
+                            ? (_isUsernameValid && _usernameServerError == null
+                                ? const iconoir.CheckCircle(
+                                    width: 18,
+                                    height: 18,
+                                    color: Color(0xFF34C759),
+                                  )
+                                : iconoir.WarningCircle(
+                                    width: 18,
+                                    height: 18,
+                                    color: palette.error,
+                                  ))
+                            : null,
+                      ),
+                    TheavListRow(
+                      leading: iconoir.Clock(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
+                      ),
+                      title: _tr(
+                        'group_enable_history',
+                        'История для новых участников',
+                      ),
+                      subtitle: _tr(
+                        'group_enable_history_desc',
+                        'Показывать предыдущие сообщения при вступлении',
+                      ),
+                      trailing: TheavSwitch(
                         value: _enableHistory,
                         onChanged: (v) => setState(() => _enableHistory = v),
                       ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
+                      onTap: () =>
+                          setState(() => _enableHistory = !_enableHistory),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.UserPlus(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
                       ),
-                      AdaptiveSwitchListTile(
-                        secondary: Icon(
-                          Icons.person_add_alt_1_rounded,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          _tr(
-                            'group_allow_invites',
-                            'Разрешить приглашать участников',
-                          ),
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          _tr(
-                            'group_allow_invites_desc',
-                            'Участники смогут добавлять своих друзей',
-                          ),
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
+                      title: _tr(
+                        'group_allow_invites',
+                        'Разрешить приглашать участников',
+                      ),
+                      subtitle: _tr(
+                        'group_allow_invites_desc',
+                        'Участники смогут добавлять своих друзей',
+                      ),
+                      trailing: TheavSwitch(
                         value: _allowInvites,
                         onChanged: (v) => setState(() => _allowInvites = v),
                       ),
-                      Divider(
-                        height: 1,
-                        indent: 56,
-                        color: palette.borderSubtle,
+                      onTap: () =>
+                          setState(() => _allowInvites = !_allowInvites),
+                    ),
+                    TheavListRow(
+                      leading: iconoir.Timer(
+                        width: 20,
+                        height: 20,
+                        color: primaryColor,
                       ),
-                      ListTile(
-                        leading: Icon(
-                          Icons.timer_outlined,
-                          color: primaryColor,
-                        ),
-                        title: Text(
-                          'Медленный режим',
-                          style: TextStyle(
-                            color: palette.textPrimary,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        subtitle: Text(
-                          'Интервал между отправкой сообщений участниками',
-                          style: TextStyle(
-                            color: palette.textSecondary,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _slowModeLabel(_slowModeInterval),
-                              style: TextStyle(
-                                color: primaryColor,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 14,
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            iconoir.NavArrowRight(
-                              width: 18,
-                              height: 18,
-                              color: palette.textTertiary,
-                            ),
-                          ],
-                        ),
-                        onTap: _showSlowModeSheet,
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 18),
-
-                // 3. Участники группы
-                Row(
-                  children: [
-                    _buildSectionHeader('УЧАСТНИКИ', palette),
-                    const Spacer(),
-                    if (_selectedMembers.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: Text(
-                          'Выбрано: ${_selectedMembers.length}',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: primaryColor,
-                          ),
-                        ),
-                      ),
+                      title: 'Медленный режим',
+                      subtitle: 'Интервал между отправкой сообщений участниками',
+                      valueText: _slowModeLabel(_slowModeInterval),
+                      showChevron: true,
+                      onTap: _showSlowModeSheet,
+                    ),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 16),
 
-                // Выбранные участники
+                // 3. Выбранные участники
                 if (_selectedMembers.isNotEmpty) ...[
                   SizedBox(
                     height: 82,
@@ -848,6 +789,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                       separatorBuilder: (_, __) => const SizedBox(width: 10),
                       itemBuilder: (context, index) {
                         final member = _selectedMembers[index];
+                        final memberName = _resolvedUserName(member);
+                        final memberAvatar = _resolvedUserAvatar(member);
                         return GestureDetector(
                           onTap: () => _removeMember(member),
                           child: SizedBox(
@@ -859,10 +802,12 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                   clipBehavior: Clip.none,
                                   children: [
                                     AvatarWithStatus(
-                                      avatarUrl: member.avatarUrl,
-                                      name: member.name,
+                                      userId: member.id,
+                                      avatarUrl: memberAvatar,
+                                      name: memberName,
                                       radius: 24,
                                       isOnline: member.isOnline,
+                                      resolveContactOverride: !member.isBot,
                                     ),
                                     Positioned(
                                       right: -2,
@@ -871,17 +816,17 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                         width: 20,
                                         height: 20,
                                         decoration: BoxDecoration(
-                                          color: Colors.redAccent,
+                                          color: palette.error,
                                           shape: BoxShape.circle,
                                           border: Border.all(
-                                            color: palette.bgBase,
+                                            color: palette.background,
                                             width: 1.8,
                                           ),
                                         ),
                                         alignment: Alignment.center,
-                                        child: const Icon(
-                                          Icons.close_rounded,
-                                          size: 12,
+                                        child: const iconoir.Xmark(
+                                          width: 12,
+                                          height: 12,
                                           color: Colors.white,
                                         ),
                                       ),
@@ -890,14 +835,14 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                                 ),
                                 const SizedBox(height: 5),
                                 Text(
-                                  member.name,
+                                  memberName,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     fontSize: 11.5,
                                     fontWeight: FontWeight.w500,
-                                    color: palette.textPrimary,
+                                    color: palette.onSurface,
                                   ),
                                 ),
                               ],
@@ -910,138 +855,66 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                   const SizedBox(height: 10),
                 ],
 
-                // Поиск и список пользователей
-                _buildSurfaceCard(
-                  context,
-                  isGlass: isGlass,
-                  isLite: isLite,
-                  isDark: isDark,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 4,
-                        ),
-                        child: TextField(
-                          controller: _searchController,
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: palette.textPrimary,
-                          ),
-                          decoration: InputDecoration(
-                            hintText: _tr(
-                              'search_user_hint',
-                              'Поиск людей по имени или @username...',
-                            ),
-                            hintStyle: TextStyle(color: palette.textTertiary),
-                            prefixIcon: Icon(
-                              Icons.search_rounded,
-                              color: palette.textSecondary,
-                              size: 20,
-                            ),
-                            suffixIcon: _searchQuery.isNotEmpty
-                                ? IconButton(
-                                    icon: Icon(
-                                      Icons.clear_rounded,
-                                      size: 18,
-                                      color: palette.textSecondary,
-                                    ),
-                                    onPressed: () => _searchController.clear(),
-                                  )
-                                : null,
-                            border: InputBorder.none,
-                          ),
-                        ),
+                // 4. Поиск и список пользователей
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  header: _selectedMembers.isNotEmpty
+                      ? 'УЧАСТНИКИ (${_selectedMembers.length})'
+                      : 'УЧАСТНИКИ',
+                  children: [
+                    TheavInlineTextField(
+                      controller: _searchController,
+                      placeholder: _tr(
+                        'search_user_hint',
+                        'Поиск людей по имени или @username...',
                       ),
-                      Divider(height: 1, color: palette.borderSubtle),
-                      if (_isLoadingUsers && _filteredUsers.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.all(28),
-                          child: Center(child: CircularProgressIndicator()),
-                        )
-                      else if (_filteredUsers.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(28),
-                          child: Center(
-                            child: Text(
-                              _searchQuery.isEmpty
-                                  ? 'Введите имя или @username, чтобы пригласить участников'
-                                  : 'Пользователи не найдены',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: palette.textSecondary,
-                                fontSize: 13.5,
+                      prefix: iconoir.Search(
+                        width: 18,
+                        height: 18,
+                        color: palette.subtext,
+                      ),
+                      suffix: _searchQuery.isNotEmpty
+                          ? GestureDetector(
+                              onTap: () => _searchController.clear(),
+                              child: iconoir.XmarkCircle(
+                                width: 18,
+                                height: 18,
+                                color: palette.subtext,
                               ),
+                            )
+                          : null,
+                    ),
+                    if (_isLoadingUsers && _filteredUsers.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(28),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (_filteredUsers.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(28),
+                        child: Center(
+                          child: Text(
+                            _searchQuery.isEmpty
+                                ? 'Введите имя или @username, чтобы пригласить участников'
+                                : 'Пользователи не найдены',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: palette.subtext,
+                              fontSize: 13.5,
                             ),
                           ),
-                        )
-                      else
-                        for (int i = 0; i < _filteredUsers.length; i++) ...[
-                          if (i > 0)
-                            Divider(
-                              height: 1,
-                              indent: 68,
-                              color: palette.borderSubtle,
-                            ),
-                          _buildUserSelectTile(
-                            _filteredUsers[i],
-                            primaryColor: primaryColor,
-                            palette: palette,
-                          ),
-                        ],
-                    ],
-                  ),
+                        ),
+                      )
+                    else
+                      for (final user in _filteredUsers)
+                        _buildUserSelectTile(
+                          user,
+                          primaryColor: primaryColor,
+                          palette: palette,
+                        ),
+                  ],
                 ),
               ],
-            ),
-          ),
-
-          // Нижняя кнопка создания группы
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-              child: SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton.icon(
-                  onPressed: _isCreating ? null : _createGroup,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                  icon: _isCreating
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const iconoir.Group(
-                          width: 20,
-                          height: 20,
-                          color: Colors.white,
-                        ),
-                  label: Text(
-                    _selectedMembers.isEmpty
-                        ? _tr('chat_new_group', 'Создать группу')
-                        : 'Создать группу (${_selectedMembers.length + 1})',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1052,130 +925,53 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     required TheavPalette palette,
   }) {
     final isSelected = _selectedMembers.any((m) => m.id == user.id);
+    final userName = _resolvedUserName(user);
+    final userAvatar = getValidAvatarUrl(_resolvedUserAvatar(user));
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+    return TheavListRow(
       leading: AvatarWithStatus(
-        avatarUrl: getValidAvatarUrl(user.avatarUrl),
-        name: user.name,
+        userId: user.id,
+        avatarUrl: userAvatar,
+        name: userName,
         radius: 21,
         isOnline: user.isOnline,
+        resolveContactOverride: !user.isBot,
       ),
-      title: Row(
+      titleWidget: Row(
         children: [
           Flexible(
             child: Text(
-              user.name,
+              userName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontWeight: FontWeight.w600,
                 fontSize: 15,
-                color: palette.textPrimary,
+                color: palette.onSurface,
               ),
             ),
           ),
           PeerBadgesRow(isBot: user.isBot, isVerified: user.isVerified),
         ],
       ),
-      subtitle: user.username.isNotEmpty
-          ? Text(
-              '@${user.username}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12.5,
-                color: palette.textSecondary,
-              ),
-            )
-          : null,
-      trailing: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        width: 24,
-        height: 24,
-        decoration: BoxDecoration(
-          color: isSelected ? primaryColor : Colors.transparent,
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isSelected ? primaryColor : palette.textTertiary,
-            width: 1.8,
-          ),
-        ),
-        child: isSelected
-            ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
-            : null,
+      subtitle: user.username.isNotEmpty ? '@${user.username}' : null,
+      trailing: TheavCheckCircle(
+        selected: isSelected,
+        onTap: () => _toggleMember(user),
       ),
       onTap: () => _toggleMember(user),
     );
   }
 
-  Widget _buildSectionHeader(String title, TheavPalette palette) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Text(
-        title,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-          color: palette.textSecondary,
-        ),
-      ),
-    );
-  }
-
   Widget _buildSurfaceCard(
     BuildContext context, {
-    required bool isGlass,
-    required bool isLite,
-    required bool isDark,
     required Widget child,
     double cornerRadius = 20,
   }) {
-    if (isGlass) {
-      final glassProvider = context.watch<LiquidGlassProvider>();
-      final style = glassProvider.createStyle(
-        context: context,
-        isLiteOverride: isLite,
-        shape: LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: cornerRadius,
-        ),
-      );
-      return LiquidGlassLens(
-        style: style,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(cornerRadius),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.10)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.6,
-            ),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: child,
-          ),
-        ),
-      );
-    }
-
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-        borderRadius: BorderRadius.circular(cornerRadius),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withValues(alpha: 0.08)
-              : Colors.black.withValues(alpha: 0.06),
-          width: 0.6,
-        ),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: child,
-      ),
+    return TheavInsetGroup(
+      margin: EdgeInsets.zero,
+      borderRadius: cornerRadius,
+      children: [child],
     );
   }
 }

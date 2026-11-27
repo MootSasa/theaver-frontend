@@ -1,17 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import '../../models/theav_theme.dart';
+import '../../models/chat_draft.dart';
+import '../../models/profile_customization.dart';
 import '../../services/chat_service.dart';
+import '../../services/contacts_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/websocket_service.dart';
 import '../../services/unread_count_provider.dart';
@@ -19,24 +28,18 @@ import '../../services/database/app_database.dart';
 import '../../services/sync_service.dart';
 import '../../services/chat_realtime_manager.dart';
 import '../../services/notification_service.dart';
+import '../../services/peer_customization_cache.dart';
 import '../../services/profile_instant_cache.dart';
-import '../../services/profile_theme_provider.dart';
-import 'package:drift/drift.dart' show Value;
-import '../../utils/image_utils.dart';
-import '../../utils/emoji_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
 import '../../widgets/chat/floating_glass_app_bar.dart';
 import '../../widgets/chat/chat_scaffold.dart';
-import '../../widgets/chat/chat_input_bar.dart';
 import '../../widgets/chat/chat_messages_list_view.dart';
 import '../../widgets/chat/chat_messages_shimmer.dart';
 import '../../widgets/chat/chat_scroll_navigator.dart';
 import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/message_bubble.dart';
-import '../../widgets/message/text_message_widget.dart';
-import '../../widgets/message/message_status_widget.dart';
-import '../../widgets/chat/message_reply_info.dart';
 import '../../widgets/chat/swipe_to_reply_wrapper.dart';
 import '../../widgets/chat/unread_separator.dart';
 import '../../utils/swipe_back_route.dart';
@@ -46,7 +49,6 @@ import '../../l10n/app_localizations.dart';
 import '../../utils/date_time_utils.dart';
 import '../../config/app_config.dart';
 import '../../services/media_playback_coordinator.dart';
-import '../../services/media_cache_manager.dart';
 import '../../services/file_service.dart';
 import '../../services/video_note_recorder_service.dart';
 import '../../services/video_note_playback_service.dart';
@@ -55,21 +57,51 @@ import '../../services/voice_playback_service.dart';
 import '../../widgets/chat/media_note_player_header.dart';
 import '../../widgets/chat/round_video_recording_overlay.dart';
 import '../../widgets/chat/voice_recording_overlay.dart';
-import '../../widgets/message/video_message_widget.dart';
-import '../../widgets/message/voice_message_widget.dart';
-import '../../widgets/message/poll_message_widget.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../services/draft_service.dart';
 import '../../services/chat_actions_helper.dart';
 import '../../services/glass_toast_service.dart';
+import '../../widgets/chat/forward_options_sheet.dart';
+import '../../widgets/chat/send_options_popup.dart';
+import '../../widgets/chat/telegram_delete_messages_sheet.dart';
+import 'pinned_messages_screen.dart';
+import 'scheduled_messages_screen.dart';
 import '../../services/message_context_menu_service.dart';
+import '../../services/notification_settings_provider.dart';
+import '../../services/screen_protection_service.dart';
 import '../../widgets/chat/forward_chat_picker_sheet.dart';
+import '../../widgets/chat/groups_channels_parity_widgets.dart';
 import '../../widgets/chat/pinned_message_banner.dart';
-import '../../widgets/message/inline_keyboard_widget.dart';
 import '../settings/profile_screen.dart';
+import 'settings/channel_stats_screen.dart';
 import '../../services/tiling_layout_controller.dart';
 import '../../services/sticker_service.dart';
 import '../../widgets/tiling/tile_viewport_scope.dart';
+import '../../models/media_album.dart';
+import '../../models/theav_media_item.dart';
+import '../../widgets/media_viewer/theav_media_viewer.dart';
+import '../../widgets/chat/chat_history_calendar.dart';
+import '../../widgets/chat/channel_post_card.dart';
+import '../../widgets/chat/channel_bottom_capsule_bar.dart';
+import '../../widgets/chat/live_chat_call_banner.dart';
+import '../../widgets/message/telegram_service_message_widget.dart';
+import '../../widgets/chat/attachment_picker_bottom_sheet.dart';
+import '../../services/bot_service.dart';
+import '../../services/deep_link_service.dart';
+import '../../services/dm_parity_service.dart';
+import '../../widgets/chat/dm_parity_sheets.dart';
+import '../../services/account_manager.dart';
+import '../../services/chat_instant_cache.dart';
+import '../../services/media_send_coordinator.dart';
+import '../../widgets/chat/contact_picker_sheet.dart';
+import '../../widgets/chat/location_picker_sheet.dart';
+import '../../widgets/chat/mention_and_bot_popup.dart';
+import '../../widgets/bot/inline_results_popup.dart';
+import '../../widgets/bot/mini_app_webview_sheet.dart';
+import '../../widgets/message/fullscreen_photo_viewer.dart';
+import 'media_send_screen.dart';
+import 'poll_create_screen.dart';
+import 'post_comments_screen.dart';
 
 
 
@@ -114,7 +146,9 @@ class _ChannelScreenState extends State<ChannelScreen>
       !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
 
   bool get _isMobilePlatform =>
-      !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   bool _isLoading = true;
   bool _isSyncing = false;
@@ -135,17 +169,404 @@ class _ChannelScreenState extends State<ChannelScreen>
   bool _isAdmin = false;
   bool _isMuted = false;
   bool _isVerified = false;
+  bool _showAuthorProfiles = false;
+  bool _signMessages = false;
+  String _myRole = 'guest';
+  bool _isMember = true;
+  bool _canPostInChannel = false;
+  bool _canEditMessages = false;
+  bool _canDeleteMessages = false;
+  bool _canPinMessages = false;
+  String? _linkedChatId;
+  LinkedChatSummary? _linkedChat;
+  String? _channelDescription;
+  ReactionSettings? _reactionSettings;
+  bool _hasActiveCall = false;
+  bool _isSilentBroadcast = false;
+  bool? _savedSilentBroadcastPref;
+  bool _seededFromChatDetails = false;
+  List<BotInfo> _inlineDirectoryBots = const [];
+  String? _activeMentionQuery;
+  int _mentionTokenStart = -1;
+  int _mentionTokenEnd = -1;
+  bool _mentionIsAtStart = false;
+  final InlineQueryController _inlineQueryController = InlineQueryController();
+  final Map<String, TranslationResult> _translationsByMsgId = {};
+  final Set<String> _translatingMsgIds = {};
+  List<ChatParticipant> _participants = [];
   Message? _pinnedMessage;
+  List<Message> _pinnedMessages = [];
+  int _currentPinnedIndex = 0;
+  bool _hasProtectedContent = false;
+  int _scheduledCount = 0;
+  StagedForwardPayload? _stagedForward;
   bool _showScrollDownFab = false;
   double _lastScrollOffset = 0;
   double _accumulatedScrollDown = 0;
   double _accumulatedScrollUp = 0;
+  double _newestMessageHeight = 150.0;
+  double _lastStickyDateEvalOffset = -1000.0;
   String? _highlightMessageId;
   bool _hasScrolledToHighlight = false;
   final GlobalKey _inputKey = GlobalKey();
   double _inputHeight = 90.0;
   final Map<String, GlobalKey> _messageKeys = {};
   final List<String> _jumpHistory = [];
+
+  // Feed albums, reactions, unread tracking & sticky date state
+  List<FeedItem> _feedItems = [];
+  final Map<String, Map<String, int>> _messageReactions = {};
+  final Map<String, Set<String>> _myReactions = {};
+  int _unreadCount = 0;
+  String? _firstUnreadMessageId;
+  bool _showUnreadDivider = false;
+  int _firstUnreadFeedIndex = -1;
+  final GlobalKey _unreadSeparatorKey = GlobalKey();
+  final Map<String, GlobalKey> _dateSeparatorKeys = {};
+  final GlobalKey _stickyDateSlotKey = GlobalKey();
+  final ValueNotifier<StickyDateState> _stickyDateStateNotifier =
+      ValueNotifier<StickyDateState>(StickyDateState.empty);
+  List<({DateTime day, DateTime sampleDt, int newestIdx, int oldestIdx})>
+      _daySpans = [];
+  bool _stickyDatePostFrameScheduled = false;
+  final Map<String, (DateTime, DateTime)> _dateCache = {};
+
+  // Batch channel post view tracking (1.5s debounce)
+  final Set<String> _viewedPostIdsThisSession = <String>{};
+  final Set<String> _pendingViewIds = <String>{};
+  Timer? _viewsFlushTimer;
+  Timer? _entrySettleTimer;
+
+  DateTime _dateOnly(DateTime dt) {
+    final local = dt.toLocal();
+    return DateTime(local.year, local.month, local.day);
+  }
+
+  (DateTime, DateTime) _resolveDates(String createdAt) {
+    final cached = _dateCache[createdAt];
+    if (cached != null) return cached;
+    final dt = DateTimeUtils.parseUtcDateTime(createdAt) ?? DateTime.now();
+    final day = _dateOnly(dt);
+    final result = (dt, day);
+    if (_dateCache.length > 500) _dateCache.clear();
+    _dateCache[createdAt] = result;
+    return result;
+  }
+
+  String _formatDateLabel(DateTime dt) =>
+      DateTimeUtils.formatDateSeparator(dt, context: context);
+
+  GlobalKey _dateSeparatorKeyFor(DateTime day, Message primaryMessage) {
+    final stableId = (primaryMessage.localId != null &&
+            primaryMessage.localId!.isNotEmpty)
+        ? primaryMessage.localId!
+        : primaryMessage.id;
+    return _dateSeparatorKeys.putIfAbsent(
+      '${day.millisecondsSinceEpoch}_$stableId',
+      () => GlobalKey(),
+    );
+  }
+
+  GlobalKey _dateSeparatorKeyForFeedIndex(DateTime day, int feedIndex) {
+    if (feedIndex < 0 || feedIndex >= _feedItems.length) {
+      return _dateSeparatorKeys.putIfAbsent(
+        '${day.millisecondsSinceEpoch}_idx_$feedIndex',
+        () => GlobalKey(),
+      );
+    }
+    final item = _feedItems[feedIndex];
+    final msg = item is FeedAlbumItem
+        ? item.album.primaryMessage
+        : (item as FeedSingleItem).message;
+    return _dateSeparatorKeyFor(day, msg);
+  }
+
+  bool _isOwnChannelPost(Message m) {
+    if (m.isOwn) return true;
+    final uid = _currentUserId;
+    if (uid == null || uid.isEmpty) return false;
+    return m.senderId == uid || m.postAuthorId == uid;
+  }
+
+  bool _canEditChannelPost(Message m) =>
+      _canEditMessages || (_canPostInChannel && _isOwnChannelPost(m));
+
+  bool _canDeleteChannelPosts(Iterable<Message> msgs) =>
+      _canDeleteMessages ||
+      (_canPostInChannel && msgs.isNotEmpty && msgs.every(_isOwnChannelPost));
+
+  bool get _canDeleteSelectedChannelPosts {
+    if (_selectedMessageIds.isEmpty) return false;
+    if (_canDeleteMessages) return true;
+    if (!_canPostInChannel) return false;
+    final selected = _messages
+        .where((m) => _selectedMessageIds.contains(m.id))
+        .toList();
+    return selected.isNotEmpty && selected.every(_isOwnChannelPost);
+  }
+
+  void _updateFeedItems() {
+    _feedItems = groupMessagesIntoFeedItems(_messages, isReversed: true);
+    if (_showUnreadDivider && _firstUnreadMessageId != null) {
+      _firstUnreadFeedIndex = _feedItems.indexWhere((item) =>
+          item.id == _firstUnreadMessageId ||
+          (item is FeedAlbumItem &&
+              item.album.items.any((ai) => ai.id == _firstUnreadMessageId)));
+    } else {
+      _firstUnreadFeedIndex = -1;
+    }
+
+    final spans =
+        <({DateTime day, DateTime sampleDt, int newestIdx, int oldestIdx})>[];
+    for (int i = 0; i < _feedItems.length; i++) {
+      final (dt, day) = _resolveDates(_feedItems[i].createdAt);
+      if (spans.isEmpty || spans.last.day != day) {
+        spans.add((day: day, sampleDt: dt, newestIdx: i, oldestIdx: i));
+      } else {
+        final prev = spans.removeLast();
+        spans.add((
+          day: prev.day,
+          sampleDt: prev.sampleDt,
+          newestIdx: prev.newestIdx,
+          oldestIdx: i,
+        ));
+      }
+    }
+    for (final span in spans) {
+      _dateSeparatorKeyForFeedIndex(span.day, span.oldestIdx);
+    }
+    _daySpans = spans;
+
+    if (_messageKeys.length > _messages.length * 2 + 200) {
+      final activeIds = <String>{
+        for (final m in _messages) m.id,
+        for (final m in _messages)
+          if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+      };
+      _messageKeys.removeWhere((id, _) => !activeIds.contains(id));
+    }
+    _scheduleStickyDateUpdate();
+  }
+
+  void _syncReactionCacheFromMessages(List<Message> msgs) {
+    for (final m in msgs) {
+      if (m.reactions.isNotEmpty) {
+        _messageReactions[m.id] = Map<String, int>.from(m.reactions);
+      } else {
+        _messageReactions.remove(m.id);
+      }
+      if (m.myReactions.isNotEmpty) {
+        _myReactions[m.id] = Set<String>.from(m.myReactions);
+      } else {
+        _myReactions.remove(m.id);
+      }
+    }
+  }
+
+  void _applyChatDetails(ChatDetails chat, {bool fromInitialCache = false}) {
+    if (!fromInitialCache) {
+      ChatInstantCache.instance.putChatDetails(chat);
+    }
+    _seededFromChatDetails = true;
+    _channelName = chat.name;
+    _channelAvatar = chat.avatarUrl;
+    _channelDescription = chat.description;
+    _subscriberCount = chat.effectiveMemberCount;
+    _isVerified = chat.isVerified;
+    _showAuthorProfiles = chat.showAuthorProfiles;
+    _signMessages = chat.signMessages;
+    _linkedChatId = chat.linkedChatId;
+    _linkedChat = chat.linkedChat;
+    _reactionSettings = chat.reactionSettings;
+    _hasActiveCall = chat.hasActiveCall;
+    _hasProtectedContent = chat.hasProtectedContent;
+    unawaited(
+      ScreenProtectionService.instance.sync(
+        'channel_${widget.channelId}',
+        _hasProtectedContent,
+      ),
+    );
+    _isMuted = NotificationSettingsProvider().isChatMuted(
+      widget.channelId,
+      chatType: 'channel',
+    );
+    _participants = chat.participants;
+    if (chat.pinnedMessage != null) {
+      _pinnedMessage = chat.pinnedMessage;
+      _pinnedMessages = [chat.pinnedMessage!];
+    }
+
+    _isMember = chat.isMember;
+    final resolvedRole = (chat.myRole != null && chat.myRole!.isNotEmpty)
+        ? chat.myRole!
+        : (_isMember
+            ? (chat.participants
+                    .where((p) => p.id == _currentUserId)
+                    .map((p) => p.role)
+                    .firstOrNull ??
+                'subscriber')
+            : 'guest');
+    _myRole = _isMember ? resolvedRole : 'guest';
+
+    final isOwner = _myRole == 'owner' ||
+        chat.participants
+            .any((p) => p.id == _currentUserId && p.role == 'owner');
+    final isAdminRole = isOwner ||
+        _myRole == 'admin' ||
+        chat.participants.any((p) =>
+            p.id == _currentUserId && (p.role == 'owner' || p.role == 'admin'));
+    _isAdmin = _isMember && isAdminRole;
+    _canPostInChannel = _isMember && chat.canPostInChannel;
+    _canEditMessages = isOwner ||
+        (_isAdmin && (chat.myAdminPermissions?.canEditMessages ?? false));
+    _canDeleteMessages = isOwner ||
+        (_isAdmin && (chat.myAdminPermissions?.canDeleteMessages ?? true));
+    _canPinMessages = isOwner ||
+        (_isAdmin && (chat.myAdminPermissions?.canPinMessages ?? true));
+    if (!_canPostInChannel) {
+      _isSilentBroadcast = false;
+      if (!fromInitialCache && !_isEditing && !_userEditedComposer) {
+        _pendingDraftReplyId = null;
+        if (_messageController.text.isNotEmpty || _replyToMessage != null) {
+          _suppressDraftSave = true;
+          try {
+            _messageController.clear();
+            _replyToMessage = null;
+            _isQuote = false;
+            _quoteText = null;
+            _quoteOffset = 0;
+            _quoteLength = 0;
+          } finally {
+            _suppressDraftSave = false;
+          }
+        }
+        DraftService().cancelPendingPublish(_draftKey);
+      }
+    } else if (_savedSilentBroadcastPref != null) {
+      _isSilentBroadcast = _savedSilentBroadcastPref!;
+    }
+  }
+
+  String get _silentBroadcastPrefKey =>
+      'channel_silent_broadcast_${widget.channelId}';
+
+  Future<void> _loadSilentBroadcastPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getBool(_silentBroadcastPrefKey);
+      if (saved == null || !mounted) return;
+      _savedSilentBroadcastPref = saved;
+      if (_canPostInChannel && _isSilentBroadcast != saved) {
+        setState(() => _isSilentBroadcast = saved);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _setSilentBroadcast(bool silent) async {
+    _savedSilentBroadcastPref = silent;
+    if (mounted) {
+      setState(() => _isSilentBroadcast = silent);
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_silentBroadcastPrefKey, silent);
+    } catch (_) {}
+  }
+
+  void _enqueuePostViews(Iterable<String> messageIds) {
+    bool added = false;
+    for (final rawId in messageIds) {
+      final id = rawId.trim();
+      if (id.isEmpty ||
+          int.tryParse(id) == null ||
+          _viewedPostIdsThisSession.contains(id) ||
+          _pendingViewIds.contains(id)) {
+        continue;
+      }
+      _pendingViewIds.add(id);
+      added = true;
+    }
+    if (!added) return;
+    _viewsFlushTimer?.cancel();
+    _viewsFlushTimer = Timer(const Duration(milliseconds: 1500), () {
+      unawaited(_flushPendingViews());
+    });
+  }
+
+  Message _feedItemPrimaryMessage(FeedItem item) {
+    return item is FeedAlbumItem
+        ? item.album.primaryMessage
+        : (item as FeedSingleItem).message;
+  }
+
+  Future<void> _flushPendingViews() async {
+    if (_pendingViewIds.isEmpty) return;
+    final batch = _pendingViewIds.toList(growable: false);
+    _pendingViewIds.clear();
+    _viewedPostIdsThisSession.addAll(batch);
+    try {
+      await ChatService.recordMessageViews(
+        chatId: widget.channelId,
+        messageIds: batch,
+      );
+    } catch (e) {
+      debugPrint('ChannelScreen: recordMessageViews error: $e');
+    }
+  }
+
+  void _applyViewsMap(
+    Map<String, int> viewsById, {
+    Map<String, int> forwardsById = const {},
+  }) {
+    if (viewsById.isEmpty && forwardsById.isEmpty) return;
+    bool changed = false;
+    if (mounted) {
+      setState(() {
+        for (int i = 0; i < _messages.length; i++) {
+          final id = _messages[i].id;
+          final nextViews = viewsById[id];
+          final nextForwards = forwardsById[id];
+          final viewsChanged =
+              nextViews != null && nextViews != _messages[i].viewsCount;
+          final forwardsChanged =
+              nextForwards != null && nextForwards != _messages[i].forwardsCount;
+          if (viewsChanged || forwardsChanged) {
+            _messages[i] = _messages[i].copyWith(
+              viewsCount: nextViews ?? _messages[i].viewsCount,
+              forwardsCount: nextForwards ?? _messages[i].forwardsCount,
+            );
+            changed = true;
+          }
+        }
+        for (int i = 0; i < _detachedLatestBackup.length; i++) {
+          final id = _detachedLatestBackup[i].id;
+          final nextViews = viewsById[id];
+          final nextForwards = forwardsById[id];
+          if ((nextViews != null &&
+                  nextViews != _detachedLatestBackup[i].viewsCount) ||
+              (nextForwards != null &&
+                  nextForwards != _detachedLatestBackup[i].forwardsCount)) {
+            _detachedLatestBackup[i] = _detachedLatestBackup[i].copyWith(
+              viewsCount: nextViews ?? _detachedLatestBackup[i].viewsCount,
+              forwardsCount:
+                  nextForwards ?? _detachedLatestBackup[i].forwardsCount,
+            );
+          }
+        }
+        if (changed) {
+          _updateFeedItems();
+        }
+      });
+    }
+    try {
+      if (viewsById.isNotEmpty) {
+        AppDatabase().updateMessagesViews(viewsById);
+      }
+      if (forwardsById.isNotEmpty) {
+        AppDatabase().updateMessagesForwards(forwardsById);
+      }
+    } catch (_) {}
+  }
 
   // Multi-message selection & desktop LMB drag state
   final Set<String> _selectedMessageIds = <String>{};
@@ -182,8 +603,29 @@ class _ChannelScreenState extends State<ChannelScreen>
   bool _isEditing = false;
   String? _editingMessageId;
 
+  // Draft lifecycle state
+  String get _draftKey => widget.channelId;
+  bool _suppressDraftSave = false;
+  bool _userEditedComposer = false;
+  String? _pendingDraftReplyId;
+  StreamSubscription<({String chatId, ChatDraft? draft})>? _draftRemoteSub;
+  ({
+    String text,
+    List<MessageEntity> entities,
+    Message? replyTo,
+    bool isQuote,
+    String? quoteText,
+    int quoteOffset,
+    int quoteLength,
+  })? _stashedDraftBeforeEdit;
+
   // File upload & voice/video note recording state
   final FileService _fileService = FileService();
+  final ImagePicker _imagePicker = ImagePicker();
+  final List<File> _attachedFiles = [];
+  final List<String> _attachedFileNames = [];
+  LinkPreviewOptions? _linkPreviewOptions;
+  bool _invertMedia = false;
   final ValueNotifier<double> _uploadProgressNotifier = ValueNotifier<double>(0.0);
   bool _isUploading = false;
   final VideoNoteRecorderService _videoRecorderService = VideoNoteRecorderService();
@@ -198,6 +640,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   // WebSocket & Realtime
   final WebSocketService _wsService = WebSocketService();
   ChatSubscription? _chatSubscription;
+  StreamSubscription<ChatRealtimeUpdate>? _realtimeUpdateSub;
+  StreamSubscription<MediaSendEvent>? _mediaSendSub;
   UnreadCountProvider? _unreadCountProvider;
   String? _registeredTileId;
 
@@ -205,8 +649,68 @@ class _ChannelScreenState extends State<ChannelScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _currentUserId = AccountManager().currentAccount?.userId;
     _highlightMessageId = widget.highlightMessageId;
-    ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
+    final instant = ChatInstantCache.instance.getSync(widget.channelId);
+    final chanSnap = ProfileInstantCache.instance.getGroupSnapshotSync(widget.channelId);
+
+    _isMuted = NotificationSettingsProvider().isChatMuted(
+          widget.channelId,
+          chatType: 'channel',
+        ) ||
+        ProfileInstantCache.instance.isChatMutedSync(widget.channelId);
+    unawaited(_loadSilentBroadcastPreference());
+    _keyboardHeight =
+        instant?.keyboardHeight ?? ChatInstantCache.instance.globalKeyboardHeight;
+    if (instant?.inputHeight != null) {
+      _inputHeight = instant!.inputHeight!;
+    }
+    if (instant?.chatDetails != null) {
+      _applyChatDetails(instant!.chatDetails!, fromInitialCache: true);
+    }
+    if ((widget.channelName != null && widget.channelName!.isNotEmpty) ||
+        _channelName.isEmpty) {
+      _channelName = (widget.channelName != null && widget.channelName!.isNotEmpty)
+          ? widget.channelName!
+          : (instant?.chat?.name ?? _channelName);
+    }
+    _channelAvatar =
+        widget.channelAvatar ?? instant?.chat?.avatarUrl ?? _channelAvatar;
+    if (_subscriberCount == 0) {
+      _subscriberCount =
+          instant?.subscriberCount ?? instant?.memberCount ?? chanSnap?.memberCount ?? 0;
+    }
+    _isVerified = instant?.isVerified ?? instant?.chat?.isVerified ?? _isVerified;
+    _linkedChat ??= instant?.linkedChat;
+    _linkedChatId ??= instant?.linkedChat?.id ?? instant?.chat?.linkedChatId;
+    if (!_seededFromChatDetails) {
+      final cachedRole = instant?.myRole ?? instant?.chat?.myRole;
+      if (cachedRole != null && cachedRole.isNotEmpty) {
+        _myRole = cachedRole;
+        _isMember = instant?.isMember ?? instant?.chat?.isMember ?? (cachedRole != 'guest');
+        _isAdmin = _isMember && (cachedRole == 'owner' || cachedRole == 'admin');
+        _canPostInChannel = _isAdmin;
+      } else if (instant?.isMember != null) {
+        _isMember = instant!.isMember!;
+      }
+      _hasProtectedContent =
+          instant?.hasProtectedContent ?? instant?.chat?.hasProtectedContent ?? _hasProtectedContent;
+    }
+    final instantPinned = instant?.effectivePinnedMessage;
+    if (_pinnedMessage == null && instantPinned != null) {
+      _pinnedMessage = instantPinned;
+      _pinnedMessages = instant?.pinnedMessages ?? [instantPinned];
+    }
+
+    if (instant != null && instant.hasMessages) {
+      _messages.addAll(instant.messages!);
+      _syncReactionCacheFromMessages(_messages);
+      _isLoading = false;
+      _hasMoreMessages = _messages.length >= 35;
+      _updateFeedItems();
+    } else {
+      unawaited(_loadMessages());
+    }
 
     _emojiPanelController = AnimationController(
       vsync: this,
@@ -218,9 +722,16 @@ class _ChannelScreenState extends State<ChannelScreen>
       reverseCurve: Curves.easeInCubic,
     );
 
-    _loadData();
-    _loadCachedKeyboardHeight();
     _initWebSocket();
+    _mediaSendSub =
+        MediaSendCoordinator.instance.events.listen(_onMediaSendEvent);
+    _entrySettleTimer = Timer(const Duration(milliseconds: 320), () {
+      if (!mounted) return;
+      ProfileInstantCache.instance.prefetchGroupOrChannel(widget.channelId);
+      unawaited(_loadData());
+      unawaited(_loadCachedKeyboardHeight());
+      unawaited(_loadInlineDirectoryBots());
+    });
     _inputFocusNode.addListener(_onFocusChanged);
     _stickerInputTarget = ChatStickerInputTarget(
       chatId: widget.channelId,
@@ -236,20 +747,56 @@ class _ChannelScreenState extends State<ChannelScreen>
     StickerService.instance.registerInputTarget(_stickerInputTarget);
     _lastActiveTileId = TilingLayoutController.instance.activeTileId;
     TilingLayoutController.instance.addListener(_onTilingLayoutChanged);
+    ContactsService.revisionNotifier.addListener(_onContactsRevisionChanged);
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.addHandler(_handleGlobalDesktopKeyEvent);
     }
 
     // Restore draft if exists
-    final draft = DraftService().getDraft(widget.channelId);
-    if (draft != null && draft.isNotEmpty) {
+    final draft = DraftService().getDraft(_draftKey);
+    if (draft != null &&
+        draft.isNotEmpty &&
+        (_canPostInChannel || !_seededFromChatDetails)) {
+      _suppressDraftSave = true;
       _messageController.loadMessage(draft.text, draft.entities);
+      _suppressDraftSave = false;
+      if (_replyToMessage == null &&
+          draft.replyToMessageId != null &&
+          draft.replyToMessageId!.isNotEmpty) {
+        _pendingDraftReplyId = draft.replyToMessageId;
+      }
       if (draft.quoteText != null && draft.quoteText!.isNotEmpty) {
         _isQuote = draft.isQuote;
         _quoteText = draft.quoteText;
+        _quoteOffset = draft.quoteOffset;
+        _quoteLength = draft.quoteLength;
       }
+      _resolvePendingDraftReply();
     }
+    _draftRemoteSub = DraftService().remoteUpdatesStream.listen((event) {
+      if (event.chatId == _draftKey) {
+        _applyRemoteDraft(event.draft);
+      }
+    });
     _messageController.addListener(_onInputTextChanged);
+    DeepLinkService.pendingInlinePrefill.addListener(
+      _onPendingInlinePrefillChanged,
+    );
+    final pendingPrefill =
+        DeepLinkService.consumeInlinePrefill(widget.channelId);
+    final initialInlineText =
+        (pendingPrefill != null && pendingPrefill.isNotEmpty)
+            ? pendingPrefill
+            : (draft != null &&
+                    BotService.parseInlineBotInput(draft.text) != null
+                ? draft.text
+                : null);
+    if (initialInlineText != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _insertInlineQueryText(initialInlineText);
+      });
+    }
 
     // Connect continuous media playback with coordinator
     MediaPlaybackCoordinator.instance.registerChat(
@@ -303,16 +850,21 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
 
       // Dynamic threshold: height of the newest message
-      double threshold = 150.0;
-      if (_messages.isNotEmpty) {
+      if (!_isDetachedHistoryWindow && offset < 50 && _messages.isNotEmpty) {
         final firstMsgId = _messages.first.id;
-        final key = _messageKeys[firstMsgId];
+        final key = _feedItems.isNotEmpty
+            ? _messageKeys[_feedItemKeyId(_feedItems.first)]
+            : _messageKeys[firstMsgId];
         final renderBox = key?.currentContext?.findRenderObject() as RenderBox?;
-        if (renderBox != null && renderBox.hasSize) {
-          threshold = renderBox.size.height;
+        if (renderBox != null && renderBox.hasSize && renderBox.size.height > 20.0) {
+          _newestMessageHeight = renderBox.size.height;
+        }
+        if (_unreadCount > 0 && _isMember) {
+          _markMessagesAsRead();
         }
       }
-      
+      final double threshold = _newestMessageHeight;
+
       bool shouldShow = _showScrollDownFab;
       if (_isDetachedHistoryWindow || _jumpHistory.isNotEmpty) {
         shouldShow = true;
@@ -323,7 +875,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       } else if (delta > 0 && _accumulatedScrollUp >= 120.0) {
         shouldShow = false;
       }
-      
+
       if (shouldShow != _showScrollDownFab) {
         setState(() {
           _showScrollDownFab = shouldShow;
@@ -333,6 +885,11 @@ class _ChannelScreenState extends State<ChannelScreen>
             _accumulatedScrollUp = 0;
           }
         });
+      }
+
+      if ((offset - _lastStickyDateEvalOffset).abs() >= 48.0) {
+        _lastStickyDateEvalOffset = offset;
+        _scheduleStickyDateUpdate();
       }
     });
 
@@ -344,7 +901,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         _unreadCountProvider?.openChat(widget.channelId);
       } catch (_) {}
       NotificationService().cancelChatNotifications(widget.channelId, chatTitle: widget.channelName);
-      if (_isDesktopPlatform && _isAdmin && _isMyTileActive()) {
+      if (_isDesktopPlatform && (_canPostInChannel || _isAdmin) && _isMyTileActive()) {
         _inputFocusNode.requestFocus();
       }
     });
@@ -445,11 +1002,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getDouble('cached_keyboard_height');
     if (cached != null && cached > 150) {
-      if (mounted) setState(() => _keyboardHeight = cached);
+      ChatInstantCache.instance.setKeyboardHeight(cached, chatId: widget.channelId);
+      if (mounted && (cached - _keyboardHeight).abs() > 0.5) {
+        setState(() => _keyboardHeight = cached);
+      }
     }
   }
 
   Future<void> _saveKeyboardHeight(double height) async {
+    ChatInstantCache.instance.setKeyboardHeight(height, chatId: widget.channelId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('cached_keyboard_height', height);
   }
@@ -460,8 +1021,11 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
     if (_inputFocusNode.hasFocus && _showEmojiPanel && !_isMobilePlatform) {
       _closeEmojiPanel();
-    } else if (!_inputFocusNode.hasFocus && !_showEmojiPanel && !_isEditing) {
-      DraftService().flushDraft(widget.channelId);
+    } else if (!_inputFocusNode.hasFocus &&
+        !_showEmojiPanel &&
+        !_isEditing &&
+        _canPostInChannel) {
+      DraftService().flushDraft(_draftKey);
     }
   }
 
@@ -504,20 +1068,48 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
   }
 
+  void _enterEditMode(Message message) {
+    if (!_isEditing) {
+      _stashedDraftBeforeEdit = (
+        text: _messageController.cleanText,
+        entities: List<MessageEntity>.from(_messageController.entities),
+        replyTo: _replyToMessage,
+        isQuote: _isQuote,
+        quoteText: _quoteText,
+        quoteOffset: _quoteOffset,
+        quoteLength: _quoteLength,
+      );
+    }
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = true;
+        _editingMessageId = message.id;
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _messageController.loadMessage(message.content, message.entities);
+        _messageController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _messageController.text.length),
+        );
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _focusInputField();
+  }
+
   void _editLastOwnMessage() {
-    if (!_isAdmin) return;
+    if (!_isAdmin && !_canPostInChannel) return;
     for (final msg in _messages) {
-      if ((msg.senderId == _currentUserId || _isAdmin) &&
+      if (_canEditChannelPost(msg) &&
           msg.messageType == 'text' &&
           !msg.isRound &&
           msg.content.trim().isNotEmpty) {
-        setState(() {
-          _cancelReply();
-          _messageController.loadMessage(msg.content, msg.entities);
-          _isEditing = true;
-          _editingMessageId = msg.id;
-        });
-        _focusInputField();
+        _enterEditMode(msg);
         return;
       }
     }
@@ -535,9 +1127,14 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
 
     _transitionTimer?.cancel();
-    final kbOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+    final kbOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
 
     if (!_showEmojiPanel) {
+      if (!_messageController.selection.isValid) {
+        _messageController.selection = TextSelection.collapsed(
+          offset: _messageController.text.length,
+        );
+      }
       if (kbOpen) {
         _emojiPanelController.value = 1.0;
         setState(() {
@@ -547,12 +1144,16 @@ class _ChannelScreenState extends State<ChannelScreen>
         });
         if (_isMobilePlatform) {
           SystemChannels.textInput.invokeMethod('TextInput.hide');
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
           if (!_inputFocusNode.hasFocus) {
             _inputFocusNode.requestFocus();
           }
-        } else {
-          _inputFocusNode.unfocus();
-        }
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _transitionTimer = Timer(const Duration(milliseconds: 600), () {
           if (mounted && _isKeyboardFalling) {
             setState(() => _isKeyboardFalling = false);
@@ -564,9 +1165,18 @@ class _ChannelScreenState extends State<ChannelScreen>
           _isKeyboardFalling = false;
           _isKeyboardRising = false;
         });
-        if (_isMobilePlatform && !_inputFocusNode.hasFocus) {
-          _inputFocusNode.requestFocus();
+        if (_isMobilePlatform) {
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
         }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_showEmojiPanel || _isKeyboardRising) return;
+          if (!_inputFocusNode.hasFocus) {
+            _inputFocusNode.requestFocus();
+          }
+          if (_isMobilePlatform) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        });
         _emojiPanelController.forward(from: 0.0);
       }
     } else {
@@ -643,10 +1253,26 @@ class _ChannelScreenState extends State<ChannelScreen>
       text: newText,
       selection: TextSelection.collapsed(offset: start + emoji.length),
     );
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 
   void _insertCustomEmojiItem(StickerItem item) {
     _messageController.insertCustomEmoji(item);
+    if (!_inputFocusNode.hasFocus) {
+      _inputFocusNode.requestFocus();
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_inputFocusNode.hasFocus) {
+        _inputFocusNode.requestFocus();
+      }
+    });
   }
 
   Future<void> _sendStickerMessage(StickerItem item) async {
@@ -675,6 +1301,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         mediaPayload: payload,
         replyToMessageId: replyTo?.id,
         localId: localId,
+        isSilent: _isSilentBroadcast,
       );
       if (res['success'] == true && res['message'] is Message) {
         final sent = res['message'] as Message;
@@ -682,11 +1309,13 @@ class _ChannelScreenState extends State<ChannelScreen>
           setState(() {
             if (!_messages.any((m) => m.id == sent.id)) {
               _messages.insert(0, sent);
+              _updateFeedItems();
             }
           });
           _scrollToBottom();
         }
-        await AppDatabase().saveMessage(_messageToCompanion(sent));
+        await AppDatabase()
+            .saveMessage(sent.toCompanion(fallbackChatId: widget.channelId));
       } else if (res['message'] != null && mounted) {
         GlassToastService().show(context, res['message'].toString());
       }
@@ -716,6 +1345,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         mediaPayload: payload,
         replyToMessageId: replyTo?.id,
         localId: localId,
+        isSilent: _isSilentBroadcast,
       );
       if (res['success'] == true && res['message'] is Message) {
         final sent = res['message'] as Message;
@@ -723,11 +1353,13 @@ class _ChannelScreenState extends State<ChannelScreen>
           setState(() {
             if (!_messages.any((m) => m.id == sent.id)) {
               _messages.insert(0, sent);
+              _updateFeedItems();
             }
           });
           _scrollToBottom();
         }
-        await AppDatabase().saveMessage(_messageToCompanion(sent));
+        await AppDatabase()
+            .saveMessage(sent.toCompanion(fallbackChatId: widget.channelId));
       } else if (res['message'] != null && mounted) {
         GlassToastService().show(context, res['message'].toString());
       }
@@ -792,10 +1424,470 @@ class _ChannelScreenState extends State<ChannelScreen>
       onNewMessage: _onNewMessage,
       onMessageEdited: _onMessageEdited,
       onMessageDeleted: _onMessageDeleted,
+      onReactionUpdated: _onMessageReactionUpdated,
+      onUnreadCountUpdated: _onUnreadCountUpdated,
       onMessagePinned: _onMessagePinned,
       onMessageUnpinned: _onMessageUnpinned,
+      onScheduledMessagesUpdated: (_) => unawaited(_loadScheduledCount()),
+      onUserAppearanceUpdated: _onUserAppearanceUpdated,
+      onMessageViewsUpdated: (e) => _handleMessageViewsUpdatedData(e.data),
+      onPostCommentsUpdated: (e) => _handlePostCommentsUpdatedData(e.data),
+      onChatSettingsUpdated: (e) => _handleChatSettingsUpdatedData(e.data),
+      onMemberUpdated: _onMemberUpdated,
+      onChatDeleted: _onChatDeleted,
       onReconnect: _triggerSilentSync,
     );
+
+    _realtimeUpdateSub?.cancel();
+    _realtimeUpdateSub = ChatService.realtimeUpdates
+        .where((u) => u.chatId == widget.channelId)
+        .listen((update) {
+      if (!mounted) return;
+      switch (update.type) {
+        case WebSocketEventType.messageViewsUpdated:
+          _handleMessageViewsUpdatedData(update.data);
+          break;
+        case WebSocketEventType.postCommentsUpdated:
+          _handlePostCommentsUpdatedData(update.data);
+          break;
+        case WebSocketEventType.chatSettingsUpdated:
+          _handleChatSettingsUpdatedData(update.data);
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  void _handleMessageViewsUpdatedData(Map<String, dynamic> data) {
+    final viewsById = <String, int>{};
+    final forwardsById = <String, int>{};
+    final rawViews = data['views'];
+    if (rawViews is List) {
+      for (final item in rawViews) {
+        if (item is Map) {
+          final id = (item['message_id'] ?? item['id'] ?? '').toString().trim();
+          final rawCount = item['views_count'] ?? item['count'];
+          final count = rawCount is num
+              ? rawCount.toInt()
+              : int.tryParse(rawCount?.toString() ?? '');
+          if (id.isNotEmpty && count != null && count >= 0) {
+            viewsById[id] = count;
+          }
+          if (id.isNotEmpty && item.containsKey('forwards_count')) {
+            final rawFwd = item['forwards_count'];
+            final fwd = rawFwd is num
+                ? rawFwd.toInt()
+                : int.tryParse(rawFwd?.toString() ?? '');
+            if (fwd != null && fwd >= 0) {
+              forwardsById[id] = fwd;
+            }
+          }
+        }
+      }
+    } else if (data['message_id'] != null) {
+      final id = data['message_id'].toString().trim();
+      final rawCount = data['views_count'];
+      final count = rawCount is num
+          ? rawCount.toInt()
+          : int.tryParse(rawCount?.toString() ?? '');
+      if (id.isNotEmpty && count != null && count >= 0) {
+        viewsById[id] = count;
+      }
+      if (id.isNotEmpty && data.containsKey('forwards_count')) {
+        final rawFwd = data['forwards_count'];
+        final fwd = rawFwd is num
+            ? rawFwd.toInt()
+            : int.tryParse(rawFwd?.toString() ?? '');
+        if (fwd != null && fwd >= 0) {
+          forwardsById[id] = fwd;
+        }
+      }
+    }
+    if (viewsById.isNotEmpty || forwardsById.isNotEmpty) {
+      _applyViewsMap(viewsById, forwardsById: forwardsById);
+    }
+  }
+
+  void _handlePostCommentsUpdatedData(Map<String, dynamic> data) {
+    final targetIds = <String>{};
+    final primaryId = (data['message_id'] ??
+            data['post_message_id'] ??
+            data['channel_post_id'] ??
+            '')
+        .toString()
+        .trim();
+    if (primaryId.isNotEmpty) targetIds.add(primaryId);
+    if (data['message_ids'] is List) {
+      for (final item in data['message_ids'] as List) {
+        final id = item?.toString().trim() ?? '';
+        if (id.isNotEmpty) targetIds.add(id);
+      }
+    }
+    if (targetIds.isEmpty) return;
+
+    final rawCount = data['comments_count'];
+    final commentsCount = rawCount is num
+        ? rawCount.toInt()
+        : int.tryParse(rawCount?.toString() ?? '');
+    final hasRepliers = data.containsKey('recent_repliers');
+    final parsedRepliers =
+        hasRepliers ? RecentReplier.parseList(data['recent_repliers']) : null;
+
+    if (mounted) {
+      bool changed = false;
+      setState(() {
+        for (int i = 0; i < _messages.length; i++) {
+          if (targetIds.contains(_messages[i].id)) {
+            _messages[i] = _messages[i].copyWith(
+              commentsCount: commentsCount ?? _messages[i].commentsCount,
+              recentRepliers: parsedRepliers ?? _messages[i].recentRepliers,
+            );
+            changed = true;
+          }
+        }
+        for (int i = 0; i < _detachedLatestBackup.length; i++) {
+          if (targetIds.contains(_detachedLatestBackup[i].id)) {
+            _detachedLatestBackup[i] = _detachedLatestBackup[i].copyWith(
+              commentsCount:
+                  commentsCount ?? _detachedLatestBackup[i].commentsCount,
+              recentRepliers:
+                  parsedRepliers ?? _detachedLatestBackup[i].recentRepliers,
+            );
+          }
+        }
+        if (changed) {
+          _updateFeedItems();
+        }
+      });
+    }
+
+    for (final id in targetIds) {
+      try {
+        AppDatabase().updatePostCommentsMeta(
+          messageId: id,
+          commentsCount: commentsCount,
+          recentRepliersJson:
+              hasRepliers ? jsonEncode(data['recent_repliers']) : null,
+        );
+      } catch (_) {}
+    }
+  }
+
+  void _handleChatSettingsUpdatedData(Map<String, dynamic> data) {
+    if (!mounted) return;
+    setState(() {
+      if (data.containsKey('name')) {
+        final nextName = data['name']?.toString().trim() ?? '';
+        if (nextName.isNotEmpty) _channelName = nextName;
+      }
+      if (data.containsKey('avatar_url')) {
+        final rawAvatar = data['avatar_url']?.toString().trim();
+        _channelAvatar =
+            (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null;
+      }
+      if (data.containsKey('description')) {
+        final rawDesc = data['description']?.toString().trim();
+        _channelDescription =
+            (rawDesc != null && rawDesc.isNotEmpty) ? rawDesc : null;
+      }
+      if (data.containsKey('sign_messages')) {
+        final val = data['sign_messages'];
+        _signMessages = val == true || val == 1 || val == 'true';
+      }
+      if (data.containsKey('show_author_profiles')) {
+        final val = data['show_author_profiles'];
+        _showAuthorProfiles = val == true || val == 1 || val == 'true';
+      }
+      if (data['linked_chat'] is Map) {
+        final summary = LinkedChatSummary.fromJson(
+          Map<String, dynamic>.from(data['linked_chat'] as Map),
+        );
+        if (summary.id.isNotEmpty) {
+          _linkedChat = summary;
+          _linkedChatId = summary.id;
+        }
+      } else if (data.containsKey('linked_chat_id')) {
+        final rawLinked = data['linked_chat_id']?.toString().trim() ?? '';
+        if (rawLinked.isEmpty || rawLinked == '0' || rawLinked == 'null') {
+          _linkedChatId = null;
+          _linkedChat = null;
+        } else {
+          _linkedChatId = rawLinked;
+        }
+      }
+      if (data.containsKey('reaction_settings') ||
+          data.containsKey('reaction_mode') ||
+          data.containsKey('allowed_reactions')) {
+        final nextReactions = ReactionSettings.fromChatJson(data);
+        if (nextReactions != null) {
+          _reactionSettings = nextReactions;
+        }
+      }
+      if (data.containsKey('has_active_call')) {
+        final val = data['has_active_call'];
+        _hasActiveCall = val == true || val == 1 || val == 'true';
+      }
+      if (data.containsKey('has_protected_content')) {
+        final val = data['has_protected_content'];
+        _hasProtectedContent = val == true || val == 1 || val == 'true';
+        unawaited(
+          ScreenProtectionService.instance.sync(
+            'channel_${widget.channelId}',
+            _hasProtectedContent,
+          ),
+        );
+      }
+      if (data.containsKey('subscriber_count') ||
+          data.containsKey('member_count')) {
+        final rawCnt = data['subscriber_count'] ?? data['member_count'];
+        final parsed = rawCnt is num
+            ? rawCnt.toInt()
+            : int.tryParse(rawCnt?.toString() ?? '');
+        if (parsed != null && parsed >= 0) {
+          _subscriberCount = parsed;
+        }
+      }
+    });
+    unawaited(_refreshChannelDetails());
+  }
+
+  void _onMemberUpdated(WebSocketEvent event) {
+    final targetUserId = (event.data['user_id'] ?? '').toString().trim();
+    final action = (event.data['action'] ?? '').toString().trim();
+    if (_currentUserId != null &&
+        targetUserId == _currentUserId &&
+        (action == 'removed' || action == 'banned' || action == 'left')) {
+      if (mounted) {
+        GlassToastService().show(context, 'Вы больше не участник этого канала');
+        Navigator.of(context).maybePop();
+      }
+      return;
+    }
+    unawaited(_refreshChannelDetails());
+  }
+
+  void _onChatDeleted(WebSocketEvent event) {
+    if (!mounted) return;
+    GlassToastService().show(context, 'Канал был удалён');
+    Navigator.of(context).maybePop();
+  }
+
+  void _onUnreadCountUpdated(WebSocketEvent event) {
+    if (!mounted) return;
+    final rawCount = event.data['unread_count'];
+    final nextCount = rawCount is num
+        ? rawCount.toInt()
+        : int.tryParse(rawCount?.toString() ?? '');
+    if (nextCount != null && nextCount >= 0 && nextCount != _unreadCount) {
+      setState(() => _unreadCount = nextCount);
+    }
+  }
+
+  void _onMessageReactionUpdated(WebSocketEvent event) {
+    final messageId = event.data['message_id']?.toString();
+    if (messageId == null) return;
+
+    final userId = event.data['user_id']?.toString();
+    final emoji = event.data['emoji']?.toString();
+    final action = event.data['action']?.toString();
+    final bool? active =
+        event.data['active'] is bool ? event.data['active'] as bool : null;
+    final bool isAdded = action == 'added' || active == true;
+    final bool isRemoved = action == 'removed' || active == false;
+
+    final Map<String, int> reactionsMap = {};
+    if (event.data['reactions'] is List) {
+      for (final r in event.data['reactions']) {
+        if (r is Map && r['emoji'] != null && r['count'] != null) {
+          final cnt = (r['count'] as num).toInt();
+          if (cnt > 0) {
+            reactionsMap[r['emoji'].toString()] = cnt;
+          }
+        }
+      }
+    } else if (event.data['reactions'] is Map) {
+      (event.data['reactions'] as Map).forEach((k, v) {
+        final cnt = v is num ? v.toInt() : int.tryParse(v.toString()) ?? 0;
+        if (cnt > 0) reactionsMap[k.toString()] = cnt;
+      });
+    }
+
+    if (mounted) {
+      setState(() {
+        _messageReactions[messageId] = reactionsMap;
+
+        if (userId != null && userId == _currentUserId && emoji != null) {
+          final mySet = _myReactions.putIfAbsent(messageId, () => <String>{});
+          if (isAdded) {
+            mySet.add(emoji);
+          } else if (isRemoved) {
+            mySet.remove(emoji);
+          }
+          if (mySet.isEmpty) {
+            _myReactions.remove(messageId);
+          }
+        }
+
+        final idx = _messages.indexWhere((m) => m.id == messageId);
+        if (idx != -1) {
+          _messages[idx] = _messages[idx].copyWith(
+            reactions: reactionsMap,
+            myReactions: _myReactions[messageId] ?? _messages[idx].myReactions,
+          );
+          _updateFeedItems();
+        }
+      });
+
+      try {
+        AppDatabase().updateMessageReactions(
+          messageId,
+          reactionsMap,
+          _myReactions[messageId] ?? {},
+        );
+      } catch (_) {}
+    }
+  }
+
+  void _toggleReaction(String messageId, String emoji) {
+    if (_reactionSettings != null && !_reactionSettings!.isReactionAllowed(emoji)) {
+      if (mounted) {
+        GlassToastService().show(context, 'Эта реакция отключена в канале');
+      }
+      return;
+    }
+
+    final previousMyReactions = Set<String>.from(_myReactions[messageId] ?? {});
+    final previousReactions =
+        Map<String, int>.from(_messageReactions[messageId] ?? {});
+
+    setState(() {
+      final mySet = _myReactions.putIfAbsent(messageId, () => <String>{});
+      final reactions =
+          _messageReactions.putIfAbsent(messageId, () => <String, int>{});
+
+      final isCurrentlySelected = mySet.contains(emoji);
+      if (isCurrentlySelected) {
+        mySet.remove(emoji);
+        if (mySet.isEmpty) {
+          _myReactions.remove(messageId);
+        }
+        reactions[emoji] = (reactions[emoji] ?? 1) - 1;
+        if (reactions[emoji]! <= 0) {
+          reactions.remove(emoji);
+        }
+      } else {
+        mySet.add(emoji);
+        reactions[emoji] = (reactions[emoji] ?? 0) + 1;
+      }
+
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          reactions: Map.from(reactions),
+          myReactions: Set.from(mySet),
+        );
+        _updateFeedItems();
+      }
+    });
+
+    try {
+      AppDatabase().updateMessageReactions(
+        messageId,
+        _messageReactions[messageId] ?? {},
+        _myReactions[messageId] ?? {},
+      );
+    } catch (_) {}
+
+    unawaited(_sendReactionToggle(
+        messageId, emoji, previousMyReactions, previousReactions));
+  }
+
+  Future<void> _sendReactionToggle(
+    String messageId,
+    String emoji,
+    Set<String> previousMyReactions,
+    Map<String, int> previousReactions,
+  ) async {
+    try {
+      final res = await ChatService.toggleReaction(
+        chatId: widget.channelId,
+        messageId: messageId,
+        emoji: emoji,
+      );
+      if (res['success'] != true) {
+        _rollbackReaction(messageId, previousMyReactions, previousReactions);
+        if (res['message'] != null && mounted) {
+          GlassToastService().show(context, res['message'].toString());
+        }
+      }
+    } catch (_) {
+      _rollbackReaction(messageId, previousMyReactions, previousReactions);
+    }
+  }
+
+  void _rollbackReaction(
+    String messageId,
+    Set<String> previousMyReactions,
+    Map<String, int> previousReactions,
+  ) {
+    if (!mounted) return;
+    setState(() {
+      if (previousMyReactions.isEmpty) {
+        _myReactions.remove(messageId);
+      } else {
+        _myReactions[messageId] = Set.from(previousMyReactions);
+      }
+      if (previousReactions.isEmpty) {
+        _messageReactions.remove(messageId);
+      } else {
+        _messageReactions[messageId] = Map.from(previousReactions);
+      }
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          reactions: Map.from(previousReactions),
+          myReactions: Set.from(previousMyReactions),
+        );
+        _updateFeedItems();
+      }
+    });
+  }
+
+  Future<void> _loadPinnedMessagesList() async {
+    try {
+      final list = await ChatService.getPinnedMessages(chatId: widget.channelId);
+      if (!mounted) return;
+      ChatInstantCache.instance.putPinnedMessages(widget.channelId, list);
+      final nextIndex =
+          list.isNotEmpty ? _currentPinnedIndex.clamp(0, list.length - 1) : 0;
+      final nextPinned = list.isNotEmpty ? list[nextIndex] : null;
+      if (_pinnedMessages.length == list.length &&
+          _pinnedMessage?.id == nextPinned?.id &&
+          _currentPinnedIndex == nextIndex) {
+        return;
+      }
+      setState(() {
+        _pinnedMessages = list;
+        if (list.isNotEmpty) {
+          _currentPinnedIndex = nextIndex;
+          _pinnedMessage = nextPinned;
+        } else {
+          _pinnedMessage = null;
+          _currentPinnedIndex = 0;
+        }
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadScheduledCount() async {
+    if (!_canPostInChannel) return;
+    try {
+      final items = await ChatService.getScheduledMessages(widget.channelId);
+      if (mounted && _scheduledCount != items.length) {
+        setState(() => _scheduledCount = items.length);
+      }
+    } catch (_) {}
   }
 
   void _onMessagePinned(WebSocketEvent event) {
@@ -803,19 +1895,90 @@ class _ChannelScreenState extends State<ChannelScreen>
     final msgRaw = event.data['message'] ?? event.data['pinned_message'];
     final msgId = event.data['message_id']?.toString() ??
         event.data['pinned_message_id']?.toString();
-    if (msgRaw is Map<String, dynamic>) {
-      setState(() => _pinnedMessage = Message.fromJson(msgRaw));
-    } else if (msgId != null && msgId.isNotEmpty) {
-      final found = _messages.where((m) => m.id == msgId);
-      if (found.isNotEmpty) {
-        setState(() => _pinnedMessage = found.first);
+    setState(() {
+      Message? parsed;
+      if (msgRaw is Map<String, dynamic>) {
+        parsed = Message.fromJson(msgRaw);
+      } else if (msgId != null && msgId.isNotEmpty) {
+        final found = _messages.where((m) => m.id == msgId);
+        if (found.isNotEmpty) parsed = found.first;
       }
-    }
+      if (parsed != null) {
+        _pinnedMessages.removeWhere((m) => m.id == parsed!.id);
+        _pinnedMessages.insert(0, parsed);
+        _currentPinnedIndex = 0;
+        _pinnedMessage = parsed;
+      }
+    });
+    unawaited(_loadPinnedMessagesList());
   }
 
   void _onMessageUnpinned(WebSocketEvent event) {
     if (!mounted) return;
-    setState(() => _pinnedMessage = null);
+    final msgId = event.data['message_id']?.toString() ??
+        event.data['pinned_message_id']?.toString();
+    setState(() {
+      if (msgId != null && msgId.isNotEmpty) {
+        _pinnedMessages.removeWhere((m) => m.id == msgId);
+        if (_pinnedMessages.isEmpty) {
+          _pinnedMessage = null;
+          _currentPinnedIndex = 0;
+        } else {
+          _currentPinnedIndex = _currentPinnedIndex.clamp(0, _pinnedMessages.length - 1);
+          _pinnedMessage = _pinnedMessages[_currentPinnedIndex];
+        }
+      } else {
+        _pinnedMessages.clear();
+        _pinnedMessage = null;
+        _currentPinnedIndex = 0;
+      }
+    });
+    unawaited(_loadPinnedMessagesList());
+  }
+
+  void _onUserAppearanceUpdated(WebSocketEvent event) {
+    final userId = event.data['user_id']?.toString();
+    if (userId == null || userId.isEmpty || !mounted) return;
+    PeerCustomizationCache.instance.mergeFromJson(userId, event.data);
+    final updatedCust = PeerCustomizationCache.instance.getSync(userId);
+    final nameColorPresetId = event.data['name_color_preset_id']?.toString();
+    final replyStripStyle = event.data['reply_strip_style']?.toString();
+
+    setState(() {
+      for (int i = 0; i < _messages.length; i++) {
+        final m = _messages[i];
+        bool changed = false;
+        String? newSenderColor = m.senderNameColorId;
+        String? newSenderStrip = m.senderReplyStripStyle;
+        PeerCustomization? newSenderCust = m.senderCustomization;
+        ReplyInfo? newReplyInfo = m.replyInfo;
+
+        if (m.senderId == userId) {
+          if (nameColorPresetId != null) newSenderColor = nameColorPresetId;
+          if (replyStripStyle != null) newSenderStrip = replyStripStyle;
+          if (updatedCust != null) newSenderCust = updatedCust;
+          changed = true;
+        }
+        if (m.replyInfo != null && m.replyInfo!.senderId == userId) {
+          newReplyInfo = m.replyInfo!.copyWith(
+            nameColorPresetId:
+                nameColorPresetId ?? m.replyInfo!.nameColorPresetId,
+            replyStripStyle: replyStripStyle ?? m.replyInfo!.replyStripStyle,
+            replyEmoji: updatedCust?.replyEmoji,
+            clearReplyEmoji: updatedCust != null && updatedCust.replyEmoji == null,
+          );
+          changed = true;
+        }
+        if (changed) {
+          _messages[i] = m.copyWith(
+            senderNameColorId: newSenderColor,
+            senderReplyStripStyle: newSenderStrip,
+            senderCustomization: newSenderCust,
+            replyInfo: newReplyInfo,
+          );
+        }
+      }
+    });
   }
 
   @override
@@ -847,7 +2010,8 @@ class _ChannelScreenState extends State<ChannelScreen>
     _isSyncing = true;
 
     try {
-      final result = await ChatService.getMessages(chatId: widget.channelId, limit: 50);
+      final result =
+          await ChatService.getMessages(chatId: widget.channelId, limit: 50);
       if (result['success'] == true && mounted) {
         final serverMessages = result['messages'] as List<Message>;
         final db = AppDatabase();
@@ -872,11 +2036,15 @@ class _ChannelScreenState extends State<ChannelScreen>
             _messages.clear();
             _messages.addAll(merged.values);
             _sortMessagesDescending(_messages);
+            _syncReactionCacheFromMessages(serverMessages);
+            _updateFeedItems();
           });
         }
+        _resolvePendingDraftReply(serverLoaded: true);
 
         try {
-          db.saveMessages(serverMessages.map((m) => _messageToCompanion(m)).toList());
+          db.saveMessages(
+              serverMessages.map((m) => _messageToCompanion(m)).toList());
         } catch (e) {
           debugPrint('Drift saveMessages in channel sync error: $e');
         }
@@ -886,11 +2054,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           final chatResult = await ChatService.getChat(widget.channelId);
           if (chatResult['success'] == true && mounted) {
             final chat = chatResult['chat'] as ChatDetails;
-            setState(() {
-              _channelName = chat.name;
-              _channelAvatar = chat.avatarUrl;
-              _subscriberCount = chat.participants.length;
-            });
+            setState(() => _applyChatDetails(chat));
           }
         } catch (_) {}
       }
@@ -901,19 +2065,55 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-
   void _onMessageDeleted(WebSocketEvent event) {
-    final messageId = event.data['message_id']?.toString();
-    if (messageId == null) return;
+    final rawIds = event.data['message_ids'];
+    final deletedIds = <String>{
+      if (event.data['message_id'] != null) event.data['message_id'].toString(),
+      if (rawIds is List) ...rawIds.map((e) => e.toString()),
+    };
+    if (deletedIds.isEmpty) return;
 
     if (mounted) {
+      final bool replyDeleted =
+          _replyToMessage != null && deletedIds.contains(_replyToMessage!.id);
+      if (_stashedDraftBeforeEdit?.replyTo != null &&
+          deletedIds.contains(_stashedDraftBeforeEdit!.replyTo!.id)) {
+        final s = _stashedDraftBeforeEdit!;
+        _stashedDraftBeforeEdit = (
+          text: s.text,
+          entities: s.entities,
+          replyTo: null,
+          isQuote: false,
+          quoteText: null,
+          quoteOffset: 0,
+          quoteLength: 0,
+        );
+      }
       setState(() {
-        _messages.removeWhere((m) => m.id == messageId);
+        _messages.removeWhere((m) => deletedIds.contains(m.id));
+        _detachedLatestBackup.removeWhere((m) => deletedIds.contains(m.id));
+        for (final id in deletedIds) {
+          _messageReactions.remove(id);
+          _myReactions.remove(id);
+          _selectedMessageIds.remove(id);
+        }
+        if (replyDeleted) {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        }
+        _updateFeedItems();
       });
+      if (replyDeleted) {
+        _saveCurrentDraft();
+      }
     }
 
     try {
-      AppDatabase().deleteMessage(messageId);
+      AppDatabase().deleteMessagesBatch(deletedIds.toList());
     } catch (_) {}
   }
 
@@ -929,12 +2129,46 @@ class _ChannelScreenState extends State<ChannelScreen>
     } else if (event.data['poll'] is Map) {
       newMediaPayload = Map<String, dynamic>.from(event.data['poll'] as Map);
     }
+    final dynamic replyMarkup = event.data['reply_markup'];
 
-    final isPollEvent =
-        event.data['message_type'] == 'poll' || newMediaPayload != null;
-    if (newContent == null && newMediaPayload == null) return;
+    List<MessageEntity>? parsedEntities;
+    if (event.data['entities'] is List) {
+      parsedEntities = (event.data['entities'] as List)
+          .whereType<Map>()
+          .map((e) => MessageEntity.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+
+    final isPollEvent = event.data['message_type'] == 'poll' ||
+        event.data['poll'] is Map ||
+        (newMediaPayload != null &&
+            (newMediaPayload.containsKey('poll_id') ||
+                newMediaPayload.containsKey('options')));
+    if (newContent == null &&
+        newMediaPayload == null &&
+        parsedEntities == null &&
+        replyMarkup == null) {
+      return;
+    }
 
     String? effectiveContent = newContent;
+    Map<String, dynamic>? mergedPayloadForDb = newMediaPayload != null
+        ? ChatService.mergeIncomingMediaPayload(
+            null,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          )
+        : (replyMarkup != null
+            ? ChatService.mergeIncomingMediaPayload(
+                null,
+                null,
+                replyMarkup: replyMarkup,
+              )
+            : null);
+    bool effectiveIsEdited = event.data.containsKey('is_edited')
+        ? event.data['is_edited'] == true
+        : !isPollEvent;
+
     if (mounted) {
       setState(() {
         final index = _messages.indexWhere((m) => m.id == messageId);
@@ -942,11 +2176,23 @@ class _ChannelScreenState extends State<ChannelScreen>
           final current = _messages[index];
           effectiveContent ??= current.content;
           final isPollMsg = current.messageType == 'poll' || isPollEvent;
+          final mergedMedia = ChatService.mergeIncomingMediaPayload(
+            current.mediaPayload,
+            newMediaPayload,
+            replyMarkup: replyMarkup,
+          );
+          mergedPayloadForDb = mergedMedia;
+          final bool nextIsEdited = event.data.containsKey('is_edited')
+              ? (event.data['is_edited'] == true ? true : current.isEdited)
+              : (isPollMsg ? current.isEdited : true);
+          effectiveIsEdited = nextIsEdited;
           _messages[index] = current.copyWith(
             content: effectiveContent,
-            mediaPayload: newMediaPayload ?? current.mediaPayload,
-            isEdited: isPollMsg ? current.isEdited : true,
+            entities: parsedEntities ?? current.entities,
+            mediaPayload: mergedMedia,
+            isEdited: nextIsEdited,
           );
+          _updateFeedItems();
         }
       });
     }
@@ -955,11 +2201,149 @@ class _ChannelScreenState extends State<ChannelScreen>
       AppDatabase().updateMessageContent(
         messageId,
         effectiveContent ?? '',
-        null,
-        newMediaPayload != null ? jsonEncode(newMediaPayload) : null,
-        !isPollEvent,
+        parsedEntities != null
+            ? jsonEncode(parsedEntities.map((e) => e.toJson()).toList())
+            : null,
+        mergedPayloadForDb != null ? jsonEncode(mergedPayloadForDb) : null,
+        effectiveIsEdited,
       );
     } catch (_) {}
+  }
+
+  void _onMediaSendEvent(MediaSendEvent event) {
+    if (!mounted || event.chatId != widget.channelId) return;
+    if (event.threadRootMessageId != null &&
+        event.threadRootMessageId!.isNotEmpty) {
+      return;
+    }
+
+    final targetList =
+        _isDetachedHistoryWindow ? _detachedLatestBackup : _messages;
+
+    switch (event.type) {
+      case MediaSendEventType.inserted:
+        if (event.messages.isEmpty) return;
+        setState(() {
+          for (final msg in event.messages) {
+            final key = (msg.localId != null && msg.localId!.isNotEmpty)
+                ? msg.localId!
+                : msg.id;
+            final existingIdx = targetList.indexWhere((m) =>
+                (m.localId != null &&
+                    m.localId!.isNotEmpty &&
+                    m.localId == key) ||
+                m.id == msg.id);
+            if (existingIdx != -1) {
+              targetList[existingIdx] = msg;
+            } else {
+              targetList.insert(0, msg);
+            }
+          }
+          if (!_isDetachedHistoryWindow) {
+            _updateFeedItems();
+          }
+        });
+        if (!_isDetachedHistoryWindow) {
+          _scrollToBottom();
+        }
+        break;
+
+      case MediaSendEventType.updated:
+      case MediaSendEventType.replacedWithServer:
+      case MediaSendEventType.failed:
+      case MediaSendEventType.albumDowngradedToSingle:
+        bool changed = false;
+        final updatedMsgs = <Message>[];
+        setState(() {
+          for (int i = 0; i < event.localIds.length; i++) {
+            final targetLocalId = event.localIds[i];
+            Message? incoming;
+            for (final m in event.messages) {
+              if ((m.localId != null && m.localId == targetLocalId) ||
+                  m.id == targetLocalId) {
+                incoming = m;
+                break;
+              }
+            }
+            if (incoming == null &&
+                event.messages.length == event.localIds.length &&
+                i < event.messages.length) {
+              incoming = event.messages[i];
+            }
+            final idx = targetList.indexWhere((m) =>
+                (m.localId != null && m.localId == targetLocalId) ||
+                m.id == targetLocalId ||
+                (incoming != null &&
+                    incoming.id.isNotEmpty &&
+                    m.id == incoming.id));
+            if (idx != -1) {
+              final existing = targetList[idx];
+              if (incoming != null) {
+                final merged = incoming.copyWith(
+                  localId:
+                      incoming.localId ?? existing.localId ?? targetLocalId,
+                  sendStatus:
+                      event.type == MediaSendEventType.replacedWithServer
+                          ? 1
+                          : (event.type == MediaSendEventType.failed
+                              ? 2
+                              : incoming.sendStatus),
+                  replyInfo: incoming.replyInfo ?? existing.replyInfo,
+                  isQuote: incoming.isQuote || existing.isQuote,
+                  quoteText: incoming.quoteText ?? existing.quoteText,
+                  quoteOffset: incoming.quoteOffset != 0
+                      ? incoming.quoteOffset
+                      : existing.quoteOffset,
+                  quoteLength: incoming.quoteLength != 0
+                      ? incoming.quoteLength
+                      : existing.quoteLength,
+                  isOwn: incoming.isOwn || existing.isOwn,
+                );
+                targetList[idx] = merged;
+                updatedMsgs.add(merged);
+              } else if (event.type == MediaSendEventType.replacedWithServer) {
+                final merged = existing.copyWith(sendStatus: 1);
+                targetList[idx] = merged;
+                updatedMsgs.add(merged);
+              } else if (event.type == MediaSendEventType.failed) {
+                final merged = existing.copyWith(sendStatus: 2);
+                targetList[idx] = merged;
+                updatedMsgs.add(merged);
+              }
+              changed = true;
+            }
+          }
+          if (changed && !_isDetachedHistoryWindow) {
+            _updateFeedItems();
+          }
+        });
+        if (event.type == MediaSendEventType.replacedWithServer) {
+          for (final um in updatedMsgs) {
+            ChatInstantCache.instance.upsertMessage(widget.channelId, um);
+          }
+        }
+        break;
+
+      case MediaSendEventType.cancelled:
+        if (event.localIds.isEmpty) return;
+        final idSet = event.localIds.toSet();
+        final hasMatch = targetList.any((m) =>
+            idSet.contains(m.id) ||
+            (m.localId != null && idSet.contains(m.localId)));
+        if (hasMatch) {
+          setState(() {
+            targetList.removeWhere((m) =>
+                idSet.contains(m.id) ||
+                (m.localId != null && idSet.contains(m.localId)));
+            _selectedMessageIds.removeAll(idSet);
+            if (!_isDetachedHistoryWindow) {
+              _updateFeedItems();
+            }
+          });
+        }
+        ChatInstantCache.instance.removeMessages(widget.channelId, idSet);
+        break;
+    }
   }
 
   void _onNewMessage(WebSocketEvent event) {
@@ -973,10 +2357,9 @@ class _ChannelScreenState extends State<ChannelScreen>
         m.id == message.id ||
         (message.localId != null &&
             message.localId!.isNotEmpty &&
-            m.localId == message.localId));
+            (m.localId == message.localId || m.id == message.localId)));
 
     if (existingIndex != -1) {
-      // Сообщение уже в списке (отправлено с этого устройства). Обновляем id, статус и обогащенный replyInfo от сервера
       if (mounted) {
         setState(() {
           final existing = _messages[existingIndex];
@@ -984,11 +2367,16 @@ class _ChannelScreenState extends State<ChannelScreen>
             localId: existing.localId ?? message.localId,
             sendStatus: 1,
             replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
             isQuote: message.isQuote || existing.isQuote,
             quoteText: message.quoteText ?? existing.quoteText,
-            quoteOffset: message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
-            quoteLength: message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
+            quoteOffset:
+                message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength:
+                message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
+            isOwn: message.isOwn || existing.isOwn,
           );
+          _updateFeedItems();
         });
       }
       return;
@@ -1001,29 +2389,69 @@ class _ChannelScreenState extends State<ChannelScreen>
     } catch (_) {}
 
     if (mounted) {
+      final isNearBottom = !_isDetachedHistoryWindow &&
+          (!_scrollController.hasClients || _scrollController.offset < 120);
+      final isIncoming =
+          message.senderId != _currentUserId && _currentUserId != null;
+
       if (_isDetachedHistoryWindow) {
-        if (!_detachedLatestBackup.any((m) => m.id == message.id)) {
+        final backupIdx = _detachedLatestBackup.indexWhere((m) =>
+            m.id == message.id ||
+            (message.localId != null &&
+                message.localId!.isNotEmpty &&
+                (m.localId == message.localId || m.id == message.localId)));
+        if (backupIdx != -1) {
+          final existing = _detachedLatestBackup[backupIdx];
+          _detachedLatestBackup[backupIdx] = message.copyWith(
+            localId: existing.localId ?? message.localId,
+            sendStatus: 1,
+            replyInfo: message.replyInfo ?? existing.replyInfo,
+            groupedId: message.groupedId ?? existing.groupedId,
+            isQuote: message.isQuote || existing.isQuote,
+            quoteText: message.quoteText ?? existing.quoteText,
+            quoteOffset:
+                message.quoteOffset != 0 ? message.quoteOffset : existing.quoteOffset,
+            quoteLength:
+                message.quoteLength != 0 ? message.quoteLength : existing.quoteLength,
+            isOwn: message.isOwn || existing.isOwn,
+          );
+        } else {
           _detachedLatestBackup.insert(0, message);
+        }
+        if (isIncoming) {
+          setState(() => _unreadCount++);
         }
       } else {
         setState(() {
           _messages.insert(0, message);
+          _syncReactionCacheFromMessages([message]);
+          if (isIncoming && !isNearBottom) {
+            _unreadCount++;
+            if (_firstUnreadMessageId == null) {
+              _firstUnreadMessageId = message.id;
+              _showUnreadDivider = true;
+            }
+          }
+          _updateFeedItems();
         });
       }
-      if (message.senderId != _currentUserId) {
+      if (isIncoming && isNearBottom && _isMember) {
         unawaited(_markMessagesAsRead());
       }
     }
   }
 
   Future<void> _markMessagesAsRead() async {
+    if (!_isMember) return;
     final result = await ChatService.markMessagesAsRead(
       chatId: widget.channelId,
       chatTitle: widget.channelName,
     );
     final markedCount = result['marked_count'] as int? ?? 0;
-    // Notify via WebSocket that messages were read
     _wsService.sendMessageRead(widget.channelId, markedCount: markedCount);
+    if (mounted && _unreadCount != 0) {
+      setState(() => _unreadCount = 0);
+    }
     if (result['success'] == true || markedCount > 0) {
       try {
         _unreadCountProvider?.clear(widget.channelId);
@@ -1031,48 +2459,107 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-  Future<void> _loadData() async {
-    // Start loading local Drift messages immediately without waiting for network calls
-    final loadMessagesFuture = _loadMessages();
-
-    // Get current user ID
-    final userId = await AuthService.getUserId();
+  Future<void> _refreshChannelDetails() async {
     if (mounted) {
-      setState(() {
-        _currentUserId = userId;
-      });
+      final syncedMuted = NotificationSettingsProvider().isChatMuted(
+        widget.channelId,
+        chatType: 'channel',
+      );
+      if (_isMuted != syncedMuted) {
+        setState(() => _isMuted = syncedMuted);
+      }
+    }
+    try {
+      final chatResult = await ChatService.getChat(widget.channelId);
+      if (chatResult['success'] == true && mounted) {
+        final chat = chatResult['chat'] as ChatDetails;
+        setState(() => _applyChatDetails(chat));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadData() async {
+    // Load cached channel flags from Drift if not already seeded with full ChatDetails
+    if (!_seededFromChatDetails) {
+      try {
+        final db = AppDatabase();
+        await db.ensureInitialized();
+        final cachedChat = await (db.select(db.chats)
+              ..where((t) => t.chatId.equals(widget.channelId)))
+            .getSingleOrNull();
+        if (cachedChat != null && mounted && !_seededFromChatDetails) {
+          final cachedReactions =
+              ReactionSettings.tryParse(cachedChat.reactionSettingsJson);
+          final nextRole =
+              (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty)
+                  ? cachedChat.myRole!
+                  : _myRole;
+          final nextMember =
+              (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty)
+                  ? nextRole != 'guest'
+                  : _isMember;
+          final nextAdmin =
+              (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty)
+                  ? (nextRole == 'owner' || nextRole == 'admin')
+                  : _isAdmin;
+          final bool changed =
+              (cachedChat.name.isNotEmpty && cachedChat.name != _channelName) ||
+                  (cachedChat.avatarUrl != null &&
+                      cachedChat.avatarUrl!.isNotEmpty &&
+                      cachedChat.avatarUrl != _channelAvatar) ||
+                  cachedChat.showAuthorProfiles != _showAuthorProfiles ||
+                  cachedChat.signMessages != _signMessages ||
+                  cachedChat.linkedChatId != _linkedChatId ||
+                  cachedChat.hasActiveCall != _hasActiveCall ||
+                  nextRole != _myRole ||
+                  nextMember != _isMember ||
+                  nextAdmin != _isAdmin;
+          if (changed) {
+            setState(() {
+              if (cachedChat.name.isNotEmpty) _channelName = cachedChat.name;
+              if (cachedChat.avatarUrl != null &&
+                  cachedChat.avatarUrl!.isNotEmpty) {
+                _channelAvatar = cachedChat.avatarUrl;
+              }
+              _showAuthorProfiles = cachedChat.showAuthorProfiles;
+              _signMessages = cachedChat.signMessages;
+              _linkedChatId = cachedChat.linkedChatId;
+              _hasActiveCall = cachedChat.hasActiveCall;
+              if (cachedChat.myRole != null && cachedChat.myRole!.isNotEmpty) {
+                _myRole = nextRole;
+                _isMember = nextMember;
+                _isAdmin = nextAdmin;
+                _canPostInChannel = nextAdmin;
+              }
+              if (cachedReactions != null) {
+                _reactionSettings = cachedReactions;
+              }
+            });
+          }
+        }
+      } catch (_) {}
     }
 
-    // Load channel details
+    // Get current user ID before applying chat permissions
+    final userId = await AuthService.getUserId();
+    if (mounted && userId != _currentUserId) {
+      setState(() => _currentUserId = userId);
+    }
+
+    // Start loading local Drift messages + channel details in parallel
+    final loadMessagesFuture = _loadMessages();
+
     final chatResult = await ChatService.getChat(widget.channelId);
     if (chatResult['success'] == true && mounted) {
       final chat = chatResult['chat'] as ChatDetails;
-      setState(() {
-        _channelName = chat.name;
-        _channelAvatar = chat.avatarUrl;
-        _subscriberCount = chat.participants.length;
-        _isVerified = chat.isVerified;
-        if (chat.pinnedMessage != null) {
-          _pinnedMessage = chat.pinnedMessage;
-        }
-        // Check if current user is admin or owner
-        for (var p in chat.participants) {
-          if (p.id == _currentUserId &&
-              (p.role == 'owner' || p.role == 'admin')) {
-            _isAdmin = true;
-            break;
-          }
-        }
-      });
-      if (chat.pinnedMessage == null && chat.pinnedMessageId != null) {
-        unawaited(ChatService.getPinnedMessages(chatId: widget.channelId).then((list) {
-          if (!mounted) return;
-          if (list.isNotEmpty) {
-            setState(() => _pinnedMessage = list.first);
-          }
-        }));
+      setState(() => _applyChatDetails(chat));
+      if (chat.pinnedMessage != null ||
+          chat.pinnedMessageId != null ||
+          chat.pinnedMessageIds.isNotEmpty) {
+        unawaited(_loadPinnedMessagesList());
       }
-      if (_isAdmin && _isDesktopPlatform) {
+      unawaited(_loadScheduledCount());
+      if ((_canPostInChannel || _isAdmin) && _isDesktopPlatform) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _isMyTileActive()) {
             _inputFocusNode.requestFocus();
@@ -1081,17 +2568,44 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
     }
 
-    // Ensure message loading has completed
     await loadMessagesFuture;
 
-    // Mark messages as read when opening channel
-    await _markMessagesAsRead();
+    if (!mounted) return;
+
+    if (_isMember) {
+      if (_highlightMessageId == null) {
+        try {
+          final unreadInfo =
+              await ChatService.getUnreadInfo(chatId: widget.channelId);
+          if (unreadInfo['success'] == true && mounted) {
+            final unreadCount = (unreadInfo['unread_count'] as int?) ?? 0;
+            final firstUnreadId =
+                unreadInfo['first_unread_message_id']?.toString();
+            if (unreadCount > 0 &&
+                firstUnreadId != null &&
+                firstUnreadId.isNotEmpty) {
+              setState(() {
+                _unreadCount = unreadCount;
+                _firstUnreadMessageId = firstUnreadId;
+                _showUnreadDivider = true;
+                _updateFeedItems();
+              });
+              _scrollToFirstUnread();
+              return;
+            }
+          }
+        } catch (_) {}
+      }
+      await _markMessagesAsRead();
+    }
   }
 
   Future<void> _loadMessages() async {
-    setState(() => _isLoading = true);
+    final bool hadInitialMessages = _messages.isNotEmpty;
+    if (_messages.isEmpty && !_isLoading) {
+      setState(() => _isLoading = true);
+    }
 
-    // 1. Сначала загрузить из Drift (мгновенно, offline-first)
     final db = AppDatabase();
     List<DbMessage> localMessages = [];
     try {
@@ -1101,12 +2615,15 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
 
     if (localMessages.isNotEmpty && mounted) {
+      final activeLocalIds = MediaSendCoordinator.instance.activeLocalIds;
       final fixedMessages = localMessages.map((m) {
         if (m.sendStatus == MessageSendStatus.sending.index) {
           if (m.serverId != null) {
             db.updateMessageSendStatus(
                 m.localId, m.serverId!, MessageSendStatus.sent.index);
             return m.copyWith(sendStatus: MessageSendStatus.sent.index);
+          } else if (activeLocalIds.contains(m.localId)) {
+            return m;
           } else {
             db.updateMessageStatus(m.localId, MessageSendStatus.failed.index);
             return m.copyWith(sendStatus: MessageSendStatus.failed.index);
@@ -1115,13 +2632,22 @@ class _ChannelScreenState extends State<ChannelScreen>
         return m;
       }).toList();
 
-      setState(() {
-        _isLoading = false;
-        _messages.clear();
-        _messages.addAll(
-            fixedMessages.map((m) => Message.fromDbMessage(m)).toList());
-        _hasMoreMessages = localMessages.length >= 50;
-      });
+      final parsedLocal =
+          fixedMessages.map((m) => Message.fromDbMessage(m)).toList();
+      _sortMessagesDescending(parsedLocal);
+      ChatInstantCache.instance.putMessages(widget.channelId, parsedLocal);
+
+      if (_isLoading || !ChatInstantCache.messagesEqual(_messages, parsedLocal)) {
+        setState(() {
+          _isLoading = false;
+          _messages.clear();
+          _messages.addAll(parsedLocal);
+          _syncReactionCacheFromMessages(_messages);
+          _hasMoreMessages = localMessages.length >= 50;
+          _updateFeedItems();
+        });
+      }
+      _resolvePendingDraftReply();
 
       if (_highlightMessageId != null && !_hasScrolledToHighlight) {
         _scrollToMessage(_highlightMessageId!);
@@ -1129,100 +2655,136 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
     }
 
-    // 2. Затем загрузить с сервера (обновление)
     try {
       final result =
           await ChatService.getMessages(chatId: widget.channelId, limit: 50);
 
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-          if (result['success'] == true) {
-            final serverMessages = result['messages'] as List<Message>;
-            _hasMoreMessages = result['has_more'] as bool? ?? (serverMessages.length >= 50);
+        if (result['success'] == true) {
+          final serverMessages = result['messages'] as List<Message>;
+          final nextHasMore =
+              result['has_more'] as bool? ?? (serverMessages.length >= 50);
 
-            // Сохранить pending/failed сообщения из текущего списка (их нет на сервере)
-            final pendingMessages = _messages
-                .where(
-                  (m) => m.sendStatus != 1 && m.localId != null,
-                )
-                .toList();
-
-            final Map<String, Message> mergedById = {};
-            final Map<String, Message> existingByLocalId = {};
-            for (final m in _messages) {
-              mergedById[m.id] = m;
-              if (m.localId != null && m.localId!.isNotEmpty) {
-                existingByLocalId[m.localId!] = m;
+          final List<Message> dbUnsentMessages = [];
+          try {
+            final dbLatest = await db.getMessages(widget.channelId, limit: 50);
+            final activeLocalIds = MediaSendCoordinator.instance.activeLocalIds;
+            for (final row in dbLatest) {
+              if (row.sendStatus == MessageSendStatus.failed.index) {
+                dbUnsentMessages.add(Message.fromDbMessage(row));
+              } else if (row.sendStatus == MessageSendStatus.sending.index &&
+                  row.serverId == null &&
+                  (activeLocalIds.contains(row.localId) ||
+                      _messages.any((em) =>
+                          em.localId == row.localId && em.sendStatus == 0))) {
+                dbUnsentMessages.add(Message.fromDbMessage(row));
               }
             }
-            for (final m in serverMessages) {
-              final existing = mergedById[m.id] ??
-                  (m.localId != null && m.localId!.isNotEmpty
-                      ? existingByLocalId[m.localId!]
-                      : null);
-              if (existing != null) {
-                mergedById[m.id] = m.copyWith(
-                  localId: m.localId ?? existing.localId,
-                  isQuote: m.isQuote || existing.isQuote,
-                  quoteText: m.quoteText ?? existing.quoteText,
-                  quoteOffset: m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
-                  quoteLength: m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
-                );
-              } else {
-                mergedById[m.id] = m;
-              }
-            }
-            final Set<String> serverLocalIds = mergedById.values
-                .map((m) => m.localId)
-                .whereType<String>()
-                .where((id) => id.isNotEmpty)
-                .toSet();
-            for (final pending in pendingMessages) {
-              final lId = pending.localId;
-              if (!mergedById.containsKey(pending.id) &&
-                  (lId == null || !serverLocalIds.contains(lId))) {
-                mergedById[pending.id] = pending;
-              }
-            }
+          } catch (_) {}
 
-            _messages.clear();
-            _messages.addAll(mergedById.values);
-
-            // Сортировка по createdAt по убыванию
-            _messages.sort((a, b) {
-              try {
-                final ta = DateTime.parse(a.createdAt);
-                final tb = DateTime.parse(b.createdAt);
-                final cmp = tb.compareTo(ta);
-                if (cmp != 0) return cmp;
-                return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-              } catch (_) {
-                return 0;
-              }
-            });
-
-            // Сохранить в Drift для оффлайн-доступа
-            try {
-              db.saveMessages(
-                  serverMessages.map((m) => _messageToCompanion(m)).toList());
-            } catch (e) {
-              debugPrint('Channel: Drift saveMessages error: $e');
+          final Map<String, Message> pendingByKey = {};
+          for (final m in _messages) {
+            if (m.sendStatus != 1 && m.localId != null) {
+              pendingByKey[m.localId!] = m;
             }
           }
-        });
+          for (final m in dbUnsentMessages) {
+            final key = (m.localId != null && m.localId!.isNotEmpty)
+                ? m.localId!
+                : m.id;
+            pendingByKey.putIfAbsent(key, () => m);
+          }
+          final pendingMessages = pendingByKey.values.toList();
+
+          final Map<String, Message> mergedById = {};
+          final Map<String, Message> existingByLocalId = {};
+          for (final m in _messages) {
+            mergedById[m.id] = m;
+            if (m.localId != null && m.localId!.isNotEmpty) {
+              existingByLocalId[m.localId!] = m;
+            }
+          }
+          for (final m in serverMessages) {
+            final existing = mergedById[m.id] ??
+                (m.localId != null && m.localId!.isNotEmpty
+                    ? existingByLocalId[m.localId!]
+                    : null);
+            if (existing != null) {
+              if (existing.id != m.id) {
+                mergedById.remove(existing.id);
+              }
+              mergedById[m.id] = m.copyWith(
+                localId: m.localId ?? existing.localId,
+                sendStatus: 1,
+                replyInfo: m.replyInfo ?? existing.replyInfo,
+                groupedId: m.groupedId ?? existing.groupedId,
+                isQuote: m.isQuote || existing.isQuote,
+                quoteText: m.quoteText ?? existing.quoteText,
+                quoteOffset:
+                    m.quoteOffset != 0 ? m.quoteOffset : existing.quoteOffset,
+                quoteLength:
+                    m.quoteLength != 0 ? m.quoteLength : existing.quoteLength,
+                isOwn: m.isOwn || existing.isOwn,
+              );
+            } else {
+              mergedById[m.id] = m;
+            }
+          }
+          final Set<String> serverLocalIds = mergedById.values
+              .map((m) => m.localId)
+              .whereType<String>()
+              .where((id) => id.isNotEmpty)
+              .toSet();
+          for (final pending in pendingMessages) {
+            final lId = pending.localId;
+            if (!mergedById.containsKey(pending.id) &&
+                (lId == null || !serverLocalIds.contains(lId))) {
+              mergedById[pending.id] = pending;
+            }
+          }
+
+          final mergedList = mergedById.values.toList();
+          _sortMessagesDescending(mergedList);
+          ChatInstantCache.instance.putMessages(widget.channelId, mergedList);
+
+          final bool needsUiUpdate = _isLoading ||
+              _hasMoreMessages != nextHasMore ||
+              !ChatInstantCache.messagesEqual(_messages, mergedList);
+
+          if (needsUiUpdate) {
+            setState(() {
+              _isLoading = false;
+              _hasMoreMessages = nextHasMore;
+              _messages.clear();
+              _messages.addAll(mergedList);
+              _syncReactionCacheFromMessages(serverMessages);
+              _updateFeedItems();
+            });
+          }
+          _resolvePendingDraftReply(serverLoaded: true);
+
+          try {
+            db.saveMessages(
+                serverMessages.map((m) => _messageToCompanion(m)).toList());
+          } catch (e) {
+            debugPrint('Channel: Drift saveMessages error: $e');
+          }
+        } else if (_isLoading) {
+          setState(() => _isLoading = false);
+        }
 
         if (_highlightMessageId != null && !_hasScrolledToHighlight) {
           _scrollToMessage(_highlightMessageId!);
           _hasScrolledToHighlight = true;
-        } else if (localMessages.isEmpty) {
+        } else if (!hadInitialMessages &&
+            localMessages.isEmpty &&
+            !_showUnreadDivider) {
           _scrollToBottom();
         }
       }
     } catch (e) {
       debugPrint('Channel: Error loading from server: $e');
-      // Сервер недоступен — оставляем локальные данные если есть
-      if (mounted && localMessages.isEmpty) {
+      if (mounted && _isLoading) {
         setState(() => _isLoading = false);
       }
     }
@@ -1237,7 +2799,6 @@ class _ChannelScreenState extends State<ChannelScreen>
     final lastMessage = _messages.isNotEmpty ? _messages.last : null;
     final db = AppDatabase();
 
-    // Найти самый старый числовой serverId и загрузить с сервера (во избежание дыр в локальном кэше)
     String? beforeServerId;
     for (int i = _messages.length - 1; i >= 0; i--) {
       if (int.tryParse(_messages[i].id) != null) {
@@ -1255,7 +2816,8 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     if (result['success'] == true && mounted) {
       final newMessages = result['messages'] as List<Message>;
-      _hasMoreMessages = result['has_more'] as bool? ?? (newMessages.length >= 50);
+      _hasMoreMessages =
+          result['has_more'] as bool? ?? (newMessages.length >= 50);
 
       if (!_isDetachedHistoryWindow) {
         try {
@@ -1273,12 +2835,13 @@ class _ChannelScreenState extends State<ChannelScreen>
           }
         }
         _sortMessagesDescending(_messages);
+        _syncReactionCacheFromMessages(newMessages);
+        _updateFeedItems();
         _isLoadingMore = false;
       });
       return;
     }
 
-    // Оффлайн-фоллбэк: если сервер недоступен, подгрузить из Drift
     try {
       final localMessages = await db.getMessages(
         widget.channelId,
@@ -1288,8 +2851,7 @@ class _ChannelScreenState extends State<ChannelScreen>
 
       if (localMessages.isNotEmpty && mounted) {
         setState(() {
-          for (final m
-              in localMessages.map((m) => Message.fromDbMessage(m))) {
+          for (final m in localMessages.map((m) => Message.fromDbMessage(m))) {
             if (!_messages.any((existing) =>
                 existing.id == m.id ||
                 (m.localId != null && existing.localId == m.localId))) {
@@ -1297,6 +2859,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             }
           }
           _sortMessagesDescending(_messages);
+          _syncReactionCacheFromMessages(_messages);
+          _updateFeedItems();
           _isLoadingMore = false;
         });
         return;
@@ -1310,69 +2874,13 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-  /// Конвертация Message → MessagesCompanion для Drift
-  MessagesCompanion _messageToCompanion(Message msg) {
-    final hasServerId = msg.sendStatus == 1 && msg.id.isNotEmpty;
-    final effectiveChatId = msg.chatId.isNotEmpty ? msg.chatId : widget.channelId;
-    return MessagesCompanion(
-      serverId: hasServerId ? Value(msg.id) : const Value.absent(),
-      localId: Value(msg.localId ?? msg.id),
-      chatId: Value(effectiveChatId),
-      senderId: Value(msg.senderId),
-      content: Value(msg.content),
-      messageType: Value(msg.messageType),
-      fileUrl: Value(msg.fileUrl),
-      fileName: Value(msg.fileName),
-      replyToMessageId: Value(msg.replyToMessageId),
-      isQuote: Value(msg.isQuote),
-      quoteText: Value(msg.quoteText),
-      quoteOffset: Value(msg.quoteOffset),
-      quoteLength: Value(msg.quoteLength),
-      replyToSenderId: Value(msg.replyInfo?.senderId),
-      replyToSenderName: Value(msg.replyInfo?.senderName),
-      replyToContent: Value(msg.replyInfo?.content),
-      replyToMessageType: Value(msg.replyInfo?.messageType ?? 'text'),
-      isRead: Value(msg.isRead),
-      isEdited: Value(msg.isEdited),
-      sendStatus: Value(msg.sendStatus),
-      senderName: Value(msg.senderName),
-      senderAvatarUrl: Value(msg.senderAvatarUrl),
-      createdAt: Value(msg.createdAt),
-      reactions: msg.reactions.isNotEmpty || msg.myReactions.isNotEmpty
-          ? Value(jsonEncode({
-              'reactions': msg.reactions,
-              'my_reactions': msg.myReactions.toList(),
-            }))
-          : const Value.absent(),
-      isRound: Value(msg.isRound),
-      groupedId: Value(msg.groupedId),
-      entities: msg.entities.isNotEmpty
-          ? Value(jsonEncode(msg.entities.map((e) => e.toJson()).toList()))
-          : const Value.absent(),
-      linkPreviewOptions: msg.linkPreviewOptions != null
-          ? Value(jsonEncode(msg.linkPreviewOptions!.toJson()))
-          : const Value.absent(),
-      mediaPayload: msg.mediaPayload != null && msg.mediaPayload!.isNotEmpty
-          ? Value(jsonEncode(msg.mediaPayload))
-          : const Value.absent(),
-      invertMedia: Value(msg.invertMedia),
-      isForward: Value(msg.isForward),
-      forwardFromId: Value(msg.forwardFromId),
-      forwardFromName: Value(msg.forwardFromName),
-    );
-  }
+  /// Конвертация Message → MessagesCompanion для Drift (включая поля каналов)
+  MessagesCompanion _messageToCompanion(Message msg) =>
+      msg.toCompanion(fallbackChatId: widget.channelId);
 
   void _sortMessagesDescending(List<Message> list) {
-    final dateMap = <String, int>{};
-    for (final m in list) {
-      dateMap[m.id] =
-          DateTimeUtils.parseUtcDateTime(m.createdAt)?.millisecondsSinceEpoch ??
-              0;
-    }
     list.sort((a, b) {
-      final ta = dateMap[a.id] ?? 0;
-      final tb = dateMap[b.id] ?? 0;
-      final cmp = tb.compareTo(ta);
+      final cmp = b.createdAtEpochMs.compareTo(a.createdAtEpochMs);
       if (cmp != 0) return cmp;
       return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
     });
@@ -1391,6 +2899,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       _hasMoreNewerMessages = false;
       _detachedLatestBackup = [];
       _showScrollDownFab = false;
+      _updateFeedItems();
     });
     if (scrollToBottom) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1446,6 +2955,8 @@ class _ChannelScreenState extends State<ChannelScreen>
                 }
               }
               _sortMessagesDescending(_messages);
+              _syncReactionCacheFromMessages(bridged);
+              _updateFeedItems();
             });
             return;
           }
@@ -1489,6 +3000,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             _sortMessagesDescending(_messages);
             _showScrollDownFab = true;
           }
+          _syncReactionCacheFromMessages(fetched);
+          _updateFeedItems();
         });
       }
     } catch (e) {
@@ -1517,11 +3030,15 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     String? anchorMsgId;
     double? anchorScreenDy;
-    for (int i = 0; i < _messages.length; i++) {
-      final key = _messageKeys[_messages[i].id];
+    for (int i = 0; i < _feedItems.length; i++) {
+      final item = _feedItems[i];
+      final keyId = item is FeedAlbumItem
+          ? item.album.primaryMessage.id
+          : (item as FeedSingleItem).message.id;
+      final key = _messageKeys[keyId];
       final box = key?.currentContext?.findRenderObject() as RenderBox?;
       if (box != null && box.attached && box.hasSize) {
-        anchorMsgId = _messages[i].id;
+        anchorMsgId = keyId;
         anchorScreenDy = box.localToGlobal(Offset.zero).dy;
         break;
       }
@@ -1564,6 +3081,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             ..clear()
             ..addAll(merged.values);
           _sortMessagesDescending(_messages);
+          _syncReactionCacheFromMessages(newerMessages);
+          _updateFeedItems();
           _isLoadingNewer = false;
         });
 
@@ -1595,6 +3114,19 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
+  int _findFeedIndexForMessageId(String messageId) {
+    return _feedItems.indexWhere((item) =>
+        item.id == messageId ||
+        (item is FeedAlbumItem &&
+            item.album.items.any((ai) => ai.id == messageId)));
+  }
+
+  String _feedItemKeyId(FeedItem item) {
+    return item is FeedAlbumItem
+        ? item.album.primaryMessage.id
+        : (item as FeedSingleItem).message.id;
+  }
+
   /// Scroll to a specific message and highlight it using RenderObject-guided seek
   Future<void> _scrollToMessage(String messageId) async {
     if (!mounted) return;
@@ -1605,29 +3137,35 @@ class _ChannelScreenState extends State<ChannelScreen>
       await _restoreLatestMessagesTail();
     }
 
-    int index = _messages.indexWhere((m) => m.id == messageId);
-    if (index == -1) {
+    int feedIndex = _findFeedIndexForMessageId(messageId);
+    if (feedIndex == -1) {
       await _fetchMessagesAround(messageId);
       if (!mounted) return;
-      index = _messages.indexWhere((m) => m.id == messageId);
+      feedIndex = _findFeedIndexForMessageId(messageId);
       int loadRetries = 0;
-      while (index == -1 && _hasMoreMessages && loadRetries < 3 && mounted) {
+      while (feedIndex == -1 && _hasMoreMessages && loadRetries < 3 && mounted) {
         await _loadMoreMessages();
         loadRetries++;
-        index = _messages.indexWhere((m) => m.id == messageId);
+        feedIndex = _findFeedIndexForMessageId(messageId);
       }
-      if (index == -1) return;
+      if (feedIndex == -1) return;
     }
 
     _isProgrammaticJump = true;
     try {
       final reached = await ChatScrollNavigator.scrollToTarget(
         scrollController: _scrollController,
-        targetIndex: index,
-        itemCount: _messages.length,
+        targetIndex: feedIndex,
+        itemCount: _feedItems.length,
         isMounted: () => mounted,
-        keyForIndex: (i) => _messageKeys[_messages[i].id],
-        resolveTargetKey: () => _messageKeys[messageId],
+        keyForIndex: (i) => _messageKeys[_feedItemKeyId(_feedItems[i])],
+        resolveTargetKey: () {
+          final idx = _findFeedIndexForMessageId(messageId);
+          if (idx != -1) {
+            return _messageKeys[_feedItemKeyId(_feedItems[idx])];
+          }
+          return _messageKeys[messageId];
+        },
         alignment: 0.5,
       );
       if (reached && mounted) {
@@ -1635,7 +3173,202 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
     } finally {
       _isProgrammaticJump = false;
+      _scheduleStickyDateUpdate();
     }
+  }
+
+  Future<void> _scrollToFirstUnread() async {
+    final targetId = _firstUnreadMessageId;
+    if (targetId == null || targetId.isEmpty || !mounted) return;
+
+    int feedIndex = _findFeedIndexForMessageId(targetId);
+    if (feedIndex == -1) {
+      await _fetchMessagesAround(targetId);
+      if (!mounted) return;
+      feedIndex = _findFeedIndexForMessageId(targetId);
+    }
+    if (feedIndex == -1) return;
+
+    _isProgrammaticJump = true;
+    try {
+      await ChatScrollNavigator.scrollToTarget(
+        scrollController: _scrollController,
+        targetIndex: feedIndex,
+        itemCount: _feedItems.length,
+        isMounted: () => mounted,
+        keyForIndex: (i) => _messageKeys[_feedItemKeyId(_feedItems[i])],
+        resolveTargetKey: () {
+          final idx = _findFeedIndexForMessageId(targetId);
+          if (idx != -1) {
+            return _messageKeys[_feedItemKeyId(_feedItems[idx])];
+          }
+          return _messageKeys[targetId];
+        },
+        alignment: 0.72,
+      );
+    } finally {
+      _isProgrammaticJump = false;
+      _scheduleStickyDateUpdate();
+    }
+  }
+
+  void _scheduleStickyDateUpdate() {
+    if (_stickyDatePostFrameScheduled) return;
+    _stickyDatePostFrameScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _stickyDatePostFrameScheduled = false;
+      if (mounted) {
+        _updateFloatingDateOnScroll();
+      }
+    });
+  }
+
+  void _updateFloatingDateOnScroll() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      _scheduleStickyDateUpdate();
+      return;
+    }
+
+    if (!mounted || _daySpans.isEmpty) {
+      if (_stickyDateStateNotifier.value != StickyDateState.empty) {
+        _stickyDateStateNotifier.value = StickyDateState.empty;
+      }
+      return;
+    }
+
+    final stickyBox =
+        _stickyDateSlotKey.currentContext?.findRenderObject() as RenderBox?;
+    if (stickyBox == null || !stickyBox.attached || !stickyBox.hasSize) {
+      _scheduleStickyDateUpdate();
+      return;
+    }
+    final stickyTopY = stickyBox.localToGlobal(Offset.zero).dy;
+
+    int? minActiveIdx;
+    int? maxActiveIdx;
+    bool activeRangeComputed = false;
+    void ensureActiveRange() {
+      if (activeRangeComputed) return;
+      activeRangeComputed = true;
+      for (int i = 0; i < _feedItems.length; i++) {
+        final key = _messageKeys[_feedItemKeyId(_feedItems[i])];
+        final box = key?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(box)) {
+          minActiveIdx ??= i;
+          maxActiveIdx = i;
+        }
+      }
+    }
+
+    int? activeSpanIdx;
+    for (int s = 0; s < _daySpans.length; s++) {
+      final span = _daySpans[s];
+      final sepKey = _dateSeparatorKeyForFeedIndex(span.day, span.oldestIdx);
+      final sepBox = sepKey.currentContext?.findRenderObject() as RenderBox?;
+
+      bool isAtOrAboveSticky;
+      if (isChatRenderBoxActivelyLaidOut(sepBox)) {
+        final sepTopY = sepBox!.localToGlobal(Offset.zero).dy;
+        isAtOrAboveSticky = sepTopY <= stickyTopY + 0.5;
+      } else {
+        final oldestItemKey =
+            _messageKeys[_feedItemKeyId(_feedItems[span.oldestIdx])];
+        final oldestItemBox =
+            oldestItemKey?.currentContext?.findRenderObject() as RenderBox?;
+        if (isChatRenderBoxActivelyLaidOut(oldestItemBox)) {
+          final itemTopY = oldestItemBox!.localToGlobal(Offset.zero).dy;
+          isAtOrAboveSticky = itemTopY <= stickyTopY + 0.5;
+        } else {
+          ensureActiveRange();
+          if (maxActiveIdx != null && minActiveIdx != null) {
+            if (span.oldestIdx > maxActiveIdx!) {
+              isAtOrAboveSticky = true;
+            } else if (span.oldestIdx < minActiveIdx!) {
+              isAtOrAboveSticky = false;
+            } else {
+              isAtOrAboveSticky = false;
+              for (int i = span.oldestIdx; i >= minActiveIdx!; i--) {
+                final k = _messageKeys[_feedItemKeyId(_feedItems[i])];
+                final b = k?.currentContext?.findRenderObject() as RenderBox?;
+                if (isChatRenderBoxActivelyLaidOut(b)) {
+                  isAtOrAboveSticky =
+                      b!.localToGlobal(Offset.zero).dy <= stickyTopY + 0.5;
+                  break;
+                }
+              }
+            }
+          } else {
+            isAtOrAboveSticky = false;
+          }
+        }
+      }
+
+      if (isAtOrAboveSticky) {
+        activeSpanIdx = s;
+        break;
+      }
+    }
+
+    final effectiveSpanIdx = activeSpanIdx ?? (_daySpans.length - 1);
+    final activeSpan = _daySpans[effectiveSpanIdx];
+    final nextNewerSpan =
+        effectiveSpanIdx > 0 ? _daySpans[effectiveSpanIdx - 1] : null;
+
+    final nextState = StickyDateState(
+      day: activeSpan.day,
+      label: _formatDateLabel(activeSpan.sampleDt),
+      sameDaySepKey:
+          _dateSeparatorKeyForFeedIndex(activeSpan.day, activeSpan.oldestIdx),
+      nextDaySepKey: nextNewerSpan != null
+          ? _dateSeparatorKeyForFeedIndex(
+              nextNewerSpan.day,
+              nextNewerSpan.oldestIdx,
+            )
+          : null,
+      hasOlderDay: effectiveSpanIdx < _daySpans.length - 1,
+    );
+
+    if (_stickyDateStateNotifier.value != nextState) {
+      _stickyDateStateNotifier.value = nextState;
+    }
+  }
+
+  Future<void> _openCalendarForDate(DateTime initialDate) async {
+    _dismissKeyboardAndEmoji();
+    final selectedDay = await ChatHistoryCalendar.show(
+      context: context,
+      chatId: widget.channelId,
+      initialDate: initialDate,
+      currentMessages: _messages,
+    );
+    if (selectedDay == null ||
+        selectedDay.firstMessageId.isEmpty ||
+        !mounted) {
+      return;
+    }
+    await _jumpToCalendarDay(selectedDay);
+  }
+
+  Future<void> _jumpToCalendarDay(ChatCalendarDayInfo dayInfo) async {
+    if (_feedItems.isNotEmpty) {
+      String fromId = _feedItemKeyId(_feedItems.first);
+      for (int i = 0; i < _feedItems.length; i++) {
+        final keyId = _feedItemKeyId(_feedItems[i]);
+        final box = _messageKeys[keyId]?.currentContext?.findRenderObject()
+            as RenderBox?;
+        if (box != null && box.attached && box.hasSize) {
+          fromId = keyId;
+          break;
+        }
+      }
+      if (_jumpHistory.isEmpty || _jumpHistory.last != fromId) {
+        _jumpHistory.add(fromId);
+        if (mounted) setState(() => _showScrollDownFab = true);
+      }
+    }
+    await _scrollToMessage(dayInfo.firstMessageId);
   }
 
   void _setHighlight(String messageId) {
@@ -1692,14 +3425,50 @@ class _ChannelScreenState extends State<ChannelScreen>
       }
     } else {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result['message'] ?? 'У вас нет доступа к этому сообщению'),
-            backgroundColor: Colors.redAccent,
-          ),
+        GlassToastService().show(
+          context,
+          result['message'] ?? 'У вас нет доступа к этому сообщению',
+          isError: true,
         );
       }
     }
+  }
+
+  bool _isVideoFile(String filePath) {
+    final clean = filePath.split('?').first.toLowerCase();
+    return clean.endsWith('.mp4') ||
+        clean.endsWith('.mov') ||
+        clean.endsWith('.avi') ||
+        clean.endsWith('.mkv') ||
+        clean.endsWith('.webm');
+  }
+
+  bool _isImageFile(String filePath) {
+    final clean = filePath.split('?').first.toLowerCase();
+    return clean.endsWith('.jpg') ||
+        clean.endsWith('.jpeg') ||
+        clean.endsWith('.png') ||
+        clean.endsWith('.webp') ||
+        clean.endsWith('.gif') ||
+        clean.endsWith('.bmp') ||
+        clean.endsWith('.heic');
+  }
+
+  bool _isAudioFile(String filePath) {
+    final clean = filePath.split('?').first.toLowerCase();
+    return clean.endsWith('.mp3') ||
+        clean.endsWith('.m4a') ||
+        clean.endsWith('.wav') ||
+        clean.endsWith('.ogg') ||
+        clean.endsWith('.aac') ||
+        clean.endsWith('.flac');
+  }
+
+  String _detectMessageType(String fileName) {
+    if (_isImageFile(fileName)) return 'image';
+    if (_isVideoFile(fileName)) return 'video';
+    if (_isAudioFile(fileName)) return 'audio';
+    return 'document';
   }
 
   Future<void> _sendMessage({
@@ -1707,22 +3476,61 @@ class _ChannelScreenState extends State<ChannelScreen>
     List<MessageEntity>? entities,
     LinkPreviewOptions? linkPreviewOptions,
     bool invertMedia = false,
+    bool isSilent = false,
+    bool hasMediaSpoiler = false,
+    bool asDocument = false,
+    bool preserveComposerDraft = false,
+    List<File>? filesOverride,
+    Map<String, String>? captionsByPath,
+    bool isViewOnce = false,
+    int ttlSeconds = 0,
   }) async {
     final String controllerCleanText = _messageController.cleanText.trimRight();
     final List<MessageEntity> controllerEntities = _messageController.entities;
     final String text = (cleanText ?? controllerCleanText).trimRight();
     final List<MessageEntity> resolvedEntities = entities ?? controllerEntities;
-    if (text.trim().isEmpty || _isSending) return;
+    final bool hasIncomingFiles = _attachedFiles.isNotEmpty ||
+        (filesOverride != null && filesOverride.isNotEmpty);
+    if ((text.trim().isEmpty &&
+            !hasIncomingFiles &&
+            _stagedForward == null) ||
+        (!hasIncomingFiles && _isSending)) {
+      return;
+    }
+    final bool effectiveSilent = isSilent || _isSilentBroadcast;
+
+    if (!_isEditing && _stagedForward != null && _canPostInChannel) {
+      final staged = _stagedForward!;
+      setState(() => _stagedForward = null);
+      final fwdRes = await ChatService.forwardMessages(
+        toChatId: widget.channelId,
+        fromChatId: staged.fromChatId,
+        messageIds: staged.messages.map((m) => m.id).toList(),
+        hideSender: staged.hideSender,
+        hideCaption: staged.hideCaption,
+        isSilent: effectiveSilent,
+      );
+      if (fwdRes['success'] == true) {
+        _triggerSilentSync();
+      } else if (mounted) {
+        GlassToastService().showError(
+          context,
+          fwdRes['message']?.toString() ?? 'Ошибка пересылки',
+        );
+      }
+      if (text.trim().isEmpty && !hasIncomingFiles) {
+        return;
+      }
+    }
 
     final String effectiveContent = text;
     final List<MessageEntity>? effectiveEntities =
         resolvedEntities.isNotEmpty ? resolvedEntities : null;
 
-    if (_isEditing && _editingMessageId != null) {
+    if (_isEditing && _editingMessageId != null && filesOverride == null) {
       final editingId = _editingMessageId!;
+      _cancelEditing();
       setState(() {
-        _isEditing = false;
-        _editingMessageId = null;
         final index = _messages.indexWhere((m) => m.id == editingId);
         if (index != -1) {
           _messages[index] = _messages[index].copyWith(
@@ -1730,9 +3538,9 @@ class _ChannelScreenState extends State<ChannelScreen>
             isEdited: true,
             entities: effectiveEntities ?? const [],
           );
+          _updateFeedItems();
         }
       });
-      _messageController.clear();
       try {
         await AppDatabase().updateMessageContent(
           editingId,
@@ -1751,23 +3559,101 @@ class _ChannelScreenState extends State<ChannelScreen>
       return;
     }
 
+    final filesToSend = filesOverride != null
+        ? List<File>.from(filesOverride)
+        : List<File>.from(_attachedFiles);
     final replyTo = _replyToMessage;
     final replyIsQuote = _isQuote;
     final replyQuoteText = _quoteText;
     final replyQuoteOffset = _quoteOffset;
     final replyQuoteLength = _quoteLength;
+    final LinkPreviewOptions? effectiveLinkPreview =
+        linkPreviewOptions ?? _linkPreviewOptions;
+    final bool effectiveInvert = invertMedia || _invertMedia;
 
-    _messageController.clear();
-    DraftService().deleteDraft(widget.channelId);
-    setState(() {
-      _isSending = true;
-      _replyToMessage = null;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
+    _suppressDraftSave = true;
+    try {
+      if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+        _showScrollDownFab = false;
+      }
+      setState(() {
+        _attachedFiles.clear();
+        _attachedFileNames.clear();
+        _linkPreviewOptions = null;
+        _invertMedia = false;
+        _replyToMessage = null;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+        _isUploading = false;
+        _uploadProgressNotifier.value = 0.0;
+        if (filesToSend.isEmpty) {
+          _isSending = true;
+        }
+      });
+      if (!preserveComposerDraft) {
+        _messageController.clear();
+      }
+    } finally {
+      _suppressDraftSave = false;
+    }
+    if (!preserveComposerDraft) {
+      DraftService().clearLocalDraftOnSend(_draftKey);
+    } else if (replyTo != null) {
+      _saveCurrentDraft(immediate: true);
+    }
     _scrollToBottom();
+
+    if (filesToSend.isNotEmpty) {
+      final channelTitle =
+          _channelName.isNotEmpty ? _channelName : widget.channelName;
+      try {
+        await MediaSendCoordinator.instance.enqueueMediaOrFiles(
+          chatId: widget.channelId,
+          files: filesToSend,
+          asDocument: asDocument,
+          caption: effectiveContent,
+          captionsByPath: captionsByPath,
+          entities: effectiveEntities,
+          invertMedia: effectiveInvert,
+          replyToMessageId: replyTo?.id,
+          isQuote: replyIsQuote,
+          quoteText: replyQuoteText,
+          quoteOffset: replyQuoteOffset,
+          quoteLength: replyQuoteLength,
+          replyToSenderId: replyTo != null ? '0' : null,
+          replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+            chatName: channelTitle,
+            chatType: 'channel',
+          ),
+          replyToContent: replyTo?.content,
+          replyToMessageType: replyTo?.messageType ?? 'text',
+          isSilent: effectiveSilent,
+          hasMediaSpoiler: hasMediaSpoiler,
+          isViewOnce: isViewOnce,
+          ttlSeconds: ttlSeconds,
+          senderId: _currentUserId,
+        );
+      } catch (e) {
+        debugPrint('Channel media enqueue error: $e');
+        if (mounted) {
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_upload_error'),
+          );
+        }
+      }
+      return;
+    }
 
     final syncService = SyncService();
     String? pendingLocalId;
@@ -1788,8 +3674,9 @@ class _ChannelScreenState extends State<ChannelScreen>
         replyToContent: replyTo?.content,
         replyToMessageType: replyTo?.messageType ?? 'text',
         entities: effectiveEntities,
-        linkPreviewOptions: linkPreviewOptions,
-        invertMedia: invertMedia,
+        linkPreviewOptions: effectiveLinkPreview,
+        invertMedia: effectiveInvert,
+        isSilent: effectiveSilent,
       );
     } catch (e) {
       debugPrint('SyncService createPendingMessage error: $e');
@@ -1797,24 +3684,24 @@ class _ChannelScreenState extends State<ChannelScreen>
 
     if (pendingMsg != null && mounted) {
       pendingLocalId = pendingMsg.localId;
-      final profileTheme = context.read<ProfileThemeProvider>();
       var message = Message.fromDbMessage(pendingMsg);
       if (replyTo != null) {
-        final isReplyToMe = replyTo.senderId == _currentUserId;
+        final channelTitle =
+            _channelName.isNotEmpty ? _channelName : widget.channelName;
         message = message.copyWith(
           replyInfo: ReplyInfo(
             messageId: replyTo.id,
-            senderId: replyTo.senderId,
-            senderName: replyTo.senderName,
+            senderId: '0',
+            senderName: replyTo.resolveEffectiveAuthorTitle(
+              chatName: channelTitle,
+              chatType: 'channel',
+            ),
             content: replyTo.content,
             messageType: replyTo.messageType,
             entities: replyTo.entities,
-            nameColorPresetId: isReplyToMe
-                ? profileTheme.currentNameColorPreset.id
-                : (replyTo.senderNameColorId ?? 'name_red'),
-            replyStripStyle: isReplyToMe
-                ? profileTheme.currentStripStyle.name
-                : (replyTo.senderReplyStripStyle ?? 'solid'),
+            nameColorPresetId: 'name_red',
+            replyStripStyle: 'solid',
+            replyEmoji: null,
           ),
         );
       }
@@ -1822,6 +3709,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         setState(() {
           _messages.insert(0, message);
           _isSending = false;
+          _updateFeedItems();
         });
         _scrollToBottom();
       }
@@ -1838,8 +3726,9 @@ class _ChannelScreenState extends State<ChannelScreen>
           quoteOffset: replyQuoteOffset,
           quoteLength: replyQuoteLength,
           entities: effectiveEntities,
-          linkPreviewOptions: linkPreviewOptions,
-          invertMedia: invertMedia,
+          linkPreviewOptions: effectiveLinkPreview,
+          invertMedia: effectiveInvert,
+          isSilent: effectiveSilent,
         );
 
         if (result['success'] == true) {
@@ -1856,29 +3745,38 @@ class _ChannelScreenState extends State<ChannelScreen>
                     final existing = _messages[idx];
                     _messages[idx] = sentMessage.copyWith(
                       localId: pendingLocalId,
-                      sendStatus: 1, // sent
+                      sendStatus: 1,
                       replyInfo: sentMessage.replyInfo ?? existing.replyInfo,
-                      isQuote: sentMessage.isQuote || existing.isQuote || replyIsQuote,
-                      quoteText: sentMessage.quoteText ?? existing.quoteText ?? replyQuoteText,
+                      isQuote:
+                          sentMessage.isQuote || existing.isQuote || replyIsQuote,
+                      quoteText: sentMessage.quoteText ??
+                          existing.quoteText ??
+                          replyQuoteText,
                       quoteOffset: sentMessage.quoteOffset != 0
                           ? sentMessage.quoteOffset
-                          : (existing.quoteOffset != 0 ? existing.quoteOffset : replyQuoteOffset),
+                          : (existing.quoteOffset != 0
+                              ? existing.quoteOffset
+                              : replyQuoteOffset),
                       quoteLength: sentMessage.quoteLength != 0
                           ? sentMessage.quoteLength
-                          : (existing.quoteLength != 0 ? existing.quoteLength : replyQuoteLength),
+                          : (existing.quoteLength != 0
+                              ? existing.quoteLength
+                              : replyQuoteLength),
                     );
                   } else {
                     _messages[idx] = _messages[idx].copyWith(
                       id: serverId,
-                      sendStatus: 1, // sent
+                      sendStatus: 1,
                     );
                   }
+                  _updateFeedItems();
                 }
               });
             }
           }
         } else {
-          final errMsg = result['message']?.toString() ?? 'Failed to send message';
+          final errMsg =
+              result['message']?.toString() ?? 'Failed to send message';
           debugPrint('ChatService.sendMessage in channel returned false: $errMsg');
           await syncService.markMessageFailed(pendingLocalId);
           if (mounted) {
@@ -1886,13 +3784,11 @@ class _ChannelScreenState extends State<ChannelScreen>
               final idx =
                   _messages.indexWhere((m) => m.localId == pendingLocalId);
               if (idx != -1) {
-                _messages[idx] =
-                    _messages[idx].copyWith(sendStatus: 2); // failed
+                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+                _updateFeedItems();
               }
             });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(errMsg)),
-            );
+            GlassToastService().show(context, errMsg);
           }
         }
       } catch (e) {
@@ -1903,19 +3799,26 @@ class _ChannelScreenState extends State<ChannelScreen>
             final idx =
                 _messages.indexWhere((m) => m.localId == pendingLocalId);
             if (idx != -1) {
-              _messages[idx] =
-                  _messages[idx].copyWith(sendStatus: 2); // failed
+              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
+              _updateFeedItems();
             }
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to send message: $e')),
-          );
+          GlassToastService().show(context, 'Failed to send message: $e');
         }
       }
     } else {
       final result = await ChatService.sendMessage(
         chatId: widget.channelId,
-        content: text,
+        content: effectiveContent,
+        entities: effectiveEntities,
+        linkPreviewOptions: effectiveLinkPreview,
+        invertMedia: effectiveInvert,
+        replyToMessageId: replyTo?.id,
+        isQuote: replyIsQuote,
+        quoteText: replyQuoteText,
+        quoteOffset: replyQuoteOffset,
+        quoteLength: replyQuoteLength,
+        isSilent: effectiveSilent,
       );
 
       if (mounted) {
@@ -1924,44 +3827,371 @@ class _ChannelScreenState extends State<ChannelScreen>
           setState(() {
             if (!_messages.any((m) => m.id == sentMsg.id)) {
               _messages.insert(0, sentMsg);
+              _updateFeedItems();
             }
             _isSending = false;
           });
           _scrollToBottom();
         } else {
           setState(() => _isSending = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-                content: Text(result['message'] ?? 'Failed to send message')),
+          GlassToastService().show(context, result['message'] ?? 'Failed to send message');
+        }
+      }
+    }
+  }
+
+  /// Show attachment picker bottom sheet (media/files/polls)
+  Future<void> _showAttachmentPicker() async {
+    _dismissKeyboardAndEmoji();
+    final result =
+        await AttachmentPickerBottomSheet.show(context, allowPoll: true);
+    if (result == null || !mounted) return;
+
+    if (result.files != null && result.files!.isNotEmpty) {
+      if (result.asDocument || result.sendImmediately) {
+        setState(() {
+          for (final file in result.files!) {
+            _attachedFiles.add(file);
+            _attachedFileNames.add(p.basename(file.path));
+          }
+        });
+        if (result.sendImmediately) {
+          _sendMessage(asDocument: result.asDocument);
+        }
+      } else {
+        await _openMediaSendScreen(result.files!);
+      }
+      return;
+    }
+
+    switch (result.action) {
+      case AttachmentPickerAction.camera:
+        await _takePhoto();
+        break;
+      case AttachmentPickerAction.gallery:
+        await _pickMedia('media');
+        break;
+      case AttachmentPickerAction.file:
+        await _pickDocument();
+        break;
+      case AttachmentPickerAction.music:
+        await _pickAudio();
+        break;
+      case AttachmentPickerAction.poll:
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => PollCreateScreen(
+              chatId: widget.channelId,
+              isChannel: true,
+              isSilent: _isSilentBroadcast,
+            ),
+          ),
+        );
+        break;
+      case AttachmentPickerAction.location:
+        await _sendLocation();
+        break;
+      case AttachmentPickerAction.contact:
+        await _sendContact();
+        break;
+      case AttachmentPickerAction.miniApp:
+        final shortcut = result.miniAppShortcut;
+        if (shortcut != null) {
+          final bid = (shortcut['bot_id'] ?? '').toString().trim();
+          final buser = (shortcut['bot_username'] ?? '').toString().trim();
+          final targetBotId = bid.isNotEmpty ? bid : buser;
+          if (targetBotId.isNotEmpty) {
+            await openMiniAppSheet(
+              context,
+              botId: targetBotId,
+              botName: shortcut['bot_name']?.toString(),
+              botUsername: buser.isNotEmpty ? buser : null,
+              isVerified: shortcut['is_verified'] == true,
+              url: shortcut['url']?.toString(),
+              appShortName: shortcut['app_short_name']?.toString(),
+              chatId: widget.channelId,
+              mode: (shortcut['mode'] ?? 'attach').toString(),
+              buttonText: (shortcut['title'] ?? '').toString(),
+              onSwitchInlineQuery: _insertInlineQueryText,
+            );
+          }
+        }
+        break;
+      case null:
+        break;
+    }
+  }
+
+  Future<void> _openMediaSendScreen(List<File> files) async {
+    if (files.isEmpty) return;
+    final result = await Navigator.push<MediaSendResult>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MediaSendScreen(initialFiles: files),
+      ),
+    );
+    if (result == null || result.files.isEmpty || !mounted) return;
+
+    if (result.scheduleAt != null) {
+      setState(() => _isUploading = true);
+      try {
+        for (int i = 0; i < result.files.length; i++) {
+          final file = result.files[i];
+          final uploadResult = await _fileService.uploadFileChunked(file);
+          final msgType = result.asDocument
+              ? 'file'
+              : _detectMessageType(p.basename(file.path));
+          final caption = result.captionsByPath[file.path] ??
+              (i == 0 ? (result.caption ?? '') : '');
+          await ChatService.createScheduledMessage(
+            chatId: widget.channelId,
+            content: caption,
+            messageType: msgType,
+            scheduleAt: result.scheduleAt,
+            fileUrl: uploadResult.url,
+            fileName: uploadResult.fileName,
+            hasMediaSpoiler: result.hasMediaSpoiler,
+            mediaPayload: uploadResult.toMediaPayload(),
+            isSilent: result.isSilent || _isSilentBroadcast,
           );
         }
+        unawaited(_loadScheduledCount());
+        if (mounted) {
+          GlassToastService().show(context, 'Публикация запланирована');
+        }
+      } finally {
+        if (mounted) setState(() => _isUploading = false);
+      }
+      return;
+    }
+
+    _sendMessage(
+      cleanText: result.caption ?? '',
+      entities: const [],
+      isSilent: result.isSilent,
+      hasMediaSpoiler: result.hasMediaSpoiler,
+      asDocument: result.asDocument,
+      preserveComposerDraft: true,
+      filesOverride: result.files,
+      captionsByPath: result.captionsByPath,
+      isViewOnce: result.isViewOnce,
+      ttlSeconds: result.ttlSeconds,
+    );
+  }
+
+  Future<void> _pickMedia(String type) async {
+    try {
+      List<XFile> pickedMedia = [];
+      try {
+        pickedMedia = await _imagePicker.pickMultipleMedia(
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 95,
+        );
+      } catch (_) {
+        pickedMedia = await _imagePicker.pickMultiImage(
+          maxWidth: 1920,
+          maxHeight: 1920,
+          imageQuality: 95,
+        );
+      }
+      if (pickedMedia.isNotEmpty && mounted) {
+        await _openMediaSendScreen(
+            pickedMedia.map((x) => File(x.path)).toList());
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Failed to pick media: $e');
+      }
+    }
+  }
+
+  Future<void> _takePhoto() async {
+    try {
+      final XFile? photo = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 95,
+      );
+      if (photo != null && mounted) {
+        await _openMediaSendScreen([File(photo.path)]);
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Failed to take photo: $e');
+      }
+    }
+  }
+
+  Future<void> _pickDocument() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+      if (result != null && result.files.isNotEmpty && mounted) {
+        setState(() {
+          for (final file in result.files) {
+            if (file.path != null) {
+              _attachedFiles.add(File(file.path!));
+              _attachedFileNames.add(file.name);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Failed to pick file: $e');
+      }
+    }
+  }
+
+  Future<void> _pickAudio() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.audio,
+        allowMultiple: true,
+      );
+      if (result != null && result.files.isNotEmpty && mounted) {
+        setState(() {
+          for (final file in result.files) {
+            if (file.path != null) {
+              _attachedFiles.add(File(file.path!));
+              _attachedFileNames.add(file.name);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Failed to pick audio: $e');
+      }
+    }
+  }
+
+  void _openFile(String fileUrl, String fileName, String messageType) {
+    final resolved = AppConfig.resolveMediaUrl(fileUrl) ?? fileUrl;
+    if (messageType == 'image') {
+      FullscreenPhotoViewer.open(context, resolved);
+      return;
+    }
+    showTheavModalSheet<void>(
+      context: context,
+      title: fileName,
+      showCloseButton: true,
+      builder: (sheetCtx) => TheavInsetGroup(
+        margin: EdgeInsets.zero,
+        children: [
+          TheavListRow(
+            leading: const iconoir.OpenNewWindow(width: 20, height: 20),
+            title: context.l10n.translate('chat_open_file'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadAndOpenFile(resolved, fileName);
+            },
+          ),
+          TheavListRow(
+            leading: const iconoir.Download(width: 20, height: 20),
+            title: context.l10n.translate('chat_download'),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              _downloadFile(resolved, fileName);
+            },
+          ),
+          TheavListRow(
+            leading: const iconoir.ShareAndroid(width: 20, height: 20),
+            title: context.l10n.translate('share'),
+            onTap: () async {
+              Navigator.pop(sheetCtx);
+              await SharePlus.instance.share(
+                ShareParams(text: resolved, subject: fileName),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _downloadAndOpenFile(String fileUrl, String fileName) async {
+    try {
+      if (kIsWeb) {
+        final uri = Uri.parse(fileUrl);
+        if (await canLaunchUrl(uri)) {
+          await launchUrl(uri, webOnlyWindowName: '_blank');
+        }
+      } else {
+        final filePath = await _fileService.downloadToDownloads(
+          fileUrl,
+          fileName,
+        );
+        if (mounted) {
+          GlassToastService().show(context, 'Файл скачан: $filePath');
+          await _fileService.openFile(filePath);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Ошибка при открытии файла: $e');
+      }
+    }
+  }
+
+  Future<void> _downloadFile(String fileUrl, String fileName) async {
+    try {
+      if (kIsWeb) {
+        await launchUrl(Uri.parse(fileUrl), webOnlyWindowName: '_blank');
+        return;
+      }
+      final filePath = await _fileService.downloadToDownloads(
+        fileUrl,
+        fileName,
+      );
+      if (mounted) {
+        GlassToastService().show(context, 'Файл скачан: $filePath');
+      }
+    } catch (e) {
+      if (mounted) {
+        GlassToastService().show(context, 'Ошибка при скачивании файла: $e');
       }
     }
   }
 
   /// Повторить отправку failed-сообщения
   Future<void> _retryMessage(Message message) async {
-    if (message.localId == null) return;
+    final targetLocalId =
+        (message.localId != null && message.localId!.isNotEmpty)
+            ? message.localId!
+            : message.id;
+    if (targetLocalId.isEmpty) return;
     final syncService = SyncService();
 
     setState(() {
-      final idx = _messages.indexWhere((m) => m.localId == message.localId);
+      final idx = _messages.indexWhere(
+        (m) =>
+            (m.localId != null && m.localId == targetLocalId) ||
+            m.id == targetLocalId,
+      );
       if (idx != -1) {
         _messages[idx] = _messages[idx].copyWith(sendStatus: 0);
+        _updateFeedItems();
       }
     });
 
-    await syncService.retryFailedMessage(message.localId!);
+    await syncService.retryFailedMessage(targetLocalId);
 
     final db = AppDatabase();
     try {
-      final updated = await db.getMessageByLocalId(message.localId!);
+      final updated = await db.getMessageByLocalId(targetLocalId);
       if (updated != null && mounted) {
         setState(() {
-          final idx =
-              _messages.indexWhere((m) => m.localId == message.localId);
+          final idx = _messages.indexWhere(
+            (m) =>
+                (m.localId != null && m.localId == targetLocalId) ||
+                m.id == targetLocalId,
+          );
           if (idx != -1) {
             _messages[idx] = Message.fromDbMessage(updated);
+            _updateFeedItems();
           }
         });
       }
@@ -1982,61 +4212,378 @@ class _ChannelScreenState extends State<ChannelScreen>
     });
   }
 
-  void _onInputTextChanged() {
+  Future<void> _loadInlineDirectoryBots() async {
+    final bots = await BotService.getBotsDirectory(inlineOnly: true);
+    if (mounted && bots.isNotEmpty) {
+      setState(() => _inlineDirectoryBots = bots);
+    }
+  }
+
+  void _updateMentionAutocompleteState() {
+    if (!mounted || !_canPostInChannel) return;
+    if (_inlineQueryController.isActive) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+    final sel = _messageController.selection;
+    final cursor =
+        sel.isValid ? sel.extentOffset : _messageController.text.length;
+    final token =
+        BotService.parseActiveMentionToken(_messageController.text, cursor);
+    if (token == null) {
+      if (_activeMentionQuery != null) {
+        setState(() {
+          _activeMentionQuery = null;
+          _mentionTokenStart = -1;
+          _mentionTokenEnd = -1;
+          _mentionIsAtStart = false;
+        });
+      }
+      return;
+    }
+    if (_activeMentionQuery != token.query ||
+        _mentionTokenStart != token.start ||
+        _mentionTokenEnd != token.end ||
+        _mentionIsAtStart != token.isAtMessageStart) {
+      setState(() {
+        _activeMentionQuery = token.query;
+        _mentionTokenStart = token.start;
+        _mentionTokenEnd = token.end;
+        _mentionIsAtStart = token.isAtMessageStart;
+      });
+    }
+  }
+
+  void _onPendingInlinePrefillChanged() {
+    if (!mounted) return;
+    final prefill = DeepLinkService.consumeInlinePrefill(widget.channelId);
+    if (prefill != null && prefill.isNotEmpty) {
+      _insertInlineQueryText(prefill);
+    }
+  }
+
+  void _insertInlineQueryText(String text) {
+    _messageController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    _inputFocusNode.requestFocus();
+    _inlineQueryController.onTextChanged(
+      text,
+      chatId: widget.channelId,
+      chatType: 'channel',
+    );
+  }
+
+  Future<void> _handleInlinePopupHeaderButtonTap(
+    BuildContext ctx,
+    BotInlineResultsButton btn,
+  ) async {
+    final inlineUsername =
+        (_inlineQueryController.activeBotUsername ?? '').trim();
+    final respBotId = (_inlineQueryController.response?.botId ?? '').trim();
+    BotInfo? botMeta;
+    for (final b in _inlineDirectoryBots) {
+      if ((respBotId.isNotEmpty && b.userId == respBotId) ||
+          (inlineUsername.isNotEmpty &&
+              (b.username ?? '').toLowerCase() ==
+                  inlineUsername.toLowerCase())) {
+        botMeta = b;
+        break;
+      }
+    }
+    if (botMeta == null && respBotId.isNotEmpty) {
+      botMeta = BotService.getCachedBotInfo(respBotId);
+    }
+    if (botMeta == null && inlineUsername.isNotEmpty) {
+      botMeta = await BotService.resolveBotByUsername(inlineUsername);
+    }
+    if (!ctx.mounted) return;
+
+    final effectiveBotId = respBotId.isNotEmpty
+        ? respBotId
+        : (botMeta?.userId.isNotEmpty == true ? botMeta!.userId : inlineUsername);
+    final effectiveUsername = (botMeta?.username?.isNotEmpty == true)
+        ? botMeta!.username!
+        : inlineUsername;
+
+    if (btn.webAppUrl != null && btn.webAppUrl!.isNotEmpty) {
+      if (effectiveBotId.isEmpty) return;
+      await openMiniAppSheet(
+        ctx,
+        botId: effectiveBotId,
+        botName: botMeta?.displayName,
+        botUsername: effectiveUsername.isNotEmpty ? effectiveUsername : null,
+        isVerified: botMeta?.isVerified,
+        url: btn.webAppUrl,
+        chatId: widget.channelId,
+        mode: 'inline',
+        buttonText: btn.text,
+        onSwitchInlineQuery: _insertInlineQueryText,
+      );
+      return;
+    }
+
+    if (btn.startParameter != null) {
+      final startCmd = btn.startParameter!.isNotEmpty
+          ? '/start ${btn.startParameter}'
+          : '/start';
+      final targetBotUserId = (botMeta != null && botMeta.userId.isNotEmpty)
+          ? botMeta.userId
+          : (int.tryParse(respBotId) != null ? respBotId : '');
+      if (targetBotUserId.isEmpty) return;
+
+      final res = await ChatService.createChat(
+        chatType: 'private',
+        participantIds: [targetBotUserId],
+      );
+      if (!mounted) return;
+      if (res['success'] == true) {
+        final chat = res['chat'];
+        final targetChatId = chat is Chat
+            ? chat.id
+            : (res['chat_id']?.toString() ?? '');
+        if (targetChatId.isNotEmpty) {
+          await ChatService.sendMessage(
+            chatId: targetChatId,
+            content: startCmd,
+          );
+          _inlineQueryController.clear();
+          _messageController.clear();
+          if (!mounted) return;
+          final botTitle = (botMeta?.displayName.isNotEmpty == true)
+              ? botMeta!.displayName
+              : (effectiveUsername.isNotEmpty ? '@$effectiveUsername' : 'Бот');
+          if (TilingLayoutController.instance.isWorkspaceMounted) {
+            TilingLayoutController.instance.openChatInActiveTile(
+              chatId: targetChatId,
+              chatType: 'private',
+              chatName: botTitle,
+              avatarUrl: botMeta?.avatarUrl,
+              otherUserId: targetBotUserId,
+            );
+          } else {
+            await Navigator.of(context).push(
+              SwipeBackPageRoute(
+                builder: (_) => PrivateChatScreen(
+                  chatId: targetChatId,
+                  otherUserId: targetBotUserId,
+                  otherUserName: botTitle,
+                  otherUserAvatar: botMeta?.avatarUrl,
+                ),
+              ),
+            );
+          }
+        }
+      } else {
+        GlassToastService().showError(
+          context,
+          res['message']?.toString() ?? 'Не удалось открыть чат с ботом',
+        );
+      }
+    }
+  }
+
+  void _applyMentionSelection(String username) {
+    final text = _messageController.text;
+    final cleanUname = username.trim().replaceFirst(RegExp(r'^@+'), '');
+    if (cleanUname.isEmpty) return;
+
+    final start = _mentionTokenStart;
+    final end = _mentionTokenEnd;
+    if (start < 0 || end < start || end > text.length) {
+      _insertInlineQueryText('@$cleanUname ');
+      return;
+    }
+
+    final insertion = '@$cleanUname ';
+    final updated = text.replaceRange(start, end, insertion);
+    final newCursor = start + insertion.length;
+    setState(() {
+      _activeMentionQuery = null;
+      _mentionTokenStart = -1;
+      _mentionTokenEnd = -1;
+      _mentionIsAtStart = false;
+    });
+    _messageController.value = TextEditingValue(
+      text: updated,
+      selection: TextSelection.collapsed(offset: newCursor),
+    );
+    _inputFocusNode.requestFocus();
+  }
+
+  void _saveCurrentDraft({bool immediate = false}) {
+    if (_suppressDraftSave || _isEditing || !_canPostInChannel) return;
     DraftService().saveDraft(
-      widget.channelId,
+      _draftKey,
       text: _messageController.cleanText,
       entities: _messageController.entities,
       replyToMessageId: _replyToMessage?.id,
       quoteText: _quoteText,
       isQuote: _isQuote,
+      quoteOffset: _quoteOffset,
+      quoteLength: _quoteLength,
+      immediate: immediate,
     );
   }
 
-  void _startReply(Message message) {
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
+  void _applyRemoteDraft(ChatDraft? draft) {
+    if (!mounted ||
+        _isEditing ||
+        _inputFocusNode.hasFocus ||
+        !_canPostInChannel) {
+      return;
+    }
+    _suppressDraftSave = true;
+    try {
+      if (draft == null || draft.isEmpty) {
         _messageController.clear();
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      } else {
+        _messageController.loadMessage(draft.text, draft.entities);
+        Message? resolvedReply;
+        if (draft.replyToMessageId != null &&
+            draft.replyToMessageId!.isNotEmpty) {
+          for (final m in _messages) {
+            if (m.id == draft.replyToMessageId) {
+              resolvedReply = m;
+              break;
+            }
+          }
+        }
+        setState(() {
+          _replyToMessage = resolvedReply;
+          _pendingDraftReplyId =
+              resolvedReply == null ? draft.replyToMessageId : null;
+          _isQuote =
+              draft.isQuote &&
+              draft.quoteText != null &&
+              draft.quoteText!.isNotEmpty;
+          _quoteText = _isQuote ? draft.quoteText : null;
+          _quoteOffset = _isQuote ? draft.quoteOffset : 0;
+          _quoteLength = _isQuote ? draft.quoteLength : 0;
+        });
       }
-      _replyToMessage = message;
-      _isQuote = false;
-      _quoteText = null;
-      _quoteOffset = 0;
-      _quoteLength = 0;
-    });
-    DraftService().saveDraft(
-      widget.channelId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-      replyToMessageId: message.id,
-      isQuote: false,
-    );
+    } finally {
+      _suppressDraftSave = false;
+    }
+  }
+
+  void _resolvePendingDraftReply({bool serverLoaded = false}) {
+    final pendingId = _pendingDraftReplyId;
+    if (pendingId == null || pendingId.isEmpty) return;
+    Message? found;
+    for (final m in _messages) {
+      if (m.id == pendingId) {
+        found = m;
+        break;
+      }
+    }
+    if (found != null) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && _replyToMessage == null && mounted) {
+        setState(() => _replyToMessage = found);
+      }
+      return;
+    }
+    if (serverLoaded) {
+      _pendingDraftReplyId = null;
+      if (!_isEditing && mounted && (_isQuote || _quoteText != null)) {
+        setState(() {
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _saveCurrentDraft(immediate: true);
+    }
+  }
+
+  void _onInputTextChanged() {
+    if (!_suppressDraftSave && !_isEditing) {
+      _userEditedComposer = true;
+    }
+    _saveCurrentDraft();
+    if (_canPostInChannel) {
+      _inlineQueryController.onTextChanged(
+        _messageController.text,
+        chatId: widget.channelId,
+        chatType: 'channel',
+      );
+      _updateMentionAutocompleteState();
+    }
+  }
+
+  void _startReply(Message message) {
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = false;
+        _quoteText = null;
+        _quoteOffset = 0;
+        _quoteLength = 0;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _focusInputField();
   }
 
   void _startQuote(Message message, String selectedText, int offset, int length) {
-    setState(() {
-      if (_isEditing) {
-        _isEditing = false;
-        _editingMessageId = null;
-        _messageController.clear();
-      }
-      _replyToMessage = message;
-      _isQuote = true;
-      _quoteText = selectedText;
-      _quoteOffset = offset;
-      _quoteLength = length;
-    });
-    DraftService().saveDraft(
-      widget.channelId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-      replyToMessageId: message.id,
-      quoteText: selectedText,
-      isQuote: true,
-    );
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        if (_isEditing) {
+          _isEditing = false;
+          _editingMessageId = null;
+          if (stashed != null && stashed.text.isNotEmpty) {
+            _messageController.loadMessage(stashed.text, stashed.entities);
+          } else {
+            _messageController.clear();
+          }
+        }
+        _replyToMessage = message;
+        _pendingDraftReplyId = null;
+        _isQuote = true;
+        _quoteText = selectedText;
+        _quoteOffset = offset;
+        _quoteLength = length;
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
+    _saveCurrentDraft();
     _messageController.selection = TextSelection.collapsed(
       offset: _messageController.text.length,
     );
@@ -2046,24 +4593,37 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _cancelReply() {
     setState(() {
       _replyToMessage = null;
+      _pendingDraftReplyId = null;
       _isQuote = false;
       _quoteText = null;
       _quoteOffset = 0;
       _quoteLength = 0;
     });
-    DraftService().saveDraft(
-      widget.channelId,
-      text: _messageController.cleanText,
-      entities: _messageController.entities,
-    );
+    _saveCurrentDraft(immediate: true);
   }
 
   void _cancelEditing() {
-    setState(() {
-      _isEditing = false;
-      _editingMessageId = null;
-      _messageController.clear();
-    });
+    final stashed = _stashedDraftBeforeEdit;
+    _stashedDraftBeforeEdit = null;
+    _suppressDraftSave = true;
+    try {
+      setState(() {
+        _isEditing = false;
+        _editingMessageId = null;
+        if (stashed != null) {
+          _messageController.loadMessage(stashed.text, stashed.entities);
+          _replyToMessage = stashed.replyTo;
+          _isQuote = stashed.isQuote;
+          _quoteText = stashed.quoteText;
+          _quoteOffset = stashed.quoteOffset;
+          _quoteLength = stashed.quoteLength;
+        } else {
+          _messageController.clear();
+        }
+      });
+    } finally {
+      _suppressDraftSave = false;
+    }
   }
 
   String _formatTime(String timestamp) {
@@ -2072,21 +4632,41 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   @override
   void dispose() {
+    unawaited(
+      ScreenProtectionService.instance.release('channel_${widget.channelId}'),
+    );
     WidgetsBinding.instance.removeObserver(this);
+    _entrySettleTimer?.cancel();
     _transitionTimer?.cancel();
     _syncDebounceTimer?.cancel();
+    _viewsFlushTimer?.cancel();
+    unawaited(_flushPendingViews());
+    _realtimeUpdateSub?.cancel();
+    _mediaSendSub?.cancel();
 
-    DraftService().flushDraft(widget.channelId);
+    if (!_isDetachedHistoryWindow && _messages.isNotEmpty) {
+      ChatInstantCache.instance.putMessages(widget.channelId, _messages);
+    }
+    if (!_isEditing && _canPostInChannel) {
+      DraftService().flushDraft(_draftKey);
+    }
+    _draftRemoteSub?.cancel();
     StickerService.instance.unregisterInputTarget(_stickerInputTarget);
     _messageController.removeListener(_onInputTextChanged);
+    _inlineQueryController.dispose();
     _emojiPanelController.dispose();
     _inputFocusNode.removeListener(_onFocusChanged);
     _inputFocusNode.dispose();
     _messageController.dispose();
     _scrollController.dispose();
+    _stickyDateStateNotifier.dispose();
     _chatSubscription?.cancel();
 
     TilingLayoutController.instance.removeListener(_onTilingLayoutChanged);
+    ContactsService.revisionNotifier.removeListener(_onContactsRevisionChanged);
+    DeepLinkService.pendingInlinePrefill.removeListener(
+      _onPendingInlinePrefillChanged,
+    );
     if (_isDesktopPlatform) {
       HardwareKeyboard.instance.removeHandler(_handleGlobalDesktopKeyEvent);
     }
@@ -2121,6 +4701,10 @@ class _ChannelScreenState extends State<ChannelScreen>
     super.dispose();
   }
 
+  void _onContactsRevisionChanged() {
+    if (mounted) setState(() {});
+  }
+
   List<PlaybackTrack> _buildPlaylistFrom(String startMessageId) {
     final List<PlaybackTrack> playlist = [];
     final startIndex = _messages.indexWhere(
@@ -2132,6 +4716,19 @@ class _ChannelScreenState extends State<ChannelScreen>
         final resolvedUrl = AppConfig.resolveMediaUrl(rawUrl) ?? rawUrl;
         if (resolvedUrl.isEmpty) continue;
 
+        final bool exposeAuthor = _signMessages &&
+            _showAuthorProfiles &&
+            ContactsService.shouldResolveUserIdentity(
+              m.senderId,
+              senderChatId: m.senderChatId,
+              isAnonymousAdmin: m.isFromAnonymousAdmin,
+            );
+        final String trackSenderName = exposeAuthor
+            ? ContactsService.resolvePeerName(m.senderId, m.senderName)
+            : (_channelName.isNotEmpty
+                ? _channelName
+                : (widget.channelName ?? m.senderName));
+
         if (m.messageType == 'voice') {
           playlist.add(PlaybackTrack(
             messageId: m.id,
@@ -2139,7 +4736,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             chatType: 'channel',
             mediaType: 'voice',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
+            senderId: exposeAuthor ? m.senderId : null,
+            senderName: trackSenderName,
             chatTitle: widget.channelName,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
             waveform: m.waveform,
@@ -2151,7 +4749,8 @@ class _ChannelScreenState extends State<ChannelScreen>
             chatType: 'channel',
             mediaType: 'video_note',
             mediaUrl: resolvedUrl,
-            senderName: m.senderName,
+            senderId: exposeAuthor ? m.senderId : null,
+            senderName: trackSenderName,
             chatTitle: widget.channelName,
             duration: m.duration != null && m.duration! > 0 ? Duration(seconds: m.duration!) : null,
           ));
@@ -2178,14 +4777,12 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _updateInputHeight() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!_isAdmin) {
-        if (_inputHeight != 0) setState(() => _inputHeight = 0);
-        return;
-      }
-      final RenderBox? renderBox = _inputKey.currentContext?.findRenderObject() as RenderBox?;
-      if (renderBox != null) {
+      final RenderBox? renderBox =
+          _inputKey.currentContext?.findRenderObject() as RenderBox?;
+      if (renderBox != null && renderBox.hasSize) {
         final newHeight = renderBox.size.height;
-        if (newHeight != _inputHeight && newHeight > 0) {
+        if ((newHeight - _inputHeight).abs() > 0.5 && newHeight > 0) {
+          ChatInstantCache.instance.setInputHeight(widget.channelId, newHeight);
           setState(() {
             _inputHeight = newHeight;
           });
@@ -2199,7 +4796,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     _updateInputHeight();
     final displayName = widget.channelName ?? (_channelName.isNotEmpty ? _channelName : 'Channel');
     final topPadding = ChatScaffold.getTopContentPadding(context);
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
 
     if (bottomInset > _keyboardHeight && !_showEmojiPanel) {
       _keyboardHeight = bottomInset;
@@ -2230,7 +4827,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         _inputFocusNode.hasFocus) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
-            MediaQuery.of(context).viewInsets.bottom == 0 &&
+            MediaQuery.viewInsetsOf(context).bottom == 0 &&
             !_showEmojiPanel &&
             _inputFocusNode.hasFocus) {
           _inputFocusNode.unfocus();
@@ -2245,8 +4842,18 @@ class _ChannelScreenState extends State<ChannelScreen>
         .translate('chat_status_subscribers_count')
         .replaceAll('{count}', _subscriberCount.toString());
 
+    final safeBottom = MediaQuery.paddingOf(context).bottom;
+    final canCompose = _canPostInChannel || _isAdmin;
+    final String heroTag = 'chat_avatar_${widget.channelId}';
+
     return ChatScaffold(
-      canPop: !isKeyboardVisible && !_showEmojiPanel && !_isSelectionMode,
+      swipeBackBlocked:
+          _isSelectionMode || _isVoiceRecording || _isVideoRecording,
+      canPop: !isKeyboardVisible &&
+          !_showEmojiPanel &&
+          !_isSelectionMode &&
+          !_isVoiceRecording &&
+          !_isVideoRecording,
       onPopInvoked: (didPop, _) {
         if (!didPop) {
           if (_isSelectionMode) {
@@ -2255,6 +4862,11 @@ class _ChannelScreenState extends State<ChannelScreen>
             _closeEmojiPanel();
           } else if (isKeyboardVisible) {
             FocusScope.of(context).unfocus();
+          } else if (_isVideoRecording) {
+            _onVideoRecordingCancelled();
+          } else if (_isVoiceRecording) {
+            _voiceRecorderService.cancelRecording();
+            setState(() => _isVoiceRecording = false);
           }
         }
       },
@@ -2266,19 +4878,39 @@ class _ChannelScreenState extends State<ChannelScreen>
         statusText: subscriberText,
         isChannel: true, // Calls hidden in channel
         isMuted: _isMuted,
-        heroTag: displayName,
+        heroTag: heroTag,
         isSelectionMode: _isSelectionMode,
         selectedCount: _selectedMessageIds.length,
+        hasProtectedContent: _hasProtectedContent,
         onCancelSelection: _clearSelection,
+        onReplySelected: (_selectedMessageIds.length == 1 && _canPostInChannel)
+            ? () {
+                final id = _selectedMessageIds.first;
+                final msg = _messages.where((m) => m.id == id).firstOrNull;
+                _clearSelection();
+                if (msg != null) _startReply(msg);
+              }
+            : null,
         onCopySelected: _copySelectedMessages,
+        onPinSelected: (_selectedMessageIds.length == 1 && _canPinMessages)
+            ? () {
+                final id = _selectedMessageIds.first;
+                final msg = _messages.where((m) => m.id == id).firstOrNull;
+                _clearSelection();
+                if (msg != null) _togglePinMessage(msg);
+              }
+            : null,
         onForwardSelected: _forwardSelectedMessages,
-        onDeleteSelected: _isAdmin ? _deleteSelectedMessages : null,
+        onDeleteSelected: _canDeleteSelectedChannelPosts
+            ? _deleteSelectedMessages
+            : null,
         profileScreenBuilder: (_) => ProfileScreen(
           entityType: ProfileEntityType.channel,
           chatId: widget.channelId,
           initialName: displayName,
           initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
-          heroTag: displayName,
+          heroTag: heroTag,
+          onUpdate: _refreshChannelDetails,
           onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
         ),
         onBack: () => TilingLayoutController.popOrCloseChatTile(context),
@@ -2291,11 +4923,21 @@ class _ChannelScreenState extends State<ChannelScreen>
                 chatId: widget.channelId,
                 initialName: displayName,
                 initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
-                heroTag: displayName,
+                heroTag: heroTag,
+                onUpdate: _refreshChannelDetails,
                 onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
               ),
             ),
-          );
+          ).then((_) {
+            if (!mounted) return;
+            setState(() {
+              _isMuted = NotificationSettingsProvider().isChatMuted(
+                widget.channelId,
+                chatType: 'channel',
+              );
+            });
+            unawaited(_refreshChannelDetails());
+          });
         },
         onViewProfile: () {
           Navigator.push(
@@ -2306,11 +4948,21 @@ class _ChannelScreenState extends State<ChannelScreen>
                 chatId: widget.channelId,
                 initialName: displayName,
                 initialAvatarUrl: widget.channelAvatar ?? _channelAvatar,
-                heroTag: displayName,
+                heroTag: heroTag,
+                onUpdate: _refreshChannelDetails,
                 onJumpToMessageId: (msgId) => _scrollToMessage(msgId),
               ),
             ),
-          );
+          ).then((_) {
+            if (!mounted) return;
+            setState(() {
+              _isMuted = NotificationSettingsProvider().isChatMuted(
+                widget.channelId,
+                chatType: 'channel',
+              );
+            });
+            unawaited(_refreshChannelDetails());
+          });
         },
         onSearch: () {
           ChatActionsHelper.openSearch(
@@ -2327,48 +4979,97 @@ class _ChannelScreenState extends State<ChannelScreen>
             onMuteChanged: (newMuted) => setState(() => _isMuted = newMuted),
           );
         },
-        onClearHistory: () {
-          ChatActionsHelper.showClearHistoryDialog(
-            context: context,
-            chatId: widget.channelId,
-            onHistoryCleared: () {
-              if (mounted) {
-                setState(() {
-                  _messages.clear();
-                });
+        onClearHistory: _isAdmin
+            ? () {
+                ChatActionsHelper.showClearHistoryDialog(
+                  context: context,
+                  chatId: widget.channelId,
+                  onHistoryCleared: () {
+                    if (mounted) {
+                      setState(() {
+                        _messages.clear();
+                        _updateFeedItems();
+                      });
+                    }
+                  },
+                );
               }
-            },
+            : null,
+        onReport: () {
+          unawaited(
+            showAbuseReportSheet(
+              context,
+              chatId: widget.channelId,
+            ),
           );
         },
-        onReport: () {
-          // TODO: Report
-        },
-      ),
-      floatingActionButton: ScrollDownFab(
-        visible: _showScrollDownFab,
-        unreadCount: 0,
-        onPressed: () {
-          if (_jumpHistory.isNotEmpty) {
-            final lastId = _jumpHistory.removeLast();
-            _scrollToMessage(lastId);
-          } else if (_isDetachedHistoryWindow) {
-            _restoreLatestMessagesTail(scrollToBottom: true);
-          } else {
-            _scrollController.animateTo(
-              0,
-              duration: const Duration(milliseconds: 300),
-              curve: Curves.easeOut,
-            );
-          }
-        },
+        extraMenuItems: [
+          if (_isAdmin)
+            FloatingChatMenuItem(
+              label: 'Статистика канала',
+              iconBuilder: (c) => iconoir.StatsUpSquare(
+                color: c,
+                width: 20,
+                height: 20,
+              ),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  SwipeBackPageRoute(
+                    builder: (_) => ChannelStatsScreen(
+                      chatId: widget.channelId,
+                      channelName: displayName,
+                    ),
+                  ),
+                );
+              },
+            ),
+          FloatingChatMenuItem(
+            label: 'Похожие каналы',
+            iconBuilder: (c) => iconoir.Megaphone(
+              color: c,
+              width: 20,
+              height: 20,
+            ),
+            onTap: () {
+              showSimilarChannelsSheet(
+                context: context,
+                chatId: widget.channelId,
+                onOpenChannel: (ch) {
+                  Navigator.push(
+                    context,
+                    SwipeBackPageRoute(
+                      builder: (_) => ChannelScreen(
+                        channelId: ch.id,
+                        channelName: ch.name,
+                        channelAvatar: ch.avatarUrl,
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ],
       ),
       body: AnimatedBuilder(
         animation: _emojiPanelAnimation,
         builder: (context, child) {
-          final emojiPanelHeight = _emojiPanelAnimation.value * _keyboardHeight;
-          final effectiveBottom = (_isKeyboardFalling || _isKeyboardRising)
-              ? _keyboardHeight
+          final emojiPanelHeight =
+              _emojiPanelAnimation.value * (_keyboardHeight + safeBottom);
+          final keyboardOrEmoji = (_isKeyboardFalling || _isKeyboardRising)
+              ? (_keyboardHeight + safeBottom)
               : (bottomInset > emojiPanelHeight ? bottomInset : emojiPanelHeight);
+          final effectiveBottom = math.max(safeBottom, keyboardOrEmoji);
+          final double bannersOffset =
+              (_pinnedMessage != null ? 52.0 : 0.0) +
+                  (_hasActiveCall ? 60.0 : 0.0);
+
+          final int listItemCount = _isLoading
+              ? 0
+              : (_feedItems.isEmpty
+                  ? 1
+                  : _feedItems.length + (!_hasMoreMessages ? 1 : 0));
 
           return Stack(
             children: [
@@ -2381,25 +5082,40 @@ class _ChannelScreenState extends State<ChannelScreen>
                   isLoading: _isLoading,
                   isLoadingMore: _isLoadingMore,
                   isChannel: true,
-                  itemCount: _messages.length,
+                  itemCount: listItemCount,
                   scrollController: _scrollController,
-                  topPadding: topPadding + (_pinnedMessage != null ? 52.0 : 0.0),
-                  bottomPadding: _isAdmin ? _inputHeight + effectiveBottom + 8 : 16,
-                  emptyTitle: 'No posts yet',
+                  topPadding: topPadding + bannersOffset,
+                  bottomPadding: _inputHeight + effectiveBottom + 8,
+                  emptyTitle: 'Нет публикаций',
                   itemBuilder: (context, index) {
-                    final message = _messages[index];
+                    if (_feedItems.isEmpty ||
+                        (!_hasMoreMessages && index == _feedItems.length)) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20),
+                        child: Center(
+                          child: TelegramChatCreatedIntroCard(
+                            isChannel: true,
+                            title: displayName,
+                            description: _channelDescription,
+                          ),
+                        ),
+                      );
+                    }
+                    final item = _feedItems[index];
+                    final primary = _feedItemPrimaryMessage(item);
                     final isNewPost = index == 0 &&
-                        (message.sendStatus == 0 ||
-                            (DateTime.tryParse(message.createdAt)
+                        (primary.sendStatus == 0 ||
+                            (DateTimeUtils.parseUtcDateTime(item.createdAt)
                                     ?.toLocal()
                                     .isAfter(DateTime.now().subtract(
                                         const Duration(seconds: 2))) ??
                                 false));
                     return TelegramMessageEntrance(
-                      key: ValueKey('entrance_${message.localId ?? message.id}'),
+                      key: ValueKey(
+                          'entrance_${primary.localId ?? item.id}'),
                       animate: isNewPost,
                       isMe: false,
-                      child: _buildChannelMessage(message, index),
+                      child: _buildChannelFeedItem(item, index),
                     );
                   },
                 ),
@@ -2411,31 +5127,64 @@ class _ChannelScreenState extends State<ChannelScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    LiveChatCallBanner(
+                      chatId: widget.channelId,
+                      chatTitle: displayName,
+                      currentUserId: _currentUserId ?? '',
+                      isChannel: true,
+                    ),
                     PinnedMessageBanner(
                       message: _pinnedMessage,
-                      canUnpin: _isAdmin,
+                      totalPinnedCount: math.max(1, _pinnedMessages.length),
+                      currentPinnedIndex: _currentPinnedIndex,
+                      canUnpin: _canPinMessages,
                       onTap: () {
-                        final msg = _pinnedMessage;
-                        if (msg != null) _scrollToMessage(msg.id);
+                        if (_pinnedMessages.isNotEmpty) {
+                          final idx = _currentPinnedIndex.clamp(0, _pinnedMessages.length - 1);
+                          final msg = _pinnedMessages[idx];
+                          _scrollToMessage(msg.id);
+                          if (_pinnedMessages.length > 1) {
+                            setState(() {
+                              _currentPinnedIndex = (idx + 1) % _pinnedMessages.length;
+                              _pinnedMessage = _pinnedMessages[_currentPinnedIndex];
+                            });
+                          }
+                        } else {
+                          final msg = _pinnedMessage;
+                          if (msg != null) _scrollToMessage(msg.id);
+                        }
                       },
-                      onUnpin: _isAdmin
+                      onOpenPinnedList: () async {
+                        final jumpId = await Navigator.of(context).push<String>(
+                          SwipeBackPageRoute(
+                            builder: (_) => PinnedMessagesScreen(
+                              chatId: widget.channelId,
+                              chatTitle: displayName,
+                              canPinMessages: _canPinMessages,
+                              initialPinnedMessages: _pinnedMessages,
+                            ),
+                          ),
+                        );
+                        if (!mounted) return;
+                        unawaited(_loadPinnedMessagesList());
+                        if (jumpId != null && jumpId.isNotEmpty) {
+                          _scrollToMessage(jumpId);
+                        }
+                      },
+                      onUnpin: _canPinMessages
                           ? () async {
                               final msg = _pinnedMessage;
                               if (msg == null) return;
-                              final msgId = msg.id;
-                              setState(() => _pinnedMessage = null);
-                              await ChatService.unpinMessage(
-                                chatId: widget.channelId,
-                                messageId: msgId,
-                              );
+                              await _togglePinMessage(msg);
                             }
                           : null,
                     ),
                     MediaNotePlayerHeader(
                       chatId: widget.channelId,
                       onScrollToActive: () {
-                        final activeId = VoicePlaybackService().activeMessageId ??
-                            VideoNotePlaybackService().activeMessageId;
+                        final activeId =
+                            VoicePlaybackService().activeMessageId ??
+                                VideoNotePlaybackService().activeMessageId;
                         if (activeId != null) {
                           _scrollToMessage(activeId);
                         }
@@ -2444,42 +5193,95 @@ class _ChannelScreenState extends State<ChannelScreen>
                   ],
                 ),
               ),
-              if (_isAdmin && (_emojiPanelAnimation.value > 0 || _showEmojiPanel))
+              Positioned(
+                top: topPadding + bannersOffset + 4.0,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: ValueListenableBuilder<StickyDateState>(
+                    valueListenable: _stickyDateStateNotifier,
+                    builder: (context, stickyState, _) {
+                      return FloatingChatDateHeader(
+                        key: _stickyDateSlotKey,
+                        state: stickyState,
+                        scrollListenable: _scrollController,
+                        hiddenBySelectionMode: _isSelectionMode,
+                        onTapDay: _openCalendarForDate,
+                        onNeedsSync: _scheduleStickyDateUpdate,
+                      );
+                    },
+                  ),
+                ),
+              ),
+              ChatBottomScrollEdge(
+                height: math.max(safeBottom + 52.0, 52.0),
+              ),
+              Positioned(
+                right: 14,
+                bottom: _inputHeight + 10 + effectiveBottom,
+                child: ScrollDownFab(
+                  visible: _showScrollDownFab,
+                  unreadCount: _unreadCount,
+                  onPressed: () {
+                    if (_jumpHistory.isNotEmpty) {
+                      final lastId = _jumpHistory.removeLast();
+                      _scrollToMessage(lastId);
+                    } else if (_isDetachedHistoryWindow) {
+                      _restoreLatestMessagesTail(scrollToBottom: true);
+                    } else {
+                      _scrollController.animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeOut,
+                      );
+                      if (_unreadCount > 0 && _isMember) {
+                        unawaited(_markMessagesAsRead());
+                      }
+                    }
+                  },
+                ),
+              ),
+              if (canCompose &&
+                  (_emojiPanelAnimation.value > 0 || _showEmojiPanel))
                 Positioned(
                   left: 0,
                   right: 0,
                   bottom: 0,
                   height: (_isKeyboardFalling || _isKeyboardRising)
-                      ? _keyboardHeight
+                      ? (_keyboardHeight + safeBottom)
                       : emojiPanelHeight,
                   child: ClipRect(
+                    clipBehavior: _emojiPanelAnimation.value < 0.999
+                        ? Clip.hardEdge
+                        : Clip.none,
                     child: OverflowBox(
                       alignment: Alignment.topCenter,
-                      maxHeight: _keyboardHeight,
-                      minHeight: _keyboardHeight,
+                      maxHeight: _keyboardHeight + safeBottom,
+                      minHeight: _keyboardHeight + safeBottom,
                       child: EmojiStickerPanel(
                         controller: _messageController,
+                        focusNode: _inputFocusNode,
+                        onEmojiSelected: _insertEmojiText,
                         onBackspace: _handleBackspace,
                         onClose: _closeEmojiPanel,
                         onCustomEmojiSelected: _insertCustomEmojiItem,
                         onStickerSelected: _sendStickerMessage,
                         onGifSelected: _sendGifMessage,
-                        height: _keyboardHeight,
+                        height: _keyboardHeight + safeBottom,
                         isVisible: _showEmojiPanel,
                       ),
                     ),
                   ),
                 ),
-              if (_isAdmin)
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: effectiveBottom,
-                  child: Container(
-                    key: _inputKey,
-                    child: _buildMessageInput(),
-                  ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: effectiveBottom,
+                child: Container(
+                  key: _inputKey,
+                  child: _buildBottomBar(displayName),
                 ),
+              ),
               if (_isVideoRecording)
                 Positioned.fill(
                   child: RoundVideoRecordingOverlay(
@@ -2507,13 +5309,10 @@ class _ChannelScreenState extends State<ChannelScreen>
                     onTooShort: () {
                       setState(() => _isVoiceRecording = false);
                       HapticFeedback.selectionClick();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            context.l10n.translate('chat_voice_too_short'),
-                          ),
-                          duration: const Duration(seconds: 2),
-                        ),
+                      GlassToastService().show(
+                        context,
+                        context.l10n.translate('chat_voice_too_short'),
+                        duration: const Duration(seconds: 2),
                       );
                     },
                     replyToMessage: _replyToMessage,
@@ -2529,508 +5328,397 @@ class _ChannelScreenState extends State<ChannelScreen>
     );
   }
 
-  Widget _buildChannelMessage(Message message, int feedIndex) {
-    final GlobalKey key;
-    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
-    if (hasLocalId && _messageKeys.containsKey(message.localId!)) {
-      key = _messageKeys[message.localId!]!;
-      _messageKeys[message.id] = key;
-    } else {
-      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
-      if (hasLocalId) {
-        _messageKeys[message.localId!] = key;
-      }
+  ChatParticipant? _findParticipant(String senderId) {
+    if (senderId.isEmpty) return null;
+    for (final p in _participants) {
+      if (p.id == senderId) return p;
     }
-    final isHighlighted = message.id == _highlightMessageId;
-    final isSelected = _selectedMessageIds.contains(message.id);
-    final bool useSelectedStyle = isSelected || isHighlighted;
-    final TheavPalette? palette =
-        Theme.of(context).extension<TheavThemeExtension>()?.palette;
-    final Color rowHighlightColor = palette?.messageSelectionOverlay ??
-        Theme.of(context).colorScheme.primary.withValues(alpha: 0.16);
-    final bool hasNoMedia = message.fileUrl == null || message.fileUrl!.trim().isEmpty;
-    final int emojiCount = (message.messageType == 'text' &&
-            hasNoMedia &&
-            !message.hasReply &&
-            message.entities.isEmpty)
-        ? EmojiUtils.countEmojiOnly(message.content)
-        : 0;
-    final bool isBigEmoji = emojiCount > 0;
-    final bool isMe = message.senderId == _currentUserId || _isAdmin;
+    return null;
+  }
 
-    Widget postBody = isBigEmoji
-          ? Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
-              child: Align(
-                alignment: Alignment.centerLeft, // Channels usually left-aligned
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    const double emojiFontSize = 64.0;
-                    final String stableKey = message.localId ?? message.id;
-                    final bool shouldAutoPlay = message.sendStatus == 0 ||
-                        (DateTime.tryParse(message.createdAt)
-                                ?.toLocal()
-                                .isAfter(DateTime.now().subtract(
-                                    const Duration(seconds: 3))) ??
-                            false);
-
-                    Widget metadataRow = Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.35),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          iconoir.Eye(
-                            width: 10,
-                            height: 10,
-                            color: Colors.white.withValues(alpha: 0.8),
-                          ),
-                          const SizedBox(width: 4),
-                          const Text(
-                            '0',
-                            style: TextStyle(color: Colors.white, fontSize: 10),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            _formatTime(message.createdAt),
-                            style: const TextStyle(color: Colors.white, fontSize: 10),
-                          ),
-                        ],
-                      ),
-                    );
-
-                    return MetaData(
-                      metaData: 'message_bubble_box',
-                      behavior: HitTestBehavior.translucent,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          if (emojiCount == 1)
-                            LottieEmoji(
-                              key: ValueKey('lottie_$stableKey'),
-                              emoji: message.content,
-                              width: emojiFontSize * 1.8,
-                              height: emojiFontSize * 1.8,
-                              isMe: false, // In channels usually left-aligned effects
-                              autoPlay: shouldAutoPlay,
-                              autoPlayId: stableKey,
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4.0, bottom: 20.0, right: 16.0),
-                              child: EmojiUtils.emojiOnlyText(
-                                message.content,
-                                fontSize: emojiCount <= 3 ? 44.0 : 32.0,
-                              ),
-                            ),
-                          Positioned(
-                            bottom: emojiCount == 1 ? 12 : 0,
-                            right: emojiCount == 1 ? -16 : 0,
-                            child: metadataRow,
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-            )
-          : MetaData(
-              metaData: 'message_bubble_box',
-              behavior: HitTestBehavior.translucent,
-              child: Card(
-                color: useSelectedStyle
-                    ? (palette?.chatBubbleIncomingSelected ??
-                        Theme.of(context).cardColor)
-                    : null,
-                margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header box: Forwarded info or Reply info
-              if (message.forwardFromName != null &&
-                  message.forwardFromName!.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4.0),
-                  child: MessageReplyInfo.forwarded(
-                    authorName: message.forwardFromName!,
-                    isMe: false,
-                  ),
-                ),
-              if (message.hasReply)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4.0),
-                  child: MessageReplyInfo(
-                    replyInfo: message.replyInfo,
-                    isQuote: message.isQuote,
-                    quoteText: message.quoteText,
-                    quoteOffset: message.quoteOffset,
-                    quoteLength: message.quoteLength,
-                    entitiesOverride: message.replyToMessageId != null
-                        ? (_messages
-                                .where((m) => m.id == message.replyToMessageId)
-                                .map((m) => m.entities)
-                                .firstOrNull ??
-                            const [])
-                        : const [],
-                    isMe: false, // In channels, usually incoming style
-                    onTap: () => _handleReplyTap(message.replyToMessageId!,
-                        message.replyInfo?.chatId,
-                        fromMessageId: message.id),
-                  ),
-                ),
-              // Channel header
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 16,
-                    backgroundColor: const Color(0xFF0088CC),
-                    backgroundImage:
-                        getValidAvatarUrl(message.senderAvatarUrl) != null
-                            ? NetworkImage(
-                                getValidAvatarUrl(message.senderAvatarUrl)!)
-                            : null,
-                    child: getValidAvatarUrl(message.senderAvatarUrl) == null
-                        ? const iconoir.Megaphone(
-                            color: Colors.white, width: 16, height: 16)
-                        : null,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _channelName.isNotEmpty ? _channelName : 'Channel',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          _formatTime(message.createdAt),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Message content
-              if (message.messageType == 'voice' && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: VoiceMessageWidget(
-                    key: ValueKey('voice_${message.id}'),
-                    messageId: message.id,
-                    audioUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                    duration: message.duration != null && message.duration! > 0
-                        ? Duration(seconds: message.duration!)
-                        : null,
-                    waveform: message.waveform,
-                    fileSize: message.mediaFileSize,
-                    isMe: false,
-                    isRead: true,
-                    sendStatus: message.sendStatus,
-                    timeText: _formatTime(message.createdAt),
-                    senderName: _channelName,
-                    onRetry: () => _retryMessage(message),
-                    chatId: widget.channelId,
-                    chatType: 'channel',
-                    chatTitle: _channelName,
-                  ),
-                )
-              else if (message.messageType == 'audio' && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: VoiceMessageWidget(
-                    key: ValueKey('audio_${message.id}'),
-                    messageId: message.id,
-                    audioUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                    title: message.fileName ?? 'Audio',
-                    duration: (message.duration ?? message.mediaDuration) != null &&
-                            (message.duration ?? message.mediaDuration)! > 0
-                        ? Duration(seconds: (message.duration ?? message.mediaDuration)!)
-                        : null,
-                    waveform: message.waveform,
-                    fileSize: message.mediaFileSize,
-                    isMe: false,
-                    isRead: true,
-                    sendStatus: message.sendStatus,
-                    timeText: _formatTime(message.createdAt),
-                    senderName: _channelName,
-                    onRetry: () => _retryMessage(message),
-                    chatId: widget.channelId,
-                    chatType: 'channel',
-                    chatTitle: _channelName,
-                  ),
-                )
-              else if ((message.isRound || (message.messageType == 'video' && message.isRound)) && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Center(
-                    child: VideoMessageWidget(
-                      key: ValueKey('vmsg_${message.id}'),
-                      messageId: message.id,
-                      videoUrl: AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                      duration: message.duration != null && message.duration! > 0
-                          ? Duration(seconds: message.duration!)
-                          : null,
-                      thumbUrl: message.thumbUrl,
-                      thumbBase64: message.thumbBase64,
-                      fileSize: message.mediaFileSize,
-                      isMe: false,
-                      isRead: true,
-                      sendStatus: message.sendStatus,
-                      timeText: _formatTime(message.createdAt),
-                      senderName: _channelName,
-                      onRetry: () => _retryMessage(message),
-                      chatId: widget.channelId,
-                      chatType: 'channel',
-                      chatTitle: _channelName,
-                    ),
-                  ),
-                )
-              else if (message.messageType != 'text' && message.fileUrl != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8.0),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8.0),
-                    child: Image.network(
-                      AppConfig.resolveMediaUrl(message.fileUrl!) ?? message.fileUrl!,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[300],
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const iconoir.Attachment(width: 20, height: 20),
-                              const SizedBox(width: 8),
-                              Text(message.fileName ?? 'File'),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final bool isMediaNoteWithoutText =
-                      message.messageType == 'voice' ||
-                          message.isRound ||
-                          message.messageType == 'round' ||
-                          (message.messageType == 'audio' &&
-                              (message.content.trim().isEmpty ||
-                                  message.content.trim() == message.fileName));
-                  final String displayContent =
-                      isMediaNoteWithoutText ? '' : message.content;
-                  final textStyle = Theme.of(context).textTheme.bodyMedium;
-                  // Conservative estimate for metadata width (Views + Time + Icons + Padding)
-                  const double metadataWidth = 85.0;
-                  const double safetyMargin = 12.0;
-                  final double maxContentWidth = constraints.maxWidth;
-
-                  final TextPainter textPainter = TextPainter(
-                    text: TextSpan(text: displayContent, style: textStyle),
-                    textDirection: TextDirection.ltr,
-                  )..layout(maxWidth: maxContentWidth);
-
-                  final lineMetrics = textPainter.computeLineMetrics();
-                  final double lastLineWidth =
-                      lineMetrics.isNotEmpty ? lineMetrics.last.width : 0;
-
-                  // Check if content ends with a block element (Code block, LaTeX, or Poll)
-                  final bool endsWithBlock = message.messageType == 'poll' ||
-                                             displayContent.trim().endsWith('```') ||
-                                             displayContent.trim().endsWith('\$\$');
-
-                  // Strict check for inline fitting
-                  // But NEVER fit inline if it ends with a block element.
-                  final bool fitsInline = !endsWithBlock && (lastLineWidth + metadataWidth + safetyMargin) < maxContentWidth;
-
-                  Widget metadataRow = Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      iconoir.Eye(
-                        width: 14,
-                        height: 14,
-                        color: Colors.grey[500]!,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '0', // Placeholder views
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatTime(message.createdAt),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.grey[500],
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      if (message.senderId == _currentUserId) ...[
-                        if (message.sendStatus == 0) // sending
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 1.2),
-                          )
-                        else if (message.sendStatus == 2) // failed
-                          GestureDetector(
-                            onTap: () => _retryMessage(message),
-                            child: const iconoir.WarningTriangle(
-                              width: 14,
-                              height: 14,
-                              color: Colors.red,
-                            ),
-                          )
-                        else
-                          MessageStatusWidget(
-                            isRead: message.isRead,
-                            isOutgoing: true,
-                          ),
-                        const SizedBox(width: 4),
-                      ],
-                    ],
-                  );
-
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (!isMediaNoteWithoutText)
-                        Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            if (message.messageType == 'poll')
-                              PollMessageWidget(
-                                chatId: message.chatId.isNotEmpty
-                                    ? message.chatId
-                                    : widget.channelId,
-                                messageId: message.id,
-                                questionFallback: message.content,
-                                pollData: message.mediaPayload,
-                                isMe: false,
-                                isDark: Theme.of(context).brightness ==
-                                    Brightness.dark,
-                                textColor: Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? Colors.white
-                                    : Colors.black87,
-                                subtextColor: Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? Colors.grey[400]!
-                                    : Colors.grey[600]!,
-                                accentColor:
-                                    Theme.of(context).colorScheme.primary,
-                                currentUserId: _currentUserId ?? '',
-                              )
-                            else
-                              MetaData(
-                                metaData: 'message_selectable_content',
-                                behavior: HitTestBehavior.translucent,
-                                child: TextMessageWidget(
-                                  text: displayContent,
-                                  isMe: false,
-                                ),
-                              ),
-                            if (fitsInline)
-                              Opacity(
-                                opacity: 0,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Replicate text width
-                                    SizedBox(width: lastLineWidth),
-                                    SizedBox(width: metadataWidth),
-                                  ],
-                                ),
-                              ),
-                            if (fitsInline)
-                              Positioned(
-                                bottom: 0,
-                                right: 0,
-                                child: metadataRow,
-                              ),
-                          ],
-                        ),
-                      if (isMediaNoteWithoutText || !fitsInline)
-                        Align(
-                          alignment: Alignment.bottomRight,
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 4.0),
-                            child: metadataRow,
-                          ),
-                        ),
-                      if (message.inlineKeyboard.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: InlineKeyboardWidget(
-                            chatId: message.chatId.isNotEmpty
-                                ? message.chatId
-                                : widget.channelId,
-                            messageId: message.id,
-                            rows: message.inlineKeyboard,
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
+  void _openAuthorProfile(Message message) {
+    final authorId =
+        (message.postAuthorId != null && message.postAuthorId!.isNotEmpty)
+            ? message.postAuthorId!
+            : message.senderId;
+    if (authorId.isEmpty || authorId == '0') return;
+    HapticUtils.tap();
+    final participant = _findParticipant(authorId);
+    final isBot = participant?.isBot ?? false;
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      authorId,
+      senderChatId: message.senderChatId,
+      isAnonymousAdmin: message.isFromAnonymousAdmin,
+      isBot: isBot,
+    );
+    final rawName = participant?.displayName.isNotEmpty == true
+        ? participant!.displayName
+        : (message.senderName.isNotEmpty
+            ? message.senderName
+            : (_channelName.isNotEmpty ? _channelName : 'Channel'));
+    final resolvedName = canResolve
+        ? ContactsService.resolvePeerName(
+            authorId,
+            rawName,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isBot: isBot,
+          )
+        : rawName;
+    final rawAvatar = participant?.avatarUrl ?? message.senderAvatarUrl;
+    final resolvedAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(
+            authorId,
+            rawAvatar,
+            senderChatId: message.senderChatId,
+            isAnonymousAdmin: message.isFromAnonymousAdmin,
+            isBot: isBot,
+          )
+        : rawAvatar;
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ProfileScreen(
+          entityType: ProfileEntityType.user,
+          userId: authorId,
+          initialName: resolvedName,
+          initialAvatarUrl: resolvedAvatar,
+          initialIsOnline: participant?.isOnline,
+          initialLastSeen: participant?.lastSeen,
         ),
       ),
     );
+  }
 
-    Widget messageWidget = AnimatedContainer(
-      key: key,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeInOut,
-      width: double.infinity,
-      color: useSelectedStyle ? rowHighlightColor : Colors.transparent,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOutCubic,
-            child: _isSelectionMode
-                ? Padding(
-                    padding: const EdgeInsets.only(left: 12.0, right: 4.0),
-                    child: MessageSelectionCheckbox(isSelected: isSelected),
-                  )
-                : const SizedBox.shrink(),
-          ),
-          Expanded(child: postBody),
-        ],
+  void _openUserProfileById(String userId) {
+    if (userId.isEmpty || userId == '0') return;
+    HapticUtils.tap();
+    final participant = _findParticipant(userId);
+    final isBot = participant?.isBot ?? false;
+    final canResolve = ContactsService.shouldResolveUserIdentity(
+      userId,
+      isBot: isBot,
+    );
+    final rawName = participant?.displayName.isNotEmpty == true
+        ? participant!.displayName
+        : (_channelName.isNotEmpty ? _channelName : 'User');
+    final resolvedName = canResolve
+        ? ContactsService.resolvePeerName(userId, rawName, isBot: isBot)
+        : rawName;
+    final resolvedAvatar = canResolve
+        ? ContactsService.resolvePeerAvatarUrl(
+            userId,
+            participant?.avatarUrl,
+            isBot: isBot,
+          )
+        : participant?.avatarUrl;
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => ProfileScreen(
+          entityType: ProfileEntityType.user,
+          userId: userId,
+          initialName: resolvedName,
+          initialAvatarUrl: resolvedAvatar,
+          initialIsOnline: participant?.isOnline,
+          initialLastSeen: participant?.lastSeen,
+        ),
       ),
     );
+  }
 
-    // Wrap with SwipeToReplyWrapper for swipe-to-reply gesture
-    messageWidget = SwipeToReplyWrapper(
+  void _openPostComments(Message postMessage) {
+    _dismissKeyboardAndEmoji();
+    HapticUtils.tap();
+    Navigator.push(
+      context,
+      SwipeBackPageRoute(
+        builder: (_) => PostCommentsScreen(
+          channelId: widget.channelId,
+          postMessage: postMessage,
+          channelName: _channelName.isNotEmpty
+              ? _channelName
+              : widget.channelName,
+          channelAvatar: widget.channelAvatar ?? _channelAvatar,
+          linkedChatId: _linkedChatId,
+          showAuthorProfiles: _showAuthorProfiles,
+          signMessages: _signMessages,
+          reactionSettings: _reactionSettings,
+        ),
+      ),
+    );
+  }
+
+  void _toggleFeedSelection(Message primaryMsg, MediaAlbum? album) {
+    final ids = album != null
+        ? album.items.map((m) => m.id).toList()
+        : [primaryMsg.id];
+    HapticUtils.selection();
+    setState(() {
+      final allSelected = ids.every(_selectedMessageIds.contains);
+      if (allSelected) {
+        _selectedMessageIds.removeAll(ids);
+      } else {
+        _selectedMessageIds.addAll(ids);
+      }
+    });
+  }
+
+  void _enterFeedSelection(Message primaryMsg, MediaAlbum? album) {
+    _dismissKeyboardAndEmoji();
+    HapticUtils.selection();
+    setState(() {
+      if (album != null) {
+        _selectedMessageIds.addAll(album.items.map((m) => m.id));
+      } else {
+        _selectedMessageIds.add(primaryMsg.id);
+      }
+    });
+  }
+
+  void _openChatMediaViewer(
+    Message targetMessage, {
+    String? localFilePath,
+  }) {
+    final timeline = buildChatMediaTimeline(
+      _messages,
+      isReversed: true,
+      hasProtectedContent: _hasProtectedContent,
+    );
+    int initialIndex = timeline.indexWhere(
+      (it) =>
+          it.messageId == targetMessage.id ||
+          (targetMessage.localId != null && it.id == targetMessage.localId),
+    );
+    final List<TheavMediaItem> items;
+    if (initialIndex == -1 || timeline.isEmpty) {
+      items = <TheavMediaItem>[
+        TheavMediaItem.fromMessage(
+          targetMessage,
+          localFilePathOverride: localFilePath,
+          hasProtectedContent: _hasProtectedContent,
+        ),
+      ];
+      initialIndex = 0;
+    } else {
+      items = timeline;
+    }
+
+    TheavMediaViewer.open<void>(
+      context,
+      items: items,
+      initialIndex: initialIndex,
+      config: TheavMediaViewerConfig(
+        onJumpToMessage: (viewerCtx, item) {
+          Navigator.of(viewerCtx).pop();
+          final mid = item.messageId;
+          if (mid != null && mid.isNotEmpty) {
+            unawaited(_scrollToMessage(mid));
+          }
+        },
+        onForwardItem: _hasProtectedContent
+            ? null
+            : (viewerCtx, item) async {
+                final mid = item.messageId;
+                if (mid != null && mid.isNotEmpty) {
+                  await ForwardChatPickerSheet.show(
+                    viewerCtx,
+                    fromChatId: widget.channelId,
+                    messageIds: <String>[mid],
+                  );
+                }
+              },
+      ),
+    );
+  }
+
+  Widget _buildChannelFeedItem(FeedItem item, int feedIndex) {
+    final MediaAlbum? album = item is FeedAlbumItem ? item.album : null;
+    final Message message = _feedItemPrimaryMessage(item);
+
+    final GlobalKey key;
+    final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
+    if (hasLocalId &&
+        message.localId != message.id &&
+        _messageKeys.containsKey(message.localId!)) {
+      key = _messageKeys.remove(message.localId!)!;
+      _messageKeys[message.id] = key;
+    } else {
+      key = _messageKeys.putIfAbsent(message.id, () => GlobalKey());
+    }
+
+    final prevItem =
+        feedIndex + 1 < _feedItems.length ? _feedItems[feedIndex + 1] : null;
+    final (currentDt, currentDate) = _resolveDates(item.createdAt);
+    final prevDate =
+        prevItem != null ? _resolveDates(prevItem.createdAt).$2 : null;
+
+    final items = <Widget>[];
+    if (currentDate != prevDate) {
+      final sepKey = _dateSeparatorKeyFor(currentDate, message);
+      items.add(
+        RepaintBoundary(
+          child: InlineChatDateHeader(
+            key: sepKey,
+            day: currentDate,
+            scrollListenable: _scrollController,
+            stickySlotKey: _stickyDateSlotKey,
+            stickyStateListenable: _stickyDateStateNotifier,
+            onNeedsSync: _scheduleStickyDateUpdate,
+            child: DateSeparator(
+              key: ValueKey<DateTime>(currentDate),
+              dateLabel: _formatDateLabel(currentDt),
+              onTap: () => _openCalendarForDate(currentDt),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_showUnreadDivider && feedIndex == _firstUnreadFeedIndex) {
+      items.add(UnreadSeparator(key: _unreadSeparatorKey));
+    }
+
+    if (album == null && message.messageType == 'system') {
+      items.add(
+        Padding(
+          key: key,
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+          child: TelegramServiceMessageWidget(
+            message: message,
+            isChannel: true,
+            onTapUser: _openUserProfileById,
+            onTapPinnedMessage: (msgId) => _scrollToMessage(msgId),
+            onTapPhoto: (url) {
+              final resolved = AppConfig.resolveMediaUrl(url) ?? url;
+              FullscreenPhotoViewer.open(context, resolved);
+            },
+          ),
+        ),
+      );
+      return RepaintBoundary(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: items,
+        ),
+      );
+    }
+
+    final isHighlighted = message.id == _highlightMessageId ||
+        (album != null &&
+            album.items.any((ai) => ai.id == _highlightMessageId));
+    final isSelected = _selectedMessageIds.contains(message.id) ||
+        (album != null &&
+            album.items.any((ai) => _selectedMessageIds.contains(ai.id)));
+    final bool isMe = message.senderId == _currentUserId || _isAdmin;
+
+    Widget postWidget = ChannelPostCard(
+      key: key,
+      message: album == null ? message : null,
+      album: album,
+      currentUserId: _currentUserId ?? '',
+      channelName: _channelName.isNotEmpty
+          ? _channelName
+          : (widget.channelName ?? 'Channel'),
+      channelAvatar: widget.channelAvatar ?? _channelAvatar,
+      signMessages: _signMessages,
+      showAuthorProfiles: _showAuthorProfiles,
+      linkedChatId: _linkedChatId,
+      reactionSettings: _reactionSettings,
+      reactionsOverride: _messageReactions[message.id],
+      myReactionsOverride: _myReactions[message.id],
+      isHighlighted: isHighlighted,
+      isSelected: isSelected,
+      isSelectionMode: _isSelectionMode,
+      highlightItemId: _highlightMessageId,
+      formatTime: _formatTime,
+      onReactionTap: (emoji) {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _toggleReaction(message.id, emoji);
+      },
+      onShareTap: () {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _forwardMessagesToPickedChat(
+          album != null
+              ? album.items.map((m) => m.id).toList()
+              : [message.id],
+        );
+      },
+      onCommentsTap: () {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _openPostComments(message);
+      },
+      onAuthorTap:
+          _isSelectionMode ? null : () => _openAuthorProfile(message),
+      onReplyTap: _isSelectionMode
+          ? (_, __) => _toggleFeedSelection(message, album)
+          : (replyToId, chatId) => _handleReplyTap(
+                replyToId,
+                chatId,
+                fromMessageId: message.id,
+              ),
+      onFileTap: (url, name, type) {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        _openFile(url, name, type);
+      },
+      onMediaTap: _isSelectionMode
+          ? null
+          : (post, {localFilePath}) => _openChatMediaViewer(
+                post,
+                localFilePath: localFilePath,
+              ),
+      onRetry: (msg) => _retryMessage(msg),
+      hasProtectedContent: _hasProtectedContent,
+      onInsertInlineQuery: _canPostInChannel ? _insertInlineQueryText : null,
+      translation: _translationsByMsgId[message.id],
+      isTranslating: _translatingMsgIds.contains(message.id),
+      onHideTranslation: () {
+        setState(() => _translationsByMsgId.remove(message.id));
+      },
+      onHashtagTap: (_) {
+        if (_isSelectionMode) {
+          _toggleFeedSelection(message, album);
+          return;
+        }
+        ChatActionsHelper.openSearch(
+          context: context,
+          chatId: widget.channelId,
+          chatName: _channelName.isNotEmpty
+              ? _channelName
+              : (widget.channelName ?? 'Канал'),
+          onMessageSelected: (msgId) => _scrollToMessage(msgId),
+        );
+      },
+      onBodyTap: _isSelectionMode
+          ? null
+          : () => _showContextMenu(
+                message,
+                isMe,
+                key,
+                album: album,
+                enableBlur: true,
+              ),
+      onDoubleTap: _isSelectionMode
+          ? null
+          : () => _toggleReaction(message.id, '❤️'),
+    );
+
+    postWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: _isAdmin && !_isSelectionMode,
-      child: messageWidget,
+      enabled: _canPostInChannel && !_isSelectionMode,
+      child: postWidget,
     );
 
     final platform = Theme.of(context).platform;
@@ -3038,7 +5726,7 @@ class _ChannelScreenState extends State<ChannelScreen>
         platform == TargetPlatform.linux ||
         platform == TargetPlatform.macOS;
 
-    messageWidget = Listener(
+    postWidget = Listener(
       onPointerDown: (event) => _handleMessagePointerDown(
         event: event,
         feedIndex: feedIndex,
@@ -3050,19 +5738,32 @@ class _ChannelScreenState extends State<ChannelScreen>
         onTap: () {
           if (_isSelectionMode) {
             if (_isLmbDraggingMessages) return;
-            _toggleMessageSelection(message);
+            _toggleFeedSelection(message, album);
             return;
           }
           if (!isDesktop) {
-            _showContextMenu(message, isMe, key, enableBlur: true);
+            _showContextMenu(
+              message,
+              isMe,
+              key,
+              album: album,
+              enableBlur: true,
+            );
           }
         },
+        onDoubleTap: _isSelectionMode
+            ? null
+            : () => _toggleReaction(message.id, '❤️'),
         onLongPress: isDesktop
             ? null
             : () {
-                _enterSelectionMode(message);
+                _enterFeedSelection(message, album);
               },
         onSecondaryTapUp: (details) {
+          if (_isSelectionMode) {
+            _toggleFeedSelection(message, album);
+            return;
+          }
           final bool clickedOnBubble = MessageBubble.isGlobalPointInsideBubble(
             key.currentContext,
             details.globalPosition,
@@ -3071,21 +5772,17 @@ class _ChannelScreenState extends State<ChannelScreen>
             message,
             isMe,
             key,
+            album: album,
             forceOpen: true,
             enableBlur: clickedOnBubble,
           );
         },
         behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: double.infinity,
-          color: Colors.transparent,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: messageWidget,
-        ),
+        child: postWidget,
       ),
     );
 
-    return ValueListenableBuilder<String?>(
+    postWidget = ValueListenableBuilder<String?>(
       valueListenable: MessageContextMenuService().activeBlurMessageId,
       builder: (context, activeBlurId, child) {
         final isSeparatedForBlur = activeBlurId != null &&
@@ -3099,46 +5796,113 @@ class _ChannelScreenState extends State<ChannelScreen>
           child: child!,
         );
       },
-      child: messageWidget,
+      child: postWidget,
+    );
+
+    final viewIds = album != null
+        ? album.items.map((m) => m.id).toList()
+        : [message.id];
+    postWidget = VisibilityDetector(
+      key: Key('ch_view_${item.id}'),
+      onVisibilityChanged: (info) {
+        if (info.visibleFraction >= 0.35) {
+          _enqueuePostViews(viewIds);
+        }
+      },
+      child: postWidget,
+    );
+
+    items.add(postWidget);
+
+    return RepaintBoundary(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: items,
+      ),
     );
   }
 
-  void _confirmDeleteMessage(Message message) {
-    final deletedIndex = _messages.indexWhere((m) => m.id == message.id);
-    ChatActionsHelper.confirmAndDeleteMessage(
+  Future<void> _deleteMessagesWithSheet(List<Message> targets) async {
+    if (targets.isEmpty) return;
+    final canRevokeTargets = _canDeleteChannelPosts(targets);
+    final res = await showTelegramDeleteMessagesSheet(
       context: context,
-      chatId: widget.channelId,
-      message: message,
-      onOptimisticDelete: () {
-        if (mounted) {
-          setState(() {
-            _messages.removeWhere((m) => m.id == message.id);
-          });
-        }
-      },
-      onRollback: () {
-        if (mounted) {
-          setState(() {
-            if (deletedIndex >= 0 && deletedIndex <= _messages.length) {
-              _messages.insert(deletedIndex, message);
-            } else {
-              _messages.add(message);
-              _messages.sort((a, b) {
-                try {
-                  final ta = DateTime.parse(a.createdAt);
-                  final tb = DateTime.parse(b.createdAt);
-                  final cmp = tb.compareTo(ta);
-                  if (cmp != 0) return cmp;
-                  return (int.tryParse(b.id) ?? 0).compareTo(int.tryParse(a.id) ?? 0);
-                } catch (_) {
-                  return 0;
-                }
-              });
-            }
-          });
-        }
-      },
+      messageCount: targets.length,
+      chatType: 'channel',
+      canRevoke: canRevokeTargets,
+      defaultRevoke: canRevokeTargets,
     );
+    if (res == null || !res.confirmed || !mounted) return;
+
+    final unsentMessages = targets
+        .where((m) => m.sendStatus != 1 || m.id.startsWith('local_'))
+        .toList();
+    final serverMessages = targets
+        .where((m) => m.sendStatus == 1 && !m.id.startsWith('local_'))
+        .toList();
+    final targetIds = <String>{
+      for (final m in targets) m.id,
+      for (final m in targets)
+        if (m.localId != null && m.localId!.isNotEmpty) m.localId!,
+    };
+    final serverIds = serverMessages.map((m) => m.id).toList();
+    final serverBackup = List<Message>.from(
+      _messages.where((m) => serverIds.contains(m.id)),
+    );
+
+    setState(() {
+      _messages.removeWhere((m) =>
+          targetIds.contains(m.id) ||
+          (m.localId != null && targetIds.contains(m.localId)));
+      _selectedMessageIds.removeAll(targetIds);
+      _updateFeedItems();
+    });
+
+    for (final unsent in unsentMessages) {
+      final targetLocalId =
+          (unsent.localId != null && unsent.localId!.isNotEmpty)
+              ? unsent.localId!
+              : unsent.id;
+      await MediaSendCoordinator.instance.cancelUpload(targetLocalId);
+      await AppDatabase().deleteMessage(targetLocalId);
+      if (unsent.id != targetLocalId) {
+        await AppDatabase().deleteMessage(unsent.id);
+      }
+    }
+    if (unsentMessages.isNotEmpty) {
+      ChatInstantCache.instance.removeMessages(
+        widget.channelId,
+        [
+          for (final u in unsentMessages) ...[
+            u.id,
+            if (u.localId != null && u.localId!.isNotEmpty) u.localId!,
+          ],
+        ],
+      );
+    }
+
+    if (serverIds.isEmpty) return;
+
+    final apiRes = await ChatService.deleteMessagesBatch(
+      chatId: widget.channelId,
+      messageIds: serverIds,
+      revoke: res.revoke,
+    );
+    if (apiRes['success'] != true && mounted) {
+      setState(() {
+        for (final restored in serverBackup) {
+          if (!_messages.any((m) => m.id == restored.id)) {
+            _messages.add(restored);
+          }
+        }
+        _sortMessagesDescending(_messages);
+        _updateFeedItems();
+      });
+      GlassToastService().showError(
+        context,
+        apiRes['message']?.toString() ?? 'Не удалось удалить публикации',
+      );
+    }
   }
 
   Future<void> _togglePinMessage(Message message) async {
@@ -3182,23 +5946,212 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   Future<void> _forwardMessagesToPickedChat(List<String> messageIds) async {
     if (messageIds.isEmpty) return;
+    if (_hasProtectedContent) {
+      GlassToastService().show(
+        context,
+        'Копирование и пересылка запрещены в этом канале',
+      );
+      return;
+    }
     await ForwardChatPickerSheet.show(
       context,
       fromChatId: widget.channelId,
       messageIds: messageIds,
+      onStageInCurrentChat: _canPostInChannel
+          ? ({required hideSender, required hideCaption}) {
+              final stagedMsgs = _messages
+                  .where((m) => messageIds.contains(m.id))
+                  .toList()
+                  .reversed
+                  .toList();
+              if (stagedMsgs.isEmpty || !mounted) return;
+              setState(() {
+                _stagedForward = StagedForwardPayload(
+                  fromChatId: widget.channelId,
+                  messages: stagedMsgs,
+                  hideSender: hideSender,
+                  hideCaption: hideCaption,
+                );
+              });
+            }
+          : null,
+      onForwarded: (targetChatId) {
+        if (targetChatId == widget.channelId) _triggerSilentSync();
+      },
     );
+  }
+
+  Future<void> _openStagedForwardOptions() async {
+    final staged = _stagedForward;
+    if (staged == null) return;
+    final res = await showForwardOptionsSheet(
+      context: context,
+      payload: staged,
+    );
+    if (!mounted || res == null) return;
+    if (res.cancelForward) {
+      setState(() => _stagedForward = null);
+      return;
+    }
+    final updated = staged.copyWith(
+      hideSender: res.hideSender,
+      hideCaption: res.hideCaption,
+    );
+    if (res.changeRecipient) {
+      final target = await ForwardChatPickerSheet.pickTargetChat(
+        context,
+        fromChatId: updated.fromChatId,
+        messageCount: updated.messages.length,
+      );
+      if (!mounted || target == null) return;
+      if (target.chatId == widget.channelId) {
+        setState(() => _stagedForward = updated);
+        return;
+      }
+      final fwdRes = await ChatService.forwardMessages(
+        toChatId: target.chatId,
+        fromChatId: updated.fromChatId,
+        messageIds: updated.messages.map((m) => m.id).toList(),
+        hideSender: updated.hideSender,
+        hideCaption: updated.hideCaption,
+        isSilent: _isSilentBroadcast,
+      );
+      if (!mounted) return;
+      if (fwdRes['success'] == true) {
+        setState(() => _stagedForward = null);
+        GlassToastService().show(
+          context,
+          'Переслано в «${target.chatType == 'saved' ? 'Избранное' : target.name}»',
+        );
+      } else {
+        GlassToastService().showError(
+          context,
+          fwdRes['message']?.toString() ?? 'Ошибка пересылки',
+        );
+      }
+      return;
+    }
+    setState(() => _stagedForward = updated);
+  }
+
+  Future<void> _openScheduledMessages() async {
+    await Navigator.of(context).push(
+      SwipeBackPageRoute(
+        builder: (_) => ScheduledMessagesScreen(
+          chatId: widget.channelId,
+          chatTitle: _channelName,
+        ),
+      ),
+    );
+    if (mounted) unawaited(_loadScheduledCount());
+  }
+
+  Future<void> _handleSendLongPress() async {
+    final parsedText = _messageController.cleanText.trimRight();
+    if (parsedText.trim().isEmpty && _attachedFiles.isEmpty) return;
+    final choice = await showSendOptionsPopup(
+      context: context,
+      isPrivateChat: false,
+    );
+    if (!mounted || choice == null) return;
+    if (choice == SendOptionChoice.sendSilent) {
+      await _sendMessage(isSilent: true);
+      return;
+    }
+    if (choice != SendOptionChoice.schedule) return;
+    final scheduleAt = await showTheavScheduleSheet(context: context);
+    if (!mounted || scheduleAt == null) return;
+
+    final entities = _messageController.entities;
+    if (_attachedFiles.isNotEmpty) {
+      setState(() => _isUploading = true);
+      try {
+        for (int i = 0; i < _attachedFiles.length; i++) {
+          final file = _attachedFiles[i];
+          final uploadResult = await _fileService.uploadFileChunked(file);
+          final msgType = _detectMessageType(p.basename(file.path));
+          await ChatService.createScheduledMessage(
+            chatId: widget.channelId,
+            content: i == 0 ? parsedText : '',
+            messageType: msgType,
+            scheduleAt: scheduleAt,
+            fileUrl: uploadResult.url,
+            fileName: uploadResult.fileName,
+            mediaPayload: uploadResult.toMediaPayload(),
+            entities: i == 0 && entities.isNotEmpty ? entities : null,
+            isSilent: _isSilentBroadcast,
+          );
+        }
+        setState(() {
+          _attachedFiles.clear();
+          _attachedFileNames.clear();
+        });
+      } finally {
+        if (mounted) setState(() => _isUploading = false);
+      }
+    } else {
+      await ChatService.createScheduledMessage(
+        chatId: widget.channelId,
+        content: parsedText,
+        scheduleAt: scheduleAt,
+        entities: entities.isNotEmpty ? entities : null,
+        isSilent: _isSilentBroadcast,
+      );
+    }
+    _suppressDraftSave = true;
+    try {
+      if (_replyToMessage != null && mounted) {
+        setState(() {
+          _replyToMessage = null;
+          _pendingDraftReplyId = null;
+          _isQuote = false;
+          _quoteText = null;
+          _quoteOffset = 0;
+          _quoteLength = 0;
+        });
+      }
+      _messageController.clear();
+    } finally {
+      _suppressDraftSave = false;
+    }
+    DraftService().clearLocalDraftOnSend(_draftKey);
+    unawaited(_loadScheduledCount());
+    if (mounted) {
+      GlassToastService().show(context, 'Публикация запланирована');
+    }
+  }
+
+  MediaAlbum? _resolveAlbumForMessage(Message message) {
+    final gId = message.groupedId;
+    if (gId == null || gId.isEmpty) return null;
+    for (final item in _feedItems) {
+      if (item is FeedAlbumItem &&
+          (item.album.groupedId == gId ||
+              item.album.items.any((ai) => ai.id == message.id))) {
+        return item.album;
+      }
+    }
+    return null;
   }
 
   void _showContextMenu(
     Message message,
     bool isMe,
     GlobalKey key, {
+    MediaAlbum? album,
     bool forceOpen = false,
     bool enableBlur = true,
     Offset? initialDragStartGlobalPosition,
     Offset? initialDragCurrentGlobalPosition,
   }) {
     _dismissKeyboardAndEmoji();
+    final MediaAlbum? resolvedAlbum = album ?? _resolveAlbumForMessage(message);
+    final List<String> targetIds = resolvedAlbum != null
+        ? resolvedAlbum.items.map((m) => m.id).toList()
+        : [message.id];
+    final List<Message> targetMessages = resolvedAlbum != null
+        ? _messages.where((m) => targetIds.contains(m.id)).toList()
+        : [message];
     final bool isVideoNote = message.isRound || (message.messageType == 'video' && message.isRound);
     final bool isVoiceNote = message.messageType == 'voice';
     final bool isPoll = message.messageType == 'poll';
@@ -3209,6 +6162,7 @@ class _ChannelScreenState extends State<ChannelScreen>
       messageKey: key,
       isMe: isMe,
       enableBlur: enableBlur,
+      hasProtectedContent: _hasProtectedContent,
       initialDragStartGlobalPosition: initialDragStartGlobalPosition,
       initialDragCurrentGlobalPosition: initialDragCurrentGlobalPosition,
       currentUserId: _currentUserId,
@@ -3219,59 +6173,184 @@ class _ChannelScreenState extends State<ChannelScreen>
           final idx = _messages.indexWhere((m) => m.id == message.id);
           if (idx != -1) {
             _messages[idx] = _messages[idx].copyWith(mediaPayload: updatedPoll);
+            _updateFeedItems();
           }
         });
       },
-      onReply: () => _startReply(message),
-      onQuote: (!isVideoNote && !isVoiceNote && !isPoll) ? () => _startQuote(message, message.content, 0, message.content.length) : null,
-      onQuotePartial: (!isVideoNote && !isVoiceNote && !isPoll)
+      onReply: _canPostInChannel ? () => _startReply(message) : null,
+      onQuote: (_canPostInChannel && !isVideoNote && !isVoiceNote && !isPoll)
+          ? () => _startQuote(message, message.content, 0, message.content.length)
+          : null,
+      onQuotePartial: (_canPostInChannel && !isVideoNote && !isVoiceNote && !isPoll)
           ? (selectedText, offset, length) =>
               _startQuote(message, selectedText, offset, length)
           : null,
-      onSelect: () => _enterSelectionMode(message),
-      onPin: _isAdmin ? () => _togglePinMessage(message) : null,
+      onSelect: () => _enterFeedSelection(message, resolvedAlbum),
+      onPin: _canPinMessages ? () => _togglePinMessage(message) : null,
       isPinned: _pinnedMessage?.id == message.id,
-      onForward: () => _forwardMessagesToPickedChat([message.id]),
-      onEdit: (_isAdmin && !isVideoNote && !isVoiceNote && !isPoll)
-          ? () {
-              setState(() {
-                _replyToMessage = null;
-                _isQuote = false;
-                _quoteText = null;
-                _quoteOffset = 0;
-                _quoteLength = 0;
-                _isEditing = true;
-                _editingMessageId = message.id;
-                _messageController.loadMessage(message.content, message.entities);
-                _messageController.selection = TextSelection.fromPosition(
-                  TextPosition(offset: _messageController.text.length),
-                );
-              });
-              _focusInputField();
-            }
+      onForward: () => _forwardMessagesToPickedChat(targetIds),
+      onEdit: (_canEditChannelPost(message) &&
+              !isVideoNote &&
+              !isVoiceNote &&
+              !isPoll)
+          ? () => _enterEditMode(message)
           : null,
-      onDelete: (msg) => _confirmDeleteMessage(msg),
-      onReaction: (msgId, emoji) {},
+      onViewStats: _isAdmin
+          ? () => showPostStatsSheet(
+                context: context,
+                chatId: widget.channelId,
+                messageId: message.id,
+                previewText: message.content,
+              )
+          : null,
+      onTranslate: message.content.trim().isNotEmpty
+          ? () => unawaited(_toggleTranslateMessage(message))
+          : null,
+      isTranslated: _translationsByMsgId.containsKey(message.id),
+      onReplyInAnotherChat: !_hasProtectedContent
+          ? () => unawaited(_replyInAnotherChat(message))
+          : null,
+      onDelete: _canDeleteChannelPosts(
+              targetMessages.isNotEmpty ? targetMessages : [message])
+          ? (_) => _deleteMessagesWithSheet(
+                targetMessages.isNotEmpty ? targetMessages : [message],
+              )
+          : null,
+      onReaction: (msgId, emoji) => _toggleReaction(msgId, emoji),
+      selectedEmojis: _myReactions[message.id] ?? message.myReactions,
     );
   }
 
-  void _enterSelectionMode(Message message) {
-    _dismissKeyboardAndEmoji();
-    HapticUtils.selection();
-    setState(() {
-      _selectedMessageIds.add(message.id);
-    });
+  Future<void> _sendLocation() async {
+    if (!_canPostInChannel) return;
+    final picked = await showLocationPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.channelId,
+      content: '',
+      messageType: picked.messageType,
+      latitude: picked.latitude,
+      longitude: picked.longitude,
+      livePeriod: picked.livePeriod,
+      heading: picked.heading,
+      horizontalAccuracy: picked.horizontalAccuracy,
+      placeName: picked.placeName,
+      address: picked.address,
+      isSilent: _isSilentBroadcast,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить геопозицию',
+      );
+    }
   }
 
-  void _toggleMessageSelection(Message message) {
-    HapticUtils.selection();
+  Future<void> _sendContact() async {
+    if (!_canPostInChannel) return;
+    final picked = await showContactPickerSheet(context);
+    if (!mounted || picked == null) return;
+    final res = await ChatService.sendMessage(
+      chatId: widget.channelId,
+      content: picked.displayName,
+      messageType: 'contact',
+      contact: picked.toPayload(),
+      isSilent: _isSilentBroadcast,
+    );
+    if (!mounted) return;
+    if (res['success'] == true && res['message'] is Message) {
+      final sent = res['message'] as Message;
+      setState(() {
+        if (!_messages.any((m) => m.id == sent.id)) {
+          _messages.insert(0, sent);
+          _updateFeedItems();
+        }
+      });
+      await AppDatabase().saveMessage(_messageToCompanion(sent));
+      _scrollToBottom();
+    } else {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось отправить контакт',
+      );
+    }
+  }
+
+  Future<void> _toggleTranslateMessage(Message message) async {
+    if (_translationsByMsgId.containsKey(message.id)) {
+      setState(() => _translationsByMsgId.remove(message.id));
+      return;
+    }
+    if (_translatingMsgIds.contains(message.id)) return;
+    setState(() => _translatingMsgIds.add(message.id));
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final targetLang = localeCode.isNotEmpty ? localeCode : 'ru';
+    final res = await DmParityService.translateMessage(
+      chatId: widget.channelId,
+      messageId: message.id,
+      targetLang: targetLang,
+    );
+    if (!mounted) return;
     setState(() {
-      if (_selectedMessageIds.contains(message.id)) {
-        _selectedMessageIds.remove(message.id);
-      } else {
-        _selectedMessageIds.add(message.id);
+      _translatingMsgIds.remove(message.id);
+      if (res['success'] == true && res['translation'] is TranslationResult) {
+        _translationsByMsgId[message.id] =
+            res['translation'] as TranslationResult;
       }
     });
+    if (res['success'] != true && mounted) {
+      GlassToastService().showError(
+        context,
+        res['message']?.toString() ?? 'Не удалось перевести пост',
+      );
+    }
+  }
+
+  Future<void> _replyInAnotherChat(Message message) async {
+    final target = await ForwardChatPickerSheet.pickTargetChat(
+      context,
+      fromChatId: widget.channelId,
+      messageCount: 1,
+    );
+    if (!mounted || target == null) return;
+    if (target.chatId == widget.channelId && _canPostInChannel) {
+      _startReply(message);
+      return;
+    }
+    if (target.chatType == 'private' || target.chatType == 'saved') {
+      await Navigator.of(context).push(
+        SwipeBackPageRoute(
+          builder: (_) => PrivateChatScreen(
+            chatId: target.chatId,
+            otherUserName:
+                target.chatType == 'saved' ? 'Избранное' : target.name,
+            otherUserAvatar: target.avatarUrl,
+            otherUserId: target.otherUserId,
+            initialReplyMessage: message,
+            initialReplyChatId: widget.channelId,
+            initialReplyChatName: _channelName.isNotEmpty
+                ? _channelName
+                : (widget.channelName ?? 'Канал'),
+          ),
+        ),
+      );
+    } else {
+      GlassToastService().show(
+        context,
+        'Ответ в другой чат пока поддержан только для личных чатов',
+      );
+    }
   }
 
   void _clearSelection() {
@@ -3301,6 +6380,13 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   void _copySelectedMessages() {
+    if (_hasProtectedContent) {
+      GlassToastService().show(
+        context,
+        'Копирование и пересылка запрещены в этом канале',
+      );
+      return;
+    }
     final selected = _getOrderedSelectedMessages();
     if (selected.isEmpty) return;
     final text = selected
@@ -3329,9 +6415,7 @@ class _ChannelScreenState extends State<ChannelScreen>
     final selected = _getOrderedSelectedMessages();
     if (selected.isEmpty) return;
     _clearSelection();
-    for (final msg in selected) {
-      _confirmDeleteMessage(msg);
-    }
+    _deleteMessagesWithSheet(selected);
   }
 
   void _handleMessagePointerDown({
@@ -3400,7 +6484,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           _touchVelocityY = _touchVelocityY * 0.35 + instantVy * 0.65;
           // Fast vertical scroll on mobile dismisses keyboard & emoji panel
           if (_touchVelocityY > 1250.0 && totalDy > 42.0 && totalDy > totalDx * 1.8) {
-            final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+            final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
             if (isKeyboardOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
               _dismissedOnCurrentTouch = true;
               _dismissKeyboardAndEmoji();
@@ -3477,7 +6561,7 @@ class _ChannelScreenState extends State<ChannelScreen>
           !_isSelectionMode) {
         final dist = (event.position - downPos).distance;
         if (dist < 12.0) {
-          final isKeyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+          final isKeyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
           if (isKeyboardOpen || _showEmojiPanel || _inputFocusNode.hasFocus) {
             _dismissKeyboardAndEmoji();
           }
@@ -3532,8 +6616,8 @@ class _ChannelScreenState extends State<ChannelScreen>
   }
 
   int? _findFeedIndexAtGlobalY(double globalY) {
-    for (int i = 0; i < _messages.length; i++) {
-      final msg = _messages[i];
+    for (int i = 0; i < _feedItems.length; i++) {
+      final msg = _feedItemPrimaryMessage(_feedItems[i]);
       final key = _messageKeys[msg.id] ??
           (msg.localId != null ? _messageKeys[msg.localId!] : null);
       final ctx = key?.currentContext;
@@ -3556,12 +6640,17 @@ class _ChannelScreenState extends State<ChannelScreen>
     final int high = math.max(startIdx, currentIndex);
     final nextIds = Set<String>.from(_dragSelectBaselineIds);
     for (int i = low; i <= high; i++) {
-      if (i < 0 || i >= _messages.length) continue;
-      final id = _messages[i].id;
-      if (_dragSelectTargetState) {
-        nextIds.add(id);
-      } else {
-        nextIds.remove(id);
+      if (i < 0 || i >= _feedItems.length) continue;
+      final item = _feedItems[i];
+      final ids = item is FeedAlbumItem
+          ? item.album.items.map((m) => m.id)
+          : [_feedItemPrimaryMessage(item).id];
+      for (final id in ids) {
+        if (_dragSelectTargetState) {
+          nextIds.add(id);
+        } else {
+          nextIds.remove(id);
+        }
       }
     }
     if (nextIds.length != _selectedMessageIds.length ||
@@ -3575,8 +6664,38 @@ class _ChannelScreenState extends State<ChannelScreen>
     }
   }
 
-  Widget _buildMessageInput() {
-    return ChatInputBar(
+  Widget _buildBottomBar(String displayName) {
+    final bar = ChannelBottomCapsuleBar(
+      channelId: widget.channelId,
+      channelName: displayName,
+      myRole: _myRole,
+      isMember: _isMember,
+      canPostInChannel: _canPostInChannel,
+      isMuted: _isMuted,
+      linkedChatId: _linkedChatId,
+      linkedChatName: _linkedChat?.name,
+      linkedChatAvatar: _linkedChat?.avatarUrl,
+      isSilentBroadcast: _isSilentBroadcast,
+      onToggleSilentBroadcast: (silent) {
+        unawaited(_setSilentBroadcast(silent));
+      },
+      onMuteChanged: (newMuted) {
+        setState(() => _isMuted = newMuted);
+      },
+      onSubscribed: (joinedChat) {
+        if (!mounted) return;
+        setState(() {
+          _isMember = true;
+          if (_myRole == 'guest') {
+            _myRole = 'subscriber';
+          }
+          if (joinedChat != null && joinedChat.name.isNotEmpty) {
+            _channelName = joinedChat.name;
+          }
+        });
+        unawaited(_refreshChannelDetails());
+        unawaited(_markMessagesAsRead());
+      },
       controller: _messageController,
       focusNode: _inputFocusNode,
       hintText: AppLocalizations.of(context)?.translate('channel_write_post') ??
@@ -3589,13 +6708,38 @@ class _ChannelScreenState extends State<ChannelScreen>
       quoteOffset: _quoteOffset,
       quoteLength: _quoteLength,
       onCancelReply: _cancelReply,
-      onTapReply: _replyToMessage != null ? () => _scrollToMessage(_replyToMessage!.id) : null,
+      onTapReply: _replyToMessage != null
+          ? () => _scrollToMessage(_replyToMessage!.id)
+          : null,
+      attachedFiles: _attachedFiles,
+      attachedFileNames: _attachedFileNames,
+      onRemoveAttachment: (index) {
+        setState(() {
+          if (index >= 0 && index < _attachedFiles.length) {
+            _attachedFiles.removeAt(index);
+          }
+          if (index >= 0 && index < _attachedFileNames.length) {
+            _attachedFileNames.removeAt(index);
+          }
+        });
+      },
       isEditing: _isEditing,
       onCancelEditing: _cancelEditing,
       onEditLastMessage: _editLastOwnMessage,
       isEmojiPanelOpen: _showEmojiPanel && !_isKeyboardRising,
       onTapInputWhenEmojiOpen: _onEmojiToggle,
       onEmoji: _onEmojiToggle,
+      forwardPreviewBanner: _stagedForward != null
+          ? ForwardPreviewBar(
+              payload: _stagedForward!,
+              onTapOptions: _openStagedForwardOptions,
+              onCancel: () => setState(() => _stagedForward = null),
+            )
+          : null,
+      scheduledCount: _scheduledCount,
+      onOpenScheduled: _openScheduledMessages,
+      onSendLongPress: _handleSendLongPress,
+      onAttach: _showAttachmentPicker,
       onSend: _sendMessage,
       onSendDetailed: (cleanText, entities, linkPreviewOptions, invertMedia) {
         _sendMessage(
@@ -3615,6 +6759,126 @@ class _ChannelScreenState extends State<ChannelScreen>
       onVoiceRecordCancel: _onVoiceRecordCancel,
       currentUserId: _currentUserId,
       isSending: _isSending,
+      linkPreviewOptions: _linkPreviewOptions,
+      onLinkPreviewOptionsChanged: (opts) {
+        setState(() => _linkPreviewOptions = opts);
+      },
+      invertMedia: _invertMedia,
+      onInvertMediaChanged: (val) {
+        setState(() => _invertMedia = val);
+      },
+    );
+
+    if (!_canPostInChannel) return bar;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListenableBuilder(
+          listenable: _inlineQueryController,
+          builder: (ctx, _) {
+            if (!_inlineQueryController.isActive) {
+              return const SizedBox.shrink();
+            }
+            return InlineResultsPopup(
+              botUsername: _inlineQueryController.activeBotUsername ?? '',
+              query: _inlineQueryController.query,
+              response: _inlineQueryController.response,
+              isLoading: _inlineQueryController.isLoading,
+              isLoadingMore: _inlineQueryController.isLoadingMore,
+              onClose: _inlineQueryController.clear,
+              onLoadMore: () => _inlineQueryController.loadMore(
+                chatId: widget.channelId,
+                chatType: 'channel',
+              ),
+              onTapHeaderButton: (btn) =>
+                  _handleInlinePopupHeaderButtonTap(ctx, btn),
+              onSelectResult: (item) async {
+                final ok = await _inlineQueryController.sendSelectedResult(
+                  chatId: widget.channelId,
+                  result: item,
+                  replyToMessageId: _replyToMessage?.id,
+                  isSilent: _isSilentBroadcast,
+                );
+                if (!ctx.mounted) return;
+                if (ok) {
+                  _suppressDraftSave = true;
+                  try {
+                    if (_replyToMessage != null && mounted) {
+                      setState(() {
+                        _replyToMessage = null;
+                        _pendingDraftReplyId = null;
+                        _isQuote = false;
+                        _quoteText = null;
+                        _quoteOffset = 0;
+                        _quoteLength = 0;
+                      });
+                    }
+                    _messageController.clear();
+                    _inlineQueryController.clear();
+                  } finally {
+                    _suppressDraftSave = false;
+                  }
+                  DraftService().clearLocalDraftOnSend(_draftKey);
+                } else {
+                  GlassToastService().show(
+                    ctx,
+                    'Не удалось отправить результат',
+                  );
+                }
+              },
+            );
+          },
+        ),
+        if (_activeMentionQuery != null && !_inlineQueryController.isActive)
+          MentionAndBotPopup(
+            query: _activeMentionQuery!,
+            isAtMessageStart: _mentionIsAtStart,
+            participants: _participants
+                .where((p) => p.id != _currentUserId && p.username.isNotEmpty)
+                .map(
+                  (p) {
+                    final isBot = p.isBot ||
+                        p.username.toLowerCase().endsWith('bot') ||
+                        p.username.toLowerCase() == 'botmother' ||
+                        p.username.toLowerCase() == 'walt';
+                    final rawName =
+                        p.displayName.isNotEmpty ? p.displayName : p.username;
+                    final displayName = !isBot
+                        ? ContactsService.resolvePeerName(
+                            p.id,
+                            rawName,
+                            isBot: isBot,
+                          )
+                        : rawName;
+                    final avatarUrl = !isBot
+                        ? ContactsService.resolvePeerAvatarUrl(
+                            p.id,
+                            p.avatarUrl,
+                            isBot: isBot,
+                          )
+                        : p.avatarUrl;
+                    return MentionCandidate(
+                      id: p.id,
+                      username: p.username,
+                      displayName: displayName,
+                      avatarUrl: avatarUrl,
+                      isBot: isBot,
+                    );
+                  },
+                )
+                .toList(),
+            inlineBots: _inlineDirectoryBots,
+            onSelectMention: (cand) => _applyMentionSelection(cand.username),
+            onSelectInlineBot: (bot) {
+              if (bot.username != null && bot.username!.isNotEmpty) {
+                _applyMentionSelection(bot.username!);
+              }
+            },
+            onClose: () => setState(() => _activeMentionQuery = null),
+          ),
+        bar,
+      ],
     );
   }
 
@@ -3628,16 +6892,11 @@ class _ChannelScreenState extends State<ChannelScreen>
           await _videoRecorderService.isPermanentlyDenied();
       if (permanentlyDenied) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                context.l10n.translate('chat_video_note_permission_denied'),
-              ),
-              action: SnackBarAction(
-                label: context.l10n.translate('settings_title'),
-                onPressed: () => openAppSettings(),
-              ),
-            ),
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_video_note_permission_denied'),
+            actionLabel: context.l10n.translate('settings_title'),
+            onAction: () => openAppSettings(),
           );
         }
         return;
@@ -3646,29 +6905,21 @@ class _ChannelScreenState extends State<ChannelScreen>
       final granted = await _videoRecorderService.requestPermissions();
       if (!granted) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                context.l10n.translate('chat_video_note_permission_denied'),
-              ),
-              action: SnackBarAction(
-                label: context.l10n.translate('settings_title'),
-                onPressed: () => openAppSettings(),
-              ),
-            ),
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_video_note_permission_denied'),
+            actionLabel: context.l10n.translate('settings_title'),
+            onAction: () => openAppSettings(),
           );
         }
         return;
       }
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_video_note_hold_hint'),
-            ),
-            duration: const Duration(seconds: 3),
-          ),
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_video_note_hold_hint'),
+          duration: const Duration(seconds: 3),
         );
       }
       return;
@@ -3690,22 +6941,15 @@ class _ChannelScreenState extends State<ChannelScreen>
       setState(() => _isVideoRecording = false);
       final isPermDenied =
           _videoRecorderService.errorMessage == 'permission_denied';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isPermDenied
+      GlassToastService().show(
+        context,
+        isPermDenied
                 ? context.l10n.translate('chat_video_note_permission_denied')
                 : (_videoRecorderService.errorMessage ??
                     context.l10n
                         .translate('chat_video_note_permission_denied')),
-          ),
-          action: isPermDenied
-              ? SnackBarAction(
-                  label: context.l10n.translate('settings_title'),
-                  onPressed: () => openAppSettings(),
-                )
-              : null,
-        ),
+        actionLabel: context.l10n.translate('settings_title'),
+        onAction: () => openAppSettings(),
       );
     }
   }
@@ -3739,13 +6983,10 @@ class _ChannelScreenState extends State<ChannelScreen>
   void _onVideoRecordingTooShort() {
     setState(() => _isVideoRecording = false);
     HapticFeedback.selectionClick();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          context.l10n.translate('chat_video_note_too_short'),
-        ),
-        duration: const Duration(seconds: 2),
-      ),
+    GlassToastService().show(
+      context,
+      context.l10n.translate('chat_video_note_too_short'),
+      duration: const Duration(seconds: 2),
     );
   }
 
@@ -3764,16 +7005,11 @@ class _ChannelScreenState extends State<ChannelScreen>
           await _voiceRecorderService.isPermanentlyDenied();
       if (isPermanentlyDenied) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                context.l10n.translate('chat_voice_permission_denied'),
-              ),
-              action: SnackBarAction(
-                label: context.l10n.translate('settings_title'),
-                onPressed: () => openAppSettings(),
-              ),
-            ),
+          GlassToastService().show(
+            context,
+            context.l10n.translate('chat_voice_permission_denied'),
+            actionLabel: context.l10n.translate('settings_title'),
+            onAction: () => openAppSettings(),
           );
         }
         return;
@@ -3781,13 +7017,10 @@ class _ChannelScreenState extends State<ChannelScreen>
       final granted = await _voiceRecorderService.requestPermissions();
       if (!granted) return;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_video_note_hold_hint'),
-            ),
-            duration: const Duration(seconds: 3),
-          ),
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_video_note_hold_hint'),
+          duration: const Duration(seconds: 3),
         );
       }
       return;
@@ -3837,9 +7070,6 @@ class _ChannelScreenState extends State<ChannelScreen>
 
   Future<void> _sendVoiceMessage(VoiceRecordResult result) async {
     final file = result.file;
-    final voiceLabel =
-        AppLocalizations.of(context)?.translate('chat_voice_message') ??
-            'Voice message';
     if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
       debugPrint('Voice file is empty or does not exist');
       return;
@@ -3850,180 +7080,57 @@ class _ChannelScreenState extends State<ChannelScreen>
     final replyQuoteText = _quoteText;
     final replyQuoteOffset = _quoteOffset;
     final replyQuoteLength = _quoteLength;
+    final channelTitle =
+        _channelName.isNotEmpty ? _channelName : widget.channelName;
+
+    if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+        _showScrollDownFab = false;
+        _updateFeedItems();
+      });
+    }
     _cancelReply();
 
-    final syncService = SyncService();
-    String? pendingLocalId;
-    DbMessage? pendingMsg;
-
     try {
-      final fileName = kIsWeb
-          ? 'voice_${DateTime.now().millisecondsSinceEpoch}.webm'
-          : file.path.split(Platform.pathSeparator).last;
-      try {
-        pendingMsg = await syncService.createPendingMessage(
-          chatId: widget.channelId,
-          senderId: _currentUserId ?? '',
-          content: voiceLabel,
-          messageType: 'voice',
-          fileUrl: file.path,
-          fileName: fileName,
-          replyToMessageId: replyTo?.id,
-          isQuote: replyIsQuote,
-          quoteText: replyQuoteText,
-          quoteOffset: replyQuoteOffset,
-          quoteLength: replyQuoteLength,
-          replyToSenderId: replyTo?.senderId,
-          replyToSenderName: replyTo?.senderName,
-          replyToContent: replyTo?.content,
-          replyToMessageType: replyTo?.messageType ?? 'text',
-          waveform: result.waveform,
-          duration: result.duration.inSeconds,
-        );
-      } catch (e) {
-        debugPrint('SyncService createPendingMessage voice error in channel: $e');
-      }
-
-      if (pendingMsg != null && mounted) {
-        pendingLocalId = pendingMsg.localId;
-        final profileTheme = context.read<ProfileThemeProvider>();
-        var message = Message.fromDbMessage(pendingMsg).copyWith(
-          waveform: result.waveform,
-          duration: result.duration.inSeconds,
-        );
-        if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
-          message = message.copyWith(
-            replyInfo: ReplyInfo(
-              messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
-              content: replyTo.content,
-              messageType: replyTo.messageType,
-              entities: replyTo.entities,
-              nameColorPresetId: isReplyToMe
-                  ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
-              replyStripStyle: isReplyToMe
-                  ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
-            ),
-          );
-        }
-        if (mounted) {
-          setState(() {
-            _messages.insert(0, message);
-          });
-          _scrollToBottom();
-        }
-      }
-
-      setState(() => _isUploading = true);
-      final uploadResult = await _fileService.uploadFile(
-        file,
-        onProgress: (progress) {
-          if (mounted) _uploadProgressNotifier.value = progress;
-        },
-      );
-
-      final effectiveDuration = uploadResult.duration > 0
-          ? uploadResult.duration
-          : result.duration.inSeconds;
-
-      final sendResult = await ChatService.sendMessage(
+      await MediaSendCoordinator.instance.enqueueVoiceNote(
         chatId: widget.channelId,
-        content: voiceLabel,
-        messageType: 'voice',
-        localId: pendingLocalId,
-        fileUrl: uploadResult.url,
-        fileName: uploadResult.fileName,
-        mediaPayload: uploadResult.toMediaPayload(),
+        audioFile: file,
+        durationSeconds: result.duration.inSeconds,
+        waveform: result.waveform,
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,
         quoteText: replyQuoteText,
         quoteOffset: replyQuoteOffset,
         quoteLength: replyQuoteLength,
-        waveform: result.waveform,
-        duration: effectiveDuration,
+        replyToSenderId: replyTo != null ? '0' : null,
+        replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+          chatName: channelTitle,
+          chatType: 'channel',
+        ),
+        replyToContent: replyTo?.content,
+        replyToMessageType: replyTo?.messageType ?? 'text',
+        isSilent: _isSilentBroadcast,
+        senderId: _currentUserId,
       );
-
-      if (sendResult['success'] == true) {
-        if (!kIsWeb) {
-          await MediaCacheManager.instance
-              .seedCacheFromFile(uploadResult.url, file);
-        }
-        final sentMessage = sendResult['message'];
-        final serverId = sentMessage is Message ? sentMessage.id : null;
-        if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId,
-              remoteFileUrl: uploadResult.url);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                if (sentMessage is Message) {
-                  _messages[idx] = sentMessage.copyWith(
-                    localId: pendingLocalId,
-                    replyInfo: _messages[idx].replyInfo,
-                    waveform: sentMessage.waveform ?? _messages[idx].waveform,
-                    duration: sentMessage.duration ?? effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                } else {
-                  _messages[idx] = _messages[idx].copyWith(
-                    id: serverId,
-                    sendStatus: 1,
-                    duration: effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                }
-              }
-            });
-          }
-        }
-      } else {
-        if (pendingLocalId != null) {
-          await syncService.markMessageFailed(pendingLocalId);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-              }
-            });
-          }
-        }
-      }
     } catch (e) {
       debugPrint('Voice message send error in channel: $e');
-      if (pendingLocalId != null) {
-        await syncService.markMessageFailed(pendingLocalId);
-        if (mounted) {
-          setState(() {
-            final idx =
-                _messages.indexWhere((m) => m.localId == pendingLocalId);
-            if (idx != -1) {
-              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-            }
-          });
-        }
-      }
-    } finally {
       if (mounted) {
-        setState(() {
-          _isUploading = false;
-          _uploadProgressNotifier.value = 0.0;
-        });
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_upload_error'),
+        );
       }
     }
   }
 
   Future<void> _sendRoundVideoMessage(File file) async {
-    final videoNoteLabel =
-        AppLocalizations.of(context)?.translate('chat_video_note') ??
-            'Video message';
     if (!kIsWeb && (!await file.exists() || await file.length() == 0)) {
       debugPrint('Video file is empty or does not exist');
       return;
@@ -4036,182 +7143,51 @@ class _ChannelScreenState extends State<ChannelScreen>
     final replyQuoteText = _quoteText;
     final replyQuoteOffset = _quoteOffset;
     final replyQuoteLength = _quoteLength;
+    final channelTitle =
+        _channelName.isNotEmpty ? _channelName : widget.channelName;
+
+    if (_isDetachedHistoryWindow && _detachedLatestBackup.isNotEmpty) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(_detachedLatestBackup);
+        _hasMoreMessages = _detachedBackupHasMoreOlder;
+        _isDetachedHistoryWindow = false;
+        _hasMoreNewerMessages = false;
+        _detachedLatestBackup = [];
+        _showScrollDownFab = false;
+        _updateFeedItems();
+      });
+    }
     _cancelReply();
 
-    final syncService = SyncService();
-    String? pendingLocalId;
-    DbMessage? pendingMsg;
-
     try {
-      final fileName = kIsWeb
-          ? 'video_note_${DateTime.now().millisecondsSinceEpoch}.webm'
-          : file.path.split(Platform.pathSeparator).last;
-      try {
-        pendingMsg = await syncService.createPendingMessage(
-          chatId: widget.channelId,
-          senderId: _currentUserId ?? '',
-          content: videoNoteLabel,
-          messageType: 'video',
-          fileUrl: file.path,
-          fileName: fileName,
-          isRound: true,
-          duration: recordedDurationSec,
-          replyToMessageId: replyTo?.id,
-          isQuote: replyIsQuote,
-          quoteText: replyQuoteText,
-          quoteOffset: replyQuoteOffset,
-          quoteLength: replyQuoteLength,
-          replyToSenderId: replyTo?.senderId,
-          replyToSenderName: replyTo?.senderName,
-          replyToContent: replyTo?.content,
-          replyToMessageType: replyTo?.messageType ?? 'text',
-        );
-      } catch (e) {
-        debugPrint('SyncService createPendingMessage video error in channel: $e');
-      }
-
-      if (pendingMsg != null && mounted) {
-        pendingLocalId = pendingMsg.localId;
-        final profileTheme = context.read<ProfileThemeProvider>();
-        var message = Message.fromDbMessage(pendingMsg).copyWith(
-          duration: recordedDurationSec,
-        );
-        if (replyTo != null) {
-          final isReplyToMe = replyTo.senderId == _currentUserId;
-          message = message.copyWith(
-            replyInfo: ReplyInfo(
-              messageId: replyTo.id,
-              senderId: replyTo.senderId,
-              senderName: replyTo.senderName,
-              content: replyTo.content,
-              messageType: replyTo.messageType,
-              entities: replyTo.entities,
-              nameColorPresetId: isReplyToMe
-                  ? profileTheme.currentNameColorPreset.id
-                  : (replyTo.senderNameColorId ?? 'name_red'),
-              replyStripStyle: isReplyToMe
-                  ? profileTheme.currentStripStyle.name
-                  : (replyTo.senderReplyStripStyle ?? 'solid'),
-            ),
-          );
-        }
-        if (mounted) {
-          setState(() {
-            _messages.insert(0, message);
-          });
-          _scrollToBottom();
-        }
-      }
-
-      setState(() => _isUploading = true);
-      final uploadResult = await _fileService.uploadFileChunked(
-        file,
-        onProgress: (progress) {
-          if (mounted) _uploadProgressNotifier.value = progress;
-        },
-      );
-
-      final effectiveDuration = uploadResult.duration > 0
-          ? uploadResult.duration
-          : recordedDurationSec;
-
-      final result = await ChatService.sendMessage(
+      await MediaSendCoordinator.instance.enqueueRoundVideoNote(
         chatId: widget.channelId,
-        content: videoNoteLabel,
-        messageType: 'video',
-        localId: pendingLocalId,
-        fileUrl: uploadResult.url,
-        fileName: uploadResult.fileName,
-        mediaPayload: uploadResult.toMediaPayload(),
-        isRound: true,
-        duration: effectiveDuration,
+        videoFile: file,
+        durationSeconds: recordedDurationSec,
         replyToMessageId: replyTo?.id,
         isQuote: replyIsQuote,
         quoteText: replyQuoteText,
         quoteOffset: replyQuoteOffset,
         quoteLength: replyQuoteLength,
+        replyToSenderId: replyTo != null ? '0' : null,
+        replyToSenderName: replyTo?.resolveEffectiveAuthorTitle(
+          chatName: channelTitle,
+          chatType: 'channel',
+        ),
+        replyToContent: replyTo?.content,
+        replyToMessageType: replyTo?.messageType ?? 'text',
+        isSilent: _isSilentBroadcast,
+        senderId: _currentUserId,
       );
-
-      if (result['success'] == true) {
-        if (!kIsWeb) {
-          await MediaCacheManager.instance
-              .seedCacheFromFile(uploadResult.url, file);
-        }
-        final sentMessage = result['message'];
-        final serverId = sentMessage is Message ? sentMessage.id : null;
-        if (serverId != null && serverId.isNotEmpty && pendingLocalId != null) {
-          await syncService.confirmMessageSent(pendingLocalId, serverId,
-              remoteFileUrl: uploadResult.url);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                if (sentMessage is Message) {
-                  _messages[idx] = sentMessage.copyWith(
-                    localId: pendingLocalId,
-                    replyInfo: _messages[idx].replyInfo,
-                    sendStatus: 1,
-                    isRound: true,
-                    duration: sentMessage.duration ?? effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                } else {
-                  _messages[idx] = _messages[idx].copyWith(
-                    id: serverId,
-                    sendStatus: 1,
-                    isRound: true,
-                    duration: effectiveDuration,
-                    fileUrl: uploadResult.url,
-                  );
-                }
-              }
-            });
-          }
-        }
-      } else {
-        if (pendingLocalId != null) {
-          await syncService.markMessageFailed(pendingLocalId);
-          if (mounted) {
-            setState(() {
-              final idx =
-                  _messages.indexWhere((m) => m.localId == pendingLocalId);
-              if (idx != -1) {
-                _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-              }
-            });
-          }
-        }
-      }
     } catch (e) {
       debugPrint('Error sending round video message in channel: $e');
-      if (pendingLocalId != null) {
-        await syncService.markMessageFailed(pendingLocalId);
-        if (mounted) {
-          setState(() {
-            final idx =
-                _messages.indexWhere((m) => m.localId == pendingLocalId);
-            if (idx != -1) {
-              _messages[idx] = _messages[idx].copyWith(sendStatus: 2);
-            }
-          });
-        }
-      }
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              context.l10n.translate('chat_upload_error'),
-            ),
-          ),
+        GlassToastService().show(
+          context,
+          context.l10n.translate('chat_upload_error'),
         );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isUploading = false;
-          _uploadProgressNotifier.value = 0.0;
-        });
       }
     }
   }

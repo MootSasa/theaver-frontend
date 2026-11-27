@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
-import 'package:provider/provider.dart';
 import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/blur_utils.dart';
@@ -13,6 +13,7 @@ import '../../utils/blur_utils.dart';
 class ReplyKeyboardPanel extends StatefulWidget {
   final List<List<Map<String, dynamic>>> rows;
   final ValueChanged<String> onButtonPressed;
+  final ValueChanged<Map<String, dynamic>>? onButtonAction;
   final bool resizeKeyboard;
   final bool isOpen;
 
@@ -20,6 +21,7 @@ class ReplyKeyboardPanel extends StatefulWidget {
     super.key,
     required this.rows,
     required this.onButtonPressed,
+    this.onButtonAction,
     this.resizeKeyboard = true,
     this.isOpen = true,
   });
@@ -98,37 +100,40 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
         final ext = theme.extension<TheavThemeExtension>();
         final colorScheme = theme.colorScheme;
         final bottomPadding = MediaQuery.of(context).padding.bottom;
-        final glassProvider = context.watch<LiquidGlassProvider?>();
+        final glassProvider = LiquidGlassProvider.maybeOf(context);
         final glassEnabled = glassProvider?.enabled ?? false;
         final isLite = glassProvider?.isLite ?? false;
 
         final Widget gridContent = FadeTransition(
           opacity: _innerFade,
-          child: SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(10, 8, 10, 8 + bottomPadding),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (int r = 0; r < widget.rows.length; r++) ...[
-                  if (r > 0) const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      for (int c = 0; c < widget.rows[r].length; c++) ...[
-                        if (c > 0) const SizedBox(width: 6),
-                        Expanded(
-                          child: _buildReplyButton(
-                            context,
-                            widget.rows[r][c],
-                            theme,
-                            ext,
-                            colorScheme,
+          child: ScrollConfiguration(
+            behavior: const MaterialScrollBehavior().copyWith(overscroll: false),
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(10, 8, 10, 8 + bottomPadding),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (int r = 0; r < widget.rows.length; r++) ...[
+                    if (r > 0) const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        for (int c = 0; c < widget.rows[r].length; c++) ...[
+                          if (c > 0) const SizedBox(width: 6),
+                          Expanded(
+                            child: _buildReplyButton(
+                              context,
+                              widget.rows[r][c],
+                              theme,
+                              ext,
+                              colorScheme,
+                            ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
-                  ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         );
@@ -143,7 +148,7 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
             isLiteOverride: isLite,
           );
           panelSurface = Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: widget.resizeKeyboard ? 220 : 260,
@@ -155,14 +160,21 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
             ),
           );
         } else {
-          panelSurface = Container(
+          final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+          final bg = BlurUtils.resolveMaterialHudColor(
+            ext?.glassSurfaceColor ?? colorScheme.surfaceContainerLow,
+            isDark: isDark,
+            blurEnabled: blurEnabled,
+            darkAlpha: 0.88,
+            lightAlpha: 0.92,
+          );
+          final Widget surfaceBox = Container(
             width: double.infinity,
             constraints: BoxConstraints(
               maxHeight: widget.resizeKeyboard ? 220 : 260,
             ),
             decoration: BoxDecoration(
-              color: ext?.glassSurfaceColor ??
-                  colorScheme.surfaceContainerLow.withValues(alpha: 0.95),
+              color: bg,
               border: Border(
                 top: BorderSide(
                   color: ext?.glassBorderColor ??
@@ -171,16 +183,21 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
                 ),
               ),
             ),
-            child: ClipRect(
-              child: BackdropFilter.grouped(
-                filter: BlurUtils.createDownsampledBlur(15),
-                child: gridContent,
-              ),
-            ),
+            child: gridContent,
+          );
+          panelSurface = ClipRect(
+            child: blurEnabled
+                ? BackdropFilter.grouped(
+                    filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+                    child: surfaceBox,
+                  )
+                : surfaceBox,
           );
         }
 
         return ClipRect(
+          clipBehavior:
+              _controller.value < 0.999 ? Clip.hardEdge : Clip.none,
           child: Align(
             alignment: Alignment.topCenter,
             heightFactor: _heightFactor.value,
@@ -202,6 +219,40 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
     ColorScheme colorScheme,
   ) {
     final text = button['text']?.toString() ?? '';
+    final isWebApp = button['web_app'] is Map &&
+        (button['web_app']['url']?.toString().isNotEmpty ?? false);
+    final isLocation = button['request_location'] == true;
+    final isContact = button['request_contact'] == true;
+    final isPoll = button['request_poll'] != null;
+    final hasSpecialAction = isWebApp || isLocation || isContact || isPoll;
+
+    Widget? leadingIcon;
+    if (isWebApp) {
+      leadingIcon = iconoir.AppWindow(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    } else if (isLocation) {
+      leadingIcon = iconoir.MapPin(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    } else if (isContact) {
+      leadingIcon = iconoir.Phone(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    } else if (isPoll) {
+      leadingIcon = iconoir.StatsReport(
+        width: 15,
+        height: 15,
+        color: colorScheme.primary,
+      );
+    }
+
     return SizedBox(
       height: 42,
       child: Material(
@@ -209,7 +260,15 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
         borderRadius: BorderRadius.circular(12),
         child: InkWell(
           borderRadius: BorderRadius.circular(12),
-          onTap: text.isEmpty ? null : () => widget.onButtonPressed(text),
+          onTap: text.isEmpty
+              ? null
+              : () {
+                  if (hasSpecialAction && widget.onButtonAction != null) {
+                    widget.onButtonAction!(button);
+                  } else {
+                    widget.onButtonPressed(text);
+                  }
+                },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10),
             alignment: Alignment.center,
@@ -221,14 +280,26 @@ class _ReplyKeyboardPanelState extends State<ReplyKeyboardPanel>
                 width: 0.8,
               ),
             ),
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: colorScheme.onSurface,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (leadingIcon != null) ...[
+                  leadingIcon,
+                  const SizedBox(width: 6),
+                ],
+                Flexible(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

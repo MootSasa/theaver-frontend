@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import '../../models/theav_theme.dart';
 import '../../l10n/app_localizations.dart';
+import '../design_system/theav_design_system.dart';
 import 'chat_preview_card.dart';
 
 /// Modal bottom sheet allowing users to inspect and apply/save an imported theme.
@@ -23,13 +24,9 @@ class ThemePreviewSheet extends StatelessWidget {
     required VoidCallback onApply,
     VoidCallback? onSaveToCloud,
   }) {
-    return showModalBottomSheet(
+    return showTheavModalSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      padding: const EdgeInsets.fromLTRB(0, 6, 0, 20),
       builder: (_) => ThemePreviewSheet(
         theme: theme,
         onApply: onApply,
@@ -43,24 +40,11 @@ class ThemePreviewSheet extends StatelessWidget {
     final l10n = context.l10n;
     final colorScheme = Theme.of(context).colorScheme;
 
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.only(top: 12, bottom: 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Top drag handle
-            Center(
-              child: Container(
-                width: 38,
-                height: 4.5,
-                decoration: BoxDecoration(
-                  color: Colors.grey.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 6),
 
             // Theme Name & Author Header
             Padding(
@@ -188,7 +172,6 @@ class ThemePreviewSheet extends StatelessWidget {
             ),
           ],
         ),
-      ),
     );
   }
 }

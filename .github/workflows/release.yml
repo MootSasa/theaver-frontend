@@ -50,7 +50,7 @@ concurrency:
 
 jobs:
   prepare-release:
-    name: 🏷️ Calculate Semver & Changelog
+    name: Calculate Semver & Changelog
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.calc.outputs.version }}
@@ -73,6 +73,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Validate Changelog Fragments
+        run: python3 scripts/calculate_release.py --validate-fragments
+
       - name: Calculate Version and Release Notes
         id: calc
         run: |
@@ -84,17 +87,19 @@ jobs:
             fi
           fi
           
-          python3 scripts/calculate_release.py $ARGS --github-output --output-file release_notes.md
+          python3 scripts/calculate_release.py $ARGS --github-output --output-file release_notes.md --github-notes-file github_release_notes.md
 
       - name: Upload Release Notes
         uses: actions/upload-artifact@v4
         with:
           name: release-notes
-          path: release_notes.md
+          path: |
+            release_notes.md
+            github_release_notes.md
           retention-days: 7
 
   build-android:
-    name: 🤖 Build Android APKs
+    name: Build Android APKs
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -129,7 +134,7 @@ jobs:
             mkdir -p ~/.android
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
             echo "$DEBUG_KEYSTORE_B64" | base64 -d > android/app/debug.keystore
-            echo "✅ Restored consistent Android debug keystore"
+            echo "[OK] Restored consistent Android debug keystore"
           fi
           if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$RELEASE_STORE_PASSWORD" ]; then
             echo "$RELEASE_KEYSTORE_B64" | base64 -d > android/app/release-keystore.jks
@@ -137,7 +142,7 @@ jobs:
               "$RELEASE_STORE_PASSWORD" \
               "${RELEASE_KEY_PASSWORD:-$RELEASE_STORE_PASSWORD}" \
               "${RELEASE_KEY_ALIAS:-theaver}" > android/key.properties
-            echo "✅ Restored production Android release keystore & key.properties"
+            echo "[OK] Restored production Android release keystore & key.properties"
           fi
 
       - name: Set up Java 17
@@ -199,9 +204,9 @@ jobs:
           fi
           
           if [ -x "$SDK_DIR/cmake/3.22.1/bin/cmake" ]; then
-            echo "✅ Android CMake 3.22.1 ready: $($SDK_DIR/cmake/3.22.1/bin/cmake --version | head -n 1)"
+            echo "[OK] Android CMake 3.22.1 ready: $($SDK_DIR/cmake/3.22.1/bin/cmake --version | head -n 1)"
           else
-            echo "❌ Failed to setup CMake 3.22.1"
+            echo "[ERROR] Failed to setup CMake 3.22.1"
             exit 1
           fi
 
@@ -214,7 +219,8 @@ jobs:
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           CH="${{ needs.prepare-release.outputs.channel }}"
           BDATE="$(date +'%d.%m.%Y')"
-          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE"
+          GIT_COMMIT="${GITHUB_SHA:0:8}"
+          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=$GIT_COMMIT"
           
           echo "Building Universal APK (v$VER #$BUILD)..."
           flutter build apk --release --build-name="$VER" --build-number="$BUILD" $DEFINES
@@ -252,7 +258,7 @@ jobs:
           retention-days: 7
 
   build-windows:
-    name: 🪟 Build Windows x64
+    name: Build Windows x64
     needs: prepare-release
     runs-on: windows-latest
     steps:
@@ -293,7 +299,8 @@ jobs:
           $ver = "${{ needs.prepare-release.outputs.version }}"
           $build = "${{ needs.prepare-release.outputs.build_number }}"
           $bdate = (Get-Date -Format "dd.MM.yyyy")
-          flutter build windows --release --dart-define="APP_VERSION=$ver" --dart-define="APP_BUILD_NUMBER=$build" --dart-define="BUILD_DATE=$bdate"
+          $sha = if ($env:GITHUB_SHA -and $env:GITHUB_SHA.Length -ge 8) { $env:GITHUB_SHA.Substring(0, 8) } else { "$env:GITHUB_SHA" }
+          flutter build windows --release --dart-define="APP_VERSION=$ver" --dart-define="APP_BUILD_NUMBER=$build" --dart-define="BUILD_DATE=$bdate" --dart-define="GIT_COMMIT=$sha"
 
       - name: Package Windows Portable ZIP & Setup Installer
         shell: pwsh
@@ -352,7 +359,7 @@ jobs:
 
 
   build-linux:
-    name: 🐧 Build Linux x64
+    name: Build Linux x64
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -405,7 +412,7 @@ jobs:
           VER="${{ needs.prepare-release.outputs.version }}"
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           BDATE="$(date +'%d.%m.%Y')"
-          flutter build linux --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE"
+          flutter build linux --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE" --dart-define=GIT_COMMIT="${GITHUB_SHA:0:8}"
 
       - name: Package & Sign Linux Bundle into tar.gz
         env:
@@ -433,7 +440,7 @@ jobs:
           retention-days: 7
 
   build-macos:
-    name: 🍏 Build macOS Apps
+    name: Build macOS Apps
     needs: prepare-release
     runs-on: macos-latest
     steps:
@@ -461,7 +468,7 @@ jobs:
           VER="${{ needs.prepare-release.outputs.version }}"
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           BDATE="$(date +'%d.%m.%Y')"
-          flutter build macos --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE"
+          flutter build macos --release --dart-define=APP_VERSION="$VER" --dart-define=APP_BUILD_NUMBER="$BUILD" --dart-define=BUILD_DATE="$BDATE" --dart-define=GIT_COMMIT="${GITHUB_SHA:0:8}"
 
       - name: Package Universal and Sliced macOS Bundles
         run: |
@@ -526,7 +533,7 @@ jobs:
           retention-days: 7
 
   build-ios:
-    name: 📱 Build iOS IPA
+    name: Build iOS IPA
     needs: prepare-release
     runs-on: macos-latest
     steps:
@@ -555,7 +562,7 @@ jobs:
           mkdir -p dist/ios
 
           if [ -n "$IOS_P12_BASE64" ] && [ -n "$IOS_MOBILEPROVISION_BASE64" ]; then
-            echo "🔑 Apple signing credentials detected. Setting up temporary keychain..."
+            echo "[INFO] Apple signing credentials detected. Setting up temporary keychain..."
             export CERTIFICATE_PATH="$RUNNER_TEMP/build_cert.p12"
             export PP_PATH="$RUNNER_TEMP/build_pp.mobileprovision"
             KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
@@ -583,11 +590,13 @@ jobs:
             cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
 
             # 4. Build iOS Release Application
-            echo "📱 Building iOS application (v$VER #$BUILD)..."
+            echo "Building iOS application (v$VER #$BUILD)..."
+            BDATE="$(date +'%d.%m.%Y')"
+            DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=${GITHUB_SHA:0:8}"
             flutter pub get
-            flutter build ios --release --build-name="$VER" --build-number="$BUILD" || {
-              echo "⚠️ Signed build failed, trying with --no-codesign..."
-              flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD"
+            flutter build ios --release --build-name="$VER" --build-number="$BUILD" $DEFINES || {
+              echo "[WARN] Signed build failed, trying with --no-codesign..."
+              flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD" $DEFINES
             }
 
             if [ -d "build/ios/iphoneos/Runner.app" ]; then
@@ -598,9 +607,11 @@ jobs:
               rm -rf Payload
             fi
           else
-            echo "ℹ️ No Apple signing secrets provided. Building unsigned IPA for sideloading..."
+            echo "[INFO] No Apple signing secrets provided. Building unsigned IPA for sideloading..."
+            BDATE="$(date +'%d.%m.%Y')"
+            DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=${GITHUB_SHA:0:8}"
             flutter pub get
-            flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD"
+            flutter build ios --release --no-codesign --build-name="$VER" --build-number="$BUILD" $DEFINES
 
             if [ -d "build/ios/iphoneos/Runner.app" ]; then
               mkdir -p Payload
@@ -621,7 +632,7 @@ jobs:
           retention-days: 7
 
   build-web:
-    name: 🌐 Build Web SPA Bundle
+    name: Build Web SPA Bundle
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -655,9 +666,10 @@ jobs:
           BUILD="${{ needs.prepare-release.outputs.build_number }}"
           CH="${{ needs.prepare-release.outputs.channel }}"
           BDATE="$(date +'%d.%m.%Y')"
-          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE"
+          GIT_COMMIT="${GITHUB_SHA:0:8}"
+          DEFINES="--dart-define=APP_VERSION=$VER --dart-define=APP_BUILD_NUMBER=$BUILD --dart-define=BUILD_DATE=$BDATE --dart-define=GIT_COMMIT=$GIT_COMMIT"
 
-          echo "🌐 Building Flutter Web bundle (v$VER #$BUILD, channel: $CH)..."
+          echo "Building Flutter Web bundle (v$VER #$BUILD, channel: $CH)..."
           flutter build web --release --no-web-resources-cdn $DEFINES
 
           rm -f build/web/assets/assets/fonts/AppleColorEmoji*
@@ -679,7 +691,7 @@ jobs:
           retention-days: 7
 
   publish-and-deploy:
-    name: 🚀 Deploy to Storage & Create GitHub Release
+    name: Deploy to Storage & Create GitHub Release
     needs:
       - prepare-release
       - build-android
@@ -769,9 +781,15 @@ jobs:
           find dist/ -type f -exec ls -lh {} + 2>/dev/null || true
           COUNT=$(find dist/ -type f 2>/dev/null | wc -l)
           if [ "$COUNT" -eq 0 ]; then
-            echo "❌ No binary artifacts were successfully built and downloaded. Aborting release."
+            echo "[ERROR] No binary artifacts were successfully built and downloaded. Aborting release."
             exit 1
           fi
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd dist
+          find . -type f ! -name 'SHA256SUMS.txt' | sed 's|^\./||' | sort | xargs sha256sum > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Create GitHub Release & Upload Assets
         uses: softprops/action-gh-release@v2
@@ -779,13 +797,13 @@ jobs:
           tag_name: ${{ needs.prepare-release.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
           name: Theaver ${{ needs.prepare-release.outputs.tag_name }} (${{ needs.prepare-release.outputs.channel }})
-          body_path: release_notes.md
+          body_path: github_release_notes.md
           prerelease: ${{ needs.prepare-release.outputs.is_prerelease == 'true' }}
           draft: false
           files: dist/**/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Deploy to Theaver API & MinIO Storage
+      - name: Deploy to Theaver API & SeaweedFS Storage
         continue-on-error: true
         env:
           THEAVER_API_URL: ${{ secrets.THEAVER_API_URL }}

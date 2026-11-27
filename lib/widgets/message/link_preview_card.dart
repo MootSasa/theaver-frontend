@@ -1,11 +1,10 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../../services/glass_toast_service.dart';
 import '../../services/link_metadata_service.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
 
 /// Interactive Link Preview Card Widget.
 ///
@@ -108,18 +107,8 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
 
   Future<void> _handleTap() async {
     HapticUtils.tap();
-    try {
-      final uri = Uri.parse(_cleanUrl);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        if (!mounted) return;
-        GlassToastService().show(context, 'Не удалось открыть ссылку', icon: Icons.error_outline);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      GlassToastService().show(context, 'Ошибка открытия ссылки', icon: Icons.error_outline);
-    }
+    if (!mounted) return;
+    await LinkOpener.openUrl(context, _cleanUrl);
   }
 
   @override

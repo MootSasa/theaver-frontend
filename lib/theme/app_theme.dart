@@ -238,7 +238,10 @@ class AppTheme {
   }
 
   // === Dynamic TheavTheme application ===
-  static ThemeData fromTheavTheme(TheavTheme theme) {
+  static ThemeData fromTheavTheme(
+    TheavTheme theme, {
+    double messageFontSize = 16.0,
+  }) {
     final base = theme.isDark ? dark() : light();
     final p = theme.palette;
     final colorScheme = theme.isDark
@@ -264,11 +267,22 @@ class AppTheme {
           );
 
     return base.copyWith(
+      pageTransitionsTheme: CustomPageTransitionsTheme.customTheme,
       primaryColor: p.primary,
       indicatorColor: p.primary,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: p.background,
       cardColor: p.surface,
+      inputDecorationTheme: base.inputDecorationTheme.copyWith(
+        fillColor: Color.alphaBlend(
+          p.onSurface.withValues(alpha: theme.isDark ? 0.06 : 0.04),
+          p.surface,
+        ),
+        hintStyle: TextStyle(color: p.subtext.withValues(alpha: 0.75)),
+      ),
+      bottomSheetTheme: base.bottomSheetTheme.copyWith(
+        backgroundColor: p.surface,
+      ),
       appBarTheme: base.appBarTheme.copyWith(
         backgroundColor: p.appBarBackground,
         foregroundColor: p.appBarForeground,
@@ -350,6 +364,7 @@ class AppTheme {
           palette: p,
           wallpaper: theme.wallpaper,
           bubbleRadius: theme.bubbleRadius,
+          messageFontSize: messageFontSize,
         ),
       ],
     );

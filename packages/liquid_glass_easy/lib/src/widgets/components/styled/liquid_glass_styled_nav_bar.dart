@@ -41,7 +41,7 @@ import '../liquid_glass_tab_item.dart'
 import 'liquid_glass_styles.dart';
 
 /// Self-contained, drop-in **styled** animated liquid-glass bottom nav bar —
-/// the iOS-26 "morphing glass pill" bar, but configured through the shared
+/// the "morphing glass pill" bar, but configured through the shared
 /// existing config groups ([LiquidGlassRefraction], [LiquidGlassAppearance],
 /// [LiquidGlassShape]) plus [LiquidGlassMotion] / [LiquidGlassNavBarItemStyle].
 ///
@@ -723,7 +723,7 @@ class _StyledRestPill extends StatelessWidget {
   }
 }
 
-/// Styled animated shell: the iOS-26 "icon highlights through the moving
+/// Styled animated shell: the "icon highlights through the moving
 /// pill" reveal, with icon/label colors + sizes taken from [itemStyle].
 class _StyledNavShell extends StatelessWidget {
   final List<LiquidGlassTabBarItem> items;
@@ -809,21 +809,33 @@ class _StyledNavShell extends StatelessWidget {
     );
 
     final double effBottom = bottom ?? layout.bottomMargin;
+    final double padBottom = effBottom > 0 ? effBottom : 0.0;
+    final double dy = effBottom < 0 ? -effBottom : 0.0;
     if (left != null) {
+      final double padLeft = left! > 0 ? left! : 0.0;
+      final double dx = left! < 0 ? left! : 0.0;
+      Widget placed = Padding(
+        padding: EdgeInsets.only(left: padLeft, bottom: padBottom),
+        child: innerStack,
+      );
+      if (dx != 0.0 || dy != 0.0) {
+        placed = Transform.translate(offset: Offset(dx, dy), child: placed);
+      }
       return Align(
         alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: EdgeInsets.only(left: left!, bottom: effBottom),
-          child: innerStack,
-        ),
+        child: placed,
       );
+    }
+    Widget placed = Padding(
+      padding: EdgeInsets.only(bottom: padBottom),
+      child: innerStack,
+    );
+    if (dy != 0.0) {
+      placed = Transform.translate(offset: Offset(0.0, dy), child: placed);
     }
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: EdgeInsets.only(bottom: effBottom),
-        child: innerStack,
-      ),
+      child: placed,
     );
   }
 

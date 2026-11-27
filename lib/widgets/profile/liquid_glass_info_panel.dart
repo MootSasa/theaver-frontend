@@ -1,17 +1,18 @@
-import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../services/glass_toast_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
+import '../../utils/link_opener.dart';
+import '../design_system/theav_design_system.dart';
+import 'profile_material_surface.dart';
 
 /// Чистая информационная карточка профиля в стиле Telegram (без боковых иконок слева).
 ///
@@ -30,6 +31,9 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   /// Телефон
   final String? phone;
 
+  /// Email (только для собственного профиля)
+  final String? email;
+
   /// О себе (био) или описание группы/канала
   final String? bio;
 
@@ -45,11 +49,20 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   /// Возраст (строка)
   final String? age;
 
+  /// Личная заметка о контакте (видна только владельцу)
+  final String? note;
+
   /// Коллбэк при нажатии на иконку QR-кода справа от username / inviteLink
   final VoidCallback? onQrCodeTap;
 
+  /// Коллбэк при нажатии на иконку редактирования почты
+  final VoidCallback? onEmailTap;
+
   /// Коллбэк при нажатии на иконку календаря справа от даты рождения
   final VoidCallback? onBirthdayTap;
+
+  /// Коллбэк при нажатии на строку заметки
+  final VoidCallback? onNoteTap;
 
   /// Коллбэк при нажатии на @упоминание в био/описании
   final ValueChanged<String>? onMentionTap;
@@ -59,11 +72,13 @@ class LiquidGlassInfoPanel extends StatelessWidget {
 
   /// Локализованные подписи
   final String phoneLabel;
+  final String emailLabel;
   final String bioLabel;
   final String usernameLabel;
   final String inviteLinkLabel;
   final String birthdayLabel;
   final String ageLabel;
+  final String noteLabel;
 
   const LiquidGlassInfoPanel({
     Key? key,
@@ -71,20 +86,26 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     this.isLite = false,
     this.hasColoredTheme = false,
     this.phone,
+    this.email,
     this.bio,
     this.username,
     this.inviteLink,
     this.birthday,
     this.age,
+    this.note,
     this.onQrCodeTap,
+    this.onEmailTap,
     this.onBirthdayTap,
+    this.onNoteTap,
     this.onMentionTap,
     this.phoneLabel = 'телефон',
+    this.emailLabel = 'почта',
     this.bioLabel = 'о себе',
     this.usernameLabel = 'имя пользователя',
     this.inviteLinkLabel = 'ссылка-приглашение',
     this.birthdayLabel = 'дата рождения',
     this.ageLabel = 'лет',
+    this.noteLabel = 'заметка',
   }) : super(key: key);
 
   List<_InfoRowData> _buildRows() {
@@ -96,6 +117,16 @@ class LiquidGlassInfoPanel extends StatelessWidget {
         value: phone!.trim(),
         copyValue: phone!.trim(),
         isRichText: false,
+      ));
+    }
+
+    if (email != null && email!.trim().isNotEmpty) {
+      rows.add(_InfoRowData(
+        label: emailLabel.toLowerCase(),
+        value: email!.trim(),
+        copyValue: email!.trim(),
+        isRichText: false,
+        showEmailButton: onEmailTap != null,
       ));
     }
 
@@ -145,13 +176,22 @@ class LiquidGlassInfoPanel extends StatelessWidget {
       ));
     }
 
+    if (note != null && note!.trim().isNotEmpty) {
+      rows.add(_InfoRowData(
+        label: noteLabel.toLowerCase(),
+        value: note!.trim(),
+        copyValue: note!.trim(),
+        isRichText: false,
+        isNote: true,
+      ));
+    }
+
     return rows;
   }
 
   void _copyToClipboard(BuildContext context, String text, String label) {
     Clipboard.setData(ClipboardData(text: text));
     HapticUtils.selection();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     String copiedMsg = 'Скопировано в буфер обмена';
     try {
       final tr = context.l10n.translate('copied_to_clipboard');
@@ -166,7 +206,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
       iconWidget: iconoir.Copy(
         width: 18,
         height: 18,
-        color: isDark ? Colors.white : Colors.black87,
+        color: context.theav.onSurface,
       ),
       duration: const Duration(seconds: 2),
     );
@@ -221,8 +261,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   }
 
   Widget _buildClassicPanel(BuildContext context, List<_InfoRowData> rows) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark || hasColoredTheme;
+    final mat = ProfileMaterialStyle.of(context);
 
     return Container(
       width: double.infinity,
@@ -230,7 +269,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.06),
+            color: Colors.black.withValues(alpha: mat.isDark ? 0.18 : 0.06),
             blurRadius: 12,
             offset: const Offset(0, 3),
           ),
@@ -238,24 +277,26 @@ class LiquidGlassInfoPanel extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: mat.wrapBlur(
+          sigma: 14.0,
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
             decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0x99262628)
-                  : const Color(0xB3FFFFFF),
+              color: mat.panelFill,
               borderRadius: BorderRadius.circular(22),
               border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.12)
-                    : Colors.black.withValues(alpha: 0.08),
+                color: mat.borderColor,
                 width: 0.5,
               ),
             ),
-            child: _buildRowsColumn(context, rows, isDark: isDark, isGlass: false),
+            child: _buildRowsColumn(
+              context,
+              rows,
+              isDark: mat.isDark,
+              isGlass: false,
+              materialStyle: mat,
+            ),
           ),
         ),
       ),
@@ -267,15 +308,18 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     List<_InfoRowData> rows, {
     required bool isDark,
     required bool isGlass,
+    ProfileMaterialStyle? materialStyle,
   }) {
-    final labelColor = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color(0xFF6C6C70);
-    final valueColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final linkColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
+    final labelColor = materialStyle?.subtext ??
+        (isDark ? Colors.white.withValues(alpha: 0.55) : const Color(0xFF6C6C70));
+    final valueColor = materialStyle?.foreground ??
+        (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final linkColor = materialStyle?.primary ??
+        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
+    final dividerColor = materialStyle?.borderColor ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.08)
+            : Colors.black.withValues(alpha: 0.06));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -288,7 +332,9 @@ class LiquidGlassInfoPanel extends StatelessWidget {
             linkColor: linkColor,
             onCopy: () => _copyToClipboard(context, rows[i].copyValue, rows[i].label),
             onQrCodeTap: rows[i].showQrButton ? onQrCodeTap : null,
+            onEmailTap: rows[i].showEmailButton ? onEmailTap : null,
             onCalendarTap: rows[i].showCalendarButton ? onBirthdayTap : null,
+            onNoteTap: rows[i].isNote ? onNoteTap : null,
             onMentionTap: onMentionTap,
           ),
           if (i < rows.length - 1)
@@ -312,7 +358,9 @@ class _InfoRowData {
   final String copyValue;
   final bool isRichText;
   final bool showQrButton;
+  final bool showEmailButton;
   final bool showCalendarButton;
+  final bool isNote;
 
   const _InfoRowData({
     required this.label,
@@ -320,7 +368,9 @@ class _InfoRowData {
     required this.copyValue,
     this.isRichText = false,
     this.showQrButton = false,
+    this.showEmailButton = false,
     this.showCalendarButton = false,
+    this.isNote = false,
   });
 }
 
@@ -331,7 +381,9 @@ class _InfoRowWidget extends StatelessWidget {
   final Color linkColor;
   final VoidCallback onCopy;
   final VoidCallback? onQrCodeTap;
+  final VoidCallback? onEmailTap;
   final VoidCallback? onCalendarTap;
+  final VoidCallback? onNoteTap;
   final ValueChanged<String>? onMentionTap;
 
   const _InfoRowWidget({
@@ -341,7 +393,9 @@ class _InfoRowWidget extends StatelessWidget {
     required this.linkColor,
     required this.onCopy,
     this.onQrCodeTap,
+    this.onEmailTap,
     this.onCalendarTap,
+    this.onNoteTap,
     this.onMentionTap,
   });
 
@@ -414,10 +468,7 @@ class _InfoRowWidget extends StatelessWidget {
             recognizer: TapGestureRecognizer()
               ..onTap = () async {
                 HapticUtils.tap();
-                final uri = Uri.tryParse(normalized);
-                if (uri != null) {
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                }
+                await LinkOpener.openUrl(context, normalized);
               },
           ),
         );
@@ -442,7 +493,12 @@ class _InfoRowWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: onCopy,
+      onTap: onNoteTap != null
+          ? () {
+              HapticUtils.tap();
+              onNoteTap!();
+            }
+          : onCopy,
       onLongPress: onCopy,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -475,6 +531,24 @@ class _InfoRowWidget extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(4.0),
                 child: iconoir.QrCode(
+                  width: 22,
+                  height: 22,
+                  color: linkColor,
+                ),
+              ),
+            ),
+          ],
+          if (onEmailTap != null) ...[
+            const SizedBox(width: 12),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                HapticUtils.tap();
+                onEmailTap!();
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(4.0),
+                child: iconoir.Mail(
                   width: 22,
                   height: 22,
                   color: linkColor,

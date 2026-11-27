@@ -24,8 +24,7 @@ import 'liquid_glass_nav_bar_layout.dart';
 /// [extraHeight] overrides the layout's default pill-extra-height
 /// for this single frame. Animate it from `0` →
 /// `layout.pillExtraHeight` → `0` to make the pill grow out of and
-/// shrink back into the static selection highlight, the way iOS
-/// does on tap.
+/// shrink back into the static selection highlight on tap.
 ///
 /// [extraWidth] adds horizontal stretch to the pill — useful for
 /// the jelly effect during a drag. Always grows symmetrically (left
@@ -69,7 +68,7 @@ LiquidGlass buildLiquidGlassBottomNavPill({
   /// revealing the background directly through the center.
 
   /// Overrides the pill's glass shape. When `null` the default
-  /// **Apple capsule-style** [LiquidGlassShape] is used,
+  /// **continuous capsule-style** [LiquidGlassShape] is used,
   /// with its corner radius tracking the pill's current height so it
   /// stays a clean capsule as the pill grows/squashes. Pass a custom
   /// [LiquidGlassShape] (e.g. a rounded or a
@@ -87,9 +86,9 @@ LiquidGlass buildLiquidGlassBottomNavPill({
   double opacity = 1.0,
 }) {
   final extra = extraHeight ?? layout.pillExtraHeight;
-  final cellW = layout.cellWidth;
   final barLeft = (parentWidth - layout.width) / 2 + dx;
-  final pillLeft = barLeft + layout.padding + animatedIndex * cellW;
+  final pillLeft =
+      barLeft + layout.padding + layout.pillOffset(animatedIndex);
   // Center the pill (which may be taller than the cell) vertically
   // over the bar's inner row.
   final pillBottom = layout.bottomMargin + layout.padding - extra / 2;
@@ -202,7 +201,7 @@ class LiquidGlassBottomNavPillStatic extends StatelessWidget {
   /// Fill of the rest highlight.
   final Color color;
 
-  /// Corner shape of the rest highlight. When `null` a plain capsule is
+  /// Corner shape of the rest highlight. When `null` a continuous capsule is
   /// used. Only the corner family + radius are honored — the border and
   /// refractive fields don't apply to this non-shader pill.
   final LiquidGlassShape? shape;
@@ -230,23 +229,23 @@ class LiquidGlassBottomNavPillStatic extends StatelessWidget {
 }
 
 /// The outline of a non-shader nav selection pill of [size], following
-/// [shape]'s corner family — circular, L^n squircle, or the Apple
+/// [shape]'s corner family — circular, L^n squircle, or the
 /// capsule-style continuous curve — so a CPU-painted pill or a clip
 /// lines up with the glass pill the shader draws. A `null` shape yields
-/// a plain capsule (radius = half the short side).
+/// a continuous capsule (radius = half the short side).
 Path liquidGlassNavPillOutline(Size size, LiquidGlassShape? shape) {
   final s = shape;
   final double maxR = math.min(size.width, size.height) / 2;
   final double radius = s != null ? math.min(s.cornerRadius, maxR) : maxR;
   switch (s?.cornerStyle) {
     case LiquidGlassCornerStyle.continuousRoundedRectangle:
+    case null:
       return liquidGlassContinuousRoundedRectPath(size, radius);
     case LiquidGlassCornerStyle.squircle:
       // Full, fixed smoothing to match the shader's squircle branch
       // (u_cornerStyle == 1).
       return liquidGlassSquirclePath(size, radius, 1.0);
     case LiquidGlassCornerStyle.roundedRectangle:
-    case null:
       return Path()
         ..addRRect(RRect.fromRectAndRadius(
           Offset.zero & size,

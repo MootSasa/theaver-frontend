@@ -1,19 +1,14 @@
-import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import '../../utils/image_utils.dart';
 import 'package:flutter/material.dart';
+import '../../utils/image_utils.dart';
+import '../../services/account_switch_orchestrator.dart';
 import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
-import '../../services/auth_service.dart';
-import '../../services/deep_link_service.dart';
 import '../../services/tiling_layout_controller.dart';
-import '../../services/websocket_service.dart';
-import '../../services/database/app_database.dart';
 import '../auth/login_screen.dart';
 import '../../widgets/tiling/tiling_workspace_scaffold.dart';
+import '../../widgets/design_system/theav_design_system.dart';
+import '../../widgets/settings/settings_floating_header.dart';
 import '../../utils/swipe_back_route.dart';
-
-enum _TokenStatus { valid, offline, expired }
 
 /// Screen for managing multiple accounts.
 /// Allows users to:
@@ -53,43 +48,40 @@ class _AccountsScreenState extends State<AccountsScreen> {
     setState(() => _isLoading = true);
 
     try {
-      await _accountManager.setCurrentAccount(account.userId);
-      AppDatabase.setActiveUser(account.userId);
-
-      // Verify the token is still valid (or device is offline)
-      final status = await _verifyToken(account.token);
+      final res = await AccountSwitchOrchestrator()
+          .switchToAccount(context, account);
 
       if (!mounted) return;
 
-      if (status != _TokenStatus.expired) {
-        // Either valid or offline: allow switching into account seamlessly
-        try {
-          final wsService = WebSocketService();
-          await wsService.updateUserId(account.userId);
-        } catch (_) {}
-
-        if (!mounted) return;
-        TilingLayoutController.instance.closeAllChats();
+      if (res.isSuccess) {
         final localNav = Navigator.of(context);
         if (TilingLayoutController.instance.isWorkspaceMounted &&
             localNav.canPop()) {
           localNav.popUntil((route) => route.isFirst);
         } else {
-          // Navigate to main workspace with new account on root navigator
           Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
             SwipeBackPageRoute(builder: (_) => const TilingWorkspaceScaffold()),
             (route) => false,
           );
         }
-      } else {
-        // Token explicitly expired / rejected by server
+      } else if (res.status == AccountSwitchStatus.sessionExpired) {
         _showReLoginDialog(account);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${context.l10n.translate('accounts_switch_error')}: ${res.message ?? ''}',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${context.l10n.translate('accounts_switch_error')}: $e'),
+            content:
+                Text('${context.l10n.translate('accounts_switch_error')}: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -98,30 +90,6 @@ class _AccountsScreenState extends State<AccountsScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
-    }
-  }
-
-  Future<_TokenStatus> _verifyToken(String token) async {
-    try {
-      final result = await AuthService.getCurrentUser();
-      if (result['success'] == true) {
-        return _TokenStatus.valid;
-      }
-      final msg = (result['message'] as String? ?? '').toLowerCase();
-      if (msg.contains('network error') ||
-          msg.contains('socketexception') ||
-          msg.contains('timed out') ||
-          msg.contains('timeout') ||
-          msg.contains('clientexception') ||
-          msg.contains('failed host lookup') ||
-          msg.contains('connection refused') ||
-          msg.contains('handshake') ||
-          msg.contains('connection closed')) {
-        return _TokenStatus.offline;
-      }
-      return _TokenStatus.expired;
-    } catch (e) {
-      return _TokenStatus.offline;
     }
   }
 
@@ -182,30 +150,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
       ),
     );
 
-    if (confirmed == true) {
-      final isCurrent = account.userId == _currentAccount?.userId;
-      if (isCurrent) {
-        TilingLayoutController.instance.closeAllChats();
-        final nav = DeepLinkService().navigatorKey.currentState ??
-            Navigator.of(context, rootNavigator: true);
-        nav.pushAndRemoveUntil(
-          SwipeBackPageRoute(builder: (_) => const LoginScreen()),
-          (route) => false,
-        );
-        await AuthService.logout();
-      } else {
-        await _accountManager.removeAccount(account.userId);
-        try {
-          await AppDatabase.removeUserDatabase(account.userId);
-        } catch (_) {}
+    if (confirmed == true && mounted) {
+      await AccountSwitchOrchestrator()
+          .removeAccountAndRecover(context, account);
+      if (mounted) {
         _loadAccounts();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(context.l10n.translate('accounts_removed')),
-            ),
-          );
-        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.l10n.translate('accounts_removed')),
+          ),
+        );
       }
     }
   }
@@ -213,9 +167,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
   void _navigateToLogin({Account? forAccount}) {
     Navigator.of(context).push(
       SwipeBackPageRoute(
-        builder: (_) => const LoginScreen(),
+        builder: (_) => LoginScreen(initialUsername: forAccount?.username),
         settings: RouteSettings(
-          arguments: forAccount != null 
+          arguments: forAccount != null
               ? {'switchingAccount': true, 'userId': forAccount.userId}
               : null,
         ),
@@ -231,10 +185,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final l10n = context.l10n;
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(l10n.translate('accounts_title')),
-      ),
+    return SettingsFloatingScaffold(
+      title: l10n.translate('accounts_title'),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _buildBody(theme, l10n),
@@ -319,33 +271,32 @@ class _AccountsScreenState extends State<AccountsScreen> {
   void _showAccountOptions(Account account) {
     final l10n = context.l10n;
     
-    showModalBottomSheet(
+    showTheavModalSheet<void>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.swap_horiz),
-              title: Text(l10n.translate('accounts_switch')),
-              onTap: () {
-                Navigator.of(context).pop();
-                _switchAccount(account);
-              },
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.swap_horiz),
+            title: Text(l10n.translate('accounts_switch')),
+            onTap: () {
+              Navigator.of(context).pop();
+              _switchAccount(account);
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: Text(
+              l10n.translate('accounts_remove'),
+              style: const TextStyle(color: Colors.red),
             ),
-            ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: Text(
-                l10n.translate('accounts_remove'),
-                style: const TextStyle(color: Colors.red),
-              ),
-              onTap: () {
-                Navigator.of(context).pop();
-                _removeAccount(account);
-              },
-            ),
-          ],
-        ),
+            onTap: () {
+              Navigator.of(context).pop();
+              _removeAccount(account);
+            },
+          ),
+        ],
       ),
     );
   }
