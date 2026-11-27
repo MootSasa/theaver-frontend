@@ -1,4 +1,3 @@
-import 'dart:ui' as ui;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +11,8 @@ import '../../services/liquid_glass_provider.dart';
 import '../../utils/entity_parser.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/link_opener.dart';
+import '../design_system/theav_design_system.dart';
+import 'profile_material_surface.dart';
 
 /// Чистая информационная карточка профиля в стиле Telegram (без боковых иконок слева).
 ///
@@ -191,7 +192,6 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   void _copyToClipboard(BuildContext context, String text, String label) {
     Clipboard.setData(ClipboardData(text: text));
     HapticUtils.selection();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     String copiedMsg = 'Скопировано в буфер обмена';
     try {
       final tr = context.l10n.translate('copied_to_clipboard');
@@ -206,7 +206,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
       iconWidget: iconoir.Copy(
         width: 18,
         height: 18,
-        color: isDark ? Colors.white : Colors.black87,
+        color: context.theav.onSurface,
       ),
       duration: const Duration(seconds: 2),
     );
@@ -261,8 +261,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
   }
 
   Widget _buildClassicPanel(BuildContext context, List<_InfoRowData> rows) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark || hasColoredTheme;
+    final mat = ProfileMaterialStyle.of(context);
 
     return Container(
       width: double.infinity,
@@ -270,7 +269,7 @@ class LiquidGlassInfoPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.18 : 0.06),
+            color: Colors.black.withValues(alpha: mat.isDark ? 0.18 : 0.06),
             blurRadius: 12,
             offset: const Offset(0, 3),
           ),
@@ -278,24 +277,26 @@ class LiquidGlassInfoPanel extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(22),
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: mat.wrapBlur(
+          sigma: 14.0,
           child: Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
             decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0x99262628)
-                  : const Color(0xB3FFFFFF),
+              color: mat.panelFill,
               borderRadius: BorderRadius.circular(22),
               border: Border.all(
-                color: isDark
-                    ? Colors.white.withValues(alpha: 0.12)
-                    : Colors.black.withValues(alpha: 0.08),
+                color: mat.borderColor,
                 width: 0.5,
               ),
             ),
-            child: _buildRowsColumn(context, rows, isDark: isDark, isGlass: false),
+            child: _buildRowsColumn(
+              context,
+              rows,
+              isDark: mat.isDark,
+              isGlass: false,
+              materialStyle: mat,
+            ),
           ),
         ),
       ),
@@ -307,15 +308,18 @@ class LiquidGlassInfoPanel extends StatelessWidget {
     List<_InfoRowData> rows, {
     required bool isDark,
     required bool isGlass,
+    ProfileMaterialStyle? materialStyle,
   }) {
-    final labelColor = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color(0xFF6C6C70);
-    final valueColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final linkColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
+    final labelColor = materialStyle?.subtext ??
+        (isDark ? Colors.white.withValues(alpha: 0.55) : const Color(0xFF6C6C70));
+    final valueColor = materialStyle?.foreground ??
+        (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final linkColor = materialStyle?.primary ??
+        (isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC));
+    final dividerColor = materialStyle?.borderColor ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.08)
+            : Colors.black.withValues(alpha: 0.06));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

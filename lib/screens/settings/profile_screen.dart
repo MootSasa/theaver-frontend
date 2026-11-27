@@ -64,6 +64,7 @@ import '../../widgets/profile/liquid_glass_music_status.dart';
 import '../../widgets/profile/liquid_glass_profile_buttons.dart';
 import '../../widgets/profile/manage_user_badge_sheet.dart';
 import '../../widgets/profile/profile_avatar_metaball_layer.dart';
+import '../../widgets/profile/profile_material_surface.dart';
 import '../../widgets/user/avatar_with_status.dart';
 import '../../widgets/user/emoji_status_badge.dart';
 import 'change_email_screen.dart';
@@ -2165,12 +2166,11 @@ class ProfileScreenState extends State<ProfileScreen>
     if (activePreset != null) {
       return activePreset.statusColor;
     }
+    final palette = context.theav;
     if (_isUser && _isOnline) {
-      return const Color(0xFF34C759);
+      return palette.onlineIndicator;
     }
-    return Theme.of(context).brightness == Brightness.dark
-        ? Colors.white.withValues(alpha: 0.65)
-        : const Color(0xFF6C6C70);
+    return palette.subtext;
   }
 
   // ============================================================
@@ -3742,6 +3742,65 @@ class ProfileScreenState extends State<ProfileScreen>
     );
   }
 
+  Widget _wrapQuickSettingsCardSurface(
+    BuildContext context, {
+    required Widget child,
+    required bool isGlass,
+    required bool isLite,
+    required bool effectiveDark,
+  }) {
+    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
+    if (isGlass && glassProvider != null) {
+      final glassStyle = glassProvider.createStyle(
+        context: context,
+        isDarkOverride: effectiveDark,
+        isLiteOverride: isLite,
+        color: effectiveDark
+            ? const Color(0x33202025)
+            : const Color(0x66FFFFFF),
+        refractionIndex: 1.15,
+        refractionWidth: 22.0,
+        shape: const LiquidGlassShape.continuousRoundedRectangle(
+          cornerRadius: 24,
+        ),
+      );
+      return LiquidGlassLens(
+        style: glassStyle,
+        child: Container(
+          decoration: effectiveDark
+              ? null
+              : BoxDecoration(
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    width: 0.5,
+                  ),
+                ),
+          child: Material(type: MaterialType.transparency, child: child),
+        ),
+      );
+    }
+
+    final mat = ProfileMaterialStyle.of(context);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: mat.wrapBlur(
+        sigma: 14.0,
+        child: Container(
+          decoration: BoxDecoration(
+            color: mat.panelFill,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(
+              color: mat.borderColor,
+              width: 0.5,
+            ),
+          ),
+          child: Material(type: MaterialType.transparency, child: child),
+        ),
+      ),
+    );
+  }
+
   Widget _buildGroupAdminQuickSettingsCard(
     BuildContext context, {
     required bool isGlass,
@@ -3751,15 +3810,20 @@ class ProfileScreenState extends State<ProfileScreen>
   }) {
     final effectiveDark = isDark || hasColoredTheme;
     final palette = context.theav;
-    final textColor = effectiveDark ? Colors.white : palette.onSurface;
-    final subColor = effectiveDark
-        ? Colors.white.withValues(alpha: 0.65)
-        : palette.subtext;
-    final accentColor =
-        effectiveDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final dividerColor = effectiveDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
+    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
+    final bool useGlass = isGlass && glassProvider != null;
+    final ProfileMaterialStyle? mat =
+        useGlass ? null : ProfileMaterialStyle.of(context);
+    final textColor = mat?.foreground ??
+        (effectiveDark ? Colors.white : palette.onSurface);
+    final subColor = mat?.subtext ??
+        (effectiveDark ? Colors.white.withValues(alpha: 0.65) : palette.subtext);
+    final accentColor = mat?.primary ??
+        (effectiveDark ? const Color(0xFF64B5F6) : palette.primary);
+    final dividerColor = mat?.borderColor ??
+        (effectiveDark
+            ? Colors.white.withValues(alpha: 0.08)
+            : palette.divider);
 
     final permChecks = <bool>[
       _defaultPermissions.canSendMessages,
@@ -3872,58 +3936,12 @@ class ProfileScreenState extends State<ProfileScreen>
       ],
     );
 
-    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
-    if (isGlass && glassProvider != null) {
-      final glassStyle = glassProvider.createStyle(
-        context: context,
-        isDarkOverride: effectiveDark,
-        isLiteOverride: isLite,
-        color: effectiveDark
-            ? const Color(0x33202025)
-            : const Color(0x66FFFFFF),
-        refractionIndex: 1.15,
-        refractionWidth: 22.0,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 24,
-        ),
-      );
-      return LiquidGlassLens(
-        style: glassStyle,
-        child: Container(
-          decoration: effectiveDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-          child: Material(type: MaterialType.transparency, child: inner),
-        ),
-      );
-    }
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          decoration: BoxDecoration(
-            color: effectiveDark
-                ? const Color(0x99262628)
-                : const Color(0xB3FFFFFF),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: effectiveDark
-                  ? Colors.white.withValues(alpha: 0.12)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.5,
-            ),
-          ),
-          child: Material(type: MaterialType.transparency, child: inner),
-        ),
-      ),
+    return _wrapQuickSettingsCardSurface(
+      context,
+      child: inner,
+      isGlass: isGlass,
+      isLite: isLite,
+      effectiveDark: effectiveDark,
     );
   }
 
@@ -3989,12 +4007,16 @@ class ProfileScreenState extends State<ProfileScreen>
   }) {
     final effectiveDark = isDark || hasColoredTheme;
     final palette = context.theav;
-    final textColor = effectiveDark ? Colors.white : palette.onSurface;
-    final subColor = effectiveDark
-        ? Colors.white.withValues(alpha: 0.65)
-        : palette.subtext;
-    final accentColor =
-        effectiveDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
+    final bool useGlass = isGlass && glassProvider != null;
+    final ProfileMaterialStyle? mat =
+        useGlass ? null : ProfileMaterialStyle.of(context);
+    final textColor = mat?.foreground ??
+        (effectiveDark ? Colors.white : palette.onSurface);
+    final subColor = mat?.subtext ??
+        (effectiveDark ? Colors.white.withValues(alpha: 0.65) : palette.subtext);
+    final accentColor = mat?.primary ??
+        (effectiveDark ? const Color(0xFF64B5F6) : palette.primary);
     final row = _buildQuickSettingRow(
       icon: iconoir.Megaphone(width: 20, height: 20, color: accentColor),
       title: 'Похожие каналы',
@@ -4005,58 +4027,12 @@ class ProfileScreenState extends State<ProfileScreen>
       onTap: _openSimilarChannelsSheet,
     );
 
-    final glassProvider = isGlass ? LiquidGlassProvider.maybeOf(context) : null;
-    if (isGlass && glassProvider != null) {
-      final glassStyle = glassProvider.createStyle(
-        context: context,
-        isDarkOverride: effectiveDark,
-        isLiteOverride: isLite,
-        color: effectiveDark
-            ? const Color(0x33202025)
-            : const Color(0x66FFFFFF),
-        refractionIndex: 1.15,
-        refractionWidth: 22.0,
-        shape: const LiquidGlassShape.continuousRoundedRectangle(
-          cornerRadius: 24,
-        ),
-      );
-      return LiquidGlassLens(
-        style: glassStyle,
-        child: Container(
-          decoration: effectiveDark
-              ? null
-              : BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
-                ),
-          child: Material(type: MaterialType.transparency, child: row),
-        ),
-      );
-    }
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          decoration: BoxDecoration(
-            color: effectiveDark
-                ? const Color(0x99262628)
-                : const Color(0xB3FFFFFF),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: effectiveDark
-                  ? Colors.white.withValues(alpha: 0.12)
-                  : Colors.black.withValues(alpha: 0.08),
-              width: 0.5,
-            ),
-          ),
-          child: Material(type: MaterialType.transparency, child: row),
-        ),
-      ),
+    return _wrapQuickSettingsCardSurface(
+      context,
+      child: row,
+      isGlass: isGlass,
+      isLite: isLite,
+      effectiveDark: effectiveDark,
     );
   }
 
@@ -4234,17 +4210,27 @@ class ProfileScreenState extends State<ProfileScreen>
   Widget _buildUpgradedMembersSection(
     BuildContext context, {
     required bool isDark,
+    bool hasColoredTheme = false,
   }) {
     final l10n = context.l10n;
-    final accentColor =
-        isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : context.theav.onSurface;
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.60)
-        : const Color(0xFF6C6C70);
-    final dividerColor = isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
+    final palette = context.theav;
+    final bool themeIsDark = Theme.of(context).brightness == Brightness.dark;
+    final accentColor = hasColoredTheme ? Colors.white : palette.primary;
+    final selectedChipColor = palette.primary;
+    final selectedChipTextColor = palette.onPrimary;
+    final textColor = hasColoredTheme ? Colors.white : palette.onSurface;
+    final subColor = hasColoredTheme
+        ? Colors.white.withValues(alpha: 0.70)
+        : palette.subtext;
+    final dividerColor = hasColoredTheme
+        ? Colors.white.withValues(alpha: 0.14)
+        : palette.divider;
+    final unselectedChipBg = hasColoredTheme
+        ? Colors.white.withValues(alpha: 0.12)
+        : Color.alphaBlend(
+            palette.primary.withValues(alpha: themeIsDark ? 0.10 : 0.07),
+            palette.surface,
+          );
     final baseList = _resolvedParticipantsForList;
     final list = _hasActiveMemberFilter ? _filteredParticipants : baseList;
     final bool isHiddenForViewer =
@@ -4367,11 +4353,7 @@ class ProfileScreenState extends State<ProfileScreen>
                       vertical: 5,
                     ),
                     decoration: BoxDecoration(
-                      color: selected
-                          ? accentColor
-                          : (isDark
-                                ? Colors.white.withValues(alpha: 0.08)
-                                : Colors.black.withValues(alpha: 0.06)),
+                      color: selected ? selectedChipColor : unselectedChipBg,
                       borderRadius: BorderRadius.circular(14),
                     ),
                     alignment: Alignment.center,
@@ -4381,7 +4363,7 @@ class ProfileScreenState extends State<ProfileScreen>
                         fontSize: 12.5,
                         fontWeight:
                             selected ? FontWeight.w600 : FontWeight.w500,
-                        color: selected ? Colors.white : textColor,
+                        color: selected ? selectedChipTextColor : textColor,
                       ),
                     ),
                   ),
@@ -4742,10 +4724,9 @@ class ProfileScreenState extends State<ProfileScreen>
     required bool canManageAdmins,
     required bool canModerate,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : context.theav.onSurface;
-    final accentColor =
-        isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final palette = context.theav;
+    final textColor = palette.onSurface;
+    final accentColor = palette.primary;
     final isAdminOrOwner = member.role == 'admin' || member.role == 'owner';
 
     showTheavModalSheet<void>(
@@ -7201,8 +7182,10 @@ class ProfileScreenState extends State<ProfileScreen>
     );
 
     // Единый цвет иконок для всех кнопок интерфейса (<, •••, быстрые действия, капсула разделов)
-    final headerIconColor = effectiveIsDark
-        ? Colors.white.withValues(alpha: 0.92)
+    final headerIconColor = isGlass
+        ? (effectiveIsDark
+            ? Colors.white.withValues(alpha: 0.92)
+            : palette.onSurface)
         : palette.onSurface;
 
     final sections = _buildSections(l10n);
@@ -7232,8 +7215,8 @@ class ProfileScreenState extends State<ProfileScreen>
         child: Scaffold(
           backgroundColor: backgroundColor,
           body: _isLoading
-              ? const Center(
-                  child: CircularProgressIndicator(color: Color(0xFF0088CC)))
+              ? Center(
+                  child: CircularProgressIndicator(color: palette.primary))
               : Focus(
                   focusNode: _keyboardFocusNode,
                   autofocus: true,
@@ -7397,7 +7380,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                             color: _getStatusColor(
                                               context,
                                               activePreset,
-                                              const Color(0xFF0088CC)
+                                              palette.primary
                                                   .withValues(alpha: 0.85),
                                             ),
                                           ),
@@ -7723,6 +7706,8 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 ? _buildUpgradedMembersSection(
                                                     context,
                                                     isDark: effectiveIsDark,
+                                                    hasColoredTheme:
+                                                        hasColoredTheme,
                                                   )
                                                 : ProfileSectionPageContent(
                                                     sectionType:
@@ -7730,6 +7715,8 @@ class ProfileScreenState extends State<ProfileScreen>
                                                             .type,
                                                     glassEnabled: isGlass,
                                                     isLite: isLite,
+                                                    hasColoredTheme:
+                                                        hasColoredTheme,
                                                     chatId:
                                                         _resolvedChatId ?? '',
                                                     chatType: _isSystem
@@ -8035,9 +8022,9 @@ class ProfileScreenState extends State<ProfileScreen>
                         Positioned.fill(
                           child: Container(
                             color: Colors.black.withValues(alpha: 0.3),
-                            child: const Center(
+                            child: Center(
                               child: CircularProgressIndicator(
-                                  color: Color(0xFF0088CC)),
+                                  color: palette.primary),
                             ),
                           ),
                         ),
@@ -8733,6 +8720,8 @@ class _RoundHeaderButton extends StatelessWidget {
       );
     }
 
+    final mat = ProfileMaterialStyle.of(context);
+
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -8743,32 +8732,28 @@ class _RoundHeaderButton extends StatelessWidget {
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.08),
+              color: Colors.black.withValues(alpha: mat.isDark ? 0.22 : 0.08),
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),
           ],
         ),
         child: ClipOval(
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: mat.wrapBlur(
+            sigma: 14.0,
             child: Container(
               width: size,
               height: size,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0x992C2C2E)
-                    : const Color(0xB3FFFFFF),
+                color: mat.buttonFill,
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.14)
-                      : Colors.black.withValues(alpha: 0.08),
+                  color: mat.borderColor,
                   width: 0.5,
                 ),
               ),
-              child: iconBuilder(iconColor, 22.0),
+              child: iconBuilder(mat.foreground, 22.0),
             ),
           ),
         ),
@@ -8805,8 +8790,7 @@ class _ThreeDotsGlyph extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final iconColor = color ?? (isDark ? Colors.white : context.theav.onSurface);
+    final iconColor = color ?? context.theav.onSurface;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -8828,6 +8812,8 @@ class _ThreeDotsGlyph extends StatelessWidget {
 class _TopMorphMenu extends StatelessWidget {
   final double width;
   final bool isDark;
+  final Color? foregroundColor;
+  final Color? destructiveColor;
   final List<_MorphMenuItemData> items;
   final ValueChanged<String> onItemTap;
 
@@ -8835,6 +8821,8 @@ class _TopMorphMenu extends StatelessWidget {
     super.key,
     required this.width,
     required this.isDark,
+    this.foregroundColor,
+    this.destructiveColor,
     required this.items,
     required this.onItemTap,
   });
@@ -8863,6 +8851,8 @@ class _TopMorphMenu extends StatelessWidget {
                     key: ValueKey(items[i].id),
                     item: items[i],
                     isDark: isDark,
+                    foregroundColor: foregroundColor,
+                    destructiveColor: destructiveColor,
                     onTap: () => onItemTap(items[i].id),
                   ),
               ],
@@ -8877,21 +8867,26 @@ class _TopMorphMenu extends StatelessWidget {
 class _MorphMenuRow extends StatelessWidget {
   final _MorphMenuItemData item;
   final bool isDark;
+  final Color? foregroundColor;
+  final Color? destructiveColor;
   final VoidCallback onTap;
 
   const _MorphMenuRow({
     super.key,
     required this.item,
     required this.isDark,
+    this.foregroundColor,
+    this.destructiveColor,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final defaultColor = isDark
-        ? Colors.white.withValues(alpha: 0.92)
-        : context.theav.onSurface;
-    final itemColor = item.isDestructive ? Colors.red.shade400 : defaultColor;
+    final defaultColor = foregroundColor ??
+        (isDark ? Colors.white.withValues(alpha: 0.92) : context.theav.onSurface);
+    final itemColor = item.isDestructive
+        ? (destructiveColor ?? Colors.red.shade400)
+        : defaultColor;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -9082,6 +9077,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
       );
     }
 
+    final mat = ProfileMaterialStyle.of(context);
     final Widget animatedChild = AnimatedBuilder(
       animation: _curve,
       builder: (context, _) {
@@ -9114,7 +9110,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
                         child: _ThreeDotsGlyph(
                           key: const ValueKey<String>('profile_glyph'),
                           size: _ctrlSize,
-                          color: widget.iconColor,
+                          color: mat.foreground,
                           onTap: _toggleMenu,
                         ),
                       ),
@@ -9130,7 +9126,9 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
                         child: _TopMorphMenu(
                           key: const ValueKey<String>('profile_menu'),
                           width: _menuWidth,
-                          isDark: widget.isDark,
+                          isDark: mat.isDark,
+                          foregroundColor: mat.foreground,
+                          destructiveColor: mat.destructive,
                           items: widget.items,
                           onItemTap: _handleAction,
                         ),
@@ -9150,7 +9148,7 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(
-                  alpha: (widget.isDark ? 0.22 : 0.08) + 0.12 * t,
+                  alpha: (mat.isDark ? 0.22 : 0.08) + 0.12 * t,
                 ),
                 blurRadius: 8 + 14 * t,
                 offset: Offset(0, 2 + 6 * t),
@@ -9159,20 +9157,16 @@ class _MorphingHeaderMenuButtonState extends State<_MorphingHeaderMenuButton>
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(_ctrlSize / 2),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: mat.wrapBlur(
+              sigma: 14.0,
               child: Container(
                 width: currentWidth,
                 height: currentHeight,
                 decoration: BoxDecoration(
-                  color: widget.isDark
-                      ? const Color(0x992C2C2E)
-                      : const Color(0xB3FFFFFF),
+                  color: Color.lerp(mat.buttonFill, mat.panelFill, t)!,
                   borderRadius: BorderRadius.circular(_ctrlSize / 2),
                   border: Border.all(
-                    color: widget.isDark
-                        ? Colors.white.withValues(alpha: 0.14)
-                        : Colors.black.withValues(alpha: 0.08),
+                    color: mat.borderColor,
                     width: 0.5,
                   ),
                 ),

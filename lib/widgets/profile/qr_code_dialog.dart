@@ -9,6 +9,7 @@ import '../../l10n/app_localizations.dart';
 import '../../services/account_manager.dart';
 import '../../services/contacts_service.dart';
 import '../../utils/image_utils.dart';
+import '../design_system/theav_design_system.dart';
 
 /// Transparent 1x1 PNG bytes for temporary fallback
 final Uint8List _transparentPixelBytes = Uint8List.fromList(const [
@@ -371,13 +372,12 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final palette = context.theav;
 
-    final backgroundColor = isDark ? const Color(0xFF2C2C2E) : Colors.white;
-    final onSurfaceColor = isDark ? const Color(0xFFE5E5EA) : const Color(0xFF1C1C1E);
-    final secondaryColor = isDark ? const Color(0xFF8E8E93) : const Color(0xFF3C3C43);
-    const brandColor = Color(0xFF0088CC);
+    final backgroundColor = palette.surface;
+    final onSurfaceColor = palette.onSurface;
+    final secondaryColor = palette.subtext;
+    final brandColor = palette.primary;
 
     const double qrSize = 200.0;
 
@@ -497,7 +497,7 @@ class _QrCodeDialogState extends State<QrCodeDialog> {
                   alignment: Alignment.center,
                   child: Text(
                     _formattedUsername,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
                       letterSpacing: -0.5,

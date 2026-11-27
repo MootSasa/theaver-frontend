@@ -1,13 +1,12 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
-import '../../models/theav_theme.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../utils/haptic_utils.dart';
+import 'profile_material_surface.dart';
 
 /// Типы вкладок (разделов) в нижней части экрана профиля.
 enum ProfileSectionType {
@@ -258,18 +257,10 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
         child: morphChild,
       );
     }
-    final themeExt = theme.extension<TheavThemeExtension>();
-    final p = themeExt?.palette;
-    final baseSurface = p?.surface ??
-        (isDark ? const Color(0xFF2C2C2E) : Colors.white);
-    final barBackgroundColor = baseSurface.withValues(
-      alpha: isDark ? 0.62 : 0.72,
-    );
-    final borderColor = p?.divider ??
-        (isDark
-            ? Colors.white.withValues(alpha: 0.12)
-            : Colors.black.withValues(alpha: 0.08));
-    final double baseShadowAlpha = isDark ? 0.24 : 0.08;
+    final mat = ProfileMaterialStyle.of(context);
+    final barBackgroundColor = mat.buttonFill;
+    final borderColor = mat.borderColor;
+    final double baseShadowAlpha = mat.isDark ? 0.24 : 0.08;
 
     final Widget animatedChild = AnimatedBuilder(
       animation: _morphAnimation,
@@ -302,8 +293,8 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(_barRadius),
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: mat.wrapBlur(
+              sigma: 14.0,
               child: Container(
                 width: currentWidth,
                 height: currentHeight,
@@ -330,7 +321,8 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
                               title: currentSection.label,
                               titleKey: currentSection.type.name,
                               showChevron: widget.sections.length > 1,
-                              isDark: isDark,
+                              isDark: mat.isDark,
+                              foregroundColor: mat.foreground,
                               onTap: _toggleMenu,
                             ),
                           ),
@@ -345,7 +337,10 @@ class ProfileSectionPillState extends State<ProfileSectionPill>
                             width: _menuWidth,
                             sections: widget.sections,
                             selectedIndex: safeIndex,
-                            isDark: isDark,
+                            isDark: mat.isDark,
+                            foregroundColor: mat.foreground,
+                            activeColor: mat.primary,
+                            onActiveColor: mat.onPrimary,
                             onSelectSection: _selectItem,
                           ),
                         ),
@@ -381,6 +376,7 @@ class _TitlePillContent extends StatelessWidget {
   final String titleKey;
   final bool showChevron;
   final bool isDark;
+  final Color? foregroundColor;
   final VoidCallback? onTap;
 
   const _TitlePillContent({
@@ -390,13 +386,16 @@ class _TitlePillContent extends StatelessWidget {
     required this.titleKey,
     this.showChevron = true,
     required this.isDark,
+    this.foregroundColor,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final textColor =
-        isDark ? Colors.white.withValues(alpha: 0.92) : const Color(0xFF1C1C1E);
+    final textColor = foregroundColor ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.92)
+            : const Color(0xFF1C1C1E));
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -503,6 +502,9 @@ class _SectionMorphMenuList extends StatelessWidget {
   final List<ProfileSectionItem> sections;
   final int selectedIndex;
   final bool isDark;
+  final Color? foregroundColor;
+  final Color? activeColor;
+  final Color? onActiveColor;
   final ValueChanged<int> onSelectSection;
 
   const _SectionMorphMenuList({
@@ -511,6 +513,9 @@ class _SectionMorphMenuList extends StatelessWidget {
     required this.sections,
     required this.selectedIndex,
     required this.isDark,
+    this.foregroundColor,
+    this.activeColor,
+    this.onActiveColor,
     required this.onSelectSection,
   });
 
@@ -539,6 +544,9 @@ class _SectionMorphMenuList extends StatelessWidget {
                     item: sections[i],
                     isSelected: i == selectedIndex,
                     isDark: isDark,
+                    foregroundColor: foregroundColor,
+                    activeColor: activeColor,
+                    onActiveColor: onActiveColor,
                     onTap: () => onSelectSection(i),
                   ),
               ],
@@ -554,6 +562,9 @@ class _SectionMorphMenuRow extends StatelessWidget {
   final ProfileSectionItem item;
   final bool isSelected;
   final bool isDark;
+  final Color? foregroundColor;
+  final Color? activeColor;
+  final Color? onActiveColor;
   final VoidCallback onTap;
 
   const _SectionMorphMenuRow({
@@ -561,14 +572,19 @@ class _SectionMorphMenuRow extends StatelessWidget {
     required this.item,
     required this.isSelected,
     required this.isDark,
+    this.foregroundColor,
+    this.activeColor,
+    this.onActiveColor,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final defaultColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    const activeColor = Color(0xFF0088CC);
-    final itemColor = isSelected ? activeColor : defaultColor;
+    final defaultColor =
+        foregroundColor ?? (isDark ? Colors.white : const Color(0xFF1C1C1E));
+    final resolvedActiveColor = activeColor ?? const Color(0xFF0088CC);
+    final resolvedOnActiveColor = onActiveColor ?? Colors.white;
+    final itemColor = isSelected ? resolvedActiveColor : defaultColor;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -607,7 +623,7 @@ class _SectionMorphMenuRow extends StatelessWidget {
                       const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
                     color: isSelected
-                        ? activeColor
+                        ? resolvedActiveColor
                         : defaultColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
@@ -617,7 +633,7 @@ class _SectionMorphMenuRow extends StatelessWidget {
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
                       color: isSelected
-                          ? Colors.white
+                          ? resolvedOnActiveColor
                           : defaultColor.withValues(alpha: 0.75),
                     ),
                   ),
@@ -625,10 +641,10 @@ class _SectionMorphMenuRow extends StatelessWidget {
               ],
               if (isSelected) ...[
                 const SizedBox(width: 6.0),
-                const iconoir.Check(
+                iconoir.Check(
                   width: 18.0,
                   height: 18.0,
-                  color: activeColor,
+                  color: resolvedActiveColor,
                 ),
               ],
             ],

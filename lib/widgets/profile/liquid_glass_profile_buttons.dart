@@ -1,10 +1,10 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:provider/provider.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../services/liquid_glass_provider.dart';
+import 'profile_material_surface.dart';
 
 /// Описание отдельной круглой кнопки быстрого действия для профиля.
 /// Поддерживает иконки `iconoir_flutter` через [iconBuilder] (приоритетно)
@@ -321,29 +321,29 @@ class _RoundActionButton extends StatelessWidget {
     this.isLite = false,
   });
 
+  Widget _buildIconChild(Color iconColor, double iconSize) {
+    if (iconOpacity <= 0.001) {
+      return const SizedBox.shrink();
+    }
+    final Widget rawIcon = item.iconBuilder != null
+        ? item.iconBuilder!(iconColor, iconSize)
+        : Icon(item.icon, size: iconSize, color: iconColor);
+    return Opacity(
+      opacity: iconOpacity,
+      child: rawIcon,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final iconColor = item.isDestructive
-        ? Colors.red.shade400
-        : (isDark
-            ? Colors.white.withValues(alpha: 0.92)
-            : const Color(0xFF1C1C1E));
     final iconSize = (restSize * 0.42).clamp(15.0, 24.0);
 
-    Widget iconChild;
-    if (iconOpacity <= 0.001) {
-      iconChild = const SizedBox.shrink();
-    } else {
-      final Widget rawIcon = item.iconBuilder != null
-          ? item.iconBuilder!(iconColor, iconSize)
-          : Icon(item.icon, size: iconSize, color: iconColor);
-      iconChild = Opacity(
-        opacity: iconOpacity,
-        child: rawIcon,
-      );
-    }
-
     if (enabled) {
+      final iconColor = item.isDestructive
+          ? Colors.red.shade400
+          : (isDark
+              ? Colors.white.withValues(alpha: 0.92)
+              : const Color(0xFF1C1C1E));
       final glassProvider = context.watch<LiquidGlassProvider>();
       final glassStyle = glassProvider.createStyle(
         context: context,
@@ -370,7 +370,7 @@ class _RoundActionButton extends StatelessWidget {
                   width: 0.5,
                 ),
               ),
-        child: iconChild,
+        child: _buildIconChild(iconColor, iconSize),
       );
 
       return GestureDetector(
@@ -381,50 +381,48 @@ class _RoundActionButton extends StatelessWidget {
           child: buttonChild,
         ),
       );
-    } else {
-      final cardColor = isDark
-          ? const Color(0x992C2C2E)
-          : const Color(0xB3FFFFFF);
+    }
 
-      return GestureDetector(
-        onTap: item.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.20 : 0.08),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-              child: Container(
-                width: size,
-                height: size,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.12)
-                        : Colors.black.withValues(alpha: 0.08),
-                    width: 0.5,
-                  ),
+    final mat = ProfileMaterialStyle.of(context);
+    final iconColor = item.isDestructive ? mat.destructive : mat.foreground;
+    final cardColor = mat.buttonFill;
+
+    return GestureDetector(
+      onTap: item.onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: mat.isDark ? 0.20 : 0.08),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipOval(
+          child: mat.wrapBlur(
+            sigma: 14.0,
+            child: Container(
+              width: size,
+              height: size,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: cardColor,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: mat.borderColor,
+                  width: 0.5,
                 ),
-                child: iconChild,
               ),
+              child: _buildIconChild(iconColor, iconSize),
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
   }
 }

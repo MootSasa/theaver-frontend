@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -27,6 +26,7 @@ import '../design_system/theav_design_system.dart';
 import '../media_viewer/theav_media_viewer.dart';
 import '../message/blurred_media_placeholder.dart';
 import '../user/avatar_with_status.dart';
+import 'profile_material_surface.dart';
 import 'profile_section_pill.dart';
 
 /// Модель участника группы/канала для вкладки «Участники».
@@ -83,6 +83,7 @@ class ProfileSectionPageContent extends StatelessWidget {
   final ProfileSectionType sectionType;
   final bool glassEnabled;
   final bool isLite;
+  final bool hasColoredTheme;
   final String chatId;
   final String chatType;
   final String chatTitle;
@@ -114,6 +115,7 @@ class ProfileSectionPageContent extends StatelessWidget {
     required this.sectionType,
     required this.glassEnabled,
     this.isLite = false,
+    this.hasColoredTheme = false,
     required this.chatId,
     this.chatType = 'private',
     this.chatTitle = '',
@@ -182,17 +184,52 @@ class ProfileSectionPageContent extends StatelessWidget {
     return fallback;
   }
 
+  ({
+    TheavPalette palette,
+    Color textColor,
+    Color subColor,
+    Color accentColor,
+    Color onAccentColor,
+    Color dividerColor,
+    Color thumbPlaceholder,
+    bool isDark,
+  }) _resolveTabColors(BuildContext context) {
+    final palette = context.theav;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (hasColoredTheme) {
+      return (
+        palette: palette,
+        textColor: Colors.white,
+        subColor: Colors.white.withValues(alpha: 0.70),
+        accentColor: Colors.white,
+        onAccentColor: palette.onPrimary,
+        dividerColor: Colors.white.withValues(alpha: 0.14),
+        thumbPlaceholder:
+            isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+        isDark: isDark,
+      );
+    }
+    return (
+      palette: palette,
+      textColor: palette.onSurface,
+      subColor: palette.subtext,
+      accentColor: palette.primary,
+      onAccentColor: palette.onPrimary,
+      dividerColor: palette.divider,
+      thumbPlaceholder: palette.surface,
+      isDark: isDark,
+    );
+  }
+
   // ============================================================
   // 1b. Вкладка «Общие группы»
   // ============================================================
 
   Widget _buildCommonGroupsTab(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.56)
-        : Colors.black.withValues(alpha: 0.54);
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final colors = _resolveTabColors(context);
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
+    final accentColor = colors.accentColor;
 
     if (commonGroups.isEmpty) {
       return _buildEmptyState(
@@ -266,9 +303,7 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 70,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -280,8 +315,8 @@ class ProfileSectionPageContent extends StatelessWidget {
   // ============================================================
 
   Widget _buildMembersTab(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
 
     if (members.isEmpty && !canAddMembers) {
       return _buildEmptyState(
@@ -339,20 +374,16 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 70,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
         for (int i = 0; i < members.length; i++) ...[
-          _buildMemberRow(context, members[i], isDark, accentColor),
+          _buildMemberRow(context, members[i], colors.isDark, accentColor),
           if (i < members.length - 1)
             Divider(
               height: 1,
               indent: 70,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -367,10 +398,9 @@ class ProfileSectionPageContent extends StatelessWidget {
     bool isDark,
     Color accentColor,
   ) {
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final canEditThisMember = canManageMembers &&
         member.userId != currentUserId &&
@@ -609,7 +639,7 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colors = _resolveTabColors(context);
     final viewerItems = mediaMessages
         .map(
           (m) => TheavMediaItem.fromDbMessage(
@@ -678,10 +708,10 @@ class ProfileSectionPageContent extends StatelessWidget {
                 Hero(
                   tag: item.heroTag,
                   child: Container(
-                    color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                    color: colors.thumbPlaceholder,
                     child: _buildSharedGridThumb(
                       item: item,
-                      isDark: isDark,
+                      isDark: colors.isDark,
                     ),
                   ),
                 ),
@@ -847,7 +877,7 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colors = _resolveTabColors(context);
     final viewerItems = gifMessages
         .map(
           (m) => TheavMediaItem.fromDbMessage(
@@ -917,9 +947,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                 Hero(
                   tag: item.heroTag,
                   child: Container(
-                    color: isDark
-                        ? const Color(0xFF2C2C2E)
-                        : const Color(0xFFE5E5EA),
+                    color: colors.thumbPlaceholder,
                     child: !item.isVideoBackedGif && resolvedUrl.isNotEmpty
                         ? ControlledAnimatedNetworkImage(
                             url: resolvedUrl,
@@ -988,10 +1016,10 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark ? Colors.white54 : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final content = Column(
       mainAxisSize: MainAxisSize.min,
@@ -1083,9 +1111,7 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 72,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -1118,7 +1144,6 @@ class ProfileSectionPageContent extends StatelessWidget {
     } catch (_) {}
 
     if (!context.mounted) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     GlassToastService().show(
       context,
       _tr(context, 'profile_downloading_file', 'Загрузка {file}...')
@@ -1126,7 +1151,7 @@ class ProfileSectionPageContent extends StatelessWidget {
       iconWidget: iconoir.Download(
         width: 18,
         height: 18,
-        color: isDark ? Colors.white : Colors.black87,
+        color: context.theav.onSurface,
       ),
     );
 
@@ -1173,10 +1198,10 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark ? Colors.white54 : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final content = Column(
       mainAxisSize: MainAxisSize.min,
@@ -1280,9 +1305,7 @@ class ProfileSectionPageContent extends StatelessWidget {
             Divider(
               height: 1,
               indent: 72,
-              color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+              color: colors.dividerColor,
             ),
         ],
       ],
@@ -1305,10 +1328,10 @@ class ProfileSectionPageContent extends StatelessWidget {
       );
     }
 
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark ? Colors.white54 : const Color(0xFF6C6C70);
+    final colors = _resolveTabColors(context);
+    final accentColor = colors.accentColor;
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
 
     final content = AnimatedBuilder(
       animation: Listenable.merge([
@@ -1384,26 +1407,34 @@ class ProfileSectionPageContent extends StatelessWidget {
                             width: 44,
                             height: 44,
                             decoration: BoxDecoration(
-                              color: accentColor,
+                              color: hasColoredTheme
+                                  ? Colors.white.withValues(alpha: 0.22)
+                                  : accentColor,
                               shape: BoxShape.circle,
                             ),
                             alignment: Alignment.center,
                             child: isActive
-                                ? const iconoir.Pause(
+                                ? iconoir.Pause(
                                     width: 20,
                                     height: 20,
-                                    color: Colors.white,
+                                    color: hasColoredTheme
+                                        ? Colors.white
+                                        : colors.onAccentColor,
                                   )
                                 : (isRound
-                                    ? const iconoir.VideoCamera(
+                                    ? iconoir.VideoCamera(
                                         width: 20,
                                         height: 20,
-                                        color: Colors.white,
+                                        color: hasColoredTheme
+                                            ? Colors.white
+                                            : colors.onAccentColor,
                                       )
-                                    : const iconoir.Play(
+                                    : iconoir.Play(
                                         width: 20,
                                         height: 20,
-                                        color: Colors.white,
+                                        color: hasColoredTheme
+                                            ? Colors.white
+                                            : colors.onAccentColor,
                                       )),
                           ),
                           const SizedBox(width: 12),
@@ -1442,9 +1473,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                 Divider(
                   height: 1,
                   indent: 72,
-                  color: isDark
-                      ? Colors.white.withValues(alpha: 0.08)
-                      : Colors.black.withValues(alpha: 0.06),
+                  color: colors.dividerColor,
                 ),
             ],
           ],
@@ -1559,7 +1588,6 @@ class ProfileSectionPageContent extends StatelessWidget {
     String? fileName,
     String? linkUrl,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final actions = <_ProfileContextMenuAction>[
       if (onJumpToMessage != null)
         _ProfileContextMenuAction(
@@ -1587,7 +1615,7 @@ class ProfileSectionPageContent extends StatelessWidget {
               iconWidget: iconoir.Copy(
                 width: 18,
                 height: 18,
-                color: isDark ? Colors.white : Colors.black87,
+                color: context.theav.onSurface,
               ),
             );
           },
@@ -1620,7 +1648,6 @@ class ProfileSectionPageContent extends StatelessWidget {
     List<_ProfileContextMenuAction> actions,
   ) {
     if (actions.isEmpty) return;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     const double menuWidth = 248.0;
     const double itemHeight = 42.0;
     final double menuHeight = actions.length * itemHeight + 12.0;
@@ -1632,6 +1659,7 @@ class ProfileSectionPageContent extends StatelessWidget {
       barrierColor: Colors.transparent,
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (dialogCtx, animation, secondaryAnimation) {
+        final mat = ProfileMaterialStyle.of(dialogCtx);
         final screenSize = MediaQuery.of(dialogCtx).size;
         final double left = globalPosition.dx.clamp(
           12.0,
@@ -1683,7 +1711,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withValues(
-                              alpha: isDark ? 0.34 : 0.14,
+                              alpha: mat.isDark ? 0.34 : 0.14,
                             ),
                             blurRadius: 20,
                             offset: const Offset(0, 6),
@@ -1692,19 +1720,15 @@ class ProfileSectionPageContent extends StatelessWidget {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: BackdropFilter(
-                          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                        child: mat.wrapBlur(
+                          sigma: 16.0,
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 6),
                             decoration: BoxDecoration(
-                              color: isDark
-                                  ? const Color(0xCC2C2C2E)
-                                  : const Color(0xE6FFFFFF),
+                              color: mat.panelFill,
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: isDark
-                                    ? Colors.white.withValues(alpha: 0.14)
-                                    : Colors.black.withValues(alpha: 0.08),
+                                color: mat.borderColor,
                                 width: 0.5,
                               ),
                             ),
@@ -1714,7 +1738,7 @@ class ProfileSectionPageContent extends StatelessWidget {
                                 for (final action in actions)
                                   _CompactContextMenuRow(
                                     action: action,
-                                    isDark: isDark,
+                                    materialStyle: mat,
                                     onSelect: () {
                                       Navigator.of(dialogCtx).pop();
                                       action.onTap();
@@ -1820,12 +1844,10 @@ class ProfileSectionPageContent extends StatelessWidget {
     required String title,
     required String subtitle,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final textColor = isDark ? Colors.white : const Color(0xFF1C1C1E);
-    final subColor = isDark
-        ? Colors.white.withValues(alpha: 0.55)
-        : const Color(0xFF6C6C70);
-    final accentColor = isDark ? const Color(0xFF64B5F6) : const Color(0xFF0088CC);
+    final colors = _resolveTabColors(context);
+    final textColor = colors.textColor;
+    final subColor = colors.subColor;
+    final accentColor = colors.accentColor;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
@@ -1913,12 +1935,12 @@ class _ProfileContextMenuAction {
 
 class _CompactContextMenuRow extends StatefulWidget {
   final _ProfileContextMenuAction action;
-  final bool isDark;
+  final ProfileMaterialStyle materialStyle;
   final VoidCallback onSelect;
 
   const _CompactContextMenuRow({
     required this.action,
-    required this.isDark,
+    required this.materialStyle,
     required this.onSelect,
   });
 
@@ -1931,14 +1953,11 @@ class _CompactContextMenuRowState extends State<_CompactContextMenuRow> {
 
   @override
   Widget build(BuildContext context) {
-    final defaultColor = widget.isDark
-        ? Colors.white.withValues(alpha: 0.92)
-        : const Color(0xFF1C1C1E);
+    final mat = widget.materialStyle;
     final itemColor =
-        widget.action.isDestructive ? Colors.redAccent : defaultColor;
-    final hoverBg = widget.isDark
-        ? Colors.white.withValues(alpha: 0.08)
-        : Colors.black.withValues(alpha: 0.06);
+        widget.action.isDestructive ? mat.destructive : mat.foreground;
+    final hoverBg =
+        mat.primary.withValues(alpha: mat.isDark ? 0.14 : 0.08);
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
