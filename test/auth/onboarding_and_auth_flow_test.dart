@@ -517,6 +517,82 @@ void main() {
         }
       }
     });
+
+    testWidgets('TheavStepViewport transitions welcome steps forward and backward without screen overlap', (tester) async {
+      _useTallPhoneViewport(tester);
+      final tp = ThemeProvider();
+      addTearDown(tp.dispose);
+      final gp = _TestLiquidGlassProvider(GlassMode.disabled);
+      final lp = LocaleProvider();
+      await lp.ready;
+      final l10n = await _loadTestL10n(tester);
+
+      await tester.pumpWidget(
+        _buildAuthTestHost(
+          themeProvider: tp,
+          glassProvider: gp,
+          localeProvider: lp,
+          l10n: l10n,
+          child: const FirstStartWizardScreen(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      await tester.tap(find.text('Continue'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 80));
+
+      final outRect = tester.getRect(
+        find.byKey(const ValueKey<String>('theav_step_slot_0')),
+      );
+      final inRect = tester.getRect(
+        find.byKey(const ValueKey<String>('theav_step_slot_1')),
+      );
+      expect(outRect.right, lessThan(inRect.left));
+
+      await tester.pump(const Duration(milliseconds: 80));
+      final outRect2 = tester.getRect(
+        find.byKey(const ValueKey<String>('theav_step_slot_0')),
+      );
+      final inRect2 = tester.getRect(
+        find.byKey(const ValueKey<String>('theav_step_slot_1')),
+      );
+      expect(outRect2.right, lessThan(inRect2.left));
+
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(
+        find.byKey(const ValueKey<String>('theav_step_slot_0')),
+        findsNothing,
+      );
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey<String>('theav_step_slot_1'))).dx,
+        moreOrLessEquals(0.0, epsilon: 0.01),
+      );
+
+      await tester.tap(find.byTooltip('Back'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final backInRect = tester.getRect(
+        find.byKey(const ValueKey<String>('theav_step_slot_0')),
+      );
+      final backOutRect = tester.getRect(
+        find.byKey(const ValueKey<String>('theav_step_slot_1')),
+      );
+      expect(backInRect.right, lessThan(backOutRect.left));
+
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(
+        find.byKey(const ValueKey<String>('theav_step_slot_1')),
+        findsNothing,
+      );
+      expect(
+        tester.getTopLeft(find.byKey(const ValueKey<String>('theav_step_slot_0'))).dx,
+        moreOrLessEquals(0.0, epsilon: 0.01),
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('LoginScreen & ServiceMenuScreen', () {

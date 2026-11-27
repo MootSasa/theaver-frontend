@@ -205,18 +205,21 @@ class TheavAuthWallpaperBackground extends StatelessWidget {
             ? themeSvc!.activeDarkTheme.wallpaper
             : themeSvc!.activeLightTheme.wallpaper);
     return Positioned.fill(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          BakedChatWallpaper(wallpaper: wp),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: (isDark ? Colors.black : Colors.white).withValues(
-                alpha: isDark ? 0.24 : 0.12,
+      child: ColoredBox(
+        color: context.theav.background,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            BakedChatWallpaper(wallpaper: wp),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: (isDark ? Colors.black : Colors.white).withValues(
+                  alpha: isDark ? 0.24 : 0.12,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -727,7 +730,7 @@ class TheavStepProgressPill extends StatelessWidget {
 
 final SpringDescription _kAuthStepSpring = SpringDescription.withDampingRatio(
   mass: 1.0,
-  stiffness: 520.0,
+  stiffness: 380.0,
   ratio: 1.0,
 );
 
@@ -756,6 +759,10 @@ class TheavStepViewport extends StatefulWidget {
 
 class _TheavStepViewportState extends State<TheavStepViewport>
     with SingleTickerProviderStateMixin {
+  // Outgoing and incoming steps translate as a rigid strip with a 6% gap so
+  // transparent glass/blur steps never collide visually mid-flight.
+  static const double _kStepStride = 1.06;
+
   late final AnimationController _ctrl = AnimationController.unbounded(
     vsync: this,
   )..value = 1.0;
@@ -788,8 +795,15 @@ class _TheavStepViewportState extends State<TheavStepViewport>
         _ctrl.value = 1.0;
         return;
       }
+      final bool reversingCurrent = _outgoingChild != null &&
+          _outgoingStep == widget.stepIndex &&
+          !_ctrl.isCompleted;
+      final double startT =
+          reversingCurrent ? (1.0 - _ctrl.value).clamp(0.0, 1.0) : 0.0;
+      final double startVel =
+          reversingCurrent ? (-_ctrl.velocity).clamp(-2.0, 2.0) : 0.45;
       _outgoingChild = KeyedSubtree(
-        key: ValueKey<int>(oldWidget.stepIndex),
+        key: ValueKey<String>('theav_step_slot_${oldWidget.stepIndex}'),
         child: oldWidget.child,
       );
       _outgoingStep = oldWidget.stepIndex;
@@ -797,9 +811,9 @@ class _TheavStepViewportState extends State<TheavStepViewport>
       _ctrl.animateWith(
         SpringSimulation(
           _kAuthStepSpring,
-          0.0,
+          startT,
           1.0,
-          1.2,
+          startVel,
           tolerance: _kAuthStepTolerance,
         ),
       );
@@ -815,7 +829,7 @@ class _TheavStepViewportState extends State<TheavStepViewport>
   @override
   Widget build(BuildContext context) {
     final incoming = KeyedSubtree(
-      key: ValueKey<int>(widget.stepIndex),
+      key: ValueKey<String>('theav_step_slot_${widget.stepIndex}'),
       child: widget.child,
     );
 
@@ -832,11 +846,11 @@ class _TheavStepViewportState extends State<TheavStepViewport>
             fit: StackFit.passthrough,
             children: [
               FractionalTranslation(
-                translation: Offset(-0.28 * t * _dir, 0.0),
+                translation: Offset(-_kStepStride * t * _dir, 0.0),
                 child: IgnorePointer(child: _outgoingChild),
               ),
               FractionalTranslation(
-                translation: Offset((1.0 - t) * _dir, 0.0),
+                translation: Offset(_kStepStride * (1.0 - t) * _dir, 0.0),
                 child: incoming,
               ),
             ],
