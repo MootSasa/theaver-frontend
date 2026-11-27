@@ -7,7 +7,7 @@ Theaver is a cross-platform Flutter messenger client targeting Android, iOS, Win
 [![Release](https://img.shields.io/github/v/release/MootSasa/theaver-frontend?include_prereleases&label=release)](https://github.com/MootSasa/theaver-frontend/releases)
 [![Release Build](https://github.com/MootSasa/theaver-frontend/actions/workflows/release.yml/badge.svg)](https://github.com/MootSasa/theaver-frontend/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](./LICENSE)
-![Flutter](https://img.shields.io/badge/Flutter-3.41%2B-02569B?logo=flutter&logoColor=white)
+![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-02569B?logo=flutter&logoColor=white)
 ![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Web-424245)
 
 [Website](https://theaver.app) | [Web Client](https://app.theaver.app) | [Downloads](https://theaver.app/downloads) | [Docs (EN)](https://theaver.app/docs) | [Docs (RU)](https://theaver.app/ru/docs) | [Changelog](https://theaver.app/changelog)
@@ -61,7 +61,7 @@ Step-by-step instructions are in the [Download Verification Guide](https://theav
 
 ## Building from Source
 
-You need Flutter `3.41.9` (Dart `>=3.0.0 <4.0.0`) and standard build tools for your target platform (Android SDK + JDK 17, Xcode for Apple targets, MSVC + CMake on Windows, or `libsqlite3-dev` + GTK/Clang toolchain on Linux).
+You need Flutter `3.44.9` (Dart `>=3.0.0 <4.0.0`) and standard build tools for your target platform (Android SDK + JDK 17, Xcode for Apple targets, MSVC + CMake on Windows, or `libsqlite3-dev` + GTK/Clang toolchain on Linux).
 
 1. Clone the repository:
 

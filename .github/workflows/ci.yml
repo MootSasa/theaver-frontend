@@ -49,10 +49,15 @@ jobs:
         env:
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_BASE_REF: ${{ github.base_ref }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          git fetch --no-tags origin "${PR_BASE_REF}"
+          if [ -n "${PR_BASE_SHA}" ] && git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Using PR base commit ${PR_BASE_SHA}"
+          else
+            git fetch --no-tags origin "${PR_BASE_REF}"
+          fi
           python3 - <<'EOF'
           import os
           import subprocess
@@ -60,6 +65,7 @@ jobs:
 
           head = os.environ.get("PR_HEAD_REF", "").strip()
           base = os.environ.get("PR_BASE_REF", "beta").strip() or "beta"
+          base_sha = os.environ.get("PR_BASE_SHA", "").strip()
           title = os.environ.get("PR_TITLE", "")
           body = os.environ.get("PR_BODY", "")
 
@@ -71,13 +77,14 @@ jobs:
               print(f"Branch '{head}' is outside feat/* and fix/*; fragment optional.")
               sys.exit(0)
 
+          diff_range = f"{base_sha}...HEAD" if base_sha else f"origin/{base}...HEAD"
           out = subprocess.check_output(
               [
                   "git",
                   "diff",
                   "--diff-filter=AM",
                   "--name-only",
-                  f"origin/{base}...HEAD",
+                  diff_range,
                   "--",
                   "changelogs/fragments",
                   "changelogs/unreleased",
@@ -119,7 +126,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Install packages & run static analysis and tests
