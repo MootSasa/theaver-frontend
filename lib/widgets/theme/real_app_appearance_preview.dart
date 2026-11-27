@@ -1,5 +1,8 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
@@ -7,13 +10,13 @@ import '../../models/theav_theme.dart';
 import '../../services/chat_service.dart';
 import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
+import '../../theme/app_theme.dart';
 import '../../theme/theme_provider.dart';
-import '../chat/chat_list_item.dart';
+import '../chat/chat_list_tile_item.dart';
 import '../chat/chat_scaffold.dart';
+import '../chat/chat_selection_header.dart';
 import '../chat/classic_bottom_bar.dart';
 import '../chat/floating_glass_app_bar.dart';
-import '../chat/liquid_glass_bottom_bar.dart';
-import '../chat/liquid_glass_filter_chips.dart';
 import '../chat/liquid_glass_input_field.dart';
 import '../design_system/theav_design_system.dart';
 import '../message/message_bubble.dart';
@@ -58,7 +61,7 @@ class _RealAppAppearancePreviewState extends State<RealAppAppearancePreview> {
   final ScrollController _dialogScrollCtrl = ScrollController();
   final ScrollController _workspaceScrollCtrl = ScrollController();
   int _workspaceTabIndex = 1;
-  int _workspaceFilterIndex = 0;
+  bool _isTopMenuOpen = false;
 
   @override
   void dispose() {
@@ -71,7 +74,10 @@ class _RealAppAppearancePreviewState extends State<RealAppAppearancePreview> {
 
   void _setScene(AppearancePreviewScene next) {
     if (_scene == next) return;
-    setState(() => _scene = next);
+    setState(() {
+      _scene = next;
+      _isTopMenuOpen = false;
+    });
     widget.onSceneChanged?.call(next);
   }
 
@@ -87,7 +93,7 @@ class _RealAppAppearancePreviewState extends State<RealAppAppearancePreview> {
     final glassEnabled = glassProvider?.enabled ?? false;
     final isLite = glassProvider?.isLite ?? false;
 
-    final Widget previewContent = _scene == AppearancePreviewScene.dialog
+    final Widget rawScene = _scene == AppearancePreviewScene.dialog
         ? _DialogPreviewScene(
             theme: activeTheme,
             glassEnabled: glassEnabled,
@@ -102,11 +108,16 @@ class _RealAppAppearancePreviewState extends State<RealAppAppearancePreview> {
             isLite: isLite,
             scrollController: _workspaceScrollCtrl,
             selectedTabIndex: _workspaceTabIndex,
-            activeFilterIndex: _workspaceFilterIndex,
+            isTopMenuOpen: _isTopMenuOpen,
             onTabSelected: (idx) => setState(() => _workspaceTabIndex = idx),
-            onFilterSelected: (idx) =>
-                setState(() => _workspaceFilterIndex = idx),
+            onTopMenuOpenChanged: (open) =>
+                setState(() => _isTopMenuOpen = open),
           );
+
+    final Widget previewContent = Theme(
+      data: AppTheme.fromTheavTheme(activeTheme),
+      child: rawScene,
+    );
 
     final Widget framedScene = Container(
       height: widget.height,
@@ -359,12 +370,7 @@ class _DialogPreviewScene extends StatelessWidget {
             ],
           ),
         ),
-        const Positioned(
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: ChatBottomScrollEdge(height: 66),
-        ),
+        const ChatBottomScrollEdge(height: 66),
         Positioned(
           top: 0,
           left: 0,
@@ -405,9 +411,9 @@ class _WorkspacePreviewScene extends StatelessWidget {
   final bool isLite;
   final ScrollController scrollController;
   final int selectedTabIndex;
-  final int activeFilterIndex;
+  final bool isTopMenuOpen;
   final ValueChanged<int> onTabSelected;
-  final ValueChanged<int> onFilterSelected;
+  final ValueChanged<bool> onTopMenuOpenChanged;
 
   const _WorkspacePreviewScene({
     required this.theme,
@@ -415,169 +421,354 @@ class _WorkspacePreviewScene extends StatelessWidget {
     required this.isLite,
     required this.scrollController,
     required this.selectedTabIndex,
-    required this.activeFilterIndex,
+    required this.isTopMenuOpen,
     required this.onTabSelected,
-    required this.onFilterSelected,
+    required this.onTopMenuOpenChanged,
   });
+
+  List<Chat> _buildPreviewChats(AppLocalizations l10n) {
+    final now = DateTime.now().toUtc();
+    String isoAgo(Duration delta) => now.subtract(delta).toIso8601String();
+    return [
+      Chat(
+        id: 'onb_ws_saved',
+        chatType: 'saved',
+        name: l10n.trOr('chat_saved', 'Saved Messages'),
+        lastMessage: l10n.trOr(
+          'onboarding_preview_saved_subtitle',
+          'Notes, media, and links',
+        ),
+        lastMessageTime: isoAgo(const Duration(minutes: 2)),
+        lastMessageType: 'text',
+        updatedAt: isoAgo(const Duration(minutes: 2)),
+        unreadCount: 0,
+      ),
+      Chat(
+        id: 'onb_ws_anna',
+        chatType: 'private',
+        name: l10n.trOr('onboarding_preview_contact_name', 'Anna'),
+        lastMessage: l10n.trOr(
+          'onboarding_preview_msg_1',
+          'Look how smooth the glass bar looks over this wallpaper.',
+        ),
+        lastMessageTime: isoAgo(const Duration(minutes: 9)),
+        lastMessageType: 'text',
+        updatedAt: isoAgo(const Duration(minutes: 9)),
+        unreadCount: 2,
+        isOnline: true,
+      ),
+      Chat(
+        id: 'onb_ws_news',
+        chatType: 'channel',
+        name: 'Theaver News',
+        lastMessage: l10n.trOr(
+          'onboarding_preview_news_subtitle',
+          'Themes, glass refraction, and instant cross-device sync.',
+        ),
+        lastMessageTime: isoAgo(const Duration(minutes: 26)),
+        lastMessageType: 'text',
+        updatedAt: isoAgo(const Duration(minutes: 26)),
+        unreadCount: 1,
+      ),
+      Chat(
+        id: 'onb_ws_team',
+        chatType: 'group',
+        name: 'Design Team',
+        lastMessage: l10n.trOr(
+          'onboarding_preview_team_subtitle',
+          'Updated palette contrast for light and OLED themes.',
+        ),
+        lastMessageTime: isoAgo(const Duration(hours: 2)),
+        lastMessageType: 'text',
+        updatedAt: isoAgo(const Duration(hours: 2)),
+        lastMessageSenderId: 'me',
+        lastReadOutboxMessageId: 10,
+      ),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final palette = theme.palette;
-    final filters = [
-      l10n.trOr('filter_all', 'All'),
-      l10n.trOr('filter_private', 'Personal'),
-      l10n.trOr('filter_groups', 'Groups'),
+    final glassProvider = context.watch<LiquidGlassProvider?>();
+    final isDark = theme.isDark;
+    final chats = _buildPreviewChats(l10n);
+
+    final topMenuItems = <SelectionMorphMenuItem>[
+      SelectionMorphMenuItem(
+        id: 'saved',
+        label: l10n.trOr('chat_saved', 'Saved Messages'),
+        iconBuilder: (color, size) =>
+            iconoir.Bookmark(color: color, width: size, height: size),
+      ),
+      SelectionMorphMenuItem(
+        id: 'contacts',
+        label: l10n.trOr('contacts_title', 'Contacts'),
+        iconBuilder: (color, size) =>
+            iconoir.Group(color: color, width: size, height: size),
+      ),
+      SelectionMorphMenuItem(
+        id: 'settings',
+        label: l10n.trOr('nav_settings', 'Settings'),
+        iconBuilder: (color, size) =>
+            iconoir.Settings(color: color, width: size, height: size),
+      ),
     ];
-    final now = DateTime.now();
+
+    final Widget topBar = ChatListAdaptiveTopBar(
+      isSelectMode: false,
+      selectedCount: 0,
+      onCancelSelection: () {},
+      normalTitle: l10n.trOr('nav_chats', 'Chats'),
+      normalTitleKey: 'preview_chats',
+      isTitleConnected: true,
+      normalMenuItems: topMenuItems,
+      isNormalMenuOpen: isTopMenuOpen,
+      onNormalMenuOpenChanged: onTopMenuOpenChanged,
+      onNormalMenuAction: (_) => onTopMenuOpenChanged(false),
+    );
+
+    final Widget chatListView = ListView.builder(
+      controller: scrollController,
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      padding: const EdgeInsets.only(top: 66, bottom: 84),
+      itemCount: chats.length,
+      itemBuilder: (ctx, i) {
+        final chat = chats[i];
+        return ChatListTileItem(
+          chat: chat,
+          isSelectMode: false,
+          isSelected: false,
+          isMuted: false,
+          currentUserId: 'me',
+          lastMessageIsRead: chat.lastMessageSenderId == 'me',
+          onTap: () {
+            if (isTopMenuOpen) onTopMenuOpenChanged(false);
+          },
+          onLongPress: () {},
+          onSwipeAction: (_) async {},
+        );
+      },
+    );
+
+    if (glassEnabled && glassProvider != null) {
+      return LayoutBuilder(
+        builder: (layoutCtx, constraints) {
+          final double width = constraints.maxWidth.isFinite &&
+                  constraints.maxWidth > 0
+              ? constraints.maxWidth
+              : TileViewportScope.widthOf(layoutCtx);
+          const double barHeight = 56.0;
+          const double edgePadding = 12.0;
+          const double spacing = 8.0;
+          const double actionSize = 56.0;
+          const double bottomMargin = 10.0;
+          final double barWidth = math.max(
+            120.0,
+            width - edgePadding * 2 - actionSize - spacing,
+          );
+
+          final barStyle = glassProvider.createStyle(
+            context: layoutCtx,
+            cornerRadius: barHeight / 2,
+            refractionIndex: 1.1,
+            refractionWidth: 24.0,
+            isLiteOverride: isLite,
+          );
+          final actionStyle = glassProvider.createStyle(
+            context: layoutCtx,
+            cornerRadius: barHeight / 2,
+            refractionIndex: 1.1,
+            refractionWidth: 24.0,
+            isLiteOverride: isLite,
+          );
+
+          return LiquidGlassScaffold(
+            key: ValueKey<String>(
+              'preview_ws_glass_${isLite}_${isDark}_${theme.id}',
+            ),
+            pixelRatio: 1.0,
+            useSync: true,
+            batch: false,
+            backgroundColor: palette.background,
+            appBar: topBar,
+            appBarTopMargin: 8.0,
+            body: Stack(
+              fit: StackFit.expand,
+              children: [
+                chatListView,
+                if (isTopMenuOpen)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTap: () => onTopMenuOpenChanged(false),
+                    ),
+                  ),
+              ],
+            ),
+            bottomNavigationBarActionMargin: edgePadding,
+            floatingActionButtonMargin: edgePadding,
+            bottomNavigationBar: LiquidGlassTabBar(
+              items: [
+                LiquidGlassTabBarItem(
+                  iconBuilder: (_, glyph) => iconoir.Settings(
+                    color: glyph.color,
+                    width: glyph.size,
+                    height: glyph.size,
+                  ),
+                ),
+                LiquidGlassTabBarItem(
+                  iconBuilder: (_, glyph) => Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.center,
+                    children: [
+                      iconoir.ChatBubble(
+                        color: glyph.color,
+                        width: glyph.size,
+                        height: glyph.size,
+                      ),
+                      Positioned(
+                        top: -4,
+                        right: -10,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: palette.primary,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: const Text(
+                            '3',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                LiquidGlassTabBarItem(
+                  iconBuilder: (_, glyph) => iconoir.Search(
+                    color: glyph.color,
+                    width: glyph.size,
+                    height: glyph.size,
+                  ),
+                ),
+              ],
+              selectedIndex: selectedTabIndex,
+              onChanged: onTabSelected,
+              width: barWidth,
+              height: barHeight,
+              alignment: Alignment.bottomLeft,
+              margin: const EdgeInsets.only(
+                left: edgePadding,
+                bottom: bottomMargin,
+              ),
+              itemPadding: 3,
+              swell: const LiquidGlassTabBarSwell(scale: 0.024),
+              style: barStyle,
+              itemStyle: LiquidGlassTabItemStyle(
+                selectedColor: palette.primary,
+                unselectedColor: isDark
+                    ? const Color(0xFF8E8E93)
+                    : const Color(0xFF636366),
+                iconSize: 24,
+                labelFontSize: 10,
+                iconLabelGap: 0,
+                underGlassIconSize: 28,
+                underGlassLabelFontSize: 10,
+                selectedFontWeight: FontWeight.w700,
+                unselectedFontWeight: FontWeight.w600,
+              ),
+              pillStyle: LiquidGlassTabPillStyle(
+                mode: LiquidGlassPillMode.both,
+                show: true,
+                animated: true,
+                growHeight: isLite ? 0.0 : 6.0,
+                rest: LiquidGlassStyle(
+                  shape: const LiquidGlassShape.continuousRoundedRectangle(
+                    cornerRadius: 28,
+                    clipQuality: LiquidGlassClipQuality.roundedRectangle,
+                  ),
+                  color: isDark
+                      ? const Color(0x38FFFFFF)
+                      : const Color(0x2EAEAEB2),
+                  liteGlass: isLite,
+                ),
+              ),
+            ),
+            bottomNavigationBarAction: SizedBox(
+              width: actionSize,
+              height: actionSize,
+              child: LiquidGlassMorph(
+                key: ValueKey<String>('preview_ws_plus_${isLite}_$isDark'),
+                alignment: Alignment.bottomRight,
+                motion: LiquidGlassMorphMotion.fluid,
+                smoothness: 28,
+                style: actionStyle,
+                child: SizedBox(
+                  width: actionSize,
+                  height: actionSize,
+                  child: Center(
+                    child: iconoir.Plus(
+                      width: 26,
+                      height: 26,
+                      color: isDark ? Colors.white : const Color(0xFF121215),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        Positioned.fill(
-          child: Container(color: palette.background),
-        ),
-        Positioned.fill(
-          child: ListView(
-            controller: scrollController,
-            physics: const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
+        Positioned.fill(child: ColoredBox(color: palette.background)),
+        Positioned.fill(child: chatListView),
+        if (isTopMenuOpen)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => onTopMenuOpenChanged(false),
             ),
-            padding: const EdgeInsets.only(top: 102, bottom: 86),
-            children: [
-              ChatListItem(
-                chatName: l10n.trOr('chat_saved', 'Saved Messages'),
-                lastMessage: l10n.trOr(
-                  'onboarding_preview_saved_subtitle',
-                  'Notes, media, and links',
-                ),
-                lastMessageTime: now.subtract(const Duration(minutes: 2)),
-                avatarUrl: '',
-                isOnline: false,
-                isGroup: false,
-                unreadCount: 0,
-                onTap: () {},
-              ),
-              ChatListItem(
-                chatName: l10n.trOr('onboarding_preview_contact_name', 'Anna'),
-                lastMessage: l10n.trOr(
-                  'onboarding_preview_msg_1',
-                  'Look how smooth the glass bar looks over this wallpaper.',
-                ),
-                lastMessageTime: now.subtract(const Duration(minutes: 9)),
-                avatarUrl: '',
-                isOnline: true,
-                isGroup: false,
-                unreadCount: 2,
-                onTap: () {},
-              ),
-              ChatListItem(
-                chatName: 'Theaver News',
-                lastMessage: l10n.trOr(
-                  'onboarding_preview_news_subtitle',
-                  'Themes, glass refraction, and instant cross-device sync.',
-                ),
-                lastMessageTime: now.subtract(const Duration(minutes: 26)),
-                avatarUrl: '',
-                isOnline: false,
-                isGroup: true,
-                unreadCount: 1,
-                onTap: () {},
-              ),
-              ChatListItem(
-                chatName: 'Design Team',
-                lastMessage: l10n.trOr(
-                  'onboarding_preview_team_subtitle',
-                  'Updated palette contrast for light and OLED themes.',
-                ),
-                lastMessageTime: now.subtract(const Duration(hours: 2)),
-                avatarUrl: '',
-                isOnline: true,
-                isGroup: true,
-                unreadCount: 0,
-                onTap: () {},
-              ),
-            ],
           ),
-        ),
         Positioned(
           top: 8,
-          left: 12,
-          right: 12,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const SizedBox(width: 40),
-                  TheavFloatingSurface(
-                    borderRadius: 20.0,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
-                    ),
-                    child: Text(
-                      'Theaver',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: palette.onSurface,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                  ),
-                  SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: TheavFloatingSurface(
-                      borderRadius: 20.0,
-                      child: Center(
-                        child: iconoir.MoreVert(
-                          width: 19,
-                          height: 19,
-                          color: palette.onSurface,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              LiquidGlassFilterChips(
-                enabled: glassEnabled,
-                isLite: isLite,
-                filters: filters,
-                activeFilter: activeFilterIndex,
-                unreadCounts: const [3, 2, 1],
-                onFilterSelected: onFilterSelected,
-              ),
-            ],
-          ),
+          left: 0,
+          right: 0,
+          child: topBar,
         ),
         Positioned(
           left: 0,
           right: 0,
           bottom: 0,
-          child: glassEnabled
-              ? LiquidGlassBottomBar(
-                  selectedIndex: selectedTabIndex,
-                  onTabSelected: onTabSelected,
-                  onAddTap: () {},
-                  isLite: isLite,
-                  horizontalPadding: 14,
-                  bottomPadding: 10,
-                  barHeight: 58,
-                )
-              : ClassicBottomBar(
-                  selectedIndex: selectedTabIndex,
-                  onTabSelected: onTabSelected,
-                  onAddTap: () {},
-                  unreadCount: 3,
-                  horizontalPadding: 14,
-                  bottomPadding: 10,
-                  barHeight: 58,
-                ),
+          child: ClassicBottomBar(
+            selectedIndex: selectedTabIndex,
+            onTabSelected: onTabSelected,
+            onAddTap: () {},
+            unreadCount: 3,
+            horizontalPadding: 12,
+            bottomPadding: 10,
+            barHeight: 56,
+            spacing: 8,
+          ),
         ),
       ],
     );

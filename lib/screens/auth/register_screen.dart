@@ -632,26 +632,37 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 onTap: null,
               ),
             ],
-            body: SafeArea(
-              top: false,
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 540),
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(0, topClearance + 10, 0, 28),
-                    child: TheavStepViewport(
-                      stepIndex: _step,
-                      forward: _stepForward,
-                      child: _step == 0
-                          ? _buildStep0Contacts(palette, l10n)
-                          : (_step == 1
-                              ? _buildStep1Credentials(palette, l10n)
-                              : _buildStep2Profile(palette, l10n)),
+            body: Stack(
+              fit: StackFit.expand,
+              children: [
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 540),
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(
+                        0,
+                        topClearance + 10,
+                        0,
+                        112 + MediaQuery.paddingOf(context).bottom,
+                      ),
+                      child: TheavStepViewport(
+                        stepIndex: _step,
+                        forward: _stepForward,
+                        child: _step == 0
+                            ? _buildStep0Contacts(palette, l10n)
+                            : (_step == 1
+                                ? _buildStep1Credentials(palette, l10n)
+                                : _buildStep2Profile(palette, l10n)),
+                      ),
                     ),
                   ),
                 ),
-              ),
+                TheavFloatingBottomBar(
+                  maxWidth: 540,
+                  child: _buildStepPrimaryButton(palette, l10n),
+                ),
+              ],
             ),
           ),
         ],
@@ -833,23 +844,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 8),
           TheavAuthErrorBanner(message: _errorMessage!),
         ],
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: TheavSpringButton(
-            isLoading: _isLoading,
-            label: _awaitingCodes
-                ? l10n.trOr('register_verify_continue', 'Verify and Continue')
-                : l10n.trOr('onboarding_continue', 'Continue'),
-            trailing: iconoir.NavArrowRight(
-              width: 18,
-              height: 18,
-              color: palette.onPrimary,
-            ),
-            onPressed:
-                _awaitingCodes ? _confirmStep0Codes : _startStep0Verification,
-          ),
-        ),
       ],
     );
   }
@@ -1023,19 +1017,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 6),
           TheavAuthErrorBanner(message: _errorMessage!),
         ],
-        const SizedBox(height: 16),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: TheavSpringButton(
-            label: l10n.trOr('onboarding_continue', 'Continue'),
-            trailing: iconoir.NavArrowRight(
-              width: 18,
-              height: 18,
-              color: palette.onPrimary,
-            ),
-            onPressed: _submitStep1,
-          ),
-        ),
       ],
     );
   }
@@ -1159,16 +1140,42 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 8),
           TheavAuthErrorBanner(message: _errorMessage!),
         ],
-        const SizedBox(height: 18),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: TheavSpringButton(
-            isLoading: _isLoading,
-            label: l10n.trOr('register_complete_button', 'Complete registration'),
-            onPressed: _completeRegistration,
-          ),
-        ),
       ],
+    );
+  }
+
+  Widget _buildStepPrimaryButton(TheavPalette palette, AppLocalizations l10n) {
+    if (_step == 0) {
+      return TheavSpringButton(
+        isLoading: _isLoading,
+        label: _awaitingCodes
+            ? l10n.trOr('register_verify_continue', 'Verify & continue')
+            : l10n.trOr('onboarding_continue', 'Continue'),
+        trailing: iconoir.NavArrowRight(
+          width: 18,
+          height: 18,
+          color: palette.onPrimary,
+        ),
+        onPressed:
+            _awaitingCodes ? _confirmStep0Codes : _startStep0Verification,
+      );
+    }
+    if (_step == 1) {
+      return TheavSpringButton(
+        isLoading: _isLoading,
+        label: l10n.trOr('onboarding_continue', 'Continue'),
+        trailing: iconoir.NavArrowRight(
+          width: 18,
+          height: 18,
+          color: palette.onPrimary,
+        ),
+        onPressed: _submitStep1,
+      );
+    }
+    return TheavSpringButton(
+      isLoading: _isLoading,
+      label: l10n.trOr('register_complete_button', 'Complete registration'),
+      onPressed: _completeRegistration,
     );
   }
 

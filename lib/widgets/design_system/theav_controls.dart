@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
+import 'package:motor/motor.dart';
 
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
@@ -274,7 +275,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                   mode: LiquidGlassPillMode.both,
                   show: true,
                   animated: true,
-                  growHeight: effectiveGrowHeight,
+                  growHeight: style.isLite ? 0.0 : effectiveGrowHeight,
                   rest: LiquidGlassStyle(
                     shape: const LiquidGlassShape.continuousRoundedRectangle(
                       cornerRadius: 28,
@@ -283,6 +284,7 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                     color: style.isDark
                         ? const Color(0x38FFFFFF)
                         : const Color(0x2EAEAEB2),
+                    liteGlass: style.isLite,
                   ),
                 ),
               );
@@ -290,6 +292,9 @@ class TheavSegmentedControl<T> extends StatelessWidget {
               const double hBleed = 32.0;
               const double vBleed = 20.0;
               return Stack(
+                key: ValueKey<String>(
+                  'seg_glass_${style.mode.name}_${style.isDark}_${palette.primary.toARGB32()}_$n',
+                ),
                 clipBehavior: Clip.none,
                 children: [
                   Positioned(
@@ -345,10 +350,14 @@ class TheavSegmentedControl<T> extends StatelessWidget {
                       children: [
                         Padding(
                           padding: const EdgeInsets.all(mattePad),
-                          child: AnimatedAlign(
-                            duration: const Duration(milliseconds: 220),
-                            curve: Curves.easeOutCubic,
-                            alignment: Alignment(alignmentX, 0.0),
+                          child: SingleMotionBuilder(
+                            value: alignmentX,
+                            motion: const Motion.snappySpring(snapToEnd: true),
+                            builder: (context, animX, pill) => Align(
+                              alignment:
+                                  Alignment(animX.clamp(-1.15, 1.15), 0.0),
+                              child: pill,
+                            ),
                             child: FractionallySizedBox(
                               widthFactor: 1.0 / n,
                               heightFactor: 1.0,

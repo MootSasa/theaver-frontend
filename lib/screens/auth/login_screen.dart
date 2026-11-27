@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:pretty_qr_code/pretty_qr_code.dart';
-import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -294,109 +293,104 @@ class _LoginScreenState extends State<LoginScreen> {
     final ctrl = TextEditingController();
     bool useRecoveryCode = false;
 
-    final result = await showTheavModalSheet<Map<String, dynamic>>(
+    final result = await showTheavCompactModalCard<Map<String, dynamic>>(
       context: context,
       title: l10n.translate('auth_2fa_title'),
-      showCloseButton: true,
+      maxWidth: 368.0,
       builder: (sheetCtx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             final palette = ctx.theav;
             final sheetL10n = ctx.l10n;
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      useRecoveryCode
-                          ? sheetL10n.translate('auth_2fa_enter_backup_code')
-                          : sheetL10n.translate('auth_2fa_enter_password_prompt'),
-                      style: TextStyle(fontSize: 14, color: palette.subtext),
-                    ),
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    useRecoveryCode
+                        ? sheetL10n.translate('auth_2fa_enter_backup_code')
+                        : sheetL10n.translate('auth_2fa_enter_password_prompt'),
+                    style: TextStyle(fontSize: 14, color: palette.subtext),
                   ),
-                  const SizedBox(height: 10),
-                  TheavInsetGroup(
-                    children: [
-                      TheavInlineTextField(
-                        controller: ctrl,
-                        autofocus: true,
-                        obscureText: !useRecoveryCode,
-                        placeholder: useRecoveryCode
-                            ? sheetL10n.translate('auth_2fa_backup_code_label')
-                            : sheetL10n.translate('security_2fa_password_label'),
-                        prefix: iconoir.Shield(
-                          width: 19,
-                          height: 19,
-                          color: palette.subtext,
-                        ),
-                        onSubmitted: (v) {
-                          if (v.trim().isNotEmpty) {
-                            Navigator.of(sheetCtx).pop({
-                              'value': v.trim(),
-                              'isRecoveryCode': useRecoveryCode,
-                            });
-                          }
-                        },
+                ),
+                const SizedBox(height: 12),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  children: [
+                    TheavInlineTextField(
+                      controller: ctrl,
+                      autofocus: true,
+                      obscureText: !useRecoveryCode,
+                      placeholder: useRecoveryCode
+                          ? sheetL10n.translate('auth_2fa_backup_code_label')
+                          : sheetL10n.translate('security_2fa_password_label'),
+                      prefix: iconoir.Shield(
+                        width: 19,
+                        height: 19,
+                        color: palette.subtext,
                       ),
-                      TheavListRow(
-                        title: useRecoveryCode
-                            ? sheetL10n.translate('auth_2fa_use_password')
-                            : sheetL10n.translate('auth_2fa_use_backup_code'),
-                        showChevron: true,
-                        onTap: () {
-                          HapticUtils.selection();
-                          setSheetState(() {
-                            useRecoveryCode = !useRecoveryCode;
-                            ctrl.clear();
+                      onSubmitted: (v) {
+                        if (v.trim().isNotEmpty) {
+                          Navigator.of(sheetCtx).pop({
+                            'value': v.trim(),
+                            'isRecoveryCode': useRecoveryCode,
                           });
-                        },
-                      ),
-                      if (allowEmailReset &&
-                          hasRecoveryEmail &&
-                          usernameOrEmail != null &&
-                          passwordForReset != null)
-                        TheavListRow(
-                          title: sheetL10n.translate('auth_2fa_forgot_button'),
-                          isDestructive: true,
-                          showChevron: true,
-                          onTap: () async {
-                            Navigator.of(sheetCtx).pop();
-                            final resetDone = await _show2FAEmailResetSheet(
-                              usernameOrEmail: usernameOrEmail,
-                              password: passwordForReset,
-                            );
-                            if (resetDone == true && mounted) {
-                              GlassToastService().show(
-                                context,
-                                l10n.translate('auth_2fa_reset_success'),
-                                icon: Icons.check_circle_outline,
-                              );
-                            }
-                          },
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TheavSpringButton(
-                      label: sheetL10n.translate('confirm'),
-                      onPressed: () {
-                        final val = ctrl.text.trim();
-                        if (val.isEmpty) return;
-                        Navigator.of(sheetCtx).pop({
-                          'value': val,
-                          'isRecoveryCode': useRecoveryCode,
+                        }
+                      },
+                    ),
+                    TheavListRow(
+                      title: useRecoveryCode
+                          ? sheetL10n.translate('auth_2fa_use_password')
+                          : sheetL10n.translate('auth_2fa_use_backup_code'),
+                      showChevron: true,
+                      onTap: () {
+                        HapticUtils.selection();
+                        setSheetState(() {
+                          useRecoveryCode = !useRecoveryCode;
+                          ctrl.clear();
                         });
                       },
                     ),
-                  ),
-                ],
-              ),
+                    if (allowEmailReset &&
+                        hasRecoveryEmail &&
+                        usernameOrEmail != null &&
+                        passwordForReset != null)
+                      TheavListRow(
+                        title: sheetL10n.translate('auth_2fa_forgot_button'),
+                        isDestructive: true,
+                        showChevron: true,
+                        onTap: () async {
+                          Navigator.of(sheetCtx).pop();
+                          final resetDone = await _show2FAEmailResetSheet(
+                            usernameOrEmail: usernameOrEmail,
+                            password: passwordForReset,
+                          );
+                          if (resetDone == true && mounted) {
+                            GlassToastService().show(
+                              context,
+                              l10n.translate('auth_2fa_reset_success'),
+                              icon: Icons.check_circle_outline,
+                            );
+                          }
+                        },
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TheavSpringButton(
+                  label: sheetL10n.translate('confirm'),
+                  onPressed: () {
+                    final val = ctrl.text.trim();
+                    if (val.isEmpty) return;
+                    Navigator.of(sheetCtx).pop({
+                      'value': val,
+                      'isRecoveryCode': useRecoveryCode,
+                    });
+                  },
+                ),
+              ],
             );
           },
         );
@@ -430,80 +424,71 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     if (!mounted) return null;
-    return showTheavModalSheet<bool>(
+    return showTheavCompactModalCard<bool>(
       context: context,
       title: l10n.translate('auth_2fa_reset_title'),
-      showCloseButton: true,
+      maxWidth: 368.0,
       builder: (sheetCtx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             final palette = ctx.theav;
             final sheetL10n = ctx.l10n;
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(0, 6, 0, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      sheetL10n.translate('auth_2fa_reset_description'),
-                      style: TextStyle(fontSize: 14, color: palette.subtext),
-                    ),
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    sheetL10n.translate('auth_2fa_reset_description'),
+                    style: TextStyle(fontSize: 14, color: palette.subtext),
                   ),
-                  const SizedBox(height: 14),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TheavOtpPinRow(
-                      value: otp,
-                      errorShakeCounter: shakeCount,
-                      enabled: !sending && !confirming,
-                      onChanged: (v) => otp = v,
-                    ),
-                  ),
-                  if (errorMsg != null) TheavAuthErrorBanner(message: errorMsg!),
-                  const SizedBox(height: 14),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TheavSpringButton(
-                      isLoading: confirming,
-                      label: sheetL10n.translate('auth_2fa_reset_confirm_button'),
-                      onPressed: () async {
-                        if (otp.trim().length < 6) {
-                          setSheetState(() {
-                            shakeCount++;
-                            errorMsg = sheetL10n.translate(
-                              'email_error_invalid_code',
-                            );
-                          });
-                          return;
-                        }
-                        setSheetState(() {
-                          confirming = true;
-                          errorMsg = null;
-                        });
-                        final res = await AuthService.confirm2FAReset(
-                          usernameOrEmail: usernameOrEmail,
-                          password: password,
-                          code: otp.trim(),
+                ),
+                const SizedBox(height: 14),
+                TheavOtpPinRow(
+                  value: otp,
+                  errorShakeCounter: shakeCount,
+                  enabled: !sending && !confirming,
+                  onChanged: (v) => otp = v,
+                ),
+                if (errorMsg != null) TheavAuthErrorBanner(message: errorMsg!),
+                const SizedBox(height: 14),
+                TheavSpringButton(
+                  isLoading: confirming,
+                  label: sheetL10n.translate('auth_2fa_reset_confirm_button'),
+                  onPressed: () async {
+                    if (otp.trim().length < 6) {
+                      setSheetState(() {
+                        shakeCount++;
+                        errorMsg = sheetL10n.translate(
+                          'email_error_invalid_code',
                         );
-                        if (!ctx.mounted) return;
-                        if (res['success'] == true) {
-                          Navigator.of(sheetCtx).pop(true);
-                        } else {
-                          setSheetState(() {
-                            confirming = false;
-                            shakeCount++;
-                            errorMsg = res['message']?.toString() ??
-                                sheetL10n.translate('error_occurred');
-                          });
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
+                      });
+                      return;
+                    }
+                    setSheetState(() {
+                      confirming = true;
+                      errorMsg = null;
+                    });
+                    final res = await AuthService.confirm2FAReset(
+                      usernameOrEmail: usernameOrEmail,
+                      password: password,
+                      code: otp.trim(),
+                    );
+                    if (!ctx.mounted) return;
+                    if (res['success'] == true) {
+                      Navigator.of(sheetCtx).pop(true);
+                    } else {
+                      setSheetState(() {
+                        confirming = false;
+                        shakeCount++;
+                        errorMsg = res['message']?.toString() ??
+                            sheetL10n.translate('error_occurred');
+                      });
+                    }
+                  },
+                ),
+              ],
             );
           },
         );
@@ -750,57 +735,55 @@ class _LoginScreenState extends State<LoginScreen> {
     );
 
     if (!mounted) return;
-    await showTheavModalSheet<void>(
+    await showTheavCompactModalCard<void>(
       context: context,
       title: provider.displayName,
-      showCloseButton: true,
+      maxWidth: 356.0,
+      barrierDismissible: true,
       builder: (sheetCtx) {
         _oauthWaitingSheetContext = sheetCtx;
         final palette = sheetCtx.theav;
         final sheetL10n = sheetCtx.l10n;
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  OAuthBrandGlyph(providerId: provider.id, size: 28),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Text(
-                      sheetL10n.trOr(
-                        'oauth_waiting_browser',
-                        'Complete sign-in in your browser and return to Theaver.',
-                      ),
-                      style: TextStyle(fontSize: 14.5, color: palette.onSurface),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                OAuthBrandGlyph(providerId: provider.id, size: 28),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    sheetL10n.trOr(
+                      'oauth_waiting_browser',
+                      'Complete sign-in in your browser and return to Theaver.',
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              Center(
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.2,
-                    valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
+                    style: TextStyle(fontSize: 14.5, color: palette.onSurface),
                   ),
                 ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  valueColor: AlwaysStoppedAnimation<Color>(palette.primary),
+                ),
               ),
-              const SizedBox(height: 18),
-              TheavSpringButton(
-                variant: TheavSpringButtonVariant.glass,
-                label: sheetL10n.translate('cancel'),
-                onPressed: () {
-                  _cancelActiveOAuth();
-                  Navigator.of(sheetCtx).pop();
-                },
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 18),
+            TheavSpringButton(
+              variant: TheavSpringButtonVariant.glass,
+              label: sheetL10n.translate('cancel'),
+              onPressed: () {
+                _cancelActiveOAuth();
+                Navigator.of(sheetCtx).pop();
+              },
+            ),
+          ],
         );
       },
     ).whenComplete(() {
@@ -946,89 +929,84 @@ class _LoginScreenState extends State<LoginScreen> {
     bool submitting = false;
     String? errText;
 
-    await showTheavModalSheet<void>(
+    await showTheavCompactModalCard<void>(
       context: context,
       title: l10n.trOr('oauth_link_title', 'Link existing account'),
-      showCloseButton: true,
+      maxWidth: 368.0,
       builder: (sheetCtx) {
         return StatefulBuilder(
           builder: (ctx, setSheetState) {
             final palette = ctx.theav;
             final sheetL10n = ctx.l10n;
-            return SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(0, 4, 0, 20),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Text(
-                      sheetL10n
-                          .trOr(
-                            'oauth_link_description',
-                            'Enter your current Theaver password once to link {provider} to {email}.',
-                          )
-                          .replaceAll('{provider}', providerName)
-                          .replaceAll('{email}', maskedEmail),
-                      style: TextStyle(fontSize: 14, color: palette.subtext),
-                    ),
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: Text(
+                    sheetL10n
+                        .trOr(
+                          'oauth_link_description',
+                          'Enter your current Theaver password once to link {provider} to {email}.',
+                        )
+                        .replaceAll('{provider}', providerName)
+                        .replaceAll('{email}', maskedEmail),
+                    style: TextStyle(fontSize: 14, color: palette.subtext),
                   ),
-                  const SizedBox(height: 10),
-                  TheavInsetGroup(
-                    children: [
-                      TheavInlineTextField(
-                        controller: pwdCtrl,
-                        autofocus: true,
-                        obscureText: true,
-                        placeholder: sheetL10n.translate('auth_password'),
-                        prefix: iconoir.Lock(
-                          width: 19,
-                          height: 19,
-                          color: palette.subtext,
-                        ),
+                ),
+                const SizedBox(height: 12),
+                TheavInsetGroup(
+                  margin: EdgeInsets.zero,
+                  children: [
+                    TheavInlineTextField(
+                      controller: pwdCtrl,
+                      autofocus: true,
+                      obscureText: true,
+                      placeholder: sheetL10n.translate('auth_password'),
+                      prefix: iconoir.Lock(
+                        width: 19,
+                        height: 19,
+                        color: palette.subtext,
                       ),
-                    ],
-                  ),
-                  if (errText != null) TheavAuthErrorBanner(message: errText!),
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: TheavSpringButton(
-                      isLoading: submitting,
-                      label: sheetL10n.translate('confirm'),
-                      onPressed: () async {
-                        if (pwdCtrl.text.isEmpty) return;
-                        setSheetState(() {
-                          submitting = true;
-                          errText = null;
-                        });
-                        final res = await AuthService.confirmOAuthPasswordLink(
-                          sessionId: sessionId,
-                          pollSecret: pollSecret,
-                          password: pwdCtrl.text,
-                          context: context,
-                        );
-                        if (!ctx.mounted) return;
-                        if (res['success'] == true) {
-                          Navigator.of(sheetCtx).pop();
-                          if (mounted) {
-                            await _enterWorkspace(
-                              res['user_id']?.toString() ?? '',
-                            );
-                          }
-                        } else {
-                          setSheetState(() {
-                            submitting = false;
-                            errText = res['message']?.toString() ??
-                                sheetL10n.translate('error_occurred');
-                          });
-                        }
-                      },
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
+                if (errText != null) TheavAuthErrorBanner(message: errText!),
+                const SizedBox(height: 12),
+                TheavSpringButton(
+                  isLoading: submitting,
+                  label: sheetL10n.translate('confirm'),
+                  onPressed: () async {
+                    if (pwdCtrl.text.isEmpty) return;
+                    setSheetState(() {
+                      submitting = true;
+                      errText = null;
+                    });
+                    final res = await AuthService.confirmOAuthPasswordLink(
+                      sessionId: sessionId,
+                      pollSecret: pollSecret,
+                      password: pwdCtrl.text,
+                      context: context,
+                    );
+                    if (!ctx.mounted) return;
+                    if (res['success'] == true) {
+                      Navigator.of(sheetCtx).pop();
+                      if (mounted) {
+                        await _enterWorkspace(
+                          res['user_id']?.toString() ?? '',
+                        );
+                      }
+                    } else {
+                      setSheetState(() {
+                        submitting = false;
+                        errText = res['message']?.toString() ??
+                            sheetL10n.translate('error_occurred');
+                      });
+                    }
+                  },
+                ),
+              ],
             );
           },
         );
@@ -1042,7 +1020,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final palette = context.theav;
-    final langCode = context.watch<LocaleProvider>().locale.languageCode;
     final topClearance = SettingsFloatingHeader.topClearanceOf(context);
     final providers = _providersConfig?.providers ?? const <AuthProviderInfo>[];
 
@@ -1057,24 +1034,11 @@ class _LoginScreenState extends State<LoginScreen> {
           actions: [
             SettingsHeaderAction(
               tooltip: l10n.trOr('onboarding_select_language', 'Language'),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    langCode.toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: palette.primary,
-                    ),
-                  ),
-                ],
-              ),
-              onTap: () => showLanguagePickerSheet(
-                context,
+              child: TheavLanguageMorphButton(
+                compactCircle: true,
                 recommendedCode: _providersConfig?.recommendedLanguage,
               ),
+              onTap: null,
             ),
           ],
           body: SafeArea(
@@ -1438,6 +1402,60 @@ class _LoginScreenState extends State<LoginScreen> {
         TheavInsetGroup(
           margin: EdgeInsets.zero,
           header: l10n.translate('qr_login_title'),
+          headerTrailing: TheavMorphMenuButton<void>(
+            menuWidth: 286,
+            menuHeight: 196,
+            cornerRadius: 20,
+            collapsedBuilder: (_) => Center(
+              child: iconoir.HelpCircle(
+                width: 17,
+                height: 17,
+                color: palette.primary,
+              ),
+            ),
+            menuBuilder: (_, __) => Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    l10n.trOr('auth_qr_help_title', 'Sign in with QR code'),
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: palette.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    l10n.trOr(
+                      'auth_qr_help_steps',
+                      '1. Open Theaver on your phone.\n'
+                      '2. Go to Settings -> Devices -> Link Desktop Device.\n'
+                      '3. Point your camera at this QR code and confirm.',
+                    ),
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.42,
+                      color: palette.subtext,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            child: SizedBox(
+              width: 28,
+              height: 28,
+              child: Center(
+                child: iconoir.HelpCircle(
+                  width: 17,
+                  height: 17,
+                  color: palette.primary,
+                ),
+              ),
+            ),
+          ),
           footer: l10n.trOr(
             'qr_login_scan_instruction',
             'Open Theaver on another signed-in device: Settings -> Devices -> Link Device.',

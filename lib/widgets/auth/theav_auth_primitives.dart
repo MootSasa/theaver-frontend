@@ -1,14 +1,17 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:motor/motor.dart';
 import 'package:provider/provider.dart';
 
 import '../../l10n/app_localizations.dart';
 import '../../services/theav_theme_service.dart';
 import '../../theme/theme_provider.dart';
+import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
 import '../design_system/theav_design_system.dart';
 import '../theme/baked_chat_wallpaper.dart';
@@ -722,9 +725,20 @@ class TheavStepProgressPill extends StatelessWidget {
   }
 }
 
-/// Shader-safe step viewport using spring-eased slide transitions inside [ClipRect]
-/// without any [Opacity] or [FadeTransition] wrapping embedded glass surfaces.
-class TheavStepViewport extends StatelessWidget {
+final SpringDescription _kAuthStepSpring = SpringDescription.withDampingRatio(
+  mass: 1.0,
+  stiffness: 520.0,
+  ratio: 1.0,
+);
+
+const Tolerance _kAuthStepTolerance = Tolerance(
+  distance: 6e-3,
+  velocity: 3e-2,
+);
+
+/// Zero-delay shader-safe step viewport driven by critically damped spring
+/// physics without any [Opacity] or [FadeTransition] wrapping glass widgets.
+class TheavStepViewport extends StatefulWidget {
   final int stepIndex;
   final bool forward;
   final Widget child;
@@ -737,29 +751,181 @@ class TheavStepViewport extends StatelessWidget {
   });
 
   @override
+  State<TheavStepViewport> createState() => _TheavStepViewportState();
+}
+
+class _TheavStepViewportState extends State<TheavStepViewport>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController.unbounded(
+    vsync: this,
+  )..value = 1.0;
+
+  Widget? _outgoingChild;
+  int? _outgoingStep;
+  double _dir = 1.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.addStatusListener((status) {
+      if (status.isCompleted && _outgoingChild != null && mounted) {
+        setState(() {
+          _outgoingChild = null;
+          _outgoingStep = null;
+        });
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant TheavStepViewport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.stepIndex != oldWidget.stepIndex) {
+      final disableAnim = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+      if (disableAnim) {
+        _outgoingChild = null;
+        _outgoingStep = null;
+        _ctrl.value = 1.0;
+        return;
+      }
+      _outgoingChild = KeyedSubtree(
+        key: ValueKey<int>(oldWidget.stepIndex),
+        child: oldWidget.child,
+      );
+      _outgoingStep = oldWidget.stepIndex;
+      _dir = widget.forward ? 1.0 : -1.0;
+      _ctrl.animateWith(
+        SpringSimulation(
+          _kAuthStepSpring,
+          0.0,
+          1.0,
+          1.2,
+          tolerance: _kAuthStepTolerance,
+        ),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final incoming = KeyedSubtree(
+      key: ValueKey<int>(widget.stepIndex),
+      child: widget.child,
+    );
+
+    if (_outgoingChild == null || _outgoingStep == widget.stepIndex) {
+      return ClipRect(child: incoming);
+    }
+
     return ClipRect(
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 340),
-        switchInCurve: const Cubic(0.32, 0.72, 0.0, 1.0),
-        switchOutCurve: const Cubic(0.32, 0.72, 0.0, 1.0),
-        transitionBuilder: (childWidget, animation) {
-          final isIncoming = childWidget.key == ValueKey<int>(stepIndex);
-          final double dir = forward ? 1.0 : -1.0;
-          final beginOffset = isIncoming
-              ? Offset(0.18 * dir, 0)
-              : Offset(-0.14 * dir, 0);
-          return SlideTransition(
-            position: Tween<Offset>(
-              begin: beginOffset,
-              end: Offset.zero,
-            ).animate(animation),
-            child: childWidget,
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (context, _) {
+          final double t = _ctrl.value.clamp(0.0, 1.0);
+          return Stack(
+            fit: StackFit.passthrough,
+            children: [
+              FractionalTranslation(
+                translation: Offset(-0.28 * t * _dir, 0.0),
+                child: IgnorePointer(child: _outgoingChild),
+              ),
+              FractionalTranslation(
+                translation: Offset((1.0 - t) * _dir, 0.0),
+                child: incoming,
+              ),
+            ],
           );
         },
-        child: KeyedSubtree(
-          key: ValueKey<int>(stepIndex),
-          child: child,
+      ),
+    );
+  }
+}
+
+/// Floating bottom action container rendered directly inside a [Stack] over a
+/// full-bleed scrollable view so scrolled lists never clip at a hard seam.
+class TheavFloatingBottomBar extends StatelessWidget {
+  final Widget child;
+  final double maxWidth;
+  final EdgeInsetsGeometry padding;
+  final bool keyboardAware;
+  final bool showBottomEdgeBlur;
+
+  const TheavFloatingBottomBar({
+    super.key,
+    required this.child,
+    this.maxWidth = 640.0,
+    this.padding = const EdgeInsets.fromLTRB(16, 18, 16, 16),
+    this.keyboardAware = true,
+    this.showBottomEdgeBlur = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TheavSurfaceStyle.of(context);
+    final palette = style.palette;
+    final viewInsetsBottom =
+        keyboardAware ? MediaQuery.viewInsetsOf(context).bottom : 0.0;
+    final bool useGlassEdge = showBottomEdgeBlur &&
+        style.isGlass &&
+        BlurUtils.shouldBlurMaterialHud(context);
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1.0,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: viewInsetsBottom),
+        child: Stack(
+          alignment: Alignment.bottomCenter,
+          children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: useGlassEdge
+                    ? LiquidGlassScrollEdge(
+                        edge: LiquidGlassEdge.bottom,
+                        style: LiquidGlassScrollEdgeStyle.soft,
+                        blur: math.max(style.glassProvider?.blur ?? 8.0, 8.0),
+                        color: Colors.transparent,
+                      )
+                    : DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              palette.background.withValues(alpha: 0.0),
+                              palette.background.withValues(
+                                alpha: style.isDark ? 0.54 : 0.62,
+                              ),
+                              palette.background.withValues(
+                                alpha: style.isDark ? 0.84 : 0.88,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+            SafeArea(
+              top: false,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                heightFactor: 1.0,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: Padding(
+                    padding: padding,
+                    child: child,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -792,85 +958,289 @@ const List<TheavLanguageOption> kTheavSupportedLanguages = [
   TheavLanguageOption(code: 'ko', nativeName: '한국어', secondaryName: 'Korean'),
 ];
 
-/// Opens a native [showTheavModalSheet] listing all supported interface languages.
+/// Compact button that morphs into the interface language picker menu via
+/// [openTheavMorphPopover] without opening a heavy bottom sheet.
+class TheavLanguageMorphButton extends StatelessWidget {
+  final String? recommendedCode;
+  final ValueChanged<String>? onSelected;
+  final bool compactCircle;
+
+  const TheavLanguageMorphButton({
+    super.key,
+    this.recommendedCode,
+    this.onSelected,
+    this.compactCircle = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final palette = context.theav;
+    final currentCode = context.watch<LocaleProvider>().locale.languageCode;
+    final currentOption = kTheavSupportedLanguages.firstWhere(
+      (item) => item.code == currentCode,
+      orElse: () => kTheavSupportedLanguages.first,
+    );
+
+    return TheavMorphMenuButton<String>(
+      key: ValueKey<String>(
+        compactCircle
+            ? 'login_language_morph_btn'
+            : 'onboarding_language_morph_btn',
+      ),
+      menuWidth: 256.0,
+      menuHeight: 296.0,
+      cornerRadius: 22.0,
+      collapsedBuilder: (_) => compactCircle
+          ? Center(
+              child: Text(
+                currentCode.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: palette.primary,
+                ),
+              ),
+            )
+          : Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    iconoir.Language(
+                      width: 17,
+                      height: 17,
+                      color: palette.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      currentOption.nativeName,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        color: palette.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+      menuBuilder: (menuCtx, close) => _LanguageMorphMenuBody(
+        recommendedCode: recommendedCode,
+        onSelected: (code) {
+          onSelected?.call(code);
+          close(code);
+        },
+      ),
+      child: compactCircle
+          ? SizedBox(
+              width: 44,
+              height: 44,
+              child: Center(
+                child: Text(
+                  currentCode.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                    color: palette.primary,
+                  ),
+                ),
+              ),
+            )
+          : Semantics(
+              button: true,
+              label: l10n.trOr('onboarding_change_language', 'Change language'),
+              child: SizedBox(
+                height: 40,
+                child: TheavFloatingSurface(
+                  borderRadius: 20.0,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      iconoir.Language(
+                        width: 17,
+                        height: 17,
+                        color: palette.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${l10n.trOr('onboarding_change_language', 'Change language')} · ${currentOption.nativeName}',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          color: palette.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      iconoir.NavArrowDown(
+                        width: 15,
+                        height: 15,
+                        color: palette.subtext,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
+}
+
+/// Opens the compact morphing language picker anchored to [anchorContext].
 Future<void> showLanguagePickerSheet(
-  BuildContext context, {
+  BuildContext anchorContext, {
   String? recommendedCode,
   ValueChanged<String>? onSelected,
 }) async {
-  final l10n = context.l10n;
-  final localeProvider = context.read<LocaleProvider>();
-  final currentCode = localeProvider.locale.languageCode;
-  final resolvedRecommended =
-      (recommendedCode != null && recommendedCode.isNotEmpty)
-          ? recommendedCode
-          : LocaleProvider.resolveSystemLanguageCode();
-
-  final recommendedItem = kTheavSupportedLanguages.firstWhere(
-    (item) => item.code == resolvedRecommended,
-    orElse: () => kTheavSupportedLanguages.first,
+  await openTheavMorphPopover<String>(
+    anchorContext: anchorContext,
+    menuWidth: 256.0,
+    menuHeight: 296.0,
+    cornerRadius: 22.0,
+    menuBuilder: (menuCtx, close) => _LanguageMorphMenuBody(
+      recommendedCode: recommendedCode,
+      onSelected: (code) {
+        onSelected?.call(code);
+        close(code);
+      },
+    ),
   );
-  final otherItems = kTheavSupportedLanguages
-      .where((item) => item.code != recommendedItem.code)
-      .toList();
+}
 
-  await showTheavModalSheet<void>(
-    context: context,
-    title: l10n.trOr('onboarding_select_language', 'Language'),
-    showCloseButton: true,
-    builder: (sheetCtx) {
-      final sheetL10n = sheetCtx.l10n;
-      return SingleChildScrollView(
-        padding: const EdgeInsets.only(bottom: 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TheavInsetGroup(
-              header: sheetL10n.trOr('onboarding_recommended_language', 'Recommended'),
-              children: [
-                TheavListRow(
-                  leading: _LanguageCodeBadge(code: recommendedItem.code),
-                  title: recommendedItem.nativeName,
-                  subtitle: recommendedItem.secondaryName,
-                  trailing: TheavCheckCircle(
-                    selected: currentCode == recommendedItem.code,
+class _LanguageMorphMenuBody extends StatelessWidget {
+  final String? recommendedCode;
+  final ValueChanged<String> onSelected;
+
+  const _LanguageMorphMenuBody({
+    this.recommendedCode,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final palette = context.theav;
+    final localeProvider = context.read<LocaleProvider>();
+    final currentCode = context.watch<LocaleProvider>().locale.languageCode;
+    final resolvedRecommended =
+        (recommendedCode != null && recommendedCode!.isNotEmpty)
+            ? recommendedCode!
+            : LocaleProvider.resolveSystemLanguageCode();
+
+    final recommendedItem = kTheavSupportedLanguages.firstWhere(
+      (item) => item.code == resolvedRecommended,
+      orElse: () => kTheavSupportedLanguages.first,
+    );
+    final orderedItems = <TheavLanguageOption>[
+      recommendedItem,
+      ...kTheavSupportedLanguages.where(
+        (item) => item.code != recommendedItem.code,
+      ),
+    ];
+
+    return Column(
+      mainAxisSize: MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+          child: Row(
+            children: [
+              iconoir.Language(
+                width: 17,
+                height: 17,
+                color: palette.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  l10n.trOr('onboarding_select_language', 'Language'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: palette.onSurface,
                   ),
-                  onTap: () {
-                    HapticUtils.selection();
-                    localeProvider.setLocaleByCode(recommendedItem.code);
-                    onSelected?.call(recommendedItem.code);
-                    Navigator.of(sheetCtx).pop();
-                  },
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            TheavInsetGroup(
-              header: sheetL10n.trOr('onboarding_all_languages', 'All languages'),
-              children: [
-                for (final item in otherItems)
-                  TheavListRow(
-                    leading: _LanguageCodeBadge(code: item.code),
-                    title: item.nativeName,
-                    subtitle: item.secondaryName,
-                    trailing: TheavCheckCircle(
-                      selected: currentCode == item.code,
-                    ),
-                    onTap: () {
-                      HapticUtils.selection();
-                      localeProvider.setLocaleByCode(item.code);
-                      onSelected?.call(item.code);
-                      Navigator.of(sheetCtx).pop();
-                    },
-                  ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
-      );
-    },
-  );
+        Divider(height: 0.5, thickness: 0.5, color: palette.divider),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: orderedItems.length,
+            separatorBuilder: (_, __) => Divider(
+              height: 0.5,
+              thickness: 0.5,
+              indent: 48,
+              endIndent: 12,
+              color: palette.divider,
+            ),
+            itemBuilder: (_, idx) {
+              final item = orderedItems[idx];
+              final bool isSelected = currentCode == item.code;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  HapticUtils.selection();
+                  localeProvider.setLocaleByCode(item.code);
+                  onSelected(item.code);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  child: Row(
+                    children: [
+                      _LanguageCodeBadge(code: item.code),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              item.nativeName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: isSelected
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                                color: palette.onSurface,
+                              ),
+                            ),
+                            Text(
+                              item.secondaryName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: palette.subtext,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      TheavCheckCircle(selected: isSelected, size: 19),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _LanguageCodeBadge extends StatelessWidget {
@@ -882,17 +1252,17 @@ class _LanguageCodeBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.theav;
     return Container(
-      width: 34,
-      height: 34,
+      width: 30,
+      height: 30,
       decoration: BoxDecoration(
         color: palette.primary.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(9),
       ),
       alignment: Alignment.center,
       child: Text(
         code.toUpperCase(),
         style: TextStyle(
-          fontSize: 12,
+          fontSize: 11,
           fontWeight: FontWeight.w700,
           color: palette.primary,
           letterSpacing: 0.3,

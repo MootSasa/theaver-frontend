@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show SynchronousFuture;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/l10n/app_localizations.dart';
@@ -23,10 +25,12 @@ import 'package:theaver/services/theav_theme_service.dart';
 import 'package:theaver/theme/theme_provider.dart';
 import 'package:theaver/widgets/auth/country_phone_input.dart';
 import 'package:theaver/widgets/auth/theav_auth_primitives.dart';
+import 'package:theaver/widgets/chat/chat_list_tile_item.dart';
+import 'package:theaver/widgets/chat/chat_selection_header.dart';
 import 'package:theaver/widgets/chat/classic_bottom_bar.dart';
 import 'package:theaver/widgets/chat/floating_glass_app_bar.dart';
-import 'package:theaver/widgets/chat/liquid_glass_bottom_bar.dart';
 import 'package:theaver/widgets/chat/liquid_glass_input_field.dart';
+import 'package:theaver/widgets/settings/settings_floating_header.dart';
 import 'package:theaver/widgets/theme/real_app_appearance_preview.dart';
 
 class _TestLiquidGlassProvider extends LiquidGlassProvider {
@@ -153,6 +157,11 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('dev.fluttercommunity.plus/device_info'),
+      (_) async => <String, dynamic>{},
+    );
     SharedPreferences.setMockInitialValues({});
     await SettingsService().init();
   });
@@ -196,6 +205,7 @@ void main() {
       String selectedIso = 'RU';
       String latestE164 = '';
       final tp = ThemeProvider();
+      addTearDown(tp.dispose);
       final gp = _TestLiquidGlassProvider(GlassMode.disabled);
       final lp = LocaleProvider();
       await lp.ready;
@@ -227,6 +237,23 @@ void main() {
       expect(selectedIso, 'BY');
       expect(latestE164, '+375291112233');
       expect(find.text('BY +375'), findsOneWidget);
+
+      await tester.enterText(find.byType(TextField), '+79991234567');
+      await tester.pump();
+      expect(selectedIso, 'RU');
+      expect(find.text('RU +7'), findsOneWidget);
+
+      await tester.tap(find.text('RU +7'));
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.text('Belarus'), findsOneWidget);
+      await tester.tap(find.text('Belarus'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pumpAndSettle();
+      expect(selectedIso, 'BY');
+      expect(find.text('BY +375'), findsOneWidget);
     });
   });
 
@@ -238,9 +265,10 @@ void main() {
   });
 
   group('RealAppAppearancePreview, FirstStartWizardScreen & onboarding adoption', () {
-    testWidgets('renders real FloatingGlassAppBar, LiquidGlassInputField and switches Classic/Liquid bottom bar', (tester) async {
+    testWidgets('switches glass modes on Dialog without ParentDataWidget error and renders real MainScreen preview', (tester) async {
       _useTallPhoneViewport(tester);
       final tp = ThemeProvider();
+      addTearDown(tp.dispose);
       final gp = _TestLiquidGlassProvider(GlassMode.disabled);
       final lp = LocaleProvider();
       await lp.ready;
@@ -265,18 +293,49 @@ void main() {
       expect(find.byType(FloatingGlassAppBar), findsOneWidget);
       expect(find.byType(LiquidGlassInputField), findsOneWidget);
 
-      // Toggle to Workspace ("Main Screen") with Material -> mounts ClassicBottomBar
+      // Regression guard for ChatBottomScrollEdge ParentDataWidget across Lite/Full/Material
+      await gp.setMode(GlassMode.lite);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tester.takeException(), isNull);
+
+      await gp.setMode(GlassMode.full);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tester.takeException(), isNull);
+
+      await gp.setMode(GlassMode.disabled);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      // Toggle to Workspace ("Main Screen") with Material -> mounts real MainScreen widgets
       await tester.ensureVisible(find.text('Main Screen'));
       await tester.tap(find.text('Main Screen'));
       await tester.pumpAndSettle();
+      expect(find.byType(ChatListAdaptiveTopBar), findsOneWidget);
+      expect(find.byType(ChatListTileItem), findsWidgets);
       expect(find.byType(ClassicBottomBar), findsOneWidget);
-      expect(find.byType(LiquidGlassBottomBar), findsNothing);
+      expect(find.byType(LiquidGlassScaffold), findsNothing);
 
-      // Switch to Liquid Glass Lite -> mounts LiquidGlassBottomBar
+      // Switch to Liquid Glass Lite & Full -> mounts real LiquidGlassScaffold pill pipeline + LiquidGlassMorph (+)
       await gp.setMode(GlassMode.lite);
-      await tester.pumpAndSettle();
-      expect(find.byType(LiquidGlassBottomBar), findsOneWidget);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tester.takeException(), isNull);
+      expect(find.byType(LiquidGlassScaffold), findsOneWidget);
+      expect(find.byType(LiquidGlassMorph), findsWidgets);
       expect(find.byType(ClassicBottomBar), findsNothing);
+
+      await gp.setMode(GlassMode.full);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(tester.takeException(), isNull);
+      expect(find.byType(LiquidGlassScaffold), findsOneWidget);
+      expect(find.byType(LiquidGlassMorph), findsWidgets);
+
+      await gp.setMode(GlassMode.disabled);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
     });
 
     test('adoptDeviceOnboardingAppearanceIfUnset copies pre-login ThemeMode, GlassMode, and theme IDs into user namespace', () async {
@@ -299,9 +358,10 @@ void main() {
       expect(prefs.getString('user_user_42_active_dark_theme_id'), 'midnight_neon');
     });
 
-    testWidgets('FirstStartWizardScreen walks Step 0 Language to Step 1 Appearance', (tester) async {
+    testWidgets('FirstStartWizardScreen shows dissolving hero without top header, morphs language button, and opens Step 1 with Material default', (tester) async {
       _useTallPhoneViewport(tester);
       final tp = ThemeProvider();
+      addTearDown(tp.dispose);
       final gp = _TestLiquidGlassProvider(GlassMode.disabled);
       final lp = LocaleProvider();
       await lp.ready;
@@ -316,13 +376,41 @@ void main() {
           child: const FirstStartWizardScreen(),
         ),
       );
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
 
-      expect(find.text('Welcome to Theaver'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('onboarding_greeting_text')),
+        findsOneWidget,
+      );
+      expect(find.byType(SettingsFloatingHeader), findsNothing);
+
+      // Advance periodic greeting dissolve timer safely without exceptions.
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(tester.takeException(), isNull);
+
+      final langBtn = find.byKey(
+        const ValueKey<String>('onboarding_language_morph_btn'),
+      );
+      expect(langBtn, findsOneWidget);
+      await tester.tap(langBtn);
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 450));
+      expect(find.text('Deutsch'), findsOneWidget);
+      await tester.tap(find.text('English').first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pump(const Duration(milliseconds: 300));
+
       await tester.ensureVisible(find.text('Continue'));
       await tester.tap(find.text('Continue'));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 450));
 
+      expect(gp.mode, GlassMode.disabled);
+      expect(tp.themeMode, ThemeMode.system);
       expect(find.byType(RealAppAppearancePreview), findsOneWidget);
       expect(find.text('Material'), findsOneWidget);
       expect(find.text('Liquid Glass'), findsOneWidget);
@@ -333,6 +421,7 @@ void main() {
     testWidgets('hides unconfigured OAuth, renders regional order when configured, and opens ServiceMenuScreen after 5 emblem taps', (tester) async {
       _useTallPhoneViewport(tester);
       final tp = ThemeProvider();
+      addTearDown(tp.dispose);
       final gp = _TestLiquidGlassProvider(GlassMode.disabled);
       final lp = LocaleProvider();
       await lp.ready;
@@ -399,6 +488,7 @@ void main() {
     testWidgets('prefills verified phone for Yandex ID and leaves phone unverified for Google', (tester) async {
       _useTallPhoneViewport(tester);
       final tp = ThemeProvider();
+      addTearDown(tp.dispose);
       final gp = _TestLiquidGlassProvider(GlassMode.disabled);
       final lp = LocaleProvider();
       await lp.ready;
@@ -458,7 +548,7 @@ void main() {
       expect(find.text('Google'), findsOneWidget);
     });
 
-    test('SessionBootstrapCoordinator calls AppDatabase.setActiveUser strictly before ensureSavedChatExists and preserves profile fields', () async {
+    testWidgets('SessionBootstrapCoordinator calls AppDatabase.setActiveUser strictly before ensureSavedChatExists and preserves profile fields', (tester) async {
       final order = <String>[];
       SessionBootstrapCoordinator.debugCallOrderLog = order;
       SessionBootstrapCoordinator.debugEnsureSavedChatOverride = (_) async {};
@@ -469,19 +559,22 @@ void main() {
         SessionBootstrapCoordinator.skipBackgroundNetworkSyncInTests = false;
       });
 
-      await SessionBootstrapCoordinator.bootstrapAuthenticatedSession(
-        token: 'jwt_test_777',
-        userId: '777',
-        userMap: {
-          'username': 'smirnov_alex',
-          'first_name': 'Alexey',
-          'last_name': 'Smirnov',
-          'display_name': 'Alexey Smirnov',
-          'email': 'alex@theaver.app',
-          'email_verified': true,
-          'phone': '+79991112233',
-        },
-      );
+      await tester.runAsync(() async {
+        await SessionBootstrapCoordinator.bootstrapAuthenticatedSession(
+          token: 'jwt_test_777',
+          userId: '777',
+          userMap: {
+            'username': 'smirnov_alex',
+            'first_name': 'Alexey',
+            'last_name': 'Smirnov',
+            'display_name': 'Alexey Smirnov',
+            'email': 'alex@theaver.app',
+            'email_verified': true,
+            'phone': '+79991112233',
+          },
+        );
+      });
+      await tester.pump();
 
       expect(order, ['setActiveUser:777', 'ensureSavedChatExists:777']);
       expect(AppDatabase.activeUserId, '777');

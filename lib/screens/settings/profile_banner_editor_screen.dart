@@ -15,6 +15,7 @@ import '../../services/liquid_glass_provider.dart';
 import '../../services/profile_theme_provider.dart';
 import '../../utils/blur_utils.dart';
 import '../../utils/haptic_utils.dart';
+import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/common/glass_modal_sheet.dart';
 import '../../widgets/common/peer_badges_widget.dart';
 import '../../widgets/profile/profile_banner_layer.dart';
@@ -831,7 +832,10 @@ class _ProfileBannerEditorScreenState extends State<ProfileBannerEditorScreen> {
                     physics: const AlwaysScrollableScrollPhysics(
                       parent: BouncingScrollPhysics(),
                     ),
-                    padding: const EdgeInsets.only(top: 6, bottom: 12),
+                    padding: EdgeInsets.only(
+                      top: 6,
+                      bottom: 96 + mediaQuery.padding.bottom,
+                    ),
                     children: [
                       ProfileGlassSection(
                         glassEnabled: glassEnabled,
@@ -943,48 +947,48 @@ class _ProfileBannerEditorScreenState extends State<ProfileBannerEditorScreen> {
                     ],
                   ),
                 ),
-                SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: FilledButton(
-                        key: const ValueKey<String>('banner_editor_save_btn'),
-                        onPressed: _isSaving ? null : _saveBanner,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: accentColor,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                        ),
-                        child: _isSaving
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : Text(
-                                translateOrFallback(
-                                  context,
-                                  'bannerSave',
-                                  'Save Banner',
-                                ),
-                                style: const TextStyle(
-                                  fontSize: 15.5,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                      ),
+              ],
+            ),
+            const ChatBottomScrollEdge(height: 76),
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: math.max(12.0, mediaQuery.padding.bottom + 8.0),
+              child: SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton(
+                  key: const ValueKey<String>('banner_editor_save_btn'),
+                  onPressed: _isSaving ? null : _saveBanner,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accentColor,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
                     ),
                   ),
+                  child: _isSaving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(
+                          translateOrFallback(
+                            context,
+                            'bannerSave',
+                            'Save Banner',
+                          ),
+                          style: const TextStyle(
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                 ),
-              ],
+              ),
             ),
             Positioned(
               top: topPadding + 8.0,

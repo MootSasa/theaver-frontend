@@ -276,20 +276,26 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                 onTap: null,
               ),
             ],
-            body: SafeArea(
-              top: false,
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: SingleChildScrollView(
-                    padding: EdgeInsets.fromLTRB(0, topClearance + 14, 0, 28),
-                    child: TheavStepViewport(
-                      stepIndex: _step,
-                      forward: _stepForward,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
+            body: Stack(
+              fit: StackFit.expand,
+              children: [
+                Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(
+                        0,
+                        topClearance + 14,
+                        0,
+                        112 + MediaQuery.paddingOf(context).bottom,
+                      ),
+                      child: TheavStepViewport(
+                        stepIndex: _step,
+                        forward: _stepForward,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 20),
                             child: Column(
@@ -470,19 +476,8 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                           ],
                           if (_errorMessage != null)
                             TheavAuthErrorBanner(message: _errorMessage!),
-                          const SizedBox(height: 16),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: TheavSpringButton(
-                              label: _step == 1
-                                  ? l10n.translate('recovery_send_button')
-                                  : l10n.translate('recovery_reset_button'),
-                              isLoading: _isLoading,
-                              onPressed: _step == 1 ? _sendCode : _submitReset,
-                            ),
-                          ),
                           if (_step == 2) ...[
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 12),
                             Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 16),
                               child: TheavSpringButton(
@@ -504,7 +499,18 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                     ),
                   ),
                 ),
-              ),
+                ),
+                TheavFloatingBottomBar(
+                  maxWidth: 520,
+                  child: TheavSpringButton(
+                    label: _step == 1
+                        ? l10n.translate('recovery_send_button')
+                        : l10n.translate('recovery_reset_button'),
+                    isLoading: _isLoading,
+                    onPressed: _step == 1 ? _sendCode : _submitReset,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

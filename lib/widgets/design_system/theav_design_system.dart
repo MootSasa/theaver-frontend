@@ -12,6 +12,7 @@ export '../../services/liquid_glass_provider.dart' show GlassMode;
 export 'theav_controls.dart';
 export 'theav_floating_pill_button.dart';
 export 'theav_inset_group.dart';
+export 'theav_morph_menu.dart';
 export 'theav_overlays.dart';
 
 /// Forces a subtree (and modals opened from it when propagated) to render with

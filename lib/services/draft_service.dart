@@ -31,7 +31,7 @@ class DraftService {
 
   bool _initialized = false;
   String? _activeUserId;
-  Future<void> _pendingPersist = Future<void>.value();
+  Future<void>? _pendingPersist;
 
   /// ValueNotifier exposing published main-chat drafts for reactive UI updates (e.g. chat list badge).
   final ValueNotifier<Map<String, ChatDraft>> draftsNotifier =
@@ -128,7 +128,7 @@ class DraftService {
   /// Switches active account draft storage, canceling any pending debounced syncs
   /// from the previous account and reloading the incoming account's drafts.
   Future<void> switchAccount(String? newUserId) async {
-    await _pendingPersist;
+    if (_pendingPersist != null) await _pendingPersist;
     for (final key in _debounceTimers.keys.toList()) {
       _bumpGeneration(key);
       _debounceTimers[key]?.cancel();
@@ -144,7 +144,7 @@ class DraftService {
 
   /// Wipes all cached drafts for [userId] (or active user) from memory and SharedPreferences.
   Future<void> clearAllLocalDrafts({String? userId}) async {
-    await _pendingPersist;
+    if (_pendingPersist != null) await _pendingPersist;
     final targetUser = userId?.trim();
     for (final key in _debounceTimers.keys.toList()) {
       _bumpGeneration(key);
@@ -471,15 +471,23 @@ class DraftService {
       map[entry.key] = entry.value.toJson();
     }
     final String encoded = jsonEncode(map);
-    _pendingPersist = _pendingPersist.catchError((_) {}).then((_) async {
+    final prev = _pendingPersist;
+    late final Future<void> next;
+    next = (prev != null ? prev.catchError((_) {}) : Future<void>.value())
+        .then((_) async {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(storageKey, encoded);
       } catch (e) {
         debugPrint('DraftService: Error persisting to local storage: $e');
       }
+    }).whenComplete(() {
+      if (identical(_pendingPersist, next)) {
+        _pendingPersist = null;
+      }
     });
-    return _pendingPersist;
+    _pendingPersist = next;
+    return next;
   }
 
   void dispose() {
@@ -501,6 +509,7 @@ class DraftService {
     draftsNotifier.value = {};
     _initialized = false;
     _activeUserId = null;
+    _pendingPersist = null;
   }
 
   @visibleForTesting

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
@@ -13,6 +14,7 @@ import '../../services/tiling_layout_controller.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../widgets/avatar_editor/theav_avatar_picker_sheet.dart';
+import '../../widgets/chat/chat_scaffold.dart';
 import '../../widgets/community/community_channel_icon.dart';
 import '../../widgets/design_system/theav_design_system.dart';
 import '../chat/channel_screen.dart';
@@ -567,75 +569,89 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
             ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-            child: TheavSegmentedControl<bool>(
-              useGlass: false,
-              selected: _isJoinMode,
-              onChanged: (v) => setState(() => _isJoinMode = v),
-              options: const [
-                TheavSegmentOption(
-                  value: false,
-                  label: 'Создать',
-                  icon: iconoir.Community(width: 16, height: 16),
-                ),
-                TheavSegmentOption(
-                  value: true,
-                  label: 'Войти по коду',
-                  icon: iconoir.Link(width: 16, height: 16),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _isJoinMode
-                ? _buildJoinModeBody(context, palette)
-                : _buildCreateModeBody(context, palette),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-              child: SizedBox(
-                width: double.infinity,
-                child: TheavFloatingPillButton(
-                  height: 50,
-                  isPrimary: true,
-                  enabled: !_isSubmitting,
-                  icon: _isSubmitting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : (_isJoinMode
-                            ? const iconoir.Link(width: 18, height: 18)
-                            : const iconoir.Community(width: 18, height: 18)),
-                  label: _isJoinMode
-                      ? 'Присоединиться'
-                      : 'Создать сообщество',
-                  onTap: _submit,
+      body: Builder(
+        builder: (context) {
+          final safeBottom = MediaQuery.paddingOf(context).bottom;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+                    child: TheavSegmentedControl<bool>(
+                      useGlass: false,
+                      selected: _isJoinMode,
+                      onChanged: (v) => setState(() => _isJoinMode = v),
+                      options: const [
+                        TheavSegmentOption(
+                          value: false,
+                          label: 'Создать',
+                          icon: iconoir.Community(width: 16, height: 16),
+                        ),
+                        TheavSegmentOption(
+                          value: true,
+                          label: 'Войти по коду',
+                          icon: iconoir.Link(width: 16, height: 16),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: _isJoinMode
+                        ? _buildJoinModeBody(context, palette, safeBottom)
+                        : _buildCreateModeBody(context, palette, safeBottom),
+                  ),
+                ],
+              ),
+              const ChatBottomScrollEdge(height: 80),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: math.max(14.0, safeBottom + 10.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TheavFloatingPillButton(
+                    height: 50,
+                    isPrimary: true,
+                    enabled: !_isSubmitting,
+                    icon: _isSubmitting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : (_isJoinMode
+                              ? const iconoir.Link(width: 18, height: 18)
+                              : const iconoir.Community(width: 18, height: 18)),
+                    label: _isJoinMode
+                        ? 'Присоединиться'
+                        : 'Создать сообщество',
+                    onTap: _submit,
+                  ),
                 ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
 
-  Widget _buildCreateModeBody(BuildContext context, TheavPalette palette) {
+  Widget _buildCreateModeBody(
+    BuildContext context,
+    TheavPalette palette,
+    double safeBottom,
+  ) {
     final trimmedName = _nameController.text.trim();
     final template = _selectedTemplate;
     final avatarProvider = _pickedAvatarProvider;
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 6, 0, 20),
+      padding: EdgeInsets.fromLTRB(0, 6, 0, 104 + safeBottom),
       children: [
         Center(
           child: Column(
@@ -791,9 +807,13 @@ class _CreateCommunityScreenState extends State<CreateCommunityScreen> {
     );
   }
 
-  Widget _buildJoinModeBody(BuildContext context, TheavPalette palette) {
+  Widget _buildJoinModeBody(
+    BuildContext context,
+    TheavPalette palette,
+    double safeBottom,
+  ) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 16, 0, 20),
+      padding: EdgeInsets.fromLTRB(0, 16, 0, 104 + safeBottom),
       children: [
         Center(
           child: Container(

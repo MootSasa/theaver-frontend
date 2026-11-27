@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,7 @@ import '../../widgets/chat/chat_list_item.dart';
 import '../../widgets/chat/classic_bottom_bar.dart';
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 import '../../widgets/chat/liquid_glass_input_field.dart';
+import '../../widgets/design_system/theav_design_system.dart';
 import '../../widgets/message/message_bubble.dart';
 import '../../widgets/settings/settings_floating_header.dart';
 import '../../widgets/theme/four_corner_gradient.dart';
@@ -177,10 +179,6 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
       data: themeData,
       child: Builder(
         builder: (themedContext) {
-          final isDark = effectiveTheme.isDark;
-          final bottomBarBg = effectiveTheme.palette.appBarBackground;
-          final bottomBarBorder = isDark ? Colors.white12 : Colors.black12;
-
           return Scaffold(
             body: Stack(
               children: [
@@ -198,75 +196,53 @@ class _ThemePreviewScreenState extends State<ThemePreviewScreen> {
                   ),
                 ),
 
-                // 2. Persistent Bottom Action Bar (Cancel | Dots | Apply)
+                // 2. Floating Bottom Controls (Cancel | Dots | Apply)
                 Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: bottomBarBg,
-                      border: Border(
-                        top: BorderSide(color: bottomBarBorder, width: 0.5),
+                  left: 16,
+                  right: 16,
+                  bottom: math.max(
+                    10.0,
+                    MediaQuery.paddingOf(themedContext).bottom + 6.0,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      TheavFloatingPillButton(
+                        height: 44,
+                        label: l10n.translate('cancel'),
+                        onTap: () {
+                          HapticUtils.tap();
+                          Navigator.of(context).pop();
+                        },
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
-                          blurRadius: 10,
-                          offset: const Offset(0, -2),
+                      TheavFloatingSurface(
+                        borderRadius: 16,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
                         ),
-                      ],
-                    ),
-                    child: SafeArea(
-                      top: false,
-                      child: Container(
-                        height: 54,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Cancel Button
-                            TextButton(
-                              onPressed: () {
-                                HapticUtils.tap();
-                                Navigator.of(context).pop();
-                              },
-                              child: Text(
-                                l10n.translate('cancel').toUpperCase(),
-                                style: TextStyle(
-                                  color: effectiveTheme.palette.primary,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 14,
-                                ),
-                              ),
+                            _buildDot(
+                              isActive: _currentPage == 0,
+                              color: effectiveTheme.palette.primary,
                             ),
-
-                            // 2-Dot Page Indicator
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                _buildDot(isActive: _currentPage == 0, color: effectiveTheme.palette.primary),
-                                const SizedBox(width: 8),
-                                _buildDot(isActive: _currentPage == 1, color: effectiveTheme.palette.primary),
-                              ],
-                            ),
-
-                            // Apply Button
-                            TextButton(
-                              onPressed: _applyTheme,
-                              child: Text(
-                                l10n.translate('theme_apply').toUpperCase(),
-                                style: TextStyle(
-                                  color: effectiveTheme.palette.primary,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
-                                ),
-                              ),
+                            const SizedBox(width: 8),
+                            _buildDot(
+                              isActive: _currentPage == 1,
+                              color: effectiveTheme.palette.primary,
                             ),
                           ],
                         ),
                       ),
-                    ),
+                      TheavFloatingPillButton(
+                        height: 44,
+                        isPrimary: true,
+                        label: l10n.translate('theme_apply'),
+                        onTap: _applyTheme,
+                      ),
+                    ],
                   ),
                 ),
               ],

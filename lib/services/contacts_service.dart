@@ -263,7 +263,7 @@ class ContactsService {
   static bool _loadedOnce = false;
   static bool _diskLoaded = false;
   static String? _activeUserId;
-  static Future<void> _pendingPersist = Future<void>.value();
+  static Future<void>? _pendingPersist;
 
   static String? _resolveUserId([String? explicitUserId]) {
     if (explicitUserId != null) {
@@ -474,14 +474,22 @@ class ContactsService {
     final key = _storageKeyForUser(uid);
     if (key == null) return;
     final payload = jsonEncode(_cache.values.map((c) => c.toJson()).toList());
-    _pendingPersist = _pendingPersist.then((_) async {
+    final prev = _pendingPersist;
+    late final Future<void> next;
+    next = (prev != null ? prev.catchError((_) {}) : Future<void>.value())
+        .then((_) async {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString(key, payload);
       } catch (e) {
         debugPrint('ContactsService._persistToDisk error: $e');
       }
+    }).whenComplete(() {
+      if (identical(_pendingPersist, next)) {
+        _pendingPersist = null;
+      }
     });
+    _pendingPersist = next;
   }
 
   /// Loads cached contacts & overrides for [userId] from `SharedPreferences`.
@@ -522,7 +530,7 @@ class ContactsService {
 
   /// Switches the active account contact cache and reloads overrides for [userId].
   static Future<void> switchAccount(String? userId) async {
-    await _pendingPersist;
+    if (_pendingPersist != null) await _pendingPersist;
     _cache.clear();
     _loadedOnce = false;
     _diskLoaded = false;

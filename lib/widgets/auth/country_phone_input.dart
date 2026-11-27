@@ -163,6 +163,7 @@ class CountryPhoneInput extends StatefulWidget {
 }
 
 class _CountryPhoneInputState extends State<CountryPhoneInput> {
+  final GlobalKey _countryPillKey = GlobalKey();
   bool _internalUpdate = false;
 
   CountryDialEntry get _selectedCountry => countryByIso(widget.countryIso);
@@ -252,14 +253,31 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
     final l10n = context.l10n;
     final lang = l10n.locale.languageCode;
     final searchCtrl = TextEditingController();
+    final anchorCtx = _countryPillKey.currentContext ?? context;
 
-    final selected = await showTheavModalSheet<CountryDialEntry>(
-      context: context,
-      title: l10n.trOr('auth_country_code_title', 'Country code'),
-      showCloseButton: true,
-      builder: (sheetCtx) {
+    final selected = await openTheavMorphPopover<CountryDialEntry>(
+      anchorContext: anchorCtx,
+      menuWidth: 276.0,
+      menuHeight: 304.0,
+      cornerRadius: 22.0,
+      collapsedBuilder: (_) {
+        final palette = context.theav;
+        return Center(
+          child: Text(
+            '${_selectedCountry.iso} +${_selectedCountry.dialCode}',
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: palette.primary,
+            ),
+          ),
+        );
+      },
+      menuBuilder: (menuCtx, close) {
         return StatefulBuilder(
-          builder: (ctx, setSheetState) {
+          builder: (ctx, setMenuState) {
+            final palette = ctx.theav;
+            final style = TheavSurfaceStyle.of(ctx);
             final query = searchCtrl.text.trim().toLowerCase();
             final filtered = query.isEmpty
                 ? kTheavCountryDialCatalog
@@ -272,59 +290,120 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
                   }).toList();
 
             return Column(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.max,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TheavInsetGroup(
-                  margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                  children: [
-                    TheavInlineTextField(
-                      controller: searchCtrl,
-                      placeholder: sheetCtx.l10n.trOr(
-                        'search',
-                        'Search',
-                      ),
-                      prefix: iconoir.Search(
-                        width: 18,
-                        height: 18,
-                        color: sheetCtx.theav.subtext,
-                      ),
-                      suffix: searchCtrl.text.isNotEmpty
-                          ? GestureDetector(
-                              onTap: () {
-                                searchCtrl.clear();
-                                setSheetState(() {});
-                              },
-                              child: iconoir.XmarkCircle(
-                                width: 18,
-                                height: 18,
-                                color: sheetCtx.theav.subtext,
-                              ),
-                            )
-                          : null,
-                      onChanged: (_) => setSheetState(() {}),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  child: Container(
+                    height: 36,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: style.trackFill,
+                      borderRadius: BorderRadius.circular(11),
                     ),
-                  ],
-                ),
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.only(bottom: 18),
-                    child: TheavInsetGroup(
+                    child: Row(
                       children: [
-                        for (final item in filtered)
-                          TheavListRow(
-                            leading: _IsoPillBadge(iso: item.iso),
-                            title: item.localizedName(lang),
-                            valueText: '+${item.dialCode}',
-                            trailing: TheavCheckCircle(
-                              selected: item.iso == widget.countryIso,
+                        iconoir.Search(
+                          width: 16,
+                          height: 16,
+                          color: palette.subtext,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: TextField(
+                            controller: searchCtrl,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              color: palette.onSurface,
                             ),
+                            decoration: InputDecoration.collapsed(
+                              hintText: ctx.l10n.trOr('search', 'Search'),
+                              hintStyle: TextStyle(
+                                fontSize: 13.5,
+                                color: palette.subtext,
+                              ),
+                            ),
+                            onChanged: (_) => setMenuState(() {}),
+                          ),
+                        ),
+                        if (searchCtrl.text.isNotEmpty)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
                             onTap: () {
-                              HapticUtils.selection();
-                              Navigator.of(sheetCtx).pop(item);
+                              searchCtrl.clear();
+                              setMenuState(() {});
                             },
+                            child: iconoir.XmarkCircle(
+                              width: 16,
+                              height: 16,
+                              color: palette.subtext,
+                            ),
                           ),
                       ],
                     ),
+                  ),
+                ),
+                Divider(height: 0.5, thickness: 0.5, color: palette.divider),
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) => Divider(
+                      height: 0.5,
+                      thickness: 0.5,
+                      indent: 52,
+                      endIndent: 12,
+                      color: palette.divider,
+                    ),
+                    itemBuilder: (_, idx) {
+                      final item = filtered[idx];
+                      final bool isSelected = item.iso == widget.countryIso;
+                      return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          HapticUtils.selection();
+                          close(item);
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: Row(
+                            children: [
+                              _IsoPillBadge(iso: item.iso),
+                              const SizedBox(width: 9),
+                              Expanded(
+                                child: Text(
+                                  item.localizedName(lang),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: isSelected
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                    color: palette.onSurface,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                '+${item.dialCode}',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: palette.subtext,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              TheavCheckCircle(selected: isSelected, size: 18),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],
@@ -367,6 +446,7 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
           Row(
             children: [
               GestureDetector(
+                key: _countryPillKey,
                 onTap: _openCountryPicker,
                 behavior: HitTestBehavior.opaque,
                 child: Container(
