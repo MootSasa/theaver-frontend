@@ -7,7 +7,6 @@ import '../../models/community_models.dart';
 import '../../screens/chat/channel_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
-import '../../screens/chat/system_notifications_screen.dart';
 import '../../screens/community/community_screen.dart';
 import '../../services/account_manager.dart';
 import '../../services/archive_preferences_service.dart';
@@ -456,8 +455,8 @@ class ChatBatchDialogs {
         chat.avatarUrl ?? account?.avatarUrl ?? account?.localAvatarPath;
     final displayName = chat.chatType == 'saved'
         ? _tr(context, 'chat_saved_messages', 'Избранное')
-        : (chat.chatType == 'system' && chat.name.isEmpty
-            ? _tr(context, 'system_notifications_title', 'Системные уведомления')
+        : (chat.chatType == 'system'
+            ? PrivateChatScreen.resolveSystemChatTitle(context, chat.name)
             : chat.name);
 
     return DraggingChatPayload(
@@ -495,8 +494,8 @@ class ChatBatchDialogs {
         chat.avatarUrl ?? account?.avatarUrl ?? account?.localAvatarPath;
     final displayName = chat.chatType == 'saved'
         ? _tr(context, 'chat_saved_messages', 'Избранное')
-        : (chat.chatType == 'system' && chat.name.isEmpty
-            ? _tr(context, 'system_notifications_title', 'Системные уведомления')
+        : (chat.chatType == 'system'
+            ? PrivateChatScreen.resolveSystemChatTitle(context, chat.name)
             : chat.name);
     final effectiveAvatar =
         chat.chatType == 'saved' ? effectiveSavedAvatar : chat.avatarUrl;
@@ -612,9 +611,15 @@ class ChatBatchDialogs {
         Navigator.push(
           context,
           SwipeBackPageRoute(
-            builder: (_) => SystemNotificationsScreen(
+            builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              chatName: displayName,
+              otherUserName: displayName,
+              otherUserAvatar: chat.avatarUrl,
+              otherUserOnline: chat.isOnline,
+              otherUserLastSeen:
+                  DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+              otherUserId: chat.otherUserId,
+              initialChatType: 'system',
             ),
           ),
         ).then((_) => handleReturn());

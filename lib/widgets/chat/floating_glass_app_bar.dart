@@ -276,7 +276,7 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
     if (widget.onToggleSavedViewMode != null) count++;
     if (widget.onAutoDelete != null) count++;
     if (widget.onChatAppearance != null) count++;
-    if (widget.onReport != null || !widget.isSavedChat) count++;
+    if (widget.onReport != null && !widget.isSavedChat) count++;
     count += widget.extraMenuItems.length;
     return 18.0 + count * 42.0;
   }
@@ -561,12 +561,12 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                   isSavedChat: widget.isSavedChat,
                                   isSavedPeersMode: widget.isSavedPeersMode,
                                   autoDeleteSeconds: widget.autoDeleteSeconds,
-                                  showReport: widget.onReport != null || !widget.isSavedChat,
+                                  showReport: widget.onReport != null && !widget.isSavedChat,
                                   onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                                   onSearch: () { _closeMenu(); widget.onSearch?.call(); },
                                   onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
                                   onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                                  onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                  onReport: widget.onReport != null ? () { _closeMenu(); widget.onReport!(); } : null,
                                   onAutoDelete: widget.onAutoDelete != null
                                       ? () { _closeMenu(); widget.onAutoDelete?.call(); }
                                       : null,
@@ -619,12 +619,12 @@ class _FloatingGlassAppBarState extends State<FloatingGlassAppBar> {
                                     isSavedChat: widget.isSavedChat,
                                     isSavedPeersMode: widget.isSavedPeersMode,
                                     autoDeleteSeconds: widget.autoDeleteSeconds,
-                                    showReport: widget.onReport != null || !widget.isSavedChat,
+                                    showReport: widget.onReport != null && !widget.isSavedChat,
                                     onViewProfile: () { _closeMenu(); widget.onViewProfile?.call(); },
                                     onSearch: () { _closeMenu(); widget.onSearch?.call(); },
                                     onToggleMute: () { _closeMenu(); widget.onToggleMute?.call(); },
                                     onClearHistory: () { _closeMenu(); widget.onClearHistory?.call(); },
-                                    onReport: () { _closeMenu(); widget.onReport?.call(); },
+                                    onReport: widget.onReport != null ? () { _closeMenu(); widget.onReport!(); } : null,
                                     onAutoDelete: widget.onAutoDelete != null
                                         ? () { _closeMenu(); widget.onAutoDelete?.call(); }
                                         : null,
@@ -1192,7 +1192,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
   final VoidCallback onSearch;
   final VoidCallback onToggleMute;
   final VoidCallback onClearHistory;
-  final VoidCallback onReport;
+  final VoidCallback? onReport;
   final VoidCallback? onAutoDelete;
   final VoidCallback? onChatAppearance;
   final VoidCallback? onToggleSavedViewMode;
@@ -1211,7 +1211,7 @@ class _ChatActionsMorphMenu extends StatelessWidget {
     required this.onSearch,
     required this.onToggleMute,
     required this.onClearHistory,
-    required this.onReport,
+    this.onReport,
     this.onAutoDelete,
     this.onChatAppearance,
     this.onToggleSavedViewMode,
@@ -1303,11 +1303,11 @@ class _ChatActionsMorphMenu extends StatelessWidget {
                     iconBuilder: (c) => iconoir.Trash(color: c, width: 20, height: 20),
                     isDestructive: true,
                   ),
-                  if (showReport)
+                  if (showReport && onReport != null)
                     _menuItem(
                       context,
                       l10n.translate('chat_menu_report'),
-                      onReport,
+                      onReport!,
                       iconBuilder: (c) => iconoir.WarningTriangle(color: c, width: 20, height: 20),
                       isDestructive: true,
                     ),

@@ -305,6 +305,7 @@ class ProfileAvatarMetaballLayer extends StatefulWidget {
   final GestureDragUpdateCallback? onVerticalDragUpdate;
   final GestureDragEndCallback? onVerticalDragEnd;
   final ValueChanged<int>? onPageChanged;
+  final Widget Function(BuildContext context, double iconSize)? fallbackBuilder;
 
   const ProfileAvatarMetaballLayer({
     super.key,
@@ -328,6 +329,7 @@ class ProfileAvatarMetaballLayer extends StatefulWidget {
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
     this.onPageChanged,
+    this.fallbackBuilder,
   });
 
   @override
@@ -426,6 +428,7 @@ class _ProfileAvatarMetaballLayerState
             onVerticalDragUpdate: widget.onVerticalDragUpdate,
             onVerticalDragEnd: widget.onVerticalDragEnd,
             onPageChanged: widget.onPageChanged,
+            fallbackBuilder: widget.fallbackBuilder,
           );
 
           const double baseD = ProfileAvatarMetaballGeometry.baseAvatarDiameter;

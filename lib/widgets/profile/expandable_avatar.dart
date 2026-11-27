@@ -94,6 +94,9 @@ class ExpandableAvatar extends StatefulWidget {
   /// Опциональный обработчик вертикального перетаскивания (для плавного сворачивания/разворачивания)
   final GestureDragUpdateCallback? onVerticalDragUpdate;
 
+  /// Опциональный билдер плейсхолдера вместо первой буквы [displayName]
+  final Widget Function(BuildContext context, double iconSize)? fallbackBuilder;
+
   /// Опциональный обработчик завершения вертикального перетаскивания
   final GestureDragEndCallback? onVerticalDragEnd;
 
@@ -122,6 +125,7 @@ class ExpandableAvatar extends StatefulWidget {
     this.onVerticalDragStart,
     this.onVerticalDragUpdate,
     this.onVerticalDragEnd,
+    this.fallbackBuilder,
   }) : super(key: key);
 
   static const double baseCollapsedSize = 110.0;
@@ -447,21 +451,23 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
           ),
         ),
 
-        // 2. Буквенный плейсхолдер если нет фото
+        // 2. Плейсхолдер если нет фото
         if (widget.avatarFile == null && widget.avatarUrls.isEmpty)
           Center(
-            child: Text(
-              widget.displayName.isNotEmpty
-                  ? widget.displayName[0].toUpperCase()
-                  : '?',
-              style: TextStyle(
-                color: bgColor.computeLuminance() > 0.5
-                    ? Colors.black54
-                    : Colors.white70,
-                fontSize: iconSize,
-                fontWeight: FontWeight.w300,
-              ),
-            ),
+            child: widget.fallbackBuilder != null
+                ? widget.fallbackBuilder!(context, iconSize)
+                : Text(
+                    widget.displayName.isNotEmpty
+                        ? widget.displayName[0].toUpperCase()
+                        : '?',
+                    style: TextStyle(
+                      color: bgColor.computeLuminance() > 0.5
+                          ? Colors.black54
+                          : Colors.white70,
+                      fontSize: iconSize,
+                      fontWeight: FontWeight.w300,
+                    ),
+                  ),
           ),
 
         // 3. Верхний градиентный скрайм для контраста индикаторов историй

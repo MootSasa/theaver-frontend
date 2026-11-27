@@ -11,7 +11,6 @@ import '../../screens/call/voice_call_screen.dart';
 import '../../screens/chat/channel_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/private_chat_screen.dart';
-import '../../screens/chat/system_notifications_screen.dart';
 import '../../screens/chat/user_profile_screen.dart';
 import '../../screens/community/community_screen.dart';
 import '../../screens/main/main_screen.dart';
@@ -443,9 +442,15 @@ class _TilingWorkspaceScaffoldState extends State<TilingWorkspaceScaffold>
           highlightMessageId: descriptor.initialMessageId,
         );
       case 'system':
-        return SystemNotificationsScreen(
+        return PrivateChatScreen(
           chatId: descriptor.chatId,
-          chatName: descriptor.chatName,
+          otherUserName: descriptor.chatName,
+          otherUserAvatar: descriptor.avatarUrl,
+          otherUserOnline: descriptor.isOnline,
+          otherUserLastSeen: descriptor.lastSeen,
+          otherUserId: descriptor.otherUserId,
+          initialMessageId: descriptor.initialMessageId,
+          initialChatType: 'system',
         );
       case 'saved':
       case 'private':

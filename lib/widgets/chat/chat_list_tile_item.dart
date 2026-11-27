@@ -116,9 +116,20 @@ class ChatListTileItem extends StatelessWidget {
 
     const double avatarRadius = 22.0;
 
+    final bool isDefaultSystemTitle = chat.chatType == 'system' &&
+        (chat.name.trim().isEmpty ||
+            chat.name.trim() == 'Системные уведомления' ||
+            chat.name.trim() == 'System Notifications' ||
+            chat.name.trim() == 'system_notifications_title');
     final String effectiveDisplayName = isPrivateChat
         ? ContactsService.resolveName(chat.otherUserId, chat.name)
-        : chat.name;
+        : (isDefaultSystemTitle
+            ? _tr(
+                context,
+                'system_notifications_title',
+                'Системные уведомления',
+              )
+            : chat.name);
 
     final String? effectiveAvatarUrl = chat.chatType == 'saved' &&
             (chat.avatarUrl == null || chat.avatarUrl!.isEmpty)
@@ -275,7 +286,9 @@ class ChatListTileItem extends StatelessWidget {
         activeDraft == null &&
         _isLastMessageOutgoing &&
         !isChannel &&
-        chat.chatType != 'saved';
+        chat.chatType != 'saved' &&
+        !(chat.chatType == 'system' &&
+            (chat.otherUserId == null || chat.otherUserId!.isEmpty));
 
     String? displayTimeIso = chat.lastMessageTime;
     if (activeDraft != null) {

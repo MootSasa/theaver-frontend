@@ -92,6 +92,7 @@ enum ProfileEntityType {
   user,
   group,
   channel,
+  system,
 }
 
 /// Универсальный экран профиля в стиле Telegram (свой профиль, собеседник, группа, канал).
@@ -170,6 +171,7 @@ class ProfileScreenState extends State<ProfileScreen>
   bool get _isUser => _entityType == ProfileEntityType.user;
   bool get _isGroup => _entityType == ProfileEntityType.group;
   bool get _isChannel => _entityType == ProfileEntityType.channel;
+  bool get _isSystem => _entityType == ProfileEntityType.system;
 
   String get _heroKey =>
       widget.heroTag ??
@@ -632,6 +634,29 @@ class ProfileScreenState extends State<ProfileScreen>
           _isMuted = true;
         }
       }
+    } else if (_isSystem) {
+      _initInitialEntityData();
+      final cid = _resolvedChatId ?? '';
+      if (cid.isNotEmpty) {
+        final instantChat = ChatInstantCache.instance.getSync(cid)?.chatDetails;
+        if (instantChat != null) {
+          _chatDetails = instantChat;
+          if (instantChat.name.isNotEmpty) {
+            _nameController.text = instantChat.name;
+          }
+          if (instantChat.description != null) {
+            _bio = instantChat.description;
+          }
+          if (instantChat.avatarUrl != null &&
+              instantChat.avatarUrl!.trim().isNotEmpty) {
+            _avatarUrl = instantChat.avatarUrl!.trim();
+            _avatarUrls = [_avatarUrl!];
+          }
+        }
+        if (cache.isChatMutedSync(cid)) {
+          _isMuted = true;
+        }
+      }
     } else {
       // Group or Channel
       _initInitialEntityData();
@@ -714,7 +739,8 @@ class ProfileScreenState extends State<ProfileScreen>
   ProfileEntityType _resolveEntityType() {
     if (widget.entityType == ProfileEntityType.group ||
         widget.entityType == ProfileEntityType.channel ||
-        widget.entityType == ProfileEntityType.self) {
+        widget.entityType == ProfileEntityType.self ||
+        widget.entityType == ProfileEntityType.system) {
       return widget.entityType!;
     }
     if (widget.userId == null || widget.userId!.isEmpty) {
@@ -739,6 +765,12 @@ class ProfileScreenState extends State<ProfileScreen>
       unawaited(_loadOtherUserProfile());
       unawaited(_loadSharedContentForPeerUser());
       unawaited(_loadCommonGroups());
+    } else if (_isSystem) {
+      unawaited(_loadMuteAndBlockState());
+      unawaited(_loadSystemChatProfile());
+      if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) {
+        unawaited(_loadSharedContentForChat(_resolvedChatId!));
+      }
     } else {
       // Group or Channel
       unawaited(_loadMuteAndBlockState());
@@ -747,6 +779,43 @@ class ProfileScreenState extends State<ProfileScreen>
         unawaited(_loadSharedContentForChat(_resolvedChatId!));
       }
     }
+  }
+
+  Future<void> _loadSystemChatProfile() async {
+    final cid = _resolvedChatId;
+    if (cid == null || cid.isEmpty) return;
+    try {
+      final chatRes = await ChatService.getChat(cid);
+      if (!mounted ||
+          chatRes['success'] != true ||
+          chatRes['chat'] is! ChatDetails) {
+        return;
+      }
+      final details = chatRes['chat'] as ChatDetails;
+      ChatInstantCache.instance.putChatDetails(details);
+      setState(() {
+        _chatDetails = details;
+        if (details.name.isNotEmpty) {
+          _nameController.text = details.name;
+        }
+        if (details.description != null &&
+            details.description!.trim().isNotEmpty) {
+          _bio = details.description;
+        }
+        if (details.avatars.isNotEmpty) {
+          _avatarUrls = details.avatars
+              .map((a) => a.avatarUrl.trim())
+              .where((s) => s.isNotEmpty)
+              .toList();
+          _avatarUrl = details.avatarUrl ??
+              (_avatarUrls.isNotEmpty ? _avatarUrls.first : null);
+        } else if (details.avatarUrl != null &&
+            details.avatarUrl!.trim().isNotEmpty) {
+          _avatarUrl = details.avatarUrl!.trim();
+          _avatarUrls = [_avatarUrl!];
+        }
+      });
+    } catch (_) {}
   }
 
   String? _boundTileId;
@@ -1069,7 +1138,7 @@ class ProfileScreenState extends State<ProfileScreen>
   void _initInitialEntityData() {
     _isLoading = false;
     if (widget.initialName != null && widget.initialName!.isNotEmpty) {
-      if (_isGroup || _isChannel) {
+      if (_isGroup || _isChannel || _isSystem) {
         _nameController.text = widget.initialName!.trim();
       } else {
         final parts = widget.initialName!.trim().split(' ');
@@ -1126,9 +1195,11 @@ class ProfileScreenState extends State<ProfileScreen>
           }
           muted = notifProvider?.isChatMuted(
                 cid,
-                chatType: _isChannel
-                    ? 'channel'
-                    : (_isGroup ? 'group' : 'private'),
+                chatType: _isSystem
+                    ? 'system'
+                    : (_isChannel
+                        ? 'channel'
+                        : (_isGroup ? 'group' : 'private')),
               ) ??
               false;
         }
@@ -2050,6 +2121,9 @@ class ProfileScreenState extends State<ProfileScreen>
     if (_isSelf) {
       return _tr(l10n, 'profile_online', 'в сети');
     }
+    if (_isSystem) {
+      return _tr(l10n, 'system_notifications_subtitle', 'Служебный чат');
+    }
     if (_isGroup) {
       final count = _memberCount > 0 ? _memberCount : _members.length;
       final onlineCount = _members.where((m) => m.isOnline).length;
@@ -2127,6 +2201,43 @@ class ProfileScreenState extends State<ProfileScreen>
           label: _tr(l10n, 'profile_menu_change_color', 'Цвет'),
           onTap: _openColorSettings,
         ),
+      ];
+    }
+
+    if (_isSystem) {
+      return [
+        ProfileActionButtonItem(
+          iconBuilder: (color, size) =>
+              iconoir.ChatBubble(color: color, width: size, height: size),
+          label: _tr(l10n, 'chat_title', 'Чат'),
+          onTap: () => Navigator.maybePop(context),
+        ),
+        ProfileActionButtonItem(
+          iconBuilder: (color, size) => _isMuted
+              ? iconoir.BellOff(color: color, width: size, height: size)
+              : iconoir.Bell(color: color, width: size, height: size),
+          label: _tr(l10n, _isMuted ? 'chat_unmute' : 'chat_mute', 'Звук'),
+          onTap: _toggleMute,
+        ),
+        ProfileActionButtonItem(
+          iconBuilder: (color, size) =>
+              iconoir.Search(color: color, width: size, height: size),
+          label: _tr(l10n, 'search', 'Поиск'),
+          onTap: _handleSearchInChat,
+        ),
+        if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty)
+          ProfileActionButtonItem(
+            iconBuilder: (color, size) =>
+                iconoir.Palette(color: color, width: size, height: size),
+            label: 'Оформление',
+            onTap: () => unawaited(
+              showChatAppearanceSheet(
+                context,
+                chatId: _resolvedChatId!,
+                canApplyForBoth: false,
+              ),
+            ),
+          ),
       ];
     }
 
@@ -2348,6 +2459,16 @@ class ProfileScreenState extends State<ProfileScreen>
     if (_isChannel) {
       return [
         giftsItem,
+        mediaItem,
+        if (gifsItem != null) gifsItem,
+        filesItem,
+        linksItem,
+        voiceItem,
+      ];
+    }
+
+    if (_isSystem) {
+      return [
         mediaItem,
         if (gifsItem != null) gifsItem,
         filesItem,
@@ -4803,6 +4924,22 @@ class ProfileScreenState extends State<ProfileScreen>
           highlightMessageId: targetMsgId,
         ),
       );
+    } else if (_isSystem) {
+      final systemTitle = _getDisplayName();
+      _pushOrOpenChatInWorkspace(
+        chatId: cid,
+        chatType: 'system',
+        title: systemTitle,
+        avatarUrl: _avatarUrl,
+        initialMessageId: targetMsgId,
+        builder: (_) => PrivateChatScreen(
+          chatId: cid,
+          otherUserName: systemTitle,
+          otherUserAvatar: _avatarUrl,
+          initialMessageId: targetMsgId,
+          initialChatType: 'system',
+        ),
+      );
     } else {
       final l10n = context.l10n;
       final peerTitle = _isSelf
@@ -7236,7 +7373,7 @@ class ProfileScreenState extends State<ProfileScreen>
                                           isBot: _isUser ? _peerIsBot : false,
                                           isVerified: _isUser
                                               ? _peerIsVerified
-                                              : false,
+                                              : _isSystem,
                                           badge: activeCustomization
                                               ?.visibleBadge,
                                           interactiveBadge: true,
@@ -7335,7 +7472,15 @@ class ProfileScreenState extends State<ProfileScreen>
                                                         .text.isNotEmpty)
                                                 ? _emailController.text
                                                 : null,
-                                            bio: _bio,
+                                            bio: _isSystem &&
+                                                    (_bio == null ||
+                                                        _bio!.trim().isEmpty)
+                                                ? _tr(
+                                                    l10n,
+                                                    'system_no_notifications_desc',
+                                                    'Здесь будут отображаться важные сообщения безопасности о вашем аккаунте.',
+                                                  )
+                                                : _bio,
                                             username: _usernameController
                                                     .text.isNotEmpty
                                                 ? _usernameController.text
@@ -7396,7 +7541,9 @@ class ProfileScreenState extends State<ProfileScreen>
                                                 'profile_phone', 'телефон'),
                                             emailLabel: _tr(l10n,
                                                 'auth_email', 'почта'),
-                                            bioLabel: (_isGroup || _isChannel)
+                                            bioLabel: (_isGroup ||
+                                                    _isChannel ||
+                                                    _isSystem)
                                                 ? _tr(
                                                     l10n,
                                                     'group_info_description',
@@ -7585,11 +7732,13 @@ class ProfileScreenState extends State<ProfileScreen>
                                                     isLite: isLite,
                                                     chatId:
                                                         _resolvedChatId ?? '',
-                                                    chatType: _isGroup
-                                                        ? 'group'
-                                                        : (_isChannel
-                                                            ? 'channel'
-                                                            : 'private'),
+                                                    chatType: _isSystem
+                                                        ? 'system'
+                                                        : (_isGroup
+                                                            ? 'group'
+                                                            : (_isChannel
+                                                                ? 'channel'
+                                                                : 'private')),
                                                     chatTitle:
                                                         _getDisplayName(),
                                                     currentUserId:
@@ -7698,8 +7847,19 @@ class ProfileScreenState extends State<ProfileScreen>
                             overExpandProgress: _overExpandProgress,
                             bottomCollapseOverlap: bottomCollapseOverlap,
                             tintColor: backgroundColor,
-                            backgroundColor: backgroundColor,
+                            backgroundColor: (_isSystem &&
+                                    _avatarUrls.isEmpty &&
+                                    _avatarFile == null)
+                                ? Theme.of(context).colorScheme.primary
+                                : backgroundColor,
                             displayName: _getDisplayName(),
+                            fallbackBuilder: _isSystem
+                                ? (ctx, size) => iconoir.ShieldCheck(
+                                      color: Colors.white,
+                                      width: size * 0.95,
+                                      height: size * 0.95,
+                                    )
+                                : null,
                             decoration: activeCustomization?.avatarDecoration,
                             showDecoration: scrollOffset <= 2.0,
                             chatAvatarHeroTag: effectiveChatAvatarHeroTag,
@@ -7773,8 +7933,19 @@ class ProfileScreenState extends State<ProfileScreen>
                           avatarUrls: _avatarUrls,
                           avatarFile: _avatarFile,
                           tintColor: backgroundColor,
-                          backgroundColor: backgroundColor,
+                          backgroundColor: (_isSystem &&
+                                  _avatarUrls.isEmpty &&
+                                  _avatarFile == null)
+                              ? Theme.of(context).colorScheme.primary
+                              : backgroundColor,
                           displayName: _getDisplayName(),
+                          fallbackBuilder: _isSystem
+                              ? (ctx, size) => iconoir.ShieldCheck(
+                                    color: Colors.white,
+                                    width: size * 0.95,
+                                    height: size * 0.95,
+                                  )
+                              : null,
                           decoration: activeCustomization?.avatarDecoration,
                           chatAvatarHeroTag: effectiveChatAvatarHeroTag,
                           onTap: _openFullAvatarViewer,
@@ -7992,6 +8163,38 @@ class ProfileScreenState extends State<ProfileScreen>
             iconBuilder: (color, size) =>
                 iconoir.Trash(color: color, width: size, height: size),
           ),
+      ];
+    }
+
+    if (_isSystem) {
+      return [
+        _MorphMenuItemData(
+          id: 'search_chat',
+          label: _tr(l10n, 'chat_menu_search_messages', 'Поиск сообщений'),
+          iconBuilder: (color, size) =>
+              iconoir.Search(color: color, width: size, height: size),
+        ),
+        if (_resolvedChatId != null && _resolvedChatId!.isNotEmpty) ...[
+          _MorphMenuItemData(
+            id: 'auto_delete',
+            label: 'Автоудаление сообщений',
+            iconBuilder: (color, size) =>
+                iconoir.Timer(color: color, width: size, height: size),
+          ),
+          _MorphMenuItemData(
+            id: 'chat_appearance',
+            label: 'Оформление чата',
+            iconBuilder: (color, size) =>
+                iconoir.Palette(color: color, width: size, height: size),
+          ),
+          _MorphMenuItemData(
+            id: 'clear_history',
+            label: _tr(l10n, 'chat_menu_clear_history', 'Очистить историю'),
+            isDestructive: true,
+            iconBuilder: (color, size) =>
+                iconoir.Erase(color: color, width: size, height: size),
+          ),
+        ],
       ];
     }
 
@@ -8272,7 +8475,7 @@ class ProfileScreenState extends State<ProfileScreen>
             showChatAppearanceSheet(
               context,
               chatId: _resolvedChatId!,
-              canApplyForBoth: true,
+              canApplyForBoth: !_isSystem,
             ),
           );
         }
@@ -8404,6 +8607,22 @@ class ProfileScreenState extends State<ProfileScreen>
   }
 
   String _getDisplayName() {
+    if (_isSystem) {
+      final raw = _nameController.text.trim().isNotEmpty
+          ? _nameController.text.trim()
+          : (widget.initialName?.trim() ?? '');
+      if (raw.isEmpty ||
+          raw == 'Системные уведомления' ||
+          raw == 'System Notifications' ||
+          raw == 'system_notifications_title') {
+        final loc = AppLocalizations.of(context);
+        return loc != null
+            ? _tr(loc, 'system_notifications_title', 'Системные уведомления')
+            : 'Системные уведомления';
+      }
+      return raw;
+    }
+
     if (_isUser) {
       final custom = _contactEntry?.customName.trim() ?? '';
       if (custom.isNotEmpty) return custom;

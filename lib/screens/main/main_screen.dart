@@ -20,7 +20,6 @@ import '../../screens/chat/private_chat_screen.dart';
 import '../../screens/chat/group_chat_screen.dart';
 import '../../screens/chat/channel_screen.dart';
 import '../../screens/chat/forum_topics_screen.dart';
-import '../../screens/chat/system_notifications_screen.dart';
 import '../../services/search_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/chat_service.dart';
@@ -3686,8 +3685,8 @@ class _MainScreenState extends State<MainScreen>
         ? (translatedSaved != 'chat_saved_messages'
             ? translatedSaved
             : 'Избранное')
-        : (chat.chatType == 'system' && chat.name.isEmpty
-            ? context.l10n.translate('system_notifications_title')
+        : (chat.chatType == 'system'
+            ? PrivateChatScreen.resolveSystemChatTitle(context, chat.name)
             : (chat.chatType == 'private'
                 ? ContactsService.resolveName(chat.otherUserId, chat.name)
                 : chat.name));
@@ -3807,9 +3806,15 @@ class _MainScreenState extends State<MainScreen>
         Navigator.push(
           context,
           SwipeBackPageRoute(
-            builder: (_) => SystemNotificationsScreen(
+            builder: (_) => PrivateChatScreen(
               chatId: chat.id,
-              chatName: displayName,
+              otherUserName: displayName,
+              otherUserAvatar: effectiveAvatar,
+              otherUserOnline: chat.isOnline,
+              otherUserLastSeen:
+                  DateTimeUtils.parseUtcDateTime(chat.lastSeen),
+              otherUserId: chat.otherUserId,
+              initialChatType: 'system',
             ),
           ),
         ).then((_) => onReturn());

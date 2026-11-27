@@ -55,6 +55,8 @@ import '../../widgets/chat/emoji_sticker_panel.dart';
 import '../../widgets/message/fullscreen_photo_viewer.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'user_profile_screen.dart';
+import '../settings/devices_screen.dart';
+import '../settings/profile_screen.dart';
 import '../../utils/swipe_back_route.dart';
 import '../../services/message_context_menu_service.dart';
 import '../../services/glass_toast_service.dart';
@@ -122,6 +124,7 @@ class PrivateChatScreen extends StatefulWidget {
   final Message? initialReplyMessage;
   final String? initialReplyChatId;
   final String? initialReplyChatName;
+  final String? initialChatType;
 
   const PrivateChatScreen({
     Key? key,
@@ -135,7 +138,25 @@ class PrivateChatScreen extends StatefulWidget {
     this.initialReplyMessage,
     this.initialReplyChatId,
     this.initialReplyChatName,
+    this.initialChatType,
   }) : super(key: key);
+
+  /// Returns `true` when [raw] represents the default "System Notifications" chat title.
+  static bool isDefaultSystemChatName(String raw) {
+    final trimmed = raw.trim();
+    return trimmed.isEmpty ||
+        trimmed == 'Системные уведомления' ||
+        trimmed == 'System Notifications' ||
+        trimmed == 'system_notifications_title';
+  }
+
+  /// Resolves the localized display title for a system chat when using the default name.
+  static String resolveSystemChatTitle(BuildContext context, String raw) {
+    if (isDefaultSystemChatName(raw)) {
+      return context.trOr('system_notifications_title', 'Системные уведомления');
+    }
+    return raw;
+  }
 
   @override
   State<PrivateChatScreen> createState() => _PrivateChatScreenState();
@@ -158,22 +179,28 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String? _chatAvatar;
   String? _otherUserId;
   String? _otherUsername;
-  String _chatType = 'private'; // 'private', 'saved'
+  String _chatType = 'private'; // 'private', 'saved', 'system'
+
+  bool get _isSystemChat => _chatType == 'system';
+
+  bool get _isReadOnlySystemChat =>
+      _isSystemChat && (_otherUserId == null || _otherUserId!.isEmpty);
 
   bool get _isSavedChat =>
-      _chatType == 'saved' ||
-      widget.chatId.startsWith('saved_') ||
-      (_currentUserId != null &&
-          _otherUserId != null &&
-          _otherUserId!.isNotEmpty &&
-          _otherUserId == _currentUserId);
+      !_isSystemChat &&
+      (_chatType == 'saved' ||
+          widget.chatId.startsWith('saved_') ||
+          (_currentUserId != null &&
+              _otherUserId != null &&
+              _otherUserId!.isNotEmpty &&
+              _otherUserId == _currentUserId));
 
   String get _rawPeerTitle =>
       _chatName.isNotEmpty ? _chatName : (widget.otherUserName ?? '');
 
   String get _resolvedPeerTitle {
     final raw = _rawPeerTitle;
-    if (_isSavedChat || _isBot) return raw;
+    if (_isSavedChat || _isSystemChat || _isBot) return raw;
     return ContactsService.resolvePeerName(
       _otherUserId,
       raw,
@@ -183,7 +210,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   String? get _resolvedPeerAvatar {
     final raw = _chatAvatar ?? widget.otherUserAvatar;
-    if (_isSavedChat || _isBot) return raw;
+    if (_isSavedChat || _isSystemChat || _isBot) return raw;
     return ContactsService.resolvePeerAvatarUrl(
       _otherUserId,
       raw,
@@ -517,18 +544,24 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     _currentUserId = AccountManager().currentAccount?.userId;
     final instant = ChatInstantCache.instance.getSync(widget.chatId);
-    final bool inferredSavedFromArgs = widget.chatId.startsWith('saved_') ||
-        instant?.chat?.chatType == 'saved' ||
-        instant?.chatDetails?.chatType == 'saved' ||
-        (widget.otherUserId == null &&
-            (widget.otherUserName == 'Избранное' ||
-                widget.otherUserName == 'Saved Messages' ||
-                widget.otherUserName == 'chat_saved_messages'));
-    _chatType = inferredSavedFromArgs
-        ? 'saved'
-        : (instant?.chatDetails?.chatType ??
-            instant?.chat?.chatType ??
-            'private');
+    final bool inferredSystemFromArgs = widget.initialChatType == 'system' ||
+        instant?.chatDetails?.chatType == 'system' ||
+        instant?.chat?.chatType == 'system';
+    final bool inferredSavedFromArgs = !inferredSystemFromArgs &&
+        (widget.chatId.startsWith('saved_') ||
+            instant?.chat?.chatType == 'saved' ||
+            instant?.chatDetails?.chatType == 'saved' ||
+            (widget.otherUserId == null &&
+                (widget.otherUserName == 'Избранное' ||
+                    widget.otherUserName == 'Saved Messages' ||
+                    widget.otherUserName == 'chat_saved_messages')));
+    _chatType = inferredSystemFromArgs
+        ? 'system'
+        : (inferredSavedFromArgs
+            ? 'saved'
+            : (instant?.chatDetails?.chatType ??
+                instant?.chat?.chatType ??
+                'private'));
     _otherUserId =
         widget.otherUserId ?? instant?.chat?.otherUserId ?? _otherUserId;
     _chatName = (instant?.chatDetails?.name.isNotEmpty == true)
@@ -544,7 +577,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _otherUsername = instant?.username ?? instant?.chat?.username;
     _isMuted = NotificationSettingsProvider().isChatMuted(
           widget.chatId,
-          chatType: _chatType == 'saved' ? 'saved' : 'private',
+          chatType: _chatType,
         ) ||
         ProfileInstantCache.instance.isChatMutedSync(widget.chatId);
     _keyboardHeight =
@@ -573,7 +606,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         unameLower == 'walt' ||
         dnameLower == 'walt' ||
         unameLower.endsWith('bot');
-    _isVerified = (instant?.isVerified ?? false) ||
+    _isVerified = _isSystemChat ||
+        (instant?.isVerified ?? false) ||
         (instant?.chat?.isVerified ?? false) ||
         unameLower == 'botmother' ||
         unameLower == 'walt';
@@ -590,9 +624,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     _stableHeroTag = _chatType == 'saved'
         ? 'self'
-        : ((_otherUserId != null && _otherUserId!.isNotEmpty)
-            ? _otherUserId!
-            : 'chat_${widget.chatId}');
+        : (_isSystemChat
+            ? 'system_${widget.chatId}'
+            : ((_otherUserId != null && _otherUserId!.isNotEmpty)
+                ? _otherUserId!
+                : 'chat_${widget.chatId}'));
 
     if (instant != null && instant.hasMessages) {
       _messages.addAll(instant.messages!);
@@ -3742,12 +3778,25 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       final bool chatMetaChanged = _chatType != chat.chatType ||
           _hasProtectedContent != chat.hasProtectedContent ||
           _autoDeleteSeconds != chat.messageAutoDeleteTime ||
+          (chat.chatType == 'system' &&
+              ((chat.name.isNotEmpty && _chatName != chat.name) ||
+                  _chatAvatar != chat.avatarUrl ||
+                  !_isVerified)) ||
           (chatPinned != null && _pinnedMessage?.id != chatPinned.id);
       if (chatMetaChanged) {
         setState(() {
           _chatType = chat.chatType;
           _hasProtectedContent = chat.hasProtectedContent;
           _autoDeleteSeconds = chat.messageAutoDeleteTime;
+          if (chat.chatType == 'system') {
+            if (chat.name.isNotEmpty) {
+              _chatName = chat.name;
+            }
+            if (chat.avatarUrl != null && chat.avatarUrl!.isNotEmpty) {
+              _chatAvatar = chat.avatarUrl;
+            }
+            _isVerified = true;
+          }
           if (chatPinned != null) {
             _pinnedMessage = chatPinned;
             _pinnedMessages = [chatPinned];
@@ -4996,16 +5045,168 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
   }
 
+  Widget _buildSystemAvatarWidget(BuildContext context) {
+    final primary = context.theav.primary;
+    final secondary = Color.lerp(primary, Colors.black, 0.18)!;
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [primary, secondary],
+        ),
+      ),
+      alignment: Alignment.center,
+      child: const iconoir.ShieldCheck(
+        width: 22,
+        height: 22,
+        color: Colors.white,
+      ),
+    );
+  }
+
+  bool _isLoginSecurityAlert(Message message) {
+    final hasDeviceMeta = message.mediaPayload != null &&
+        message.mediaPayload!['device_id'] != null;
+    if (hasDeviceMeta) return true;
+    final text = message.content;
+    return text.contains('Новый вход') ||
+        text.contains('New login') ||
+        text.contains('system_alert_login_title');
+  }
+
+  Widget _buildLoginAlertDevicesButton(BuildContext context) {
+    final palette = context.theav;
+    return Padding(
+      padding: const EdgeInsets.only(left: 8.0, top: 4.0, bottom: 4.0),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            Navigator.push(
+              context,
+              SwipeBackPageRoute(builder: (_) => const DevicesScreen()),
+            );
+          },
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 7.0),
+            decoration: BoxDecoration(
+              color: palette.surface.withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: palette.primary.withValues(alpha: 0.28),
+                width: 0.8,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                iconoir.Laptop(
+                  width: 15,
+                  height: 15,
+                  color: palette.primary,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  context.trOr('devices_title', 'Устройства'),
+                  style: TextStyle(
+                    color: palette.primary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12.5,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                iconoir.NavArrowRight(
+                  width: 15,
+                  height: 15,
+                  color: palette.primary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReadOnlySystemBottomBar(BuildContext context) {
+    final palette = context.theav;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+      child: SizedBox(
+        height: 48,
+        child: TheavFloatingSurface(
+          borderRadius: 24.0,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(
+            children: [
+              iconoir.ShieldCheck(
+                width: 18,
+                height: 18,
+                color: palette.primary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  context.trOr(
+                    'system_read_only_banner',
+                    'Это системный чат только для чтения',
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
+                    color: palette.subtext,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleMuteNotifications,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: _isMuted
+                      ? iconoir.BellOff(
+                          width: 19,
+                          height: 19,
+                          color: palette.subtext,
+                        )
+                      : iconoir.Bell(
+                          width: 19,
+                          height: 19,
+                          color: palette.primary,
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     _updateInputHeight();
     final isSavedChat = _isSavedChat;
+    final isSystemChat = _isSystemChat;
     final resolvedPeerName = _resolvedPeerTitle;
     final displayName = (isSavedChat ||
             resolvedPeerName == 'chat_saved_messages' ||
             resolvedPeerName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
-        : resolvedPeerName;
+        : (isSystemChat
+            ? PrivateChatScreen.resolveSystemChatTitle(
+                context,
+                resolvedPeerName,
+              )
+            : resolvedPeerName);
     final resolvedPeerAvatar = _resolvedPeerAvatar;
 
     return Consumer<LiquidGlassProvider>(
@@ -5046,8 +5247,13 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
               return FloatingGlassAppBar(
                 name: displayName,
                 avatarUrl: resolvedPeerAvatar,
-                isOnline: _isOtherUserOnline,
-                lastSeen: _otherUserLastSeen,
+                avatarWidget: (isSystemChat &&
+                        (resolvedPeerAvatar == null ||
+                            resolvedPeerAvatar.isEmpty))
+                    ? _buildSystemAvatarWidget(context)
+                    : null,
+                isOnline: _isReadOnlySystemChat ? false : _isOtherUserOnline,
+                lastSeen: _isReadOnlySystemChat ? null : _otherUserLastSeen,
                 statusText: _watchingEmoji != null
                     ? context.l10n.translate('chat_watching_emoji', {'emoji': _watchingEmoji!})
                     : (_isTyping
@@ -5062,11 +5268,16 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                         : (_typingAction == 'uploading_file'
                                             ? 'отправляет файл'
                                             : context.l10n.translate('chat_typing'))))))
-                        : null),
+                        : (_isReadOnlySystemChat
+                            ? context.trOr(
+                                'system_notifications_subtitle',
+                                'Служебный чат',
+                              )
+                            : null)),
                 isChannel: false,
                 isMuted: _isMuted,
                 isBot: _isBot,
-                isVerified: _isVerified,
+                isVerified: _isVerified || isSystemChat,
                 isSavedChat: isSavedChat,
                 autoDeleteSeconds: _autoDeleteSeconds,
                 isSavedPeersMode: _isSavedPeersMode,
@@ -5074,25 +5285,40 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 onBack: () => TilingLayoutController.popOrCloseChatTile(context),
                 onTitleTap: _viewUserProfile,
                 onViewProfile: _viewUserProfile,
-                profileScreenBuilder: (routeContext) => UserProfileScreen(
-                  userId: isSavedChat ? '' : (_otherUserId ?? ''),
-                  initialName: isSavedChat ? null : displayName,
-                  initialAvatarUrl: resolvedPeerAvatar,
-                  isOnline: isSavedChat ? null : _isOtherUserOnline,
-                  lastSeen: isSavedChat ? null : _otherUserLastSeen,
-                  chatId: widget.chatId,
-                  heroTag: heroTag,
-                  onVoiceCall: isSavedChat ? null : _startVoiceCall,
-                  onVideoCall: isSavedChat ? null : _startVideoCall,
-                  onSearchInChat: _searchMessages,
-                  onJumpToMessageId: _scrollToMessage,
-                ),
-                onVoiceCall: _isBot ? null : _startVoiceCall,
-                onVideoCall: _isBot ? null : _startVideoCall,
+                profileScreenBuilder: (routeContext) => _isReadOnlySystemChat
+                    ? ProfileScreen(
+                        entityType: ProfileEntityType.system,
+                        initialName: displayName,
+                        initialAvatarUrl: resolvedPeerAvatar,
+                        chatId: widget.chatId,
+                        heroTag: heroTag,
+                        onSearchInChat: _searchMessages,
+                        onJumpToMessageId: _scrollToMessage,
+                      )
+                    : UserProfileScreen(
+                        userId: isSavedChat ? '' : (_otherUserId ?? ''),
+                        initialName: isSavedChat ? null : displayName,
+                        initialAvatarUrl: resolvedPeerAvatar,
+                        isOnline: isSavedChat ? null : _isOtherUserOnline,
+                        lastSeen: isSavedChat ? null : _otherUserLastSeen,
+                        chatId: widget.chatId,
+                        heroTag: heroTag,
+                        onVoiceCall: isSavedChat ? null : _startVoiceCall,
+                        onVideoCall: isSavedChat ? null : _startVideoCall,
+                        onSearchInChat: _searchMessages,
+                        onJumpToMessageId: _scrollToMessage,
+                      ),
+                onVoiceCall: (isSavedChat || isSystemChat || _isBot)
+                    ? null
+                    : _startVoiceCall,
+                onVideoCall: (isSavedChat || isSystemChat || _isBot)
+                    ? null
+                    : _startVideoCall,
                 onSearch: _searchMessages,
                 onToggleMute: _toggleMuteNotifications,
                 onClearHistory: _showClearHistoryDialog,
-                onReport: _openChatAbuseReportSheet,
+                onReport:
+                    (isSavedChat || isSystemChat) ? null : _openChatAbuseReportSheet,
                 onAutoDelete: isSavedChat ? null : _openAutoDeleteSheet,
                 onChatAppearance: _openChatAppearanceSheet,
                 onToggleSavedViewMode: isSavedChat ? _toggleSavedPeersMode : null,
@@ -5100,7 +5326,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                 selectedCount: _selectedMessageIds.length,
                 hasProtectedContent: _hasProtectedContent,
                 onCancelSelection: _clearSelection,
-                onReplySelected: _selectedMessageIds.length == 1
+                onReplySelected: (!_isReadOnlySystemChat && _selectedMessageIds.length == 1)
                     ? () {
                         final id = _selectedMessageIds.first;
                         final msg = _messages.where((m) => m.id == id).firstOrNull;
@@ -5258,6 +5484,55 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   : null,
             ),
           );
+        } else if (_isSystemChat) {
+          final palette = context.theav;
+          listContent = Center(
+            key: const ValueKey('private_chat_system_empty'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: palette.primary.withValues(alpha: 0.14),
+                      shape: BoxShape.circle,
+                    ),
+                    alignment: Alignment.center,
+                    child: iconoir.ShieldCheck(
+                      width: 38,
+                      height: 38,
+                      color: palette.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    context.trOr('system_no_notifications', 'Нет уведомлений'),
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: palette.onSurface,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    context.trOr(
+                      'system_no_notifications_desc',
+                      'Здесь будут отображаться важные сообщения безопасности о вашем аккаунте.',
+                    ),
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      color: palette.subtext,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          );
         } else {
           listContent = Center(
             key: const ValueKey('private_chat_empty'),
@@ -5408,9 +5683,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                 chatTitle: _isSavedChat
                                     ? context.l10n
                                         .translate('chat_saved_messages')
-                                    : (_resolvedPeerTitle.isNotEmpty
-                                        ? _resolvedPeerTitle
-                                        : 'Чат'),
+                                    : (_isSystemChat
+                                        ? PrivateChatScreen.resolveSystemChatTitle(
+                                            context,
+                                            _resolvedPeerTitle,
+                                          )
+                                        : (_resolvedPeerTitle.isNotEmpty
+                                            ? _resolvedPeerTitle
+                                            : 'Чат')),
                                 canPinMessages: true,
                                 initialPinnedMessages: _pinnedMessages,
                               ),
@@ -5687,7 +5967,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Widget _buildAlbumFeedItem(MediaAlbum album, int index) {
     final message = album.primaryMessage;
     final key = _obtainPrimaryMessageKey(message);
-    final bool isMe = message.senderId == _currentUserId;
+    final bool isMe = !_isReadOnlySystemChat && message.senderId == _currentUserId;
 
     final bool isAlbumTargeted = _highlightMessageId == message.id ||
         album.items.any((ai) => ai.id == _highlightMessageId);
@@ -5714,7 +5994,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
     albumWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: !_isSelectionMode,
+      enabled: !_isSelectionMode && !_isReadOnlySystemChat,
       child: albumWidget,
     );
 
@@ -5843,7 +6123,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Widget _buildMessageItem(Message message, int index) {
     final GlobalKey key = _obtainPrimaryMessageKey(message);
     final hasLocalId = message.localId != null && message.localId!.isNotEmpty;
-    final bool isMe = message.senderId == _currentUserId;
+    final bool isMe = !_isReadOnlySystemChat && message.senderId == _currentUserId;
 
     if (message.messageType == 'system') {
       final payload = message.mediaPayload;
@@ -5982,10 +6262,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           : null,
     );
 
+    if (_isSystemChat &&
+        message.inlineKeyboard.isEmpty &&
+        _isLoginSecurityAlert(message)) {
+      messageWidget = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          messageWidget,
+          _buildLoginAlertDevicesButton(context),
+        ],
+      );
+    }
+
     // Wrap with SwipeToReplyWrapper
     messageWidget = SwipeToReplyWrapper(
       onReply: () => _startReply(message),
-      enabled: !_isSelectionMode,
+      enabled: !_isSelectionMode && !_isReadOnlySystemChat,
       child: messageWidget,
     );
 
@@ -6591,6 +6884,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   }
 
   Widget _buildMessageInput() {
+    if (_isReadOnlySystemChat) {
+      return _buildReadOnlySystemBottomBar(context);
+    }
+
     final commands = _botInfo?.commands ?? const <BotCommand>[];
     final replyKb = _activeReplyKeyboard;
     final hasReplyKb = replyKb.isNotEmpty;
@@ -7181,17 +7478,38 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   /// Navigate to user profile screen
   void _viewUserProfile() {
+    final resolvedPeerName = _resolvedPeerTitle;
+    final resolvedPeerAvatar = _resolvedPeerAvatar;
+    final heroTag = _stableHeroTag;
+    if (_isReadOnlySystemChat) {
+      final systemTitle = PrivateChatScreen.resolveSystemChatTitle(
+        context,
+        resolvedPeerName,
+      );
+      Navigator.push(
+        context,
+        SwipeBackPageRoute(
+          builder: (_) => ProfileScreen(
+            entityType: ProfileEntityType.system,
+            initialName: systemTitle,
+            initialAvatarUrl: resolvedPeerAvatar,
+            chatId: widget.chatId,
+            heroTag: heroTag,
+            onSearchInChat: _searchMessages,
+            onJumpToMessageId: _scrollToMessage,
+          ),
+        ),
+      );
+      return;
+    }
     final isSavedChat = _isSavedChat ||
         _otherUserId == null ||
         _otherUserId!.isEmpty;
-    final resolvedPeerName = _resolvedPeerTitle;
     final displayName = (isSavedChat ||
             resolvedPeerName == 'chat_saved_messages' ||
             resolvedPeerName == 'chat_saved')
         ? context.l10n.translate('chat_saved_messages')
         : resolvedPeerName;
-    final resolvedPeerAvatar = _resolvedPeerAvatar;
-    final heroTag = _stableHeroTag;
     Navigator.push(
       context,
       SwipeBackPageRoute(
@@ -8705,16 +9023,23 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           }
         });
       },
-      onReply: () => _startReply(message),
-      onQuote: (isVideoNote || isVoiceNote || isPoll) ? null : () => _startQuote(message, message.content, 0, message.content.length),
-      onQuotePartial: (isVideoNote || isVoiceNote || isPoll)
+      onReply: _isReadOnlySystemChat ? null : () => _startReply(message),
+      onQuote: (_isReadOnlySystemChat || isVideoNote || isVoiceNote || isPoll)
           ? null
-          : (selectedText, offset, length) =>
-              _startQuote(message, selectedText, offset, length),
+          : () => _startQuote(message, message.content, 0, message.content.length),
+      onQuotePartial:
+          (_isReadOnlySystemChat || isVideoNote || isVoiceNote || isPoll)
+              ? null
+              : (selectedText, offset, length) =>
+                  _startQuote(message, selectedText, offset, length),
       onPin: () => _togglePinMessage(message),
       isPinned: _pinnedMessage?.id == message.id,
       onForward: () => _forwardMessagesToPickedChat([message.id]),
-      onEdit: (isVideoNote || isVoiceNote || isPoll)
+      onEdit: (_isReadOnlySystemChat ||
+              !isMe ||
+              isVideoNote ||
+              isVoiceNote ||
+              isPoll)
           ? null
           : () => _enterEditMode(
                 message,
@@ -8726,7 +9051,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           ? () => unawaited(_toggleTranslateMessage(message))
           : null,
       isTranslated: _translationsByMsgId.containsKey(message.id),
-      onReport: (!isMe && _chatType != 'saved')
+      onReport: (!isMe && _chatType != 'saved' && !_isSystemChat)
           ? () => unawaited(
                 showAbuseReportSheet(
                   context,
@@ -8793,7 +9118,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       context,
       chatId: widget.chatId,
       current: _chatAppearance,
-      canApplyForBoth: !isSavedChat,
+      canApplyForBoth: !isSavedChat && !_isSystemChat,
     );
     if (!mounted || res == null || !res.changed) return;
     final nextCfg =
@@ -9231,7 +9556,14 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
             initialReplyChatId: widget.chatId,
             initialReplyChatName: _isSavedChat
                 ? context.l10n.translate('chat_saved_messages')
-                : (_resolvedPeerTitle.isNotEmpty ? _resolvedPeerTitle : 'Чат'),
+                : (_isSystemChat
+                    ? PrivateChatScreen.resolveSystemChatTitle(
+                        context,
+                        _resolvedPeerTitle,
+                      )
+                    : (_resolvedPeerTitle.isNotEmpty
+                        ? _resolvedPeerTitle
+                        : 'Чат')),
           ),
         ),
       );
@@ -9266,14 +9598,15 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         .toList();
 
     final bool isSaved = _chatType == 'saved';
+    final bool isSingleParty = isSaved || _isReadOnlySystemChat;
     final res = await showTelegramDeleteMessagesSheet(
       context: context,
       messageCount: targets.length,
-      chatType: isSaved ? 'saved' : 'private',
+      chatType: isSaved ? 'saved' : (_isSystemChat ? 'system' : 'private'),
       peerName: _resolvedPeerTitle,
-      isSavedMessages: isSaved,
-      canRevoke: !isSaved && serverMessages.isNotEmpty,
-      defaultRevoke: !isSaved && serverMessages.isNotEmpty,
+      isSavedMessages: isSingleParty,
+      canRevoke: !isSingleParty && serverMessages.isNotEmpty,
+      defaultRevoke: !isSingleParty && serverMessages.isNotEmpty,
     );
     if (res == null || !res.confirmed || !mounted) return;
 
@@ -9314,7 +9647,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     final apiRes = await ChatService.deleteMessagesBatch(
       chatId: widget.chatId,
       messageIds: ids,
-      revoke: res.revoke,
+      revoke: isSingleParty ? true : res.revoke,
     );
     if (apiRes['success'] != true && mounted) {
       setState(() {

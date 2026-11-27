@@ -132,7 +132,11 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
 
   Future<void> _loadChats() async {
     try {
-      final localChats = await AppDatabase().getChats();
+      bool isAllowedTarget(DbChat c) =>
+          !(c.chatType == 'system' &&
+              (c.otherUserId == null || c.otherUserId!.isEmpty));
+      final localChats =
+          (await AppDatabase().getChats()).where(isAllowedTarget).toList();
       if (mounted) {
         setState(() {
           _chats = localChats;
@@ -142,7 +146,8 @@ class _ForwardChatPickerSheetState extends State<ForwardChatPickerSheet> {
       if (localChats.isEmpty) {
         final res = await ChatService.getChats();
         if (res['success'] == true && res['chats'] is List<Chat> && mounted) {
-          final fresh = await AppDatabase().getChats();
+          final fresh =
+              (await AppDatabase().getChats()).where(isAllowedTarget).toList();
           if (mounted) {
             setState(() {
               _chats = fresh;
