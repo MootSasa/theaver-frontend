@@ -9,6 +9,7 @@ import '../../config/app_config.dart';
 import '../../models/profile_customization.dart';
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../tiling/tile_viewport_scope.dart';
 import '../user/avatar_decoration_frame.dart';
 
@@ -665,12 +666,13 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
   ]) {
     _ensureLoopControllerSynced();
     final count = widget.avatarUrls.length;
-    return PageView.builder(
-      key: _pageViewKey,
-      controller: _loopPageController,
-      physics: const BouncingScrollPhysics(),
-      itemCount: count * _kInfiniteLoopMultiplier,
-      onPageChanged: (virtualIndex) {
+    return SwipeBackBlocker(
+      child: PageView.builder(
+        key: _pageViewKey,
+        controller: _loopPageController,
+        physics: const BouncingScrollPhysics(),
+        itemCount: count * _kInfiniteLoopMultiplier,
+        onPageChanged: (virtualIndex) {
         if (count == 0) return;
         _currentVirtualPage = virtualIndex;
         final realIndex = ((virtualIndex % count) + count) % count;
@@ -718,7 +720,8 @@ class _ExpandableAvatarState extends State<ExpandableAvatar> {
             enableHero && isActiveVirtualPage,
           ),
         );
-      },
+        },
+      ),
     );
   }
 

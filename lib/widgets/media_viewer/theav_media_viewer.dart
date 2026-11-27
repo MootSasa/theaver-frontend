@@ -25,8 +25,10 @@ import '../../services/glass_toast_service.dart';
 import '../../services/media_cache_manager.dart';
 import '../../services/sticker_service.dart';
 import '../../services/video_pip_service.dart';
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import '../../utils/haptic_utils.dart';
 import '../../utils/image_utils.dart';
+import '../../utils/swipe_back_route.dart';
 import '../design_system/theav_design_system.dart';
 import '../message/blurred_media_placeholder.dart';
 import 'theav_media_hud.dart';
@@ -865,6 +867,7 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
       key: ValueKey<String>('stage_${item.id}'),
       enableZoom: true,
       enableDoubleTapSeek: isVideo,
+      canSwipeHorizontally: !_isZoomed && _items.length > 1,
       onDoubleTapSeek: isVideo
           ? (deltaSec) => _bridgeForIndex(index)
               .seekRelative(Duration(seconds: deltaSec))
@@ -907,11 +910,12 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
     final TheavMediaItem currentItem = _items[_currentIndex];
     final Animation<double>? routeAnim = _routeScope?.transitionAnimation;
 
-    return Focus(
-      focusNode: _focusNode,
-      autofocus: true,
-      onKeyEvent: _handleKeyEvent,
-      child: Material(
+    return SwipeBackBlocker(
+      child: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: _handleKeyEvent,
+        child: Material(
         type: MaterialType.transparency,
         child: Stack(
           fit: StackFit.expand,
@@ -944,14 +948,25 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
 
             // 120 FPS media PageView
             Positioned.fill(
-              child: PageView.builder(
-                controller: _pageController,
-                physics: _isZoomed || _items.length <= 1
-                    ? const NeverScrollableScrollPhysics()
-                    : const BouncingScrollPhysics(),
-                onPageChanged: _onPageChanged,
-                itemCount: _items.length,
-                itemBuilder: _buildPage,
+              child: ScrollConfiguration(
+                behavior: ScrollConfiguration.of(context).copyWith(
+                  dragDevices: const <PointerDeviceKind>{
+                    PointerDeviceKind.touch,
+                    PointerDeviceKind.mouse,
+                    PointerDeviceKind.trackpad,
+                    PointerDeviceKind.stylus,
+                    PointerDeviceKind.invertedStylus,
+                  },
+                ),
+                child: PageView.builder(
+                  controller: _pageController,
+                  physics: _isZoomed || _items.length <= 1
+                      ? const NeverScrollableScrollPhysics()
+                      : const BouncingScrollPhysics(),
+                  onPageChanged: _onPageChanged,
+                  itemCount: _items.length,
+                  itemBuilder: _buildPage,
+                ),
               ),
             ),
 
@@ -991,6 +1006,7 @@ class _TheavMediaViewerState extends State<TheavMediaViewer> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

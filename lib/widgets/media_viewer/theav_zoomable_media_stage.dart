@@ -21,6 +21,7 @@ class TheavZoomableMediaStage extends StatefulWidget {
   final Widget child;
   final bool enableZoom;
   final bool enableDoubleTapSeek;
+  final bool canSwipeHorizontally;
   final ValueChanged<int>? onDoubleTapSeek;
   final VoidCallback? onSingleTap;
   final ValueChanged<bool>? onZoomStateChanged;
@@ -33,6 +34,7 @@ class TheavZoomableMediaStage extends StatefulWidget {
     required this.child,
     this.enableZoom = true,
     this.enableDoubleTapSeek = false,
+    this.canSwipeHorizontally = true,
     this.onDoubleTapSeek,
     this.onSingleTap,
     this.onZoomStateChanged,
@@ -325,8 +327,11 @@ class _TheavZoomableMediaStageState extends State<TheavZoomableMediaStage>
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (!widget.enableZoom || event is! PointerScrollEvent) return;
+    final dx = event.scrollDelta.dx;
     final dy = event.scrollDelta.dy;
-    if (dy == 0.0) return;
+    // Ignore pure or dominant horizontal touchpad scrolls so horizontal swipes
+    // cannot accidentally trigger zoom and lock PageView.
+    if (dy == 0.0 || dx.abs() >= dy.abs()) return;
     _matrixAnimController.stop();
 
     final double factor = dy < 0 ? 1.16 : (1.0 / 1.16);
@@ -431,22 +436,39 @@ class _TheavZoomableMediaStageState extends State<TheavZoomableMediaStage>
           onPointerUp: (e) => _onPointerUpOrCancel(e.pointer),
           onPointerCancel: (e) => _onPointerUpOrCancel(e.pointer),
           onPointerSignal: _onPointerSignal,
-          child: GestureDetector(
+          child: RawGestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTap: widget.onSingleTap,
-            onDoubleTapDown: (details) =>
-                _lastTapLocalPos = details.localPosition,
-            onDoubleTap: _handleDoubleTap,
-            // Notice: horizontal swipe belongs natively to PageView when not zoomed;
-            // only VerticalDrag (tracking both dx & dy 2D offset) or zoomed Pan is active.
-            onVerticalDragStart: _isZoomed ? null : _onVerticalDragStart,
-            onVerticalDragUpdate: _isZoomed ? null : _onVerticalDragUpdate,
-            onVerticalDragEnd: _isZoomed ? null : _onVerticalDragEnd,
-            onVerticalDragCancel:
-                _isZoomed ? null : () => _cancelDismissDragSmoothly(onlyIfActive: true),
-            onPanStart: _isZoomed ? _onZoomedPanStart : null,
-            onPanUpdate: _isZoomed ? _onZoomedPanUpdate : null,
-            child: Stack(
+            gestures: _isZoomed
+                ? const <Type, GestureRecognizerFactory>{}
+                : <Type, GestureRecognizerFactory>{
+                    _MediaDismissVerticalDragRecognizer:
+                        GestureRecognizerFactoryWithHandlers<
+                            _MediaDismissVerticalDragRecognizer>(
+                      () => _MediaDismissVerticalDragRecognizer(
+                        canSwipeHorizontally: widget.canSwipeHorizontally,
+                      ),
+                      (_MediaDismissVerticalDragRecognizer instance) {
+                        instance
+                          ..canSwipeHorizontally = widget.canSwipeHorizontally
+                          ..onStart = _onVerticalDragStart
+                          ..onUpdate = _onVerticalDragUpdate
+                          ..onEnd = _onVerticalDragEnd
+                          ..onCancel = () =>
+                              _cancelDismissDragSmoothly(onlyIfActive: true);
+                      },
+                    ),
+                  },
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: widget.onSingleTap,
+              onDoubleTapDown: (details) =>
+                  _lastTapLocalPos = details.localPosition,
+              onDoubleTap: _handleDoubleTap,
+              // Horizontal swipe belongs to PageView when not zoomed; vertical
+              // dismiss is gated through _MediaDismissVerticalDragRecognizer above.
+              onPanStart: _isZoomed ? _onZoomedPanStart : null,
+              onPanUpdate: _isZoomed ? _onZoomedPanUpdate : null,
+              child: Stack(
               fit: StackFit.expand,
               children: [
                 ValueListenableBuilder<Offset>(
@@ -534,9 +556,120 @@ class _TheavZoomableMediaStageState extends State<TheavZoomableMediaStage>
                   ),
               ],
             ),
+            ),
           ),
         );
       },
     );
+  }
+}
+
+/// Vertical dismiss drag recognizer that enforces a vertical cone and yields
+/// early on horizontal or multi-touch gestures so sibling PageView paging
+/// and pinch-to-zoom never compete with pull-to-dismiss.
+class _MediaDismissVerticalDragRecognizer
+    extends VerticalDragGestureRecognizer {
+  bool canSwipeHorizontally;
+  final Map<int, Offset> _pointerTotals = <int, Offset>{};
+  final Set<int> _rejectedPointers = <int>{};
+  final Set<int> _acceptedPointers = <int>{};
+  int? _lastMovedPointer;
+
+  _MediaDismissVerticalDragRecognizer({
+    required this.canSwipeHorizontally,
+  });
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    _pointerTotals[event.pointer] = Offset.zero;
+    if (_pointerTotals.length > 1 && _acceptedPointers.isEmpty) {
+      _rejectedPointers.addAll(_pointerTotals.keys);
+      resolve(GestureDisposition.rejected);
+    }
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (_rejectedPointers.contains(event.pointer)) {
+      if (event is PointerUpEvent || event is PointerCancelEvent) {
+        _clearPointer(event.pointer);
+        super.handleEvent(event);
+      }
+      return;
+    }
+    if (event is PointerMoveEvent) {
+      _lastMovedPointer = event.pointer;
+      final prev = _pointerTotals[event.pointer] ?? Offset.zero;
+      final total = prev + event.delta;
+      _pointerTotals[event.pointer] = total;
+
+      if (!_acceptedPointers.contains(event.pointer)) {
+        final absDx = total.dx.abs();
+        final absDy = total.dy.abs();
+        final rejectThreshold = canSwipeHorizontally ? 10.0 : 18.0;
+        final horizontalBias = canSwipeHorizontally ? 0.85 : 1.25;
+        if (absDx >= rejectThreshold && absDx > absDy * horizontalBias) {
+          _rejectedPointers.add(event.pointer);
+          resolve(GestureDisposition.rejected);
+          return;
+        }
+      }
+    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+      _clearPointer(event.pointer);
+    }
+    super.handleEvent(event);
+  }
+
+  @override
+  bool hasSufficientGlobalDistanceToAccept(
+    PointerDeviceKind pointerDeviceKind,
+    double? deviceTouchSlop,
+  ) {
+    if (!super.hasSufficientGlobalDistanceToAccept(
+      pointerDeviceKind,
+      deviceTouchSlop,
+    )) {
+      return false;
+    }
+    final pointer = _lastMovedPointer;
+    if (pointer == null || _rejectedPointers.contains(pointer)) {
+      return false;
+    }
+    final total = _pointerTotals[pointer] ?? Offset.zero;
+    final absDx = total.dx.abs();
+    final absDy = total.dy.abs();
+    final minVerticalRatio = canSwipeHorizontally ? 1.35 : 0.75;
+    return absDy > absDx * minVerticalRatio;
+  }
+
+  @override
+  void acceptGesture(int pointer) {
+    _acceptedPointers.add(pointer);
+    super.acceptGesture(pointer);
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    _clearPointer(pointer);
+    super.rejectGesture(pointer);
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {
+    _pointerTotals.clear();
+    _rejectedPointers.clear();
+    _acceptedPointers.clear();
+    _lastMovedPointer = null;
+    super.didStopTrackingLastPointer(pointer);
+  }
+
+  void _clearPointer(int pointer) {
+    _pointerTotals.remove(pointer);
+    _rejectedPointers.remove(pointer);
+    _acceptedPointers.remove(pointer);
+    if (_lastMovedPointer == pointer) {
+      _lastMovedPointer = null;
+    }
   }
 }

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show SynchronousFuture;
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,10 +17,12 @@ import 'package:theaver/services/liquid_glass_provider.dart';
 import 'package:theaver/services/media_playback_coordinator.dart';
 import 'package:theaver/services/profile_theme_provider.dart';
 import 'package:theaver/services/video_pip_service.dart';
+import 'package:theaver/utils/swipe_back_route.dart';
 import 'package:theaver/widgets/media_viewer/floating_video_pip_overlay.dart';
 import 'package:theaver/widgets/media_viewer/theav_media_viewer.dart';
 import 'package:theaver/widgets/media_viewer/theav_media_viewer_route.dart';
 import 'package:theaver/widgets/profile/avatar_gallery_viewer.dart';
+import 'package:theaver/widgets/tiling/trackpad_swipe_back_indicator.dart';
 import 'package:video_player/video_player.dart';
 
 class _SyncAppLocalizationsDelegate
@@ -644,6 +647,148 @@ void main() {
 
       await fakeCtrl.dispose();
     });
+
+    testWidgets(
+      'Diagonal horizontal photo swipes and ancestor SwipeBackPageRoute / TrackpadBackGestureWrapper never hijack PageView photo paging',
+      (tester) async {
+        final pngBytes = (await tester.runAsync(() => _createSyntheticPng()))!;
+        var trackpadBackCount = 0;
+        var innerRoutePopped = false;
+        late BuildContext innerContext;
+
+        await tester.pumpWidget(
+          _wrapApp(
+            home: TrackpadBackGestureWrapper(
+              onTriggerBack: () => trackpadBackCount++,
+              child: Builder(
+                builder: (rootCtx) => Scaffold(
+                  body: Center(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(rootCtx)
+                            .push<void>(
+                              SwipeBackPageRoute<void>(
+                                builder: (ctx) {
+                                  innerContext = ctx;
+                                  return const Scaffold(
+                                    body: SizedBox.expand(),
+                                  );
+                                },
+                              ),
+                            )
+                            .then((_) {
+                              innerRoutePopped = true;
+                            });
+                      },
+                      child: const Text('Open inner route'),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(TrackpadBackGestureWrapper.isBlockedByModal, isFalse);
+
+        await tester.tap(find.text('Open inner route'));
+        await tester.pumpAndSettle();
+
+        final items = <TheavMediaItem>[
+          TheavMediaItem(
+            id: 'diag_0',
+            kind: TheavMediaKind.photo,
+            url: 'mem://diag_0',
+            memoryBytes: pngBytes,
+            heroTag: 'h_diag_0',
+          ),
+          TheavMediaItem(
+            id: 'diag_1',
+            kind: TheavMediaKind.photo,
+            url: 'mem://diag_1',
+            memoryBytes: pngBytes,
+            heroTag: 'h_diag_1',
+          ),
+          TheavMediaItem(
+            id: 'diag_2',
+            kind: TheavMediaKind.photo,
+            url: 'mem://diag_2',
+            memoryBytes: pngBytes,
+            heroTag: 'h_diag_2',
+          ),
+        ];
+
+        TheavMediaViewer.open<void>(innerContext, items: items);
+        await tester.pumpAndSettle();
+
+        expect(TrackpadBackGestureWrapper.isBlockedByModal, isTrue);
+        expect(find.text('1 из 3'), findsOneWidget);
+
+        final viewerRoute =
+            ModalRoute.of(tester.element(find.byType(TheavMediaViewer)))
+                as TheavMediaViewerRoute<dynamic>;
+        expect(viewerRoute.overlayEntries.last.opaque, isTrue);
+
+        // Diagonal left swipe (accumulates 30px dy > touchSlop while staying
+        // predominantly horizontal) must advance PageView to page 2 without
+        // triggering 2D pull-to-dismiss.
+        final leftGesture = await tester.startGesture(const Offset(700, 300));
+        for (var i = 0; i < 5; i++) {
+          await leftGesture.moveBy(
+            const Offset(-90, 6),
+            timeStamp: Duration(milliseconds: 16 * (i + 1)),
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        await leftGesture.up(timeStamp: const Duration(milliseconds: 96));
+        await tester.pumpAndSettle();
+
+        expect(find.text('2 из 3'), findsOneWidget);
+        expect(viewerRoute.overlayEntries.last.opaque, isTrue);
+
+        // Trackpad two-finger swipe while viewer is open must stay blocked.
+        final panZoomPointer = TestPointer(2, PointerDeviceKind.trackpad);
+        await tester.sendEventToBinding(
+          panZoomPointer.panZoomStart(const Offset(240, 300)),
+        );
+        await tester.sendEventToBinding(
+          panZoomPointer.panZoomUpdate(
+            const Offset(240, 300),
+            pan: const Offset(220, 0),
+          ),
+        );
+        await tester.sendEventToBinding(panZoomPointer.panZoomEnd());
+        await tester.pumpAndSettle();
+
+        expect(trackpadBackCount, 0);
+        expect(find.text('2 из 3'), findsOneWidget);
+
+        // Diagonal right swipe starting from left edge must return to page 1
+        // without triggering ancestor SwipeBackPageRoute or popping viewer.
+        final rightGesture = await tester.startGesture(const Offset(24, 300));
+        for (var i = 0; i < 5; i++) {
+          await rightGesture.moveBy(
+            const Offset(90, -6),
+            timeStamp: Duration(milliseconds: 16 * (i + 1)),
+          );
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        await rightGesture.up(timeStamp: const Duration(milliseconds: 96));
+        await tester.pumpAndSettle();
+
+        expect(find.text('1 из 3'), findsOneWidget);
+        expect(find.byType(TheavMediaViewer), findsOneWidget);
+        expect(innerRoutePopped, isFalse);
+
+        // Closing the viewer clears the modal trackpad blocker cleanly.
+        await tester.tap(find.byIcon(Icons.arrow_back));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(TheavMediaViewer), findsNothing);
+        expect(TrackpadBackGestureWrapper.isBlockedByModal, isFalse);
+      },
+    );
   });
 }
 

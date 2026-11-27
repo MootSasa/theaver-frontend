@@ -3,6 +3,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../../widgets/bot/mini_app_webview_sheet.dart';
 import '../../widgets/design_system/theav_design_system.dart';
+import '../tiling/trackpad_swipe_back_indicator.dart';
 
 /// Inherited route scope exposing the live transition progress and the ability
 /// to temporarily reveal the underlying route during 2D drag-to-dismiss.
@@ -46,6 +47,7 @@ class TheavMediaViewerRoute<T> extends PageRoute<T> {
   bool _miniAppRegistered = false;
   bool _miniAppSettled = false;
   bool _dismissingFromDrag = false;
+  bool _trackpadBlockerRegistered = false;
   CurvedAnimation? _curvedTransition;
 
   TheavMediaViewerRoute({
@@ -130,9 +132,22 @@ class TheavMediaViewerRoute<T> extends PageRoute<T> {
     overlayEntries.last.opaque = shouldBeOpaque;
   }
 
+  void _registerTrackpadBlocker() {
+    if (_trackpadBlockerRegistered) return;
+    _trackpadBlockerRegistered = true;
+    TrackpadBackGestureWrapper.pushModalBlocker();
+  }
+
+  void _unregisterTrackpadBlocker() {
+    if (!_trackpadBlockerRegistered) return;
+    _trackpadBlockerRegistered = false;
+    TrackpadBackGestureWrapper.popModalBlocker();
+  }
+
   @override
   void install() {
     super.install();
+    _registerTrackpadBlocker();
     if (!_miniAppRegistered) {
       _miniAppRegistered = true;
       MiniAppSessionController.instance.registerFullScreenOpen();
@@ -180,8 +195,15 @@ class TheavMediaViewerRoute<T> extends PageRoute<T> {
   }
 
   @override
+  bool didPop(T? result) {
+    _unregisterTrackpadBlocker();
+    return super.didPop(result);
+  }
+
+  @override
   void dispose() {
     _isDisposed = true;
+    _unregisterTrackpadBlocker();
     animation?.removeStatusListener(_handleRouteStatusChanged);
     if (_miniAppSettled) {
       _miniAppSettled = false;
