@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:url_launcher/url_launcher.dart';
@@ -148,17 +149,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
     if (widget.oauthPrefill?.phone.isNotEmpty ?? false) return;
-    final cfg = widget.debugProvidersOverride ??
-        await AuthService.fetchAuthProviders();
+    final cfg = widget.debugProvidersOverride != null
+        ? await Future<AuthProvidersConfig>.microtask(
+            () => widget.debugProvidersOverride!,
+          )
+        : await AuthService.fetchAuthProviders();
     if (!mounted) return;
     if (cfg.countryCode.length == 2 &&
+        cfg.countryCode != _countryIso &&
         kTheavCountryDialCatalog.any((c) => c.iso == cfg.countryCode)) {
-      setState(() => _countryIso = cfg.countryCode);
+      setState(() {
+        _countryIso = cfg.countryCode;
+        _currentE164Phone =
+            normalizeToE164(_phoneCtrl.text, defaultIso: cfg.countryCode) ?? '';
+      });
     }
   }
 
   void _onEmailEdited() {
     if (!mounted) return;
+    if (_registrationTicket == null &&
+        !_awaitingCodes &&
+        (widget.oauthPrefill?.email.isEmpty ?? true)) {
+      return;
+    }
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _registrationTicket = null;
+          _awaitingCodes = false;
+        });
+      });
+      return;
+    }
     setState(() {
       _registrationTicket = null;
       _awaitingCodes = false;
@@ -515,7 +540,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
 
     if (!mounted) return;
-    setState(() => _isLoading = false);
+    FocusManager.instance.primaryFocus?.unfocus();
 
     TilingLayoutController.instance.closeAllChats();
     final nav = Navigator.of(context);
@@ -530,6 +555,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   void _goToStep(int next) {
+    FocusManager.instance.primaryFocus?.unfocus();
     HapticUtils.tap();
     setState(() {
       _stepForward = next >= _step;
@@ -735,12 +761,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ? providerTitle
                   : (_smsVerified ? 'SMS' : null),
               onCountryChanged: (entry) {
+                final nextE164 =
+                    normalizeToE164(_phoneCtrl.text, defaultIso: entry.iso) ??
+                        '';
+                if (_countryIso == entry.iso &&
+                    _currentE164Phone == nextE164 &&
+                    _registrationTicket == null) {
+                  return;
+                }
                 setState(() {
                   _countryIso = entry.iso;
+                  _currentE164Phone = nextE164;
                   _registrationTicket = null;
                 });
               },
               onE164Changed: (e164) {
+                if (_currentE164Phone == e164 &&
+                    _registrationTicket == null) {
+                  return;
+                }
                 setState(() {
                   _currentE164Phone = e164;
                   _registrationTicket = null;

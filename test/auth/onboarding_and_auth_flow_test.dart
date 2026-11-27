@@ -763,5 +763,115 @@ void main() {
       expect(acc.surname, 'Smirnov');
       expect(acc.emailVerified, isTrue);
     });
+
+    testWidgets(
+      'RegisterScreen under GlassMode.full handles region updates, E.164 paste, and mid-flight step focus without build-scope or RenderTapRegion assertions',
+      (tester) async {
+        _useTallPhoneViewport(tester);
+        final tp = ThemeProvider();
+        addTearDown(tp.dispose);
+        final gp = _TestLiquidGlassProvider(GlassMode.full);
+        final lp = LocaleProvider();
+        await lp.ready;
+        final l10n = await _loadTestL10n(tester);
+
+        await tester.pumpWidget(
+          _buildAuthTestHost(
+            themeProvider: tp,
+            glassProvider: gp,
+            localeProvider: lp,
+            l10n: l10n,
+            child: const RegisterScreen(
+              debugProvidersOverride: AuthProvidersConfig(countryCode: 'DE'),
+            ),
+          ),
+        );
+        // Pump initial frame, microtask RU -> DE country update, and post-frame E.164 sync.
+        await tester.pump();
+        await tester.pump();
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('DE +49'), findsOneWidget);
+
+        final phoneField = find.descendant(
+          of: find.byType(CountryPhoneInput),
+          matching: find.byType(TextField),
+        );
+        await tester.enterText(phoneField, '+375291112233');
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('BY +375'), findsOneWidget);
+
+        await tester.enterText(phoneField, '+79991234567');
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text('RU +7'), findsOneWidget);
+
+        // Unmount RegisterScreen cleanly before verifying step viewport focus stability.
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+
+        final step0Ctrl = TextEditingController();
+        final step1Ctrl = TextEditingController();
+        final step1Focus = FocusNode();
+        addTearDown(() {
+          step0Ctrl.dispose();
+          step1Ctrl.dispose();
+          step1Focus.dispose();
+        });
+        var step = 0;
+        late StateSetter setStepState;
+
+        await tester.pumpWidget(
+          _buildAuthTestHost(
+            themeProvider: tp,
+            glassProvider: gp,
+            localeProvider: lp,
+            l10n: l10n,
+            child: Scaffold(
+              body: StatefulBuilder(
+                builder: (context, setState) {
+                  setStepState = setState;
+                  return TheavStepViewport(
+                    stepIndex: step,
+                    forward: true,
+                    child: step == 0
+                        ? TextField(
+                            key: const ValueKey<String>('step0_field'),
+                            controller: step0Ctrl,
+                          )
+                        : TextField(
+                            key: const ValueKey<String>('step1_field'),
+                            controller: step1Ctrl,
+                            focusNode: step1Focus,
+                          ),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        setStepState(() => step = 1);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+
+        final step1Finder = find.byKey(const ValueKey<String>('step1_field'));
+        await tester.tapAt(
+          tester.getTopLeft(step1Finder) + const Offset(24, 24),
+        );
+        await tester.pump();
+        final midFlightElement = tester.element(step1Finder);
+        expect(step1Focus.hasFocus, isTrue);
+
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+        expect(identical(tester.element(step1Finder), midFlightElement), isTrue);
+        expect(step1Focus.hasFocus, isTrue);
+      },
+    );
   });
 }

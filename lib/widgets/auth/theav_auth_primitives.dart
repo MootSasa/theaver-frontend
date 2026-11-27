@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 import 'package:liquid_glass_easy/liquid_glass_easy.dart';
@@ -450,6 +451,7 @@ class _TheavOtpPinRowState extends State<TheavOtpPinRow>
   );
   int _activeIndex = -1;
   bool _syncing = false;
+  bool _disposed = false;
 
   @override
   void initState() {
@@ -457,14 +459,29 @@ class _TheavOtpPinRowState extends State<TheavOtpPinRow>
     for (var i = 0; i < _focusNodes.length; i++) {
       final idx = i;
       _focusNodes[idx].addListener(() {
-        if (!mounted) return;
-        setState(() {
-          if (_focusNodes[idx].hasFocus) {
-            _activeIndex = idx;
-          } else if (_activeIndex == idx) {
-            _activeIndex = -1;
-          }
-        });
+        if (!mounted || _disposed) return;
+        final int nextActive = _focusNodes[idx].hasFocus
+            ? idx
+            : (_activeIndex == idx ? -1 : _activeIndex);
+        if (nextActive == _activeIndex) return;
+        if (SchedulerBinding.instance.schedulerPhase ==
+            SchedulerPhase.persistentCallbacks) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || _disposed) return;
+            var resolved = -1;
+            for (var j = 0; j < _focusNodes.length; j++) {
+              if (_focusNodes[j].hasFocus) {
+                resolved = j;
+                break;
+              }
+            }
+            if (resolved != _activeIndex) {
+              setState(() => _activeIndex = resolved);
+            }
+          });
+          return;
+        }
+        setState(() => _activeIndex = nextActive);
       });
     }
     _applyExternalValue(widget.value);
@@ -474,7 +491,16 @@ class _TheavOtpPinRowState extends State<TheavOtpPinRow>
   void didUpdateWidget(covariant TheavOtpPinRow oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.value != oldWidget.value) {
-      _applyExternalValue(widget.value);
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        final pending = widget.value;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || _disposed || widget.value != pending) return;
+          _applyExternalValue(pending);
+        });
+      } else {
+        _applyExternalValue(widget.value);
+      }
     }
     if (widget.errorShakeCounter != oldWidget.errorShakeCounter &&
         widget.errorShakeCounter > 0) {
@@ -497,6 +523,7 @@ class _TheavOtpPinRowState extends State<TheavOtpPinRow>
 
   @override
   void dispose() {
+    _disposed = true;
     _shakeCtrl.dispose();
     for (final c in _controllers) {
       c.dispose();
@@ -767,19 +794,44 @@ class _TheavStepViewportState extends State<TheavStepViewport>
     vsync: this,
   )..value = 1.0;
 
+  final Map<int, GlobalKey> _stepKeys = <int, GlobalKey>{};
   Widget? _outgoingChild;
   int? _outgoingStep;
   double _dir = 1.0;
+
+  GlobalKey _keyForStep(int step) => _stepKeys.putIfAbsent(
+        step,
+        () => GlobalKey(debugLabel: 'theav_step_gk_$step'),
+      );
+
+  void _pruneStepKeys() {
+    _stepKeys.removeWhere(
+      (k, _) => k != widget.stepIndex && k != _outgoingStep,
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     _ctrl.addStatusListener((status) {
       if (status.isCompleted && _outgoingChild != null && mounted) {
-        setState(() {
-          _outgoingChild = null;
-          _outgoingStep = null;
-        });
+        if (SchedulerBinding.instance.schedulerPhase ==
+            SchedulerPhase.persistentCallbacks) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || _outgoingChild == null) return;
+            setState(() {
+              _outgoingChild = null;
+              _outgoingStep = null;
+              _pruneStepKeys();
+            });
+          });
+        } else {
+          setState(() {
+            _outgoingChild = null;
+            _outgoingStep = null;
+            _pruneStepKeys();
+          });
+        }
       }
     });
   }
@@ -792,6 +844,7 @@ class _TheavStepViewportState extends State<TheavStepViewport>
       if (disableAnim) {
         _outgoingChild = null;
         _outgoingStep = null;
+        _pruneStepKeys();
         _ctrl.value = 1.0;
         return;
       }
@@ -802,11 +855,9 @@ class _TheavStepViewportState extends State<TheavStepViewport>
           reversingCurrent ? (1.0 - _ctrl.value).clamp(0.0, 1.0) : 0.0;
       final double startVel =
           reversingCurrent ? (-_ctrl.velocity).clamp(-2.0, 2.0) : 0.45;
-      _outgoingChild = KeyedSubtree(
-        key: ValueKey<String>('theav_step_slot_${oldWidget.stepIndex}'),
-        child: oldWidget.child,
-      );
+      _outgoingChild = oldWidget.child;
       _outgoingStep = oldWidget.stepIndex;
+      _pruneStepKeys();
       _dir = widget.forward ? 1.0 : -1.0;
       _ctrl.animateWith(
         SpringSimulation(
@@ -828,14 +879,9 @@ class _TheavStepViewportState extends State<TheavStepViewport>
 
   @override
   Widget build(BuildContext context) {
-    final incoming = KeyedSubtree(
-      key: ValueKey<String>('theav_step_slot_${widget.stepIndex}'),
-      child: widget.child,
-    );
-
-    if (_outgoingChild == null || _outgoingStep == widget.stepIndex) {
-      return ClipRect(child: incoming);
-    }
+    final bool hasOutgoing = _outgoingChild != null &&
+        _outgoingStep != null &&
+        _outgoingStep != widget.stepIndex;
 
     return ClipRect(
       child: AnimatedBuilder(
@@ -845,13 +891,39 @@ class _TheavStepViewportState extends State<TheavStepViewport>
           return Stack(
             fit: StackFit.passthrough,
             children: [
+              if (hasOutgoing)
+                FractionalTranslation(
+                  key: ValueKey<String>('theav_step_out_${_outgoingStep!}'),
+                  translation: Offset(-_kStepStride * t * _dir, 0.0),
+                  child: ExcludeFocus(
+                    excluding: true,
+                    child: IgnorePointer(
+                      child: KeyedSubtree(
+                        key: _keyForStep(_outgoingStep!),
+                        child: KeyedSubtree(
+                          key: ValueKey<String>(
+                            'theav_step_slot_${_outgoingStep!}',
+                          ),
+                          child: _outgoingChild!,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               FractionalTranslation(
-                translation: Offset(-_kStepStride * t * _dir, 0.0),
-                child: IgnorePointer(child: _outgoingChild),
-              ),
-              FractionalTranslation(
-                translation: Offset(_kStepStride * (1.0 - t) * _dir, 0.0),
-                child: incoming,
+                key: ValueKey<String>('theav_step_in_${widget.stepIndex}'),
+                translation: hasOutgoing
+                    ? Offset(_kStepStride * (1.0 - t) * _dir, 0.0)
+                    : Offset.zero,
+                child: KeyedSubtree(
+                  key: _keyForStep(widget.stepIndex),
+                  child: KeyedSubtree(
+                    key: ValueKey<String>(
+                      'theav_step_slot_${widget.stepIndex}',
+                    ),
+                    child: widget.child,
+                  ),
+                ),
               ),
             ],
           );

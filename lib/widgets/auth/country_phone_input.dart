@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:iconoir_flutter/iconoir_flutter.dart' as iconoir;
 
@@ -164,21 +165,42 @@ class CountryPhoneInput extends StatefulWidget {
 
 class _CountryPhoneInputState extends State<CountryPhoneInput> {
   bool _internalUpdate = false;
+  bool _postFrameSyncScheduled = false;
+  String? _lastEmittedE164;
 
   CountryDialEntry get _selectedCountry => countryByIso(widget.countryIso);
 
   @override
   void initState() {
     super.initState();
-    _syncIfFullE164InController();
+    _schedulePostFrameInitialSync();
   }
 
   @override
   void didUpdateWidget(covariant CountryPhoneInput oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.countryIso != widget.countryIso) {
-      _emitE164(widget.controller.text, _selectedCountry);
+      _schedulePostFrameEmit();
     }
+  }
+
+  void _schedulePostFrameInitialSync() {
+    final text = widget.controller.text.trim();
+    if (!text.startsWith('+')) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncIfFullE164InController();
+    });
+  }
+
+  void _schedulePostFrameEmit() {
+    if (_postFrameSyncScheduled) return;
+    _postFrameSyncScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _postFrameSyncScheduled = false;
+      if (!mounted) return;
+      _emitE164(widget.controller.text, _selectedCountry);
+    });
   }
 
   void _syncIfFullE164InController() {
@@ -194,21 +216,27 @@ class _CountryPhoneInputState extends State<CountryPhoneInput> {
           selection: TextSelection.collapsed(offset: national.length),
         );
         _internalUpdate = false;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            if (detected.iso != widget.countryIso) {
-              widget.onCountryChanged(detected);
-            }
-            widget.onE164Changed?.call(text);
-          }
-        });
+        if (detected.iso != widget.countryIso) {
+          widget.onCountryChanged(detected);
+        }
+        _emitE164(national, detected);
       }
     }
   }
 
   void _emitE164(String nationalOrRaw, CountryDialEntry entry) {
-    final norm = normalizeToE164(nationalOrRaw, defaultIso: entry.iso);
-    widget.onE164Changed?.call(norm ?? '');
+    final value = normalizeToE164(nationalOrRaw, defaultIso: entry.iso) ?? '';
+    if (_lastEmittedE164 == value) return;
+    _lastEmittedE164 = value;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        widget.onE164Changed?.call(value);
+      });
+      return;
+    }
+    widget.onE164Changed?.call(value);
   }
 
   void _handleTextChanged(String raw) {
