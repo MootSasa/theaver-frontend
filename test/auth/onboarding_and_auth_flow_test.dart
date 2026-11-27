@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:theaver/l10n/app_localizations.dart';
 import 'package:theaver/screens/auth/first_start_wizard_screen.dart';
 import 'package:theaver/screens/auth/login_screen.dart';
+import 'package:theaver/screens/auth/recovery_screen.dart';
 import 'package:theaver/screens/auth/register_screen.dart';
 import 'package:theaver/screens/settings/service_menu_screen.dart';
 import 'package:theaver/services/account_manager.dart';
@@ -871,6 +872,97 @@ void main() {
         expect(tester.takeException(), isNull);
         expect(identical(tester.element(step1Finder), midFlightElement), isTrue);
         expect(step1Focus.hasFocus, isTrue);
+      },
+    );
+
+    testWidgets(
+      'RegisterScreen and RecoveryScreen position bottom button right above keyboard without double viewInsets',
+      (tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1.0;
+        tester.view.padding = const FakeViewPadding(top: 47, bottom: 34);
+        tester.view.viewPadding = const FakeViewPadding(top: 47, bottom: 34);
+        tester.view.viewInsets = FakeViewPadding.zero;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          tester.view.resetPadding();
+          tester.view.resetViewPadding();
+          tester.view.resetViewInsets();
+        });
+
+        final tp = ThemeProvider();
+        addTearDown(tp.dispose);
+        final gp = _TestLiquidGlassProvider(GlassMode.disabled);
+        final lp = LocaleProvider();
+        await lp.ready;
+        final l10n = await _loadTestL10n(tester);
+
+        await tester.pumpWidget(
+          _buildAuthTestHost(
+            themeProvider: tp,
+            glassProvider: gp,
+            localeProvider: lp,
+            l10n: l10n,
+            child: const RegisterScreen(
+              debugProvidersOverride: AuthProvidersConfig(countryCode: 'RU'),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        final registerBtn = find.descendant(
+          of: find.byType(TheavFloatingBottomBar),
+          matching: find.byType(TheavSpringButton),
+        );
+        expect(
+          tester.getBottomLeft(registerBtn).dy,
+          closeTo(844.0 - 34.0 - 16.0, 0.5),
+        );
+
+        tester.view.padding = const FakeViewPadding(top: 47, bottom: 0);
+        tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+        await tester.pump();
+        await tester.pump();
+
+        expect(
+          tester.getBottomLeft(registerBtn).dy,
+          closeTo(844.0 - 320.0 - 16.0, 0.5),
+        );
+
+        tester.view.padding = const FakeViewPadding(top: 47, bottom: 34);
+        tester.view.viewInsets = FakeViewPadding.zero;
+        await tester.pumpWidget(
+          _buildAuthTestHost(
+            themeProvider: tp,
+            glassProvider: gp,
+            localeProvider: lp,
+            l10n: l10n,
+            child: const RecoveryScreen(),
+          ),
+        );
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        final recoveryBtn = find.descendant(
+          of: find.byType(TheavFloatingBottomBar),
+          matching: find.byType(TheavSpringButton),
+        );
+        expect(
+          tester.getBottomLeft(recoveryBtn).dy,
+          closeTo(844.0 - 34.0 - 16.0, 0.5),
+        );
+
+        tester.view.padding = const FakeViewPadding(top: 47, bottom: 0);
+        tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+        await tester.pump();
+        await tester.pump();
+
+        expect(
+          tester.getBottomLeft(recoveryBtn).dy,
+          closeTo(844.0 - 320.0 - 16.0, 0.5),
+        );
       },
     );
   });
