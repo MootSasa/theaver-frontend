@@ -7,7 +7,7 @@
 [![Релиз](https://img.shields.io/github/v/release/MootSasa/theaver-frontend?include_prereleases&label=release)](https://github.com/MootSasa/theaver-frontend/releases)
 [![Сборка релизов](https://github.com/MootSasa/theaver-frontend/actions/workflows/release.yml/badge.svg)](https://github.com/MootSasa/theaver-frontend/releases)
 [![Лицензия: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](./LICENSE)
-![Flutter](https://img.shields.io/badge/Flutter-3.41%2B-02569B?logo=flutter&logoColor=white)
+![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-02569B?logo=flutter&logoColor=white)
 ![Платформы](https://img.shields.io/badge/platforms-Android%20%7C%20iOS%20%7C%20Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Web-424245)
 
 [Сайт](https://theaver.app/ru/) | [Веб-клиент](https://app.theaver.app) | [Загрузки](https://theaver.app/ru/downloads) | [Документация (RU)](https://theaver.app/ru/docs) | [Docs (EN)](https://theaver.app/docs) | [Обновления](https://theaver.app/ru/changelog)
@@ -61,7 +61,7 @@ Get-AuthenticodeSignature .\theaver-*-windows-x64-setup.exe
 
 ## Сборка из исходников
 
-Для сборки понадобится Flutter `3.41.9` (Dart `>=3.0.0 <4.0.0`) и стандартный инструментарий выбранной ОС (Android SDK и JDK 17 для Android, Xcode для Apple, MSVC и CMake для Windows, `libsqlite3-dev` + GTK/Clang для Linux).
+Для сборки понадобится Flutter `3.44.9` (Dart `>=3.0.0 <4.0.0`) и стандартный инструментарий выбранной ОС (Android SDK и JDK 17 для Android, Xcode для Apple, MSVC и CMake для Windows, `libsqlite3-dev` + GTK/Clang для Linux).
 
 1. Клонируйте репозиторий:
 

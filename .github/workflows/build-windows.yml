@@ -14,7 +14,7 @@ on:
       flutter_version:
         description: 'Версия Flutter'
         required: true
-        default: '3.41.9'
+        default: '3.44.9'
         type: string
       api_base_url:
         description: 'Кастомный API Base URL (опционально, например https://api.theaver.app)'

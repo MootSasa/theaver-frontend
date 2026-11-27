@@ -155,7 +155,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Adjust Gradle memory for CI runner
@@ -273,7 +273,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Enable Windows desktop
@@ -392,7 +392,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Enable Linux desktop
@@ -454,7 +454,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Enable macOS desktop
@@ -547,7 +547,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Build and Sign iOS IPA
@@ -646,7 +646,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.41.9'
+          flutter-version: '3.44.9'
           cache: true
 
       - name: Install dependencies & patch web plugins
