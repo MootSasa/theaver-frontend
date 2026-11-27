@@ -690,6 +690,7 @@ class AvatarStudioState {
   static const Rect fullRect = Rect.fromLTWH(0.0, 0.0, 1.0, 1.0);
   static const Offset defaultMiniCenter = Offset(0.5, 0.5);
   static const double minMiniSizeFraction = 0.18;
+  static const double maxScale = 8.0;
 
   final AvatarCropAspectMode aspectMode;
   final double scale;
@@ -793,7 +794,7 @@ class AvatarStudioState {
   }) {
     return AvatarStudioState(
       aspectMode: aspectMode ?? this.aspectMode,
-      scale: (scale ?? this.scale).clamp(1.0, 5.0).toDouble(),
+      scale: (scale ?? this.scale).clamp(1.0, maxScale).toDouble(),
       panOffset: panOffset ?? this.panOffset,
       quarterTurns: ((quarterTurns ?? this.quarterTurns) % 4 + 4) % 4,
       fineAngleDegrees:

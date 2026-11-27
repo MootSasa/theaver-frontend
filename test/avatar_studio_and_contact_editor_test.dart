@@ -577,6 +577,242 @@ void main() {
       expect(find.text('Монограмма'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('Resizing crop frame via corners and edges keeps photo stationary on canvas and exports exact cropped subregion', (tester) async {
+      tester.view.physicalSize = const Size(800, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      late Uint8List splitBytes;
+      late ui.Image decodedImage;
+      await tester.runAsync(() async {
+        splitBytes = await _createSplitPng(width: 240, height: 120);
+        decodedImage = await AvatarStudioRenderer.decodeImage(splitBytes);
+      });
+      addTearDown(decodedImage.dispose);
+
+      const Size rawSize = Size(240, 120);
+      const Size viewportSize = Size(440, 680);
+      const EdgeInsets pad = EdgeInsets.fromLTRB(20, 92, 20, 220);
+      final Rect area = Rect.fromLTRB(
+        pad.left,
+        pad.top,
+        viewportSize.width - pad.right,
+        viewportSize.height - pad.bottom,
+      );
+      final double stageSide =
+          area.width < area.height ? area.width : area.height;
+      final Rect stageSquare = Rect.fromCenter(
+        center: area.center,
+        width: stageSide,
+        height: stageSide,
+      );
+
+      Rect computeCropRect(AvatarStudioState s) {
+        final Rect norm = AvatarStudioGeometry.effectiveCropNormRect(s, rawSize);
+        return Rect.fromLTWH(
+          stageSquare.left + norm.left * stageSquare.width,
+          stageSquare.top + norm.top * stageSquare.height,
+          norm.width * stageSquare.width,
+          norm.height * stageSquare.height,
+        );
+      }
+
+      AvatarStudioState currentState =
+          const AvatarStudioState(aspectMode: AvatarCropAspectMode.free);
+      late void Function(AvatarStudioState) hostSetState;
+
+      await tester.pumpWidget(
+        _wrapTestApp(
+          home: StatefulBuilder(
+            builder: (ctx, setState) {
+              hostSetState = (AvatarStudioState next) {
+                setState(() => currentState = next);
+              };
+              return Center(
+                child: SizedBox(
+                  width: viewportSize.width,
+                  height: viewportSize.height,
+                  child: AvatarCropCanvas(
+                    image: decodedImage,
+                    state: currentState,
+                    maskShape: AvatarShapeMask.circle,
+                    activeTab: AvatarEditorTab.crop,
+                    activeBrushStyle: AvatarBrushStyle.pen,
+                    activeBrushColor: Colors.white,
+                    activeBrushWidthFraction: 0.02,
+                    viewportPadding: pad,
+                    onStateChanged: (next) =>
+                        setState(() => currentState = next),
+                    onCommitHistory: (next) =>
+                        setState(() => currentState = next),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final Rect freeCrop0 = computeCropRect(currentState);
+      final freeBefore = AvatarStudioGeometry.resolveRenderedPhotoTransform(
+        cropRect: freeCrop0,
+        stageSide: stageSide,
+        rawImageSize: rawSize,
+        state: currentState,
+      );
+
+      // 1) Shrink bottom-right corner in Free mode: photo must remain stationary.
+      await tester.drag(
+        find.byKey(const ValueKey<String>('avatar_crop_handle_bottomRight')),
+        const Offset(-70, -25),
+      );
+      await tester.pump();
+
+      final Rect freeCrop1 = computeCropRect(currentState);
+      final freeAfter1 = AvatarStudioGeometry.resolveRenderedPhotoTransform(
+        cropRect: freeCrop1,
+        stageSide: stageSide,
+        rawImageSize: rawSize,
+        state: currentState,
+      );
+      expect(freeCrop1.right, lessThan(freeCrop0.right - 20.0));
+      expect(freeCrop1.bottom, lessThan(freeCrop0.bottom - 5.0));
+      expect(freeAfter1.center.dx, closeTo(freeBefore.center.dx, 0.05));
+      expect(freeAfter1.center.dy, closeTo(freeBefore.center.dy, 0.05));
+      expect(freeAfter1.pixelScale, closeTo(freeBefore.pixelScale, 1e-4));
+
+      // 2) Reset to Free mode and drag left edge past midpoint into right coral half.
+      hostSetState(
+        const AvatarStudioState(aspectMode: AvatarCropAspectMode.free),
+      );
+      await tester.pump();
+
+      await tester.drag(
+        find.byKey(const ValueKey<String>('avatar_crop_handle_left')),
+        const Offset(230, 0),
+      );
+      await tester.pump();
+
+      final Rect leftCrop = computeCropRect(currentState);
+      final leftAfter = AvatarStudioGeometry.resolveRenderedPhotoTransform(
+        cropRect: leftCrop,
+        stageSide: stageSide,
+        rawImageSize: rawSize,
+        state: currentState,
+      );
+      expect(leftAfter.center.dx, closeTo(freeBefore.center.dx, 0.05));
+      expect(leftAfter.center.dy, closeTo(freeBefore.center.dy, 0.05));
+      expect(leftAfter.pixelScale, closeTo(freeBefore.pixelScale, 1e-4));
+
+      // Verify rendered output contains only the right coral half (#EF4444).
+      await tester.runAsync(() async {
+        final rendered = await AvatarStudioRenderer.renderEditedAvatar(
+          sourceBytes: splitBytes,
+          sourceFileName: 'split.png',
+          state: currentState,
+          maxDimension: 256,
+        );
+        try {
+          final ui.Image outImg =
+              await AvatarStudioRenderer.decodeImage(rendered.bytes);
+          try {
+            final ByteData? rgba =
+                await outImg.toByteData(format: ui.ImageByteFormat.rawRgba);
+            expect(rgba, isNotNull);
+            final int cx = outImg.width ~/ 2;
+            final int cy = outImg.height ~/ 2;
+            final int offset = (cy * outImg.width + cx) * 4;
+            final int r = rgba!.getUint8(offset);
+            final int b = rgba.getUint8(offset + 2);
+            expect(r, greaterThan(190));
+            expect(b, lessThan(90));
+          } finally {
+            outImg.dispose();
+          }
+        } finally {
+          if (rendered.file != null && await rendered.file!.exists()) {
+            await rendered.file!.delete();
+          }
+        }
+      });
+
+      // 3) Original aspect mode: shrink via top-left corner, then enlarge back.
+      hostSetState(
+        const AvatarStudioState(aspectMode: AvatarCropAspectMode.original),
+      );
+      await tester.pump();
+
+      final Rect origCrop0 = computeCropRect(currentState);
+      final origBefore = AvatarStudioGeometry.resolveRenderedPhotoTransform(
+        cropRect: origCrop0,
+        stageSide: stageSide,
+        rawImageSize: rawSize,
+        state: currentState,
+      );
+
+      await tester.drag(
+        find.byKey(const ValueKey<String>('avatar_crop_handle_topLeft')),
+        const Offset(60, 30),
+      );
+      await tester.pump();
+
+      final Rect origCropShrunk = computeCropRect(currentState);
+      final origAfterShrink =
+          AvatarStudioGeometry.resolveRenderedPhotoTransform(
+        cropRect: origCropShrunk,
+        stageSide: stageSide,
+        rawImageSize: rawSize,
+        state: currentState,
+      );
+      expect(origCropShrunk.width, lessThan(origCrop0.width - 20.0));
+      expect(origCropShrunk.height, lessThan(origCrop0.height - 10.0));
+      expect(
+        origCropShrunk.width / origCropShrunk.height,
+        closeTo(2.0, 1e-2),
+      );
+      expect(origAfterShrink.center.dx, closeTo(origBefore.center.dx, 0.05));
+      expect(origAfterShrink.center.dy, closeTo(origBefore.center.dy, 0.05));
+      expect(
+        origAfterShrink.pixelScale,
+        closeTo(origBefore.pixelScale, 1e-4),
+      );
+
+      await tester.drag(
+        find.byKey(const ValueKey<String>('avatar_crop_handle_topLeft')),
+        const Offset(-40, -20),
+      );
+      await tester.pump();
+
+      final Rect origCropEnlarged = computeCropRect(currentState);
+      final origAfterEnlarge =
+          AvatarStudioGeometry.resolveRenderedPhotoTransform(
+        cropRect: origCropEnlarged,
+        stageSide: stageSide,
+        rawImageSize: rawSize,
+        state: currentState,
+      );
+      expect(origCropEnlarged.width, greaterThan(origCropShrunk.width + 10.0));
+      expect(
+        origCropEnlarged.height,
+        greaterThan(origCropShrunk.height + 5.0),
+      );
+      expect(
+        origCropEnlarged.width / origCropEnlarged.height,
+        closeTo(2.0, 1e-2),
+      );
+      expect(origAfterEnlarge.center.dx, closeTo(origBefore.center.dx, 0.05));
+      expect(origAfterEnlarge.center.dy, closeTo(origBefore.center.dy, 0.05));
+      expect(
+        origAfterEnlarge.pixelScale,
+        closeTo(origBefore.pixelScale, 1e-4),
+      );
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('3. ContactEditScreen & SuggestedPhotoBubbleCard', () {

@@ -14,7 +14,16 @@ import '../../utils/haptic_utils.dart';
 import '../../utils/swipe_back_route.dart';
 import '../chat/sticker_item_widget.dart';
 
-enum _CropCorner { topLeft, topRight, bottomLeft, bottomRight }
+enum _CropHandle {
+  topLeft,
+  topRight,
+  bottomLeft,
+  bottomRight,
+  top,
+  bottom,
+  left,
+  right,
+}
 
 /// Interactive photo crop, filter preview, sticker/text, and markup canvas.
 ///
@@ -76,12 +85,39 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
   double _layerStartRotation = 0.0;
   Offset _layerStartFocal = Offset.zero;
 
-  // Corner handle resize state
-  Rect _cornerStartNormRect = AvatarStudioState.fullRect;
+  // Crop frame corner/edge resize state
+  Rect _resizeStartNormRect = AvatarStudioState.fullRect;
+  Offset _resizeStartLocalPos = Offset.zero;
+  Offset _resizePhotoCenterNorm = const Offset(0.5, 0.5);
+  double _resizePhotoStageScale = 1.0;
+  Rect _resizePhotoStageBounds = AvatarStudioState.fullRect;
 
   // Independent miniature circle drag state
   bool _isDraggingMiniCircle = false;
   Offset _startMiniCenter = AvatarStudioState.defaultMiniCenter;
+  AvatarStudioState? _pendingGestureState;
+
+  AvatarStudioState get _currentGestureState =>
+      _pendingGestureState ?? widget.state;
+
+  void _emitLiveState(AvatarStudioState next) {
+    _pendingGestureState = next;
+    widget.onStateChanged(next);
+  }
+
+  void _commitGestureState() {
+    final AvatarStudioState committed = _pendingGestureState ?? widget.state;
+    _pendingGestureState = null;
+    widget.onCommitHistory(committed);
+  }
+
+  @override
+  void didUpdateWidget(covariant AvatarCropCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.state != oldWidget.state && !_isInteracting) {
+      _pendingGestureState = null;
+    }
+  }
 
   void _setInteracting(bool value) {
     if (_isInteracting != value) {
@@ -124,7 +160,8 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
     if (img == null || event is! PointerScrollEvent) return;
     final Size rawSize = Size(img.width.toDouble(), img.height.toDouble());
     final double factor = event.scrollDelta.dy > 0 ? 0.92 : 1.08;
-    final double nextScale = (widget.state.scale * factor).clamp(1.0, 5.0);
+    final double nextScale =
+        (widget.state.scale * factor).clamp(1.0, AvatarStudioState.maxScale);
     final AvatarStudioState next = widget.state.copyWith(scale: nextScale);
     final Offset clampedPan = AvatarStudioGeometry.clampPanOffset(
       panOffset: next.panOffset,
@@ -203,22 +240,23 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
           _startMiniCenter.dy + delta.dy / math.max(1.0, cropRect.height),
         );
         final AvatarStudioState candidate =
-            widget.state.copyWith(miniCenterNorm: rawCenter);
+            _currentGestureState.copyWith(miniCenterNorm: rawCenter);
         final Offset clampedCenter = AvatarStudioGeometry.clampMiniCenterNorm(
           candidate,
           cropRect.size,
         );
-        widget.onStateChanged(candidate.copyWith(miniCenterNorm: clampedCenter));
+        _emitLiveState(candidate.copyWith(miniCenterNorm: clampedCenter));
         return;
       }
     }
 
     final Size rawSize = Size(img.width.toDouble(), img.height.toDouble());
-    final double nextScale = (_startScale * details.scale).clamp(1.0, 5.0);
+    final double nextScale = (_startScale * details.scale)
+        .clamp(1.0, AvatarStudioState.maxScale);
     final Offset delta = details.focalPoint - _startFocal;
     final Offset candidatePan = _startPan +
         Offset(delta.dx / stageSide, delta.dy / stageSide);
-    final AvatarStudioState candidate = widget.state.copyWith(
+    final AvatarStudioState candidate = _currentGestureState.copyWith(
       scale: nextScale,
       panOffset: candidatePan,
     );
@@ -229,13 +267,13 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
       rawImageSize: rawSize,
       state: candidate,
     );
-    widget.onStateChanged(candidate.copyWith(panOffset: clamped));
+    _emitLiveState(candidate.copyWith(panOffset: clamped));
   }
 
   void _handleBgScaleEnd(ScaleEndDetails details) {
     _isDraggingMiniCircle = false;
     _setInteracting(false);
-    widget.onCommitHistory(widget.state);
+    _commitGestureState();
   }
 
   Offset _toCropNorm(Offset localPos, Rect cropRect) {
@@ -304,116 +342,346 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
     widget.onCommitHistory(next);
   }
 
-  void _handleCornerDragStart(_CropCorner corner, Rect stageSquare) {
+  void _handleFrameResizeStart(
+    _CropHandle handle,
+    DragStartDetails details,
+    Rect stageSquare,
+  ) {
     final ui.Image? img = widget.image;
-    if (img == null) return;
+    final RenderObject? ro = context.findRenderObject();
+    if (img == null || ro is! RenderBox) return;
     final Size rawSize = Size(img.width.toDouble(), img.height.toDouble());
-    _cornerStartNormRect =
-        AvatarStudioGeometry.effectiveCropNormRect(widget.state, rawSize);
+    final Size rotSize = AvatarStudioGeometry.rotatedImageSize(
+      rawSize,
+      widget.state.quarterTurns,
+    );
+    final Rect startRect = AvatarStudioGeometry.effectiveCropNormRect(
+      widget.state,
+      rawSize,
+    );
+    final startTransform = AvatarStudioGeometry.resolveRenderedPhotoTransform(
+      cropRect: startRect,
+      stageSide: 1.0,
+      rawImageSize: rawSize,
+      state: widget.state,
+    );
+
+    Rect bounds = AvatarStudioState.fullRect;
+    if (widget.state.fineAngleDegrees.abs() <= 1e-4) {
+      final Rect imgStageRect = Rect.fromCenter(
+        center: startTransform.center,
+        width: rotSize.width * startTransform.pixelScale,
+        height: rotSize.height * startTransform.pixelScale,
+      );
+      final Rect clipped = imgStageRect.intersect(AvatarStudioState.fullRect);
+      if (!clipped.isEmpty) {
+        bounds = Rect.fromLTRB(
+          math.min(clipped.left, startRect.left),
+          math.min(clipped.top, startRect.top),
+          math.max(clipped.right, startRect.right),
+          math.max(clipped.bottom, startRect.bottom),
+        );
+      }
+    }
+
+    _resizeStartNormRect = startRect;
+    _resizeStartLocalPos = ro.globalToLocal(details.globalPosition);
+    _resizePhotoCenterNorm = startTransform.center;
+    _resizePhotoStageScale = startTransform.pixelScale;
+    _resizePhotoStageBounds = bounds;
     _setInteracting(true);
   }
 
-  void _handleCornerDragUpdate(
-    _CropCorner corner,
+  bool _isNormRectCoveredByPhoto(Rect rect, Size rawSize) {
+    final double angle =
+        -AvatarStudioGeometry.totalRotationRadians(widget.state);
+    final double cosA = math.cos(angle);
+    final double sinA = math.sin(angle);
+    final double halfW = rawSize.width * _resizePhotoStageScale * 0.5 + 1e-5;
+    final double halfH = rawSize.height * _resizePhotoStageScale * 0.5 + 1e-5;
+    final corners = <Offset>[
+      rect.topLeft,
+      rect.topRight,
+      rect.bottomLeft,
+      rect.bottomRight,
+    ];
+    for (final Offset c in corners) {
+      final double dx = c.dx - _resizePhotoCenterNorm.dx;
+      final double dy = c.dy - _resizePhotoCenterNorm.dy;
+      final double rx = dx * cosA - dy * sinA;
+      final double ry = dx * sinA + dy * cosA;
+      if (rx.abs() > halfW || ry.abs() > halfH) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  Rect _clampRectInsideRotatedPhoto(
+    Rect startRect,
+    Rect candidate,
+    Size rawSize,
+  ) {
+    if (_isNormRectCoveredByPhoto(candidate, rawSize)) {
+      return candidate;
+    }
+    double lo = 0.0;
+    double hi = 1.0;
+    for (int i = 0; i < 12; i++) {
+      final double mid = (lo + hi) * 0.5;
+      final Rect test = Rect.lerp(startRect, candidate, mid)!;
+      if (_isNormRectCoveredByPhoto(test, rawSize)) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    return Rect.lerp(startRect, candidate, lo)!;
+  }
+
+  Rect _resizeFreeAspectRect(
+    _CropHandle handle,
+    Rect r0,
+    Rect bounds,
+    double totalDx,
+    double totalDy,
+    double minW,
+    double minH,
+  ) {
+    double l = r0.left;
+    double t = r0.top;
+    double r = r0.right;
+    double b = r0.bottom;
+
+    if (handle == _CropHandle.topLeft ||
+        handle == _CropHandle.bottomLeft ||
+        handle == _CropHandle.left) {
+      l = (r0.left + totalDx).clamp(bounds.left, r0.right - minW).toDouble();
+    }
+    if (handle == _CropHandle.topRight ||
+        handle == _CropHandle.bottomRight ||
+        handle == _CropHandle.right) {
+      r = (r0.right + totalDx).clamp(r0.left + minW, bounds.right).toDouble();
+    }
+    if (handle == _CropHandle.topLeft ||
+        handle == _CropHandle.topRight ||
+        handle == _CropHandle.top) {
+      t = (r0.top + totalDy).clamp(bounds.top, r0.bottom - minH).toDouble();
+    }
+    if (handle == _CropHandle.bottomLeft ||
+        handle == _CropHandle.bottomRight ||
+        handle == _CropHandle.bottom) {
+      b = (r0.bottom + totalDy)
+          .clamp(r0.top + minH, bounds.bottom)
+          .toDouble();
+    }
+    return Rect.fromLTRB(l, t, r, b);
+  }
+
+  Rect _resizeOriginalAspectRect(
+    _CropHandle handle,
+    Rect r0,
+    Rect bounds,
+    double totalDx,
+    double totalDy,
+    double minW,
+    double minH,
+    double targetAspect,
+  ) {
+    final double effMinW =
+        math.min(r0.width, math.max(minW, minH * targetAspect));
+    final double effMinH = effMinW / math.max(1e-6, targetAspect);
+
+    double projectWidth(double rawW, double rawH) =>
+        ((rawW * targetAspect + rawH) / (targetAspect * targetAspect + 1.0)) *
+        targetAspect;
+
+    switch (handle) {
+      case _CropHandle.topLeft:
+        final double ax = r0.right;
+        final double ay = r0.bottom;
+        final double maxW =
+            math.min(ax - bounds.left, (ay - bounds.top) * targetAspect);
+        final double newW = projectWidth(r0.width - totalDx, r0.height - totalDy)
+            .clamp(effMinW, math.max(effMinW, maxW))
+            .toDouble();
+        final double newH = newW / targetAspect;
+        return Rect.fromLTRB(ax - newW, ay - newH, ax, ay);
+      case _CropHandle.topRight:
+        final double ax = r0.left;
+        final double ay = r0.bottom;
+        final double maxW =
+            math.min(bounds.right - ax, (ay - bounds.top) * targetAspect);
+        final double newW = projectWidth(r0.width + totalDx, r0.height - totalDy)
+            .clamp(effMinW, math.max(effMinW, maxW))
+            .toDouble();
+        final double newH = newW / targetAspect;
+        return Rect.fromLTRB(ax, ay - newH, ax + newW, ay);
+      case _CropHandle.bottomLeft:
+        final double ax = r0.right;
+        final double ay = r0.top;
+        final double maxW =
+            math.min(ax - bounds.left, (bounds.bottom - ay) * targetAspect);
+        final double newW = projectWidth(r0.width - totalDx, r0.height + totalDy)
+            .clamp(effMinW, math.max(effMinW, maxW))
+            .toDouble();
+        final double newH = newW / targetAspect;
+        return Rect.fromLTRB(ax - newW, ay, ax, ay + newH);
+      case _CropHandle.bottomRight:
+        final double ax = r0.left;
+        final double ay = r0.top;
+        final double maxW =
+            math.min(bounds.right - ax, (bounds.bottom - ay) * targetAspect);
+        final double newW = projectWidth(r0.width + totalDx, r0.height + totalDy)
+            .clamp(effMinW, math.max(effMinW, maxW))
+            .toDouble();
+        final double newH = newW / targetAspect;
+        return Rect.fromLTRB(ax, ay, ax + newW, ay + newH);
+      case _CropHandle.left:
+        final double ax = r0.right;
+        final double cy = r0.center.dy;
+        final double maxH = 2.0 * math.min(cy - bounds.top, bounds.bottom - cy);
+        final double maxW = math.min(ax - bounds.left, maxH * targetAspect);
+        final double newW = (r0.width - totalDx)
+            .clamp(effMinW, math.max(effMinW, maxW))
+            .toDouble();
+        final double newH = newW / targetAspect;
+        return Rect.fromLTRB(ax - newW, cy - newH * 0.5, ax, cy + newH * 0.5);
+      case _CropHandle.right:
+        final double ax = r0.left;
+        final double cy = r0.center.dy;
+        final double maxH = 2.0 * math.min(cy - bounds.top, bounds.bottom - cy);
+        final double maxW = math.min(bounds.right - ax, maxH * targetAspect);
+        final double newW = (r0.width + totalDx)
+            .clamp(effMinW, math.max(effMinW, maxW))
+            .toDouble();
+        final double newH = newW / targetAspect;
+        return Rect.fromLTRB(ax, cy - newH * 0.5, ax + newW, cy + newH * 0.5);
+      case _CropHandle.top:
+        final double ay = r0.bottom;
+        final double cx = r0.center.dx;
+        final double maxW = 2.0 * math.min(cx - bounds.left, bounds.right - cx);
+        final double maxH = math.min(ay - bounds.top, maxW / targetAspect);
+        final double newH = (r0.height - totalDy)
+            .clamp(effMinH, math.max(effMinH, maxH))
+            .toDouble();
+        final double newW = newH * targetAspect;
+        return Rect.fromLTRB(cx - newW * 0.5, ay - newH, cx + newW * 0.5, ay);
+      case _CropHandle.bottom:
+        final double ay = r0.top;
+        final double cx = r0.center.dx;
+        final double maxW = 2.0 * math.min(cx - bounds.left, bounds.right - cx);
+        final double maxH = math.min(bounds.bottom - ay, maxW / targetAspect);
+        final double newH = (r0.height + totalDy)
+            .clamp(effMinH, math.max(effMinH, maxH))
+            .toDouble();
+        final double newW = newH * targetAspect;
+        return Rect.fromLTRB(cx - newW * 0.5, ay, cx + newW * 0.5, ay + newH);
+    }
+  }
+
+  void _handleFrameResizeUpdate(
+    _CropHandle handle,
     DragUpdateDetails details,
     Rect stageSquare,
   ) {
     final ui.Image? img = widget.image;
-    if (img == null) return;
+    final RenderObject? ro = context.findRenderObject();
+    if (img == null || ro is! RenderBox) return;
+
     final Size rawSize = Size(img.width.toDouble(), img.height.toDouble());
     final Size rotSize = AvatarStudioGeometry.rotatedImageSize(
       rawSize,
       widget.state.quarterTurns,
     );
     final double stageSide = math.max(1.0, stageSquare.width);
-    final double dx = details.delta.dx / stageSide;
-    final double dy = details.delta.dy / stageSide;
+    final Offset localPos = ro.globalToLocal(details.globalPosition);
+    final double totalDx = (localPos.dx - _resizeStartLocalPos.dx) / stageSide;
+    final double totalDy = (localPos.dy - _resizeStartLocalPos.dy) / stageSide;
 
-    const double minSide = 0.22;
-    double l = _cornerStartNormRect.left;
-    double t = _cornerStartNormRect.top;
-    double r = _cornerStartNormRect.right;
-    double b = _cornerStartNormRect.bottom;
-
-    switch (corner) {
-      case _CropCorner.topLeft:
-        l = (l + dx).clamp(0.0, r - minSide);
-        t = (t + dy).clamp(0.0, b - minSide);
-        break;
-      case _CropCorner.topRight:
-        r = (r + dx).clamp(l + minSide, 1.0);
-        t = (t + dy).clamp(0.0, b - minSide);
-        break;
-      case _CropCorner.bottomLeft:
-        l = (l + dx).clamp(0.0, r - minSide);
-        b = (b + dy).clamp(t + minSide, 1.0);
-        break;
-      case _CropCorner.bottomRight:
-        r = (r + dx).clamp(l + minSide, 1.0);
-        b = (b + dy).clamp(t + minSide, 1.0);
-        break;
-    }
-
-    if (widget.state.aspectMode == AvatarCropAspectMode.original) {
-      final double targetAspect = rotSize.width / math.max(1.0, rotSize.height);
-      final double w = r - l;
-      final double h = b - t;
-      double newW = w;
-      double newH = w / targetAspect;
-      if (newH > h) {
-        newH = h;
-        newW = h * targetAspect;
-      }
-      if (newW < minSide) {
-        newW = minSide;
-        newH = minSide / targetAspect;
-      }
-      if (newH < minSide) {
-        newH = minSide;
-        newW = minSide * targetAspect;
-      }
-
-      switch (corner) {
-        case _CropCorner.topLeft:
-          l = (r - newW).clamp(0.0, r - minSide);
-          t = (b - newH).clamp(0.0, b - minSide);
-          break;
-        case _CropCorner.topRight:
-          r = (l + newW).clamp(l + minSide, 1.0);
-          t = (b - newH).clamp(0.0, b - minSide);
-          break;
-        case _CropCorner.bottomLeft:
-          l = (r - newW).clamp(0.0, r - minSide);
-          b = (t + newH).clamp(t + minSide, 1.0);
-          break;
-        case _CropCorner.bottomRight:
-          r = (l + newW).clamp(l + minSide, 1.0);
-          b = (t + newH).clamp(t + minSide, 1.0);
-          break;
-      }
-    }
-
-    _cornerStartNormRect = Rect.fromLTRB(l, t, r, b);
-    final Size nextCropSize = Size(
-      _cornerStartNormRect.width * stageSide,
-      _cornerStartNormRect.height * stageSide,
+    const double baseMinSide = 0.18;
+    final double zoomMinW =
+        rotSize.width * _resizePhotoStageScale / AvatarStudioState.maxScale;
+    final double zoomMinH =
+        rotSize.height * _resizePhotoStageScale / AvatarStudioState.maxScale;
+    final double minW = math.min(
+      _resizeStartNormRect.width,
+      math.max(baseMinSide, zoomMinW),
     );
-    final AvatarStudioState next = widget.state.copyWith(
-      freeRectNormalized: _cornerStartNormRect,
+    final double minH = math.min(
+      _resizeStartNormRect.height,
+      math.max(baseMinSide, zoomMinH),
+    );
+
+    Rect nextNormRect =
+        widget.state.aspectMode == AvatarCropAspectMode.original
+            ? _resizeOriginalAspectRect(
+                handle,
+                _resizeStartNormRect,
+                _resizePhotoStageBounds,
+                totalDx,
+                totalDy,
+                minW,
+                minH,
+                rotSize.width / math.max(1.0, rotSize.height),
+              )
+            : _resizeFreeAspectRect(
+                handle,
+                _resizeStartNormRect,
+                _resizePhotoStageBounds,
+                totalDx,
+                totalDy,
+                minW,
+                minH,
+              );
+
+    if (widget.state.fineAngleDegrees.abs() > 1e-4) {
+      nextNormRect = _clampRectInsideRotatedPhoto(
+        _resizeStartNormRect,
+        nextNormRect,
+        rawSize,
+      );
+    }
+
+    // Compensate scale and panOffset so the photo remains fixed on screen
+    // while cropRect changes around it.
+    final double nextBaseScale = AvatarStudioGeometry.computeBaseCoverScale(
+      cropSize: nextNormRect.size,
+      rawImageSize: rawSize,
+      quarterTurns: widget.state.quarterTurns,
+    );
+    final double nextScale =
+        (_resizePhotoStageScale / math.max(1e-9, nextBaseScale))
+            .clamp(1.0, AvatarStudioState.maxScale)
+            .toDouble();
+    final Offset rawNextPan = _resizePhotoCenterNorm - nextNormRect.center;
+    final Size nextCropPxSize = Size(
+      nextNormRect.width * stageSide,
+      nextNormRect.height * stageSide,
+    );
+    AvatarStudioState next = _currentGestureState.copyWith(
+      freeRectNormalized: nextNormRect,
+      scale: nextScale,
+      panOffset: rawNextPan,
     );
     final Offset clampedPan = AvatarStudioGeometry.clampPanOffset(
-      panOffset: next.panOffset,
+      panOffset: rawNextPan,
       stageSide: stageSide,
-      cropSize: nextCropSize,
+      cropSize: nextCropPxSize,
       rawImageSize: rawSize,
       state: next,
     );
-    widget.onStateChanged(next.copyWith(panOffset: clampedPan));
+    next = next.copyWith(panOffset: clampedPan);
+    final Offset clampedMini = AvatarStudioGeometry.clampMiniCenterNorm(
+      next,
+      nextCropPxSize,
+    );
+    _emitLiveState(next.copyWith(miniCenterNorm: clampedMini));
   }
 
-  void _handleCornerDragEnd([DragEndDetails? _]) {
+  void _handleFrameResizeEnd([DragEndDetails? _]) {
     _setInteracting(false);
-    widget.onCommitHistory(widget.state);
+    _commitGestureState();
   }
 
   bool _isTrashZone(double normY) => normY > 0.88;
@@ -543,8 +811,9 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
                     ),
                   ),
 
-                // Draggable 4-corner resize handles for Original / Free crop modes
-                if (showHandles) ..._buildCornerHandles(cropRect, stageSquare),
+                // Draggable 4-corner & 4-edge resize handles for Original / Free crop modes
+                if (showHandles)
+                  ..._buildCropFrameHandles(cropRect, stageSquare),
 
                 // Interactive miniature circle/squircle rim resize handle
                 if (showMiniControl)
@@ -704,8 +973,9 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
           final double nextRot = _layerStartRotation + details.rotation;
 
           _updateHoverTrash(nextY);
+          final base = _currentGestureState;
           final List<AvatarStickerLayer> updated = [
-            for (final s in widget.state.stickers)
+            for (final s in base.stickers)
               if (s.id == layer.id)
                 s.copyWith(
                   normX: nextX,
@@ -716,7 +986,7 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
               else
                 s,
           ];
-          widget.onStateChanged(widget.state.copyWith(stickers: updated));
+          _emitLiveState(base.copyWith(stickers: updated));
         },
         onScaleEnd: (_) {
           final bool shouldDelete = _hoveringTrash;
@@ -725,15 +995,17 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
             _hoveringTrash = false;
           });
           if (shouldDelete) {
-            final List<AvatarStickerLayer> remaining = widget.state.stickers
+            final base = _currentGestureState;
+            final List<AvatarStickerLayer> remaining = base.stickers
                 .where((s) => s.id != layer.id)
                 .toList();
-            final next = widget.state.copyWith(stickers: remaining);
+            final next = base.copyWith(stickers: remaining);
+            _pendingGestureState = null;
             widget.onStateChanged(next);
             widget.onCommitHistory(next);
             widget.onSelectLayer?.call(null);
           } else {
-            widget.onCommitHistory(widget.state);
+            _commitGestureState();
           }
         },
         child: Transform.rotate(
@@ -823,8 +1095,9 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
           final double nextRot = _layerStartRotation + details.rotation;
 
           _updateHoverTrash(nextY);
+          final base = _currentGestureState;
           final List<AvatarTextLayer> updated = [
-            for (final t in widget.state.textLayers)
+            for (final t in base.textLayers)
               if (t.id == layer.id)
                 t.copyWith(
                   normX: nextX,
@@ -835,7 +1108,7 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
               else
                 t,
           ];
-          widget.onStateChanged(widget.state.copyWith(textLayers: updated));
+          _emitLiveState(base.copyWith(textLayers: updated));
         },
         onScaleEnd: (_) {
           final bool shouldDelete = _hoveringTrash;
@@ -844,15 +1117,17 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
             _hoveringTrash = false;
           });
           if (shouldDelete) {
-            final List<AvatarTextLayer> remaining = widget.state.textLayers
+            final base = _currentGestureState;
+            final List<AvatarTextLayer> remaining = base.textLayers
                 .where((t) => t.id != layer.id)
                 .toList();
-            final next = widget.state.copyWith(textLayers: remaining);
+            final next = base.copyWith(textLayers: remaining);
+            _pendingGestureState = null;
             widget.onStateChanged(next);
             widget.onCommitHistory(next);
             widget.onSelectLayer?.call(null);
           } else {
-            widget.onCommitHistory(widget.state);
+            _commitGestureState();
           }
         },
         child: Transform.rotate(
@@ -894,8 +1169,9 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
     final RenderObject? ro = context.findRenderObject();
     if (ro is! RenderBox) return;
     final Offset localPos = ro.globalToLocal(details.globalPosition);
+    final AvatarStudioState base = _currentGestureState;
     final Rect curMini = AvatarStudioGeometry.effectiveMiniRectInCrop(
-      widget.state,
+      base,
       cropRect.size,
     ).shift(cropRect.topLeft);
     final double dist = (localPos - curMini.center).distance;
@@ -908,12 +1184,12 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
         .clamp(AvatarStudioState.minMiniSizeFraction, 1.0)
         .toDouble();
     final AvatarStudioState candidate =
-        widget.state.copyWith(miniSizeFrac: nextFrac);
+        base.copyWith(miniSizeFrac: nextFrac);
     final Offset clampedCenter = AvatarStudioGeometry.clampMiniCenterNorm(
       candidate,
       cropRect.size,
     );
-    widget.onStateChanged(candidate.copyWith(miniCenterNorm: clampedCenter));
+    _emitLiveState(candidate.copyWith(miniCenterNorm: clampedCenter));
   }
 
   Widget _buildMiniResizeHandle(Rect cropRect, Rect miniRect) {
@@ -924,42 +1200,47 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
       top: handleCenter.dy - hitSize * 0.5,
       width: hitSize,
       height: hitSize,
-      child: GestureDetector(
-        key: const ValueKey<String>('avatar_mini_circle_resize_handle'),
-        behavior: HitTestBehavior.opaque,
-        onPanStart: (_) => _setInteracting(true),
-        onPanUpdate: (DragUpdateDetails d) => _handleMiniResizeUpdate(d, cropRect),
-        onPanEnd: (_) {
-          _setInteracting(false);
-          widget.onCommitHistory(widget.state);
-        },
-        onPanCancel: () {
-          _setInteracting(false);
-          widget.onCommitHistory(widget.state);
-        },
-        child: Center(
-          child: Container(
-            width: 22.0,
-            height: 22.0,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Colors.black.withValues(alpha: 0.45),
-                width: 1.5,
-              ),
-              boxShadow: <BoxShadow>[
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.40),
-                  blurRadius: 6.0,
-                  offset: const Offset(0, 2),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeUpLeftDownRight,
+        child: GestureDetector(
+          key: const ValueKey<String>('avatar_mini_circle_resize_handle'),
+          behavior: HitTestBehavior.opaque,
+          dragStartBehavior: DragStartBehavior.down,
+          onPanStart: (_) => _setInteracting(true),
+          onPanUpdate: (DragUpdateDetails d) =>
+              _handleMiniResizeUpdate(d, cropRect),
+          onPanEnd: (_) {
+            _setInteracting(false);
+            _commitGestureState();
+          },
+          onPanCancel: () {
+            _setInteracting(false);
+            _commitGestureState();
+          },
+          child: Center(
+            child: Container(
+              width: 22.0,
+              height: 22.0,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  width: 1.5,
                 ),
-              ],
-            ),
-            child: const Icon(
-              Icons.open_in_full_rounded,
-              size: 12.0,
-              color: Colors.black87,
+                boxShadow: <BoxShadow>[
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.40),
+                    blurRadius: 6.0,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.open_in_full_rounded,
+                size: 12.0,
+                color: Colors.black87,
+              ),
             ),
           ),
         ),
@@ -967,32 +1248,116 @@ class _AvatarCropCanvasState extends State<AvatarCropCanvas> {
     );
   }
 
-  List<Widget> _buildCornerHandles(Rect cropRect, Rect stageSquare) {
-    const double hitSize = 36.0;
-    final entries = <(_CropCorner, Offset)>[
-      (_CropCorner.topLeft, cropRect.topLeft),
-      (_CropCorner.topRight, cropRect.topRight),
-      (_CropCorner.bottomLeft, cropRect.bottomLeft),
-      (_CropCorner.bottomRight, cropRect.bottomRight),
+  List<Widget> _buildCropFrameHandles(Rect cropRect, Rect stageSquare) {
+    const double cornerHitSize = 44.0;
+    const double edgeThickness = 26.0;
+    final double edgeInsetX = cropRect.width > 56.0 ? 22.0 : 0.0;
+    final double edgeInsetY = cropRect.height > 56.0 ? 22.0 : 0.0;
+    final double edgeSpanW = math.max(8.0, cropRect.width - edgeInsetX * 2.0);
+    final double edgeSpanH = math.max(8.0, cropRect.height - edgeInsetY * 2.0);
+
+    final edgeEntries = <(_CropHandle, Rect, MouseCursor)>[
+      (
+        _CropHandle.top,
+        Rect.fromLTWH(
+          cropRect.left + edgeInsetX,
+          cropRect.top - edgeThickness * 0.5,
+          edgeSpanW,
+          edgeThickness,
+        ),
+        SystemMouseCursors.resizeUpDown,
+      ),
+      (
+        _CropHandle.bottom,
+        Rect.fromLTWH(
+          cropRect.left + edgeInsetX,
+          cropRect.bottom - edgeThickness * 0.5,
+          edgeSpanW,
+          edgeThickness,
+        ),
+        SystemMouseCursors.resizeUpDown,
+      ),
+      (
+        _CropHandle.left,
+        Rect.fromLTWH(
+          cropRect.left - edgeThickness * 0.5,
+          cropRect.top + edgeInsetY,
+          edgeThickness,
+          edgeSpanH,
+        ),
+        SystemMouseCursors.resizeLeftRight,
+      ),
+      (
+        _CropHandle.right,
+        Rect.fromLTWH(
+          cropRect.right - edgeThickness * 0.5,
+          cropRect.top + edgeInsetY,
+          edgeThickness,
+          edgeSpanH,
+        ),
+        SystemMouseCursors.resizeLeftRight,
+      ),
     ];
 
-    return [
-      for (final entry in entries)
-        Positioned(
-          left: entry.$2.dx - hitSize * 0.5,
-          top: entry.$2.dy - hitSize * 0.5,
-          width: hitSize,
-          height: hitSize,
+    final cornerEntries = <(_CropHandle, Offset, MouseCursor)>[
+      (
+        _CropHandle.topLeft,
+        cropRect.topLeft,
+        SystemMouseCursors.resizeUpLeftDownRight,
+      ),
+      (
+        _CropHandle.topRight,
+        cropRect.topRight,
+        SystemMouseCursors.resizeUpRightDownLeft,
+      ),
+      (
+        _CropHandle.bottomLeft,
+        cropRect.bottomLeft,
+        SystemMouseCursors.resizeUpRightDownLeft,
+      ),
+      (
+        _CropHandle.bottomRight,
+        cropRect.bottomRight,
+        SystemMouseCursors.resizeUpLeftDownRight,
+      ),
+    ];
+
+    Widget buildHandleBox({
+      required _CropHandle handle,
+      required Rect box,
+      required MouseCursor cursor,
+    }) {
+      return Positioned.fromRect(
+        rect: box,
+        child: MouseRegion(
+          cursor: cursor,
           child: GestureDetector(
-            key: ValueKey<String>('avatar_crop_handle_${entry.$1.name}'),
+            key: ValueKey<String>('avatar_crop_handle_${handle.name}'),
             behavior: HitTestBehavior.opaque,
-            onPanStart: (_) => _handleCornerDragStart(entry.$1, stageSquare),
+            dragStartBehavior: DragStartBehavior.down,
+            onPanStart: (d) => _handleFrameResizeStart(handle, d, stageSquare),
             onPanUpdate: (d) =>
-                _handleCornerDragUpdate(entry.$1, d, stageSquare),
-            onPanEnd: _handleCornerDragEnd,
-            onPanCancel: _handleCornerDragEnd,
+                _handleFrameResizeUpdate(handle, d, stageSquare),
+            onPanEnd: _handleFrameResizeEnd,
+            onPanCancel: _handleFrameResizeEnd,
             child: const SizedBox.expand(),
           ),
+        ),
+      );
+    }
+
+    return [
+      for (final entry in edgeEntries)
+        buildHandleBox(handle: entry.$1, box: entry.$2, cursor: entry.$3),
+      for (final entry in cornerEntries)
+        buildHandleBox(
+          handle: entry.$1,
+          box: Rect.fromCenter(
+            center: entry.$2,
+            width: cornerHitSize,
+            height: cornerHitSize,
+          ),
+          cursor: entry.$3,
         ),
     ];
   }

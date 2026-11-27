@@ -196,6 +196,44 @@ class AvatarStudioGeometry {
     return Offset(clampedX / stageSide, clampedY / stageSide);
   }
 
+  /// Exact canvas-space center and pixel scale of the rendered source image.
+  static ({Offset center, double pixelScale, Offset clampedPan})
+      resolveRenderedPhotoTransform({
+    required Rect cropRect,
+    required double stageSide,
+    required Size rawImageSize,
+    required AvatarStudioState state,
+  }) {
+    final Size cropSize = cropRect.size;
+    final double baseScale = computeBaseCoverScale(
+      cropSize: cropSize,
+      rawImageSize: rawImageSize,
+      quarterTurns: state.quarterTurns,
+    );
+    final double effScale = computeEffectiveScale(
+      cropSize: cropSize,
+      rawImageSize: rawImageSize,
+      state: state,
+    );
+    final double appliedScale = effScale * baseScale;
+    final Offset clampedPan = clampPanOffset(
+      panOffset: state.panOffset,
+      stageSide: stageSide,
+      cropSize: cropSize,
+      rawImageSize: rawImageSize,
+      state: state,
+    );
+    final Offset center = Offset(
+      cropRect.center.dx + clampedPan.dx * stageSide,
+      cropRect.center.dy + clampedPan.dy * stageSide,
+    );
+    return (
+      center: center,
+      pixelScale: appliedScale,
+      clampedPan: clampedPan,
+    );
+  }
+
   /// Computes the square miniature circle/squircle rect (in local `[0..cropSize.width] x [0..cropSize.height]`
   /// coordinates) inside [cropSize].
   static Rect effectiveMiniRectInCrop(AvatarStudioState state, Size cropSize) {
@@ -275,24 +313,9 @@ class AvatarStudioPaint {
     FilterQuality filterQuality = FilterQuality.high,
   }) {
     final Size rawSize = Size(image.width.toDouble(), image.height.toDouble());
-    final Size cropSize = cropRect.size;
-    final double baseScale = AvatarStudioGeometry.computeBaseCoverScale(
-      cropSize: cropSize,
-      rawImageSize: rawSize,
-      quarterTurns: state.quarterTurns,
-    );
-    final double effScale = AvatarStudioGeometry.computeAutoStraightenScale(
-      cropSize: cropSize,
-      rawImageSize: rawSize,
-      quarterTurns: state.quarterTurns,
-      fineAngleDegrees: state.fineAngleDegrees,
-      baseScale: baseScale,
-    );
-    final double appliedScale = math.max(state.scale, effScale) * baseScale;
-    final Offset clampedPan = AvatarStudioGeometry.clampPanOffset(
-      panOffset: state.panOffset,
+    final resolved = AvatarStudioGeometry.resolveRenderedPhotoTransform(
+      cropRect: cropRect,
       stageSide: stageSide,
-      cropSize: cropSize,
       rawImageSize: rawSize,
       state: state,
     );
@@ -308,14 +331,11 @@ class AvatarStudioPaint {
     }
 
     canvas.save();
-    canvas.translate(
-      cropRect.center.dx + clampedPan.dx * stageSide,
-      cropRect.center.dy + clampedPan.dy * stageSide,
-    );
+    canvas.translate(resolved.center.dx, resolved.center.dy);
     canvas.rotate(totalAngle);
     canvas.scale(
-      (state.flipHorizontal ? -1.0 : 1.0) * appliedScale,
-      appliedScale,
+      (state.flipHorizontal ? -1.0 : 1.0) * resolved.pixelScale,
+      resolved.pixelScale,
     );
     canvas.drawImageRect(
       image,
