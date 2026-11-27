@@ -361,7 +361,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
 
         final theme = Theme.of(context);
         final palette = context.theav;
-        final isDark = theme.brightness == Brightness.dark;
         final textColor =
             palette.appBarForeground != Colors.transparent
                 ? palette.appBarForeground
@@ -484,15 +483,13 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
                 math.max(88.0, totalWidth - edgePadding * 2),
               );
 
-        final double activeCenterWidth = centerMenuActive
-            ? math.min(
-                openCenterMenuWidth ?? 220.0,
-                totalWidth - 16.0,
-              )
-            : centerClosedWidth;
-        final double activeCenterHeight = centerMenuActive
-            ? (openCenterMenuHeight ?? _ctrlSize)
-            : _ctrlSize;
+        final double expandedCenterWidth = math.min(
+          openCenterMenuWidth ?? 220.0,
+          totalWidth - 16.0,
+        );
+        final double expandedCenterHeight = openCenterMenuHeight ?? _ctrlSize;
+        final double expandedCenterLeft = ((totalWidth - expandedCenterWidth) / 2)
+            .clamp(8.0, math.max(8.0, totalWidth - expandedCenterWidth - 8.0));
 
         final double maxCenterLeft = math.max(
           leftOccupied,
@@ -505,15 +502,14 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
             totalWidth - edgePadding - closedRightWidth;
         final double idealSelectCenterLeft =
             (selectSlotStart + selectSlotEnd - centerClosedWidth) / 2;
-        final double centerLeft = centerMenuActive
-            ? ((totalWidth - activeCenterWidth) / 2)
-                .clamp(8.0, math.max(8.0, totalWidth - activeCenterWidth - 8.0))
-            : (isSelectMode
-                ? idealSelectCenterLeft.clamp(leftOccupied, maxCenterLeft)
-                : idealCenterLeft.clamp(
-                    edgePadding,
-                    math.max(edgePadding, totalWidth - edgePadding - centerClosedWidth),
-                  ));
+        final double closedCenterLeft = isSelectMode
+            ? idealSelectCenterLeft.clamp(leftOccupied, maxCenterLeft)
+            : idealCenterLeft.clamp(
+                edgePadding,
+                math.max(edgePadding, totalWidth - edgePadding - centerClosedWidth),
+              );
+        final double centerLeft =
+            centerMenuActive ? expandedCenterLeft : closedCenterLeft;
 
         final double rightMenuWidth = overflowMenuActive
             ? math.min(_overflowMenuWidth, totalWidth - edgePadding * 2)
@@ -529,8 +525,8 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
 
         final double rightClosedBoxWidth =
             isSelectMode ? capsuleWidth : _ctrlSize;
-        final double activeRightWidth =
-            isRightMenuActive ? rightMenuWidth : rightClosedBoxWidth;
+        final double activeCenterHeight =
+            centerMenuActive ? expandedCenterHeight : _ctrlSize;
         final double activeRightHeight =
             isRightMenuActive ? rightMenuHeight : _ctrlSize;
 
@@ -546,30 +542,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           context,
           textColor: textColor,
         );
-        final Widget centerContent = _buildCenterPillChild(
-          context,
-          textColor: textColor,
-          titleStyle: normalTitleStyle,
-          counterStyle: counterTextStyle,
-          useCompactCounter: useCompactCounter,
-          centerMenuActive: centerMenuActive,
-          closedWidth: centerClosedWidth,
-        );
-        final Widget rightContent = _buildRightPillChild(
-          context,
-          textColor: textColor,
-          iconBtnWidth: iconBtnWidth,
-          capsuleHorizontalPadding: capsuleHorizontalPadding,
-          capsuleWidth: capsuleWidth,
-          rightMenuWidth: rightMenuWidth,
-          overflowMenuActive: overflowMenuActive,
-          normalMenuActive: normalMenuActive,
-          showPin: showPin,
-          showMute: showMute,
-          showArchive: showArchive,
-          showDelete: showDelete,
-          showOverflow: showOverflow,
-        );
 
         void dismissOpenMenus() {
           if (centerMenuActive) onDismissCenterMenu?.call();
@@ -580,6 +552,31 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
         final bool anyMenuOpen = centerMenuActive || isRightMenuActive;
 
         if (isGlassEnabled && glassProvider != null) {
+          final Widget centerContent = _buildCenterPillChild(
+            context,
+            textColor: textColor,
+            titleStyle: normalTitleStyle,
+            counterStyle: counterTextStyle,
+            useCompactCounter: useCompactCounter,
+            centerMenuActive: centerMenuActive,
+            closedWidth: centerClosedWidth,
+          );
+          final Widget rightContent = _buildRightPillChild(
+            context,
+            textColor: textColor,
+            iconBtnWidth: iconBtnWidth,
+            capsuleHorizontalPadding: capsuleHorizontalPadding,
+            capsuleWidth: capsuleWidth,
+            rightMenuWidth: rightMenuWidth,
+            overflowMenuActive: overflowMenuActive,
+            normalMenuActive: normalMenuActive,
+            showPin: showPin,
+            showMute: showMute,
+            showArchive: showArchive,
+            showDelete: showDelete,
+            showOverflow: showOverflow,
+          );
+
           final morphStyle = glassProvider.createStyle(
             context: context,
             cornerRadius: _barRadius,
@@ -713,186 +710,56 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           );
         }
 
-        // Classic Material floating pills with smooth container morphing & optional single-pass frosted blur
-        final themeExt = theme.extension<TheavThemeExtension>();
-        final p = themeExt?.palette;
-        final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
-        final rawBaseBg = (p?.appBarBackground != null && p!.appBarBackground != Colors.transparent)
-            ? p.appBarBackground
-            : (p?.surface ?? (isDark ? const Color(0xFF2C2C2E) : Colors.white));
-        final barBackgroundColor = BlurUtils.resolveMaterialHudColor(
-          rawBaseBg,
-          isDark: isDark,
-          blurEnabled: blurEnabled,
+        final bool reduceMotion =
+            MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+        final Widget closedCenterContent = _buildClosedCenterPillChild(
+          context,
+          textColor: textColor,
+          titleStyle: normalTitleStyle,
+          counterStyle: counterTextStyle,
+          useCompactCounter: useCompactCounter,
+          closedWidth: centerClosedWidth,
         );
-        final borderColor = p?.divider ??
-            (isDark
-                ? Colors.white.withValues(alpha: 0.1)
-                : Colors.black.withValues(alpha: 0.06));
-        final double baseShadowAlpha = isDark ? 0.35 : 0.08;
-
-        Widget wrapFrosted(Widget child) {
-          if (!blurEnabled) return child;
-          return BackdropFilter.grouped(
-            filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
-            child: child,
-          );
-        }
-
-        BoxDecoration pillDecoration({bool elevated = false}) => BoxDecoration(
-              color: elevated && blurEnabled
-                  ? BlurUtils.resolveMaterialHudColor(
-                      p?.surface ?? rawBaseBg,
-                      isDark: isDark,
-                      blurEnabled: true,
-                      darkAlpha: 0.84,
-                      lightAlpha: 0.88,
-                    )
-                  : barBackgroundColor,
-              borderRadius: BorderRadius.circular(_barRadius),
-              border: Border.all(
-                color: borderColor,
-                width: blurEnabled ? 0.6 : 0.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(
-                    alpha: (baseShadowAlpha * (elevated ? 1.0 : 0.65))
-                        .clamp(0.0, 1.0),
-                  ),
-                  blurRadius: elevated ? 16 : 10,
-                  offset: Offset(0, elevated ? 6 : 3),
-                ),
-              ],
-            );
-
-        final classicLeftWidget = Positioned(
-          key: const ValueKey<String>('classic_left_pos'),
-          top: 2,
-          left: edgePadding,
-          child: IgnorePointer(
-            ignoring: !showLeftControl,
-            child: AnimatedScale(
-              scale: showLeftControl ? 1.0 : 0.72,
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutBack,
-              child: AnimatedOpacity(
-                opacity: showLeftControl ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 180),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(_barRadius),
-                  child: wrapFrosted(
-                    Container(
-                      width: _ctrlSize,
-                      height: _ctrlSize,
-                      decoration: pillDecoration(),
-                      clipBehavior: Clip.antiAlias,
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 200),
-                        child: leftContent,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        final Widget closedRightContent = _buildClosedRightPillChild(
+          context,
+          textColor: textColor,
+          iconBtnWidth: iconBtnWidth,
+          capsuleHorizontalPadding: capsuleHorizontalPadding,
+          capsuleWidth: capsuleWidth,
+          showPin: showPin,
+          showMute: showMute,
+          showArchive: showArchive,
+          showDelete: showDelete,
+          showOverflow: showOverflow,
+        );
+        final Widget? expandedRightMenu = _buildExpandedRightMenu(
+          cfg: cfg,
+          rightMenuWidth: rightMenuWidth,
+          overflowMenuActive: overflowMenuActive,
+          normalMenuActive: normalMenuActive,
         );
 
-        final classicCenterWidget = AnimatedPositioned(
-          key: const ValueKey<String>('classic_center_pos'),
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-          top: 2,
-          left: centerLeft,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(_barRadius),
-            child: wrapFrosted(
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                curve: Curves.easeOutCubic,
-                width: activeCenterWidth,
-                height: activeCenterHeight,
-                decoration: pillDecoration(elevated: centerMenuActive),
-                clipBehavior: Clip.antiAlias,
-                child: OverflowBox(
-                  minWidth: 0,
-                  maxWidth: math.max(activeCenterWidth, openCenterMenuWidth ?? 220),
-                  minHeight: 0,
-                  maxHeight: math.max(_ctrlSize, openCenterMenuHeight ?? _ctrlSize),
-                  alignment: Alignment.topCenter,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    child: centerContent,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-
-        final classicRightWidget = showRightControl
-            ? Positioned(
-                key: const ValueKey<String>('classic_right_pos'),
-                top: 2,
-                right: edgePadding,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(_barRadius),
-                  child: wrapFrosted(
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeOutCubic,
-                      width: activeRightWidth,
-                      height: activeRightHeight,
-                      decoration: pillDecoration(elevated: isRightMenuActive),
-                      clipBehavior: Clip.antiAlias,
-                      child: OverflowBox(
-                        minWidth: 0,
-                        maxWidth: math.max(
-                          activeRightWidth,
-                          math.max(capsuleWidth, rightMenuWidth),
-                        ),
-                        minHeight: 0,
-                        maxHeight: math.max(_ctrlSize, rightMenuHeight),
-                        alignment: Alignment.topRight,
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 200),
-                          child: rightContent,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              )
-            : null;
-
-        return SizedBox(
-          width: double.infinity,
-          height: barHeight,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              if (anyMenuOpen)
-                Positioned.fill(
-                  key: const ValueKey<String>('classic_dismiss_backdrop'),
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: dismissOpenMenus,
-                  ),
-                ),
-              classicLeftWidget,
-              if (centerMenuActive) ...[
-                if (classicRightWidget != null) classicRightWidget,
-                classicCenterWidget,
-              ] else if (isRightMenuActive) ...[
-                classicCenterWidget,
-                if (classicRightWidget != null) classicRightWidget,
-              ] else ...[
-                if (classicRightWidget != null) classicRightWidget,
-                classicCenterWidget,
-              ],
-            ],
-          ),
+        return _ClassicAdaptiveTopBarBody(
+          reduceMotion: reduceMotion,
+          edgePadding: edgePadding,
+          showLeftControl: showLeftControl,
+          showRightControl: showRightControl,
+          closedCenterWidth: centerClosedWidth,
+          closedCenterLeft: closedCenterLeft,
+          expandedCenterWidth: expandedCenterWidth,
+          expandedCenterHeight: expandedCenterHeight,
+          expandedCenterLeft: expandedCenterLeft,
+          centerMenuActive: centerMenuActive,
+          closedRightWidth: rightClosedBoxWidth,
+          expandedRightMenuWidth: rightMenuWidth,
+          expandedRightMenuHeight: rightMenuHeight,
+          isRightMenuActive: isRightMenuActive,
+          leftContent: leftContent,
+          closedCenterContent: closedCenterContent,
+          openCenterMenu: openCenterMenu,
+          closedRightContent: closedRightContent,
+          expandedRightMenu: expandedRightMenu,
+          onDismissOpenMenus: dismissOpenMenus,
         );
       },
     );
@@ -971,13 +838,12 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
     );
   }
 
-  Widget _buildCenterPillChild(
+  Widget _buildClosedCenterPillChild(
     BuildContext context, {
     required Color textColor,
     required TextStyle titleStyle,
     required TextStyle counterStyle,
     required bool useCompactCounter,
-    required bool centerMenuActive,
     required double closedWidth,
   }) {
     if (isSelectMode) {
@@ -997,13 +863,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
       );
     }
 
-    if (centerMenuActive && openCenterMenu != null) {
-      return KeyedSubtree(
-        key: const ValueKey<String>('center_folder_menu'),
-        child: openCenterMenu!,
-      );
-    }
-
     final displayColor = isTitleConnected ? textColor : Colors.grey;
 
     return GestureDetector(
@@ -1020,15 +879,71 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
     );
   }
 
-  Widget _buildRightPillChild(
+  Widget _buildCenterPillChild(
+    BuildContext context, {
+    required Color textColor,
+    required TextStyle titleStyle,
+    required TextStyle counterStyle,
+    required bool useCompactCounter,
+    required bool centerMenuActive,
+    required double closedWidth,
+  }) {
+    if (!isSelectMode && centerMenuActive && openCenterMenu != null) {
+      return KeyedSubtree(
+        key: const ValueKey<String>('center_folder_menu'),
+        child: openCenterMenu!,
+      );
+    }
+
+    return _buildClosedCenterPillChild(
+      context,
+      textColor: textColor,
+      titleStyle: titleStyle,
+      counterStyle: counterStyle,
+      useCompactCounter: useCompactCounter,
+      closedWidth: closedWidth,
+    );
+  }
+
+  Widget? _buildExpandedRightMenu({
+    required SelectionQuickActionsConfig? cfg,
+    required double rightMenuWidth,
+    required bool overflowMenuActive,
+    required bool normalMenuActive,
+  }) {
+    if (isSelectMode && cfg != null && overflowMenuActive) {
+      return _AdaptiveMorphMenu(
+        key: const ValueKey<String>('right_select_overflow_menu'),
+        width: rightMenuWidth,
+        items: cfg.overflowItems,
+        onItemTap: (id) {
+          onSelectionOverflowOpenChanged?.call(false);
+          cfg.onOverflowAction(id);
+        },
+      );
+    }
+
+    if (!isSelectMode && normalMenuActive) {
+      return _AdaptiveMorphMenu(
+        key: const ValueKey<String>('right_normal_menu'),
+        width: rightMenuWidth,
+        items: normalMenuItems,
+        onItemTap: (id) {
+          onNormalMenuOpenChanged?.call(false);
+          onNormalMenuAction?.call(id);
+        },
+      );
+    }
+
+    return null;
+  }
+
+  Widget _buildClosedRightPillChild(
     BuildContext context, {
     required Color textColor,
     required double iconBtnWidth,
     required double capsuleHorizontalPadding,
     required double capsuleWidth,
-    required double rightMenuWidth,
-    required bool overflowMenuActive,
-    required bool normalMenuActive,
     required bool showPin,
     required bool showMute,
     required bool showArchive,
@@ -1038,18 +953,6 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
     final cfg = selectionConfig;
 
     if (isSelectMode && cfg != null) {
-      if (overflowMenuActive) {
-        return _AdaptiveMorphMenu(
-          key: const ValueKey<String>('right_select_overflow_menu'),
-          width: rightMenuWidth,
-          items: cfg.overflowItems,
-          onItemTap: (id) {
-            onSelectionOverflowOpenChanged?.call(false);
-            cfg.onOverflowAction(id);
-          },
-        );
-      }
-
       return SizedBox(
         key: const ValueKey<String>('right_select_capsule'),
         width: capsuleWidth,
@@ -1062,96 +965,84 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-              if (showPin)
-                _QuickActionButton(
-                  width: iconBtnWidth,
-                  tooltip: _tr(
-                    context,
-                    cfg.isUnpin ? 'selection_unpin' : 'selection_pin',
-                    cfg.isUnpin ? 'Открепить' : 'Закрепить',
+                if (showPin)
+                  _QuickActionButton(
+                    width: iconBtnWidth,
+                    tooltip: _tr(
+                      context,
+                      cfg.isUnpin ? 'selection_unpin' : 'selection_pin',
+                      cfg.isUnpin ? 'Открепить' : 'Закрепить',
+                    ),
+                    onTap: cfg.onPin!,
+                    icon: cfg.isUnpin
+                        ? iconoir.PinSlash(width: 19, height: 19, color: textColor)
+                        : iconoir.Pin(width: 19, height: 19, color: textColor),
                   ),
-                  onTap: cfg.onPin!,
-                  icon: cfg.isUnpin
-                      ? iconoir.PinSlash(width: 19, height: 19, color: textColor)
-                      : iconoir.Pin(width: 19, height: 19, color: textColor),
-                ),
-              if (showMute)
-                _QuickActionButton(
-                  width: iconBtnWidth,
-                  tooltip: _tr(
-                    context,
-                    cfg.isUnmute ? 'selection_unmute' : 'selection_mute',
-                    cfg.isUnmute ? 'Включить звук' : 'Без звука',
+                if (showMute)
+                  _QuickActionButton(
+                    width: iconBtnWidth,
+                    tooltip: _tr(
+                      context,
+                      cfg.isUnmute ? 'selection_unmute' : 'selection_mute',
+                      cfg.isUnmute ? 'Включить звук' : 'Без звука',
+                    ),
+                    onTap: cfg.onMute!,
+                    icon: cfg.isUnmute
+                        ? iconoir.Bell(width: 19, height: 19, color: textColor)
+                        : iconoir.BellOff(width: 19, height: 19, color: textColor),
                   ),
-                  onTap: cfg.onMute!,
-                  icon: cfg.isUnmute
-                      ? iconoir.Bell(width: 19, height: 19, color: textColor)
-                      : iconoir.BellOff(width: 19, height: 19, color: textColor),
-                ),
-              if (showArchive)
-                _QuickActionButton(
-                  width: iconBtnWidth,
-                  tooltip: _tr(
-                    context,
-                    cfg.isUnarchive
-                        ? 'selection_unarchive'
-                        : 'selection_archive',
-                    cfg.isUnarchive ? 'Из архива' : 'В архив',
+                if (showArchive)
+                  _QuickActionButton(
+                    width: iconBtnWidth,
+                    tooltip: _tr(
+                      context,
+                      cfg.isUnarchive
+                          ? 'selection_unarchive'
+                          : 'selection_archive',
+                      cfg.isUnarchive ? 'Из архива' : 'В архив',
+                    ),
+                    onTap: cfg.onArchive!,
+                    icon: cfg.isUnarchive
+                        ? Icon(
+                            Icons.unarchive_outlined,
+                            size: 20,
+                            color: textColor,
+                          )
+                        : iconoir.Archive(
+                            width: 19,
+                            height: 19,
+                            color: textColor,
+                          ),
                   ),
-                  onTap: cfg.onArchive!,
-                  icon: cfg.isUnarchive
-                      ? Icon(
-                          Icons.unarchive_outlined,
-                          size: 20,
-                          color: textColor,
-                        )
-                      : iconoir.Archive(
-                          width: 19,
-                          height: 19,
-                          color: textColor,
-                        ),
-                ),
-              if (showDelete)
-                _QuickActionButton(
-                  width: iconBtnWidth,
-                  tooltip: _tr(context, 'selection_delete', 'Удалить'),
-                  onTap: cfg.onDelete!,
-                  icon: const iconoir.Trash(
-                    width: 19,
-                    height: 19,
-                    color: Colors.redAccent,
+                if (showDelete)
+                  _QuickActionButton(
+                    width: iconBtnWidth,
+                    tooltip: _tr(context, 'selection_delete', 'Удалить'),
+                    onTap: cfg.onDelete!,
+                    icon: const iconoir.Trash(
+                      width: 19,
+                      height: 19,
+                      color: Colors.redAccent,
+                    ),
                   ),
-                ),
-              if (showOverflow)
-                _QuickActionButton(
-                  width: iconBtnWidth,
-                  tooltip: 'Ещё',
-                  onTap: () {
-                    HapticUtils.tap();
-                    onSelectionOverflowOpenChanged?.call(true);
-                  },
-                  icon: iconoir.MoreVert(
-                    width: 20,
-                    height: 20,
-                    color: textColor,
+                if (showOverflow)
+                  _QuickActionButton(
+                    width: iconBtnWidth,
+                    tooltip: 'Ещё',
+                    onTap: () {
+                      HapticUtils.tap();
+                      onSelectionOverflowOpenChanged?.call(true);
+                    },
+                    icon: iconoir.MoreVert(
+                      width: 20,
+                      height: 20,
+                      color: textColor,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
         ),
-      );
-    }
-
-    if (normalMenuActive) {
-      return _AdaptiveMorphMenu(
-        key: const ValueKey<String>('right_normal_menu'),
-        width: rightMenuWidth,
-        items: normalMenuItems,
-        onItemTap: (id) {
-          onNormalMenuOpenChanged?.call(false);
-          onNormalMenuAction?.call(id);
-        },
       );
     }
 
@@ -1175,6 +1066,705 @@ class ChatListAdaptiveTopBar extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildRightPillChild(
+    BuildContext context, {
+    required Color textColor,
+    required double iconBtnWidth,
+    required double capsuleHorizontalPadding,
+    required double capsuleWidth,
+    required double rightMenuWidth,
+    required bool overflowMenuActive,
+    required bool normalMenuActive,
+    required bool showPin,
+    required bool showMute,
+    required bool showArchive,
+    required bool showDelete,
+    required bool showOverflow,
+  }) {
+    final cfg = selectionConfig;
+    final expanded = _buildExpandedRightMenu(
+      cfg: cfg,
+      rightMenuWidth: rightMenuWidth,
+      overflowMenuActive: overflowMenuActive,
+      normalMenuActive: normalMenuActive,
+    );
+    if (expanded != null) {
+      return expanded;
+    }
+
+    return _buildClosedRightPillChild(
+      context,
+      textColor: textColor,
+      iconBtnWidth: iconBtnWidth,
+      capsuleHorizontalPadding: capsuleHorizontalPadding,
+      capsuleWidth: capsuleWidth,
+      showPin: showPin,
+      showMute: showMute,
+      showArchive: showArchive,
+      showDelete: showDelete,
+      showOverflow: showOverflow,
+    );
+  }
+}
+
+enum _ClassicMenuSlot { none, center, right }
+
+/// Stateful Classic/Material morph host for [ChatListAdaptiveTopBar].
+///
+/// Uses explicit [AnimationController]s matching [ProfileSectionPill] and
+/// `_classicCreateMenuController` kinematics so center folder and right overflow
+/// cards expand/collapse smoothly in lockstep while keeping collapsed headers
+/// pinned to their top origin instead of cross-fading at vertical center.
+class _ClassicAdaptiveTopBarBody extends StatefulWidget {
+  final bool reduceMotion;
+  final double edgePadding;
+  final bool showLeftControl;
+  final bool showRightControl;
+  final double closedCenterWidth;
+  final double closedCenterLeft;
+  final double expandedCenterWidth;
+  final double expandedCenterHeight;
+  final double expandedCenterLeft;
+  final bool centerMenuActive;
+  final double closedRightWidth;
+  final double expandedRightMenuWidth;
+  final double expandedRightMenuHeight;
+  final bool isRightMenuActive;
+  final Widget leftContent;
+  final Widget closedCenterContent;
+  final Widget? openCenterMenu;
+  final Widget closedRightContent;
+  final Widget? expandedRightMenu;
+  final VoidCallback onDismissOpenMenus;
+
+  const _ClassicAdaptiveTopBarBody({
+    required this.reduceMotion,
+    required this.edgePadding,
+    required this.showLeftControl,
+    required this.showRightControl,
+    required this.closedCenterWidth,
+    required this.closedCenterLeft,
+    required this.expandedCenterWidth,
+    required this.expandedCenterHeight,
+    required this.expandedCenterLeft,
+    required this.centerMenuActive,
+    required this.closedRightWidth,
+    required this.expandedRightMenuWidth,
+    required this.expandedRightMenuHeight,
+    required this.isRightMenuActive,
+    required this.leftContent,
+    required this.closedCenterContent,
+    required this.openCenterMenu,
+    required this.closedRightContent,
+    required this.expandedRightMenu,
+    required this.onDismissOpenMenus,
+  });
+
+  @override
+  State<_ClassicAdaptiveTopBarBody> createState() =>
+      _ClassicAdaptiveTopBarBodyState();
+}
+
+class _ClassicAdaptiveTopBarBodyState extends State<_ClassicAdaptiveTopBarBody>
+    with TickerProviderStateMixin {
+  late final AnimationController _centerMorphController;
+  late final AnimationController _rightMorphController;
+  late final Animation<double> _centerMorphAnimation;
+  late final Animation<double> _rightMorphAnimation;
+
+  Widget? _cachedCenterMenu;
+  double _cachedCenterMenuWidth = 220.0;
+  double _cachedCenterMenuHeight = ChatListAdaptiveTopBar._ctrlSize;
+  double _cachedExpandedCenterLeft = 0.0;
+
+  Widget? _cachedRightMenu;
+  double _cachedRightMenuWidth = ChatListAdaptiveTopBar._normalMenuWidth;
+  double _cachedRightMenuHeight = ChatListAdaptiveTopBar._ctrlSize;
+
+  _ClassicMenuSlot _lastActiveMenuSlot = _ClassicMenuSlot.none;
+  bool _allowCenterClosedAnim = false;
+  bool _allowRightClosedAnim = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _centerMorphController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+      value: widget.centerMenuActive ? 1.0 : 0.0,
+    )..addStatusListener(_handleCenterStatusChanged);
+    _centerMorphAnimation = CurvedAnimation(
+      parent: _centerMorphController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+
+    _rightMorphController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 220),
+      value: widget.isRightMenuActive ? 1.0 : 0.0,
+    )..addStatusListener(_handleRightStatusChanged);
+    _rightMorphAnimation = CurvedAnimation(
+      parent: _rightMorphController,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+
+    if (widget.centerMenuActive && widget.openCenterMenu != null) {
+      _cacheCenterMenu();
+      _lastActiveMenuSlot = _ClassicMenuSlot.center;
+    }
+    if (widget.isRightMenuActive && widget.expandedRightMenu != null) {
+      _cacheRightMenu();
+      _lastActiveMenuSlot = _ClassicMenuSlot.right;
+    }
+  }
+
+  void _cacheCenterMenu() {
+    _cachedCenterMenu = widget.openCenterMenu;
+    _cachedCenterMenuWidth = widget.expandedCenterWidth;
+    _cachedCenterMenuHeight = widget.expandedCenterHeight;
+    _cachedExpandedCenterLeft = widget.expandedCenterLeft;
+  }
+
+  void _cacheRightMenu() {
+    _cachedRightMenu = widget.expandedRightMenu;
+    _cachedRightMenuWidth = widget.expandedRightMenuWidth;
+    _cachedRightMenuHeight = widget.expandedRightMenuHeight;
+  }
+
+  void _handleCenterStatusChanged(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed && mounted && !widget.centerMenuActive) {
+      setState(() {
+        _cachedCenterMenu = null;
+        if (_lastActiveMenuSlot == _ClassicMenuSlot.center) {
+          _lastActiveMenuSlot = widget.isRightMenuActive
+              ? _ClassicMenuSlot.right
+              : _ClassicMenuSlot.none;
+        }
+      });
+    }
+  }
+
+  void _handleRightStatusChanged(AnimationStatus status) {
+    if (status == AnimationStatus.dismissed && mounted && !widget.isRightMenuActive) {
+      setState(() {
+        _cachedRightMenu = null;
+        if (_lastActiveMenuSlot == _ClassicMenuSlot.right) {
+          _lastActiveMenuSlot = widget.centerMenuActive
+              ? _ClassicMenuSlot.center
+              : _ClassicMenuSlot.none;
+        }
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ClassicAdaptiveTopBarBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.centerMenuActive && widget.openCenterMenu != null) {
+      _cacheCenterMenu();
+    }
+    if (widget.isRightMenuActive && widget.expandedRightMenu != null) {
+      _cacheRightMenu();
+    }
+
+    if (widget.centerMenuActive != oldWidget.centerMenuActive) {
+      _allowCenterClosedAnim = false;
+      if (widget.centerMenuActive) {
+        _lastActiveMenuSlot = _ClassicMenuSlot.center;
+        if (widget.reduceMotion) {
+          _centerMorphController.value = 1.0;
+        } else {
+          _centerMorphController.forward();
+        }
+      } else {
+        if (widget.reduceMotion) {
+          _centerMorphController.value = 0.0;
+          _cachedCenterMenu = null;
+          if (_lastActiveMenuSlot == _ClassicMenuSlot.center) {
+            _lastActiveMenuSlot = widget.isRightMenuActive
+                ? _ClassicMenuSlot.right
+                : _ClassicMenuSlot.none;
+          }
+        } else {
+          _centerMorphController.reverse();
+        }
+      }
+    } else if (!widget.centerMenuActive &&
+        _centerMorphController.isDismissed &&
+        (widget.closedCenterWidth != oldWidget.closedCenterWidth ||
+            widget.closedCenterLeft != oldWidget.closedCenterLeft)) {
+      _allowCenterClosedAnim = true;
+    }
+
+    if (widget.isRightMenuActive != oldWidget.isRightMenuActive) {
+      _allowRightClosedAnim = false;
+      if (widget.isRightMenuActive) {
+        _lastActiveMenuSlot = _ClassicMenuSlot.right;
+        if (widget.reduceMotion) {
+          _rightMorphController.value = 1.0;
+        } else {
+          _rightMorphController.forward();
+        }
+      } else {
+        if (widget.reduceMotion) {
+          _rightMorphController.value = 0.0;
+          _cachedRightMenu = null;
+          if (_lastActiveMenuSlot == _ClassicMenuSlot.right) {
+            _lastActiveMenuSlot = widget.centerMenuActive
+                ? _ClassicMenuSlot.center
+                : _ClassicMenuSlot.none;
+          }
+        } else {
+          _rightMorphController.reverse();
+        }
+      }
+    } else if (!widget.isRightMenuActive &&
+        _rightMorphController.isDismissed &&
+        widget.closedRightWidth != oldWidget.closedRightWidth) {
+      _allowRightClosedAnim = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    _centerMorphController
+      ..removeStatusListener(_handleCenterStatusChanged)
+      ..dispose();
+    _rightMorphController
+      ..removeStatusListener(_handleRightStatusChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final themeExt = theme.extension<TheavThemeExtension>();
+    final palette = themeExt?.palette;
+    final blurEnabled = BlurUtils.shouldBlurMaterialHud(context);
+    final rawBaseBg = (palette?.appBarBackground != null &&
+            palette!.appBarBackground != Colors.transparent)
+        ? palette.appBarBackground
+        : (palette?.surface ??
+            (isDark ? const Color(0xFF2C2C2E) : Colors.white));
+    final barBackgroundColor = BlurUtils.resolveMaterialHudColor(
+      rawBaseBg,
+      isDark: isDark,
+      blurEnabled: blurEnabled,
+    );
+    final borderColor = palette?.divider ??
+        (isDark
+            ? Colors.white.withValues(alpha: 0.1)
+            : Colors.black.withValues(alpha: 0.06));
+    final double baseShadowAlpha = isDark ? 0.35 : 0.08;
+
+    Widget wrapFrosted(Widget child) {
+      if (!blurEnabled) return child;
+      return BackdropFilter.grouped(
+        filter: BlurUtils.createMaterialHudBlur(sigma: 10.0),
+        child: child,
+      );
+    }
+
+    BoxDecoration pillDecoration({
+      bool elevated = false,
+      double radius = ChatListAdaptiveTopBar._barRadius,
+    }) =>
+        BoxDecoration(
+          color: elevated && blurEnabled
+              ? BlurUtils.resolveMaterialHudColor(
+                  palette?.surface ?? rawBaseBg,
+                  isDark: isDark,
+                  blurEnabled: true,
+                  darkAlpha: 0.84,
+                  lightAlpha: 0.88,
+                )
+              : barBackgroundColor,
+          borderRadius: BorderRadius.circular(radius),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(
+                alpha: (baseShadowAlpha * (elevated ? 1.0 : 0.65))
+                    .clamp(0.0, 1.0),
+              ),
+              blurRadius: elevated ? 16 : 10,
+              offset: Offset(0, elevated ? 6 : 3),
+            ),
+          ],
+        );
+
+    Widget wrapPillBorder(
+      Widget child, {
+      double radius = ChatListAdaptiveTopBar._barRadius,
+    }) =>
+        DecoratedBox(
+          position: DecorationPosition.foreground,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(
+              color: borderColor,
+              width: blurEnabled ? 0.6 : 0.5,
+            ),
+          ),
+          child: child,
+        );
+
+    final Widget classicLeftWidget = Positioned(
+      key: const ValueKey<String>('classic_left_pos'),
+      top: 2,
+      left: widget.edgePadding,
+      child: IgnorePointer(
+        ignoring: !widget.showLeftControl,
+        child: AnimatedScale(
+          scale: widget.showLeftControl ? 1.0 : 0.72,
+          duration: widget.reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 220),
+          curve: Curves.easeOutBack,
+          child: AnimatedOpacity(
+            opacity: widget.showLeftControl ? 1.0 : 0.0,
+            duration: widget.reduceMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 180),
+            child: ClipRRect(
+              borderRadius:
+                  BorderRadius.circular(ChatListAdaptiveTopBar._barRadius),
+              child: wrapFrosted(
+                Container(
+                  width: ChatListAdaptiveTopBar._ctrlSize,
+                  height: ChatListAdaptiveTopBar._ctrlSize,
+                  decoration: pillDecoration(),
+                  clipBehavior: Clip.antiAlias,
+                  child: wrapPillBorder(
+                    AnimatedSwitcher(
+                      duration: widget.reduceMotion
+                          ? Duration.zero
+                          : const Duration(milliseconds: 200),
+                      child: widget.leftContent,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final Widget classicCenterWidget = AnimatedBuilder(
+      animation: _centerMorphAnimation,
+      builder: (context, _) {
+        final double p = _centerMorphAnimation.value.clamp(0.0, 1.0);
+        final bool isMorphActive =
+            _centerMorphController.isAnimating || p > 0.001;
+        final double targetExpW =
+            p > 0.0 ? _cachedCenterMenuWidth : widget.expandedCenterWidth;
+        final double targetExpH =
+            p > 0.0 ? _cachedCenterMenuHeight : widget.expandedCenterHeight;
+        final double targetExpLeft =
+            p > 0.0 ? _cachedExpandedCenterLeft : widget.expandedCenterLeft;
+
+        final double currentWidth = widget.closedCenterWidth +
+            (targetExpW - widget.closedCenterWidth) * p;
+        final double currentHeight = ChatListAdaptiveTopBar._ctrlSize +
+            (targetExpH - ChatListAdaptiveTopBar._ctrlSize) * p;
+        final double currentLeft = widget.closedCenterLeft +
+            (targetExpLeft - widget.closedCenterLeft) * p;
+        final double radius = ChatListAdaptiveTopBar._barRadius + 2.0 * p;
+
+        final Duration implicitDuration =
+            (widget.reduceMotion || isMorphActive || !_allowCenterClosedAnim)
+                ? Duration.zero
+                : const Duration(milliseconds: 240);
+
+        final Widget? activeCenterMenu =
+            _cachedCenterMenu ?? widget.openCenterMenu;
+
+        return AnimatedPositioned(
+          key: const ValueKey<String>('classic_center_pos'),
+          duration: implicitDuration,
+          curve: Curves.easeOutCubic,
+          top: 2,
+          left: currentLeft,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: wrapFrosted(
+              AnimatedContainer(
+                key: const ValueKey<String>('classic_center_card'),
+                duration: implicitDuration,
+                curve: Curves.easeOutCubic,
+                width: currentWidth,
+                height: currentHeight,
+                decoration: pillDecoration(
+                  elevated: p > 0.05,
+                  radius: radius,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: wrapPillBorder(
+                  radius: radius,
+                  Stack(
+                    alignment: Alignment.topCenter,
+                    clipBehavior: Clip.hardEdge,
+                    children: [
+                      if (p < 0.99)
+                        OverflowBox(
+                          alignment: Alignment.topCenter,
+                          minWidth: widget.closedCenterWidth,
+                          maxWidth: widget.closedCenterWidth,
+                          minHeight: ChatListAdaptiveTopBar._ctrlSize,
+                          maxHeight: ChatListAdaptiveTopBar._ctrlSize,
+                          child: IgnorePointer(
+                            ignoring: widget.centerMenuActive || p > 0.1,
+                            child: Opacity(
+                              opacity: (1.0 - p * 2.5).clamp(0.0, 1.0),
+                              child: Transform.scale(
+                                scale: 1.0 - 0.10 * p,
+                                alignment: Alignment.topCenter,
+                                child: AnimatedSwitcher(
+                                  duration: widget.reduceMotion
+                                      ? Duration.zero
+                                      : const Duration(milliseconds: 200),
+                                  child: widget.closedCenterContent,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (p > 0.01 && activeCenterMenu != null)
+                        OverflowBox(
+                          alignment: Alignment.topCenter,
+                          minWidth: targetExpW,
+                          maxWidth: targetExpW,
+                          minHeight: targetExpH,
+                          maxHeight: targetExpH,
+                          child: IgnorePointer(
+                            ignoring: !widget.centerMenuActive || p < 0.8,
+                            child: Opacity(
+                              opacity: ((p - 0.18) / 0.82).clamp(0.0, 1.0),
+                              child: Transform.translate(
+                                offset: Offset(0, -8.0 * (1.0 - p)),
+                                child: Transform.scale(
+                                  scale: 0.94 + 0.06 * p,
+                                  alignment: Alignment.topCenter,
+                                  child: KeyedSubtree(
+                                    key: const ValueKey<String>(
+                                      'center_folder_menu',
+                                    ),
+                                    child: activeCenterMenu,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    final bool keepRightMounted =
+        widget.showRightControl || _rightMorphController.value > 0.001;
+    final Widget? classicRightWidget = keepRightMounted
+        ? Positioned(
+            key: const ValueKey<String>('classic_right_pos'),
+            top: 2,
+            right: widget.edgePadding,
+            child: AnimatedBuilder(
+              animation: _rightMorphAnimation,
+              builder: (context, _) {
+                final double p = _rightMorphAnimation.value.clamp(0.0, 1.0);
+                final bool isMorphActive =
+                    _rightMorphController.isAnimating || p > 0.001;
+                final double targetExpW = p > 0.0
+                    ? _cachedRightMenuWidth
+                    : widget.expandedRightMenuWidth;
+                final double targetExpH = p > 0.0
+                    ? _cachedRightMenuHeight
+                    : widget.expandedRightMenuHeight;
+
+                final double currentWidth = widget.closedRightWidth +
+                    (targetExpW - widget.closedRightWidth) * p;
+                final double currentHeight = ChatListAdaptiveTopBar._ctrlSize +
+                    (targetExpH - ChatListAdaptiveTopBar._ctrlSize) * p;
+                final double radius =
+                    ChatListAdaptiveTopBar._barRadius + 2.0 * p;
+
+                final Duration implicitDuration =
+                    (widget.reduceMotion ||
+                            isMorphActive ||
+                            !_allowRightClosedAnim)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 240);
+
+                final Widget? activeRightMenu =
+                    _cachedRightMenu ?? widget.expandedRightMenu;
+
+                return ClipRRect(
+                  borderRadius: BorderRadius.circular(radius),
+                  child: wrapFrosted(
+                    AnimatedContainer(
+                      key: const ValueKey<String>('classic_right_card'),
+                      duration: implicitDuration,
+                      curve: Curves.easeOutCubic,
+                      width: currentWidth,
+                      height: currentHeight,
+                      decoration: pillDecoration(
+                        elevated: p > 0.05,
+                        radius: radius,
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: wrapPillBorder(
+                        radius: radius,
+                        Stack(
+                          alignment: Alignment.topRight,
+                          clipBehavior: Clip.hardEdge,
+                          children: [
+                            if (p < 0.99)
+                              OverflowBox(
+                                alignment: Alignment.topRight,
+                                minWidth: widget.closedRightWidth,
+                                maxWidth: widget.closedRightWidth,
+                                minHeight: ChatListAdaptiveTopBar._ctrlSize,
+                                maxHeight: ChatListAdaptiveTopBar._ctrlSize,
+                                child: IgnorePointer(
+                                  ignoring: widget.isRightMenuActive || p > 0.1,
+                                  child: Opacity(
+                                    opacity: (1.0 - p * 2.5).clamp(0.0, 1.0),
+                                    child: Transform.scale(
+                                      scale: 1.0 - 0.12 * p,
+                                      alignment: Alignment.topRight,
+                                      child: AnimatedSwitcher(
+                                        duration: widget.reduceMotion
+                                            ? Duration.zero
+                                            : const Duration(milliseconds: 200),
+                                        layoutBuilder: (
+                                          currentChild,
+                                          previousChildren,
+                                        ) {
+                                          return Stack(
+                                            alignment: Alignment.centerRight,
+                                            children: [
+                                              ...previousChildren,
+                                              if (currentChild != null)
+                                                currentChild,
+                                            ],
+                                          );
+                                        },
+                                        child: widget.closedRightContent,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (p > 0.01 && activeRightMenu != null)
+                              OverflowBox(
+                                alignment: Alignment.topRight,
+                                minWidth: targetExpW,
+                                maxWidth: targetExpW,
+                                minHeight: targetExpH,
+                                maxHeight: targetExpH,
+                                child: IgnorePointer(
+                                  ignoring: !widget.isRightMenuActive || p < 0.8,
+                                  child: Opacity(
+                                    opacity: ((p - 0.18) / 0.82).clamp(0.0, 1.0),
+                                    child: Transform.translate(
+                                      offset: Offset(0, -8.0 * (1.0 - p)),
+                                      child: Transform.scale(
+                                        scale: 0.94 + 0.06 * p,
+                                        alignment: Alignment.topRight,
+                                        child: activeRightMenu,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          )
+        : null;
+
+    final bool anyMenuOpen = widget.centerMenuActive || widget.isRightMenuActive;
+
+    return AnimatedBuilder(
+      animation: Listenable.merge(<Listenable>[
+        _centerMorphAnimation,
+        _rightMorphAnimation,
+      ]),
+      builder: (context, _) {
+        final double centerP = _centerMorphAnimation.value.clamp(0.0, 1.0);
+        final double rightP = _rightMorphAnimation.value.clamp(0.0, 1.0);
+        final double centerH = ChatListAdaptiveTopBar._ctrlSize +
+            (_cachedCenterMenuHeight - ChatListAdaptiveTopBar._ctrlSize) *
+                centerP;
+        final double rightH = ChatListAdaptiveTopBar._ctrlSize +
+            (_cachedRightMenuHeight - ChatListAdaptiveTopBar._ctrlSize) *
+                rightP;
+        final double barHeight = math.max(
+          ChatListAdaptiveTopBar._ctrlSize + 4.0,
+          math.max(
+            centerP > 0.001 ? centerH + 8.0 : 0.0,
+            rightP > 0.001 ? rightH + 8.0 : 0.0,
+          ),
+        );
+
+        final bool isCenterOnTop = widget.centerMenuActive ||
+            (_lastActiveMenuSlot == _ClassicMenuSlot.center &&
+                centerP > 0.001 &&
+                !widget.isRightMenuActive);
+        final bool isRightOnTop = !isCenterOnTop &&
+            (widget.isRightMenuActive ||
+                (_lastActiveMenuSlot == _ClassicMenuSlot.right &&
+                    rightP > 0.001));
+
+        return SizedBox(
+          width: double.infinity,
+          height: barHeight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              if (anyMenuOpen)
+                Positioned.fill(
+                  key: const ValueKey<String>('classic_dismiss_backdrop'),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: widget.onDismissOpenMenus,
+                  ),
+                ),
+              classicLeftWidget,
+              if (isCenterOnTop) ...[
+                if (classicRightWidget != null) classicRightWidget,
+                classicCenterWidget,
+              ] else if (isRightOnTop) ...[
+                classicCenterWidget,
+                if (classicRightWidget != null) classicRightWidget,
+              ] else ...[
+                if (classicRightWidget != null) classicRightWidget,
+                classicCenterWidget,
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

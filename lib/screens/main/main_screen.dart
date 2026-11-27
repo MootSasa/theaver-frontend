@@ -4401,12 +4401,18 @@ class _MainScreenState extends State<MainScreen>
             // Классический режим — матовый single-pass blur HUD поверх контента
             final Widget classicStack = Stack(
               children: [
-                Positioned.fill(child: pageView),
+                Positioned.fill(
+                  key: const ValueKey<String>('main_classic_page_view'),
+                  child: pageView,
+                ),
                 if (_isTopMenuOpen ||
                     _isFolderMenuOpen ||
                     _isCreateMenuOpen ||
                     _isSelectionMenuOpen)
                   Positioned.fill(
+                    key: const ValueKey<String>(
+                      'main_classic_dismiss_backdrop',
+                    ),
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {
@@ -4420,6 +4426,7 @@ class _MainScreenState extends State<MainScreen>
                     ),
                   ),
                 Positioned(
+                  key: const ValueKey<String>('main_classic_banners'),
                   top: topBarHeight + 4.0,
                   left: 0,
                   right: 0,
@@ -4432,6 +4439,7 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ),
                 Positioned(
+                  key: const ValueKey<String>('main_classic_top_bar'),
                   top: 0,
                   left: 0,
                   right: 0,
@@ -4444,6 +4452,7 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ),
                 Positioned(
+                  key: const ValueKey<String>('main_classic_bottom_bar'),
                   left: 0,
                   right: 0,
                   bottom: 0,
@@ -4478,6 +4487,7 @@ class _MainScreenState extends State<MainScreen>
                   ),
                 ),
                 Positioned(
+                  key: const ValueKey<String>('main_classic_create_overlay'),
                   right: 0,
                   bottom: 0,
                   child: _buildClassicCreateMenuOverlay(context),

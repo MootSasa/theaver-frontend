@@ -542,6 +542,233 @@ void main() {
         }
       },
     );
+
+    testWidgets(
+      'smoothly morphs folder selector and three-dots menus in Material mode even when parent Stack toggles dismiss backdrop',
+      (WidgetTester tester) async {
+        tester.view.physicalSize = const Size(420, 840);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        final l10n = await _loadRuL10n(tester);
+        final glassProvider = LiquidGlassProvider();
+        await tester.runAsync(() => glassProvider.setMode(GlassMode.disabled));
+
+        bool isFolderOpen = false;
+        bool isDotsOpen = false;
+
+        await tester.pumpWidget(
+          StatefulBuilder(
+            builder: (context, setState) {
+              return _wrapWithApp(
+                l10n: l10n,
+                glassProvider: glassProvider,
+                home: Scaffold(
+                  body: Stack(
+                    children: [
+                      const Positioned.fill(
+                        key: ValueKey<String>('test_classic_body'),
+                        child: ColoredBox(color: Colors.transparent),
+                      ),
+                      if (isFolderOpen || isDotsOpen)
+                        Positioned.fill(
+                          key: const ValueKey<String>('test_classic_backdrop'),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
+                              setState(() {
+                                isFolderOpen = false;
+                                isDotsOpen = false;
+                              });
+                            },
+                          ),
+                        ),
+                      Positioned(
+                        key: const ValueKey<String>('test_classic_top_bar'),
+                        top: 8,
+                        left: 0,
+                        right: 0,
+                        child: ChatListAdaptiveTopBar(
+                          isSelectMode: false,
+                          selectedCount: 0,
+                          onCancelSelection: () {},
+                          normalTitle: 'Чаты',
+                          normalTitleKey: 'nav_chats',
+                          onTitleTap: () {
+                            setState(() {
+                              isFolderOpen = !isFolderOpen;
+                              if (isFolderOpen) isDotsOpen = false;
+                            });
+                          },
+                          openCenterMenu: const SizedBox(
+                            width: 220,
+                            height: 188,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(height: 44, child: Center(child: Text('Все'))),
+                                SizedBox(height: 44, child: Center(child: Text('Личные'))),
+                              ],
+                            ),
+                          ),
+                          openCenterMenuWidth: 220,
+                          openCenterMenuHeight: 188,
+                          isCenterMenuOpen: isFolderOpen,
+                          onDismissCenterMenu: () {
+                            setState(() => isFolderOpen = false);
+                          },
+                          normalMenuItems: [
+                            SelectionMorphMenuItem(
+                              id: 'select',
+                              label: 'Выбрать',
+                              iconBuilder: (color, size) =>
+                                  Icon(Icons.check, color: color, size: size),
+                            ),
+                            SelectionMorphMenuItem(
+                              id: 'archive',
+                              label: 'Архив',
+                              iconBuilder: (color, size) =>
+                                  Icon(Icons.archive, color: color, size: size),
+                            ),
+                            SelectionMorphMenuItem(
+                              id: 'settings',
+                              label: 'Настройки',
+                              iconBuilder: (color, size) =>
+                                  Icon(Icons.settings, color: color, size: size),
+                            ),
+                          ],
+                          isNormalMenuOpen: isDotsOpen,
+                          onNormalMenuOpenChanged: (open) {
+                            setState(() {
+                              isDotsOpen = open;
+                              if (open) isFolderOpen = false;
+                            });
+                          },
+                          onNormalMenuAction: (_) {
+                            setState(() => isDotsOpen = false);
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+        await tester.pump();
+
+        final initialElement = tester.element(find.byType(ChatListAdaptiveTopBar));
+
+        // Open center folder selector and verify intermediate morph frame + preserved Element
+        await tester.tap(
+          find.byKey(const ValueKey<String>('center_normal_title')),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 90));
+
+        expect(
+          identical(
+            tester.element(find.byType(ChatListAdaptiveTopBar)),
+            initialElement,
+          ),
+          isTrue,
+        );
+        final midOpenCenter = tester.getSize(
+          find.byKey(const ValueKey<String>('classic_center_card')),
+        );
+        expect(midOpenCenter.width, lessThan(220.0));
+        expect(midOpenCenter.height, greaterThan(44.0));
+        expect(midOpenCenter.height, lessThan(188.0));
+        expect(tester.takeException(), isNull);
+
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(
+          tester.getSize(
+            find.byKey(const ValueKey<String>('classic_center_card')),
+          ),
+          const Size(220.0, 188.0),
+        );
+
+        // Close center folder selector via backdrop and verify smooth reverse morph
+        await tester.tapAt(const Offset(50, 420));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+
+        final midCloseCenter = tester.getSize(
+          find.byKey(const ValueKey<String>('classic_center_card')),
+        );
+        expect(midCloseCenter.height, greaterThan(44.0));
+        expect(midCloseCenter.height, lessThan(188.0));
+        expect(tester.takeException(), isNull);
+
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(
+          tester
+              .getSize(
+                find.byKey(const ValueKey<String>('classic_center_card')),
+              )
+              .height,
+          44.0,
+        );
+
+        // Open top-right three-dots menu and verify intermediate morph + settle
+        await tester.tap(
+          find.byKey(const ValueKey<String>('right_normal_dots')),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 90));
+
+        expect(
+          identical(
+            tester.element(find.byType(ChatListAdaptiveTopBar)),
+            initialElement,
+          ),
+          isTrue,
+        );
+        final midOpenRight = tester.getSize(
+          find.byKey(const ValueKey<String>('classic_right_card')),
+        );
+        expect(midOpenRight.width, greaterThan(44.0));
+        expect(midOpenRight.width, lessThan(204.0));
+        expect(midOpenRight.height, greaterThan(44.0));
+        expect(midOpenRight.height, lessThan(144.0));
+        expect(tester.takeException(), isNull);
+
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(
+          tester.getSize(
+            find.byKey(const ValueKey<String>('classic_right_card')),
+          ),
+          const Size(204.0, 144.0),
+        );
+
+        // Close three-dots menu via backdrop and verify intermediate shrink + settle
+        await tester.tapAt(const Offset(50, 420));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 80));
+
+        final midCloseRight = tester.getSize(
+          find.byKey(const ValueKey<String>('classic_right_card')),
+        );
+        expect(midCloseRight.width, greaterThan(44.0));
+        expect(midCloseRight.width, lessThan(204.0));
+        expect(midCloseRight.height, greaterThan(44.0));
+        expect(midCloseRight.height, lessThan(144.0));
+        expect(tester.takeException(), isNull);
+
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(
+          tester.getSize(
+            find.byKey(const ValueKey<String>('classic_right_card')),
+          ),
+          const Size(44.0, 44.0),
+        );
+      },
+    );
   });
 
   group('ChatListTileItem', () {

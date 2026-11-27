@@ -1119,9 +1119,15 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
             backgroundColor: Theme.of(context).scaffoldBackgroundColor,
             body: Stack(
               children: [
-                Positioned.fill(child: bodyList),
+                Positioned.fill(
+                  key: const ValueKey<String>('archive_classic_body'),
+                  child: bodyList,
+                ),
                 if (_isNormalMenuOpen || _isSelectionMenuOpen)
                   Positioned.fill(
+                    key: const ValueKey<String>(
+                      'archive_classic_dismiss_backdrop',
+                    ),
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () {
@@ -1133,6 +1139,7 @@ class _ArchivedChatsScreenState extends State<ArchivedChatsScreen> {
                     ),
                   ),
                 Positioned(
+                  key: const ValueKey<String>('archive_classic_top_bar'),
                   top: 0,
                   left: 0,
                   right: 0,

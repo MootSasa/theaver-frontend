@@ -740,22 +740,31 @@ class _WorkspacePreviewScene extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Positioned.fill(child: ColoredBox(color: palette.background)),
-        Positioned.fill(child: chatListView),
+        Positioned.fill(
+          key: const ValueKey<String>('preview_classic_bg'),
+          child: ColoredBox(color: palette.background),
+        ),
+        Positioned.fill(
+          key: const ValueKey<String>('preview_classic_list'),
+          child: chatListView,
+        ),
         if (isTopMenuOpen)
           Positioned.fill(
+            key: const ValueKey<String>('preview_classic_dismiss_backdrop'),
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: () => onTopMenuOpenChanged(false),
             ),
           ),
         Positioned(
+          key: const ValueKey<String>('preview_classic_top_bar'),
           top: 8,
           left: 0,
           right: 0,
           child: topBar,
         ),
         Positioned(
+          key: const ValueKey<String>('preview_classic_bottom_bar'),
           left: 0,
           right: 0,
           bottom: 0,
