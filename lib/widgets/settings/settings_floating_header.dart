@@ -451,6 +451,7 @@ class SettingsFloatingScaffold extends StatelessWidget {
   final Widget? bottomNavigationBar;
   final Color? backgroundColor;
   final bool padBodyTop;
+  final bool? resizeToAvoidBottomInset;
 
   /// Creates a settings scaffold with a floating pill-and-circle header.
   const SettingsFloatingScaffold({
@@ -465,53 +466,59 @@ class SettingsFloatingScaffold extends StatelessWidget {
     this.bottomNavigationBar,
     this.backgroundColor,
     this.padBodyTop = false,
+    this.resizeToAvoidBottomInset,
   });
 
   @override
   Widget build(BuildContext context) {
-    final mq = MediaQuery.of(context);
     final topClearance = SettingsFloatingHeader.topClearanceOf(context);
     final effectiveBg = backgroundColor ?? Theme.of(context).scaffoldBackgroundColor;
 
-    final Widget resolvedBody = padBodyTop
-        ? Padding(
-            padding: EdgeInsets.only(top: topClearance),
-            child: body,
-          )
-        : MediaQuery(
-            data: mq.copyWith(
-              padding: mq.padding.copyWith(
-                top: math.max(mq.padding.top, topClearance),
-              ),
-            ),
-            child: body,
-          );
-
-    final Widget stackBody = Stack(
-      children: [
-        Positioned.fill(child: resolvedBody),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: SettingsFloatingHeader(
-            title: title,
-            titleWidget: titleWidget,
-            onBack: onBack,
-            showBackButton: showBackButton,
-            actions: actions,
-          ),
-        ),
-      ],
-    );
-
     return Scaffold(
       backgroundColor: effectiveBg,
+      resizeToAvoidBottomInset: resizeToAvoidBottomInset,
       floatingActionButton: floatingActionButton,
       bottomNavigationBar: bottomNavigationBar,
-      body: BackdropGroup.of(context) == null
-          ? BackdropGroup(child: stackBody)
-          : stackBody,
+      body: Builder(
+        builder: (scaffoldBodyContext) {
+          final innerMq = MediaQuery.of(scaffoldBodyContext);
+          final Widget resolvedBody = padBodyTop
+              ? Padding(
+                  padding: EdgeInsets.only(top: topClearance),
+                  child: body,
+                )
+              : MediaQuery(
+                  data: innerMq.copyWith(
+                    padding: innerMq.padding.copyWith(
+                      top: math.max(innerMq.padding.top, topClearance),
+                    ),
+                  ),
+                  child: body,
+                );
+
+          final Widget stackBody = Stack(
+            children: [
+              Positioned.fill(child: resolvedBody),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SettingsFloatingHeader(
+                  title: title,
+                  titleWidget: titleWidget,
+                  onBack: onBack,
+                  showBackButton: showBackButton,
+                  actions: actions,
+                ),
+              ),
+            ],
+          );
+
+          return BackdropGroup.of(scaffoldBodyContext) == null
+              ? BackdropGroup(child: stackBody)
+              : stackBody;
+        },
+      ),
     );
   }
 }

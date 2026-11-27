@@ -936,12 +936,11 @@ private final class WebViewPullToRefreshHandler: NSObject {
               : 0
             let sameSiteVal: Int
             if #available(iOS 13.0, *), let policy = cookie.sameSitePolicy {
-              switch policy {
-              case .lax:
+              if policy == HTTPCookieStringPolicy.sameSiteLax {
                 sameSiteVal = 1
-              case .strict:
+              } else if policy == HTTPCookieStringPolicy.sameSiteStrict {
                 sameSiteVal = 2
-              default:
+              } else {
                 sameSiteVal = -1
               }
             } else {

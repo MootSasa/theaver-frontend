@@ -658,37 +658,39 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 onTap: null,
               ),
             ],
-            body: Stack(
-              fit: StackFit.expand,
-              children: [
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 540),
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        0,
-                        topClearance + 10,
-                        0,
-                        112 + MediaQuery.paddingOf(context).bottom,
-                      ),
-                      child: TheavStepViewport(
-                        stepIndex: _step,
-                        forward: _stepForward,
-                        child: _step == 0
-                            ? _buildStep0Contacts(palette, l10n)
-                            : (_step == 1
-                                ? _buildStep1Credentials(palette, l10n)
-                                : _buildStep2Profile(palette, l10n)),
+            body: Builder(
+              builder: (bodyCtx) => Stack(
+                fit: StackFit.expand,
+                children: [
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 540),
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                          0,
+                          topClearance + 10,
+                          0,
+                          104 + MediaQuery.paddingOf(bodyCtx).bottom,
+                        ),
+                        child: TheavStepViewport(
+                          stepIndex: _step,
+                          forward: _stepForward,
+                          child: _step == 0
+                              ? _buildStep0Contacts(palette, l10n)
+                              : (_step == 1
+                                  ? _buildStep1Credentials(palette, l10n)
+                                  : _buildStep2Profile(palette, l10n)),
+                        ),
                       ),
                     ),
                   ),
-                ),
-                TheavFloatingBottomBar(
-                  maxWidth: 540,
-                  child: _buildStepPrimaryButton(palette, l10n),
-                ),
-              ],
+                  TheavFloatingBottomBar(
+                    maxWidth: 540,
+                    child: _buildStepPrimaryButton(palette, l10n),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

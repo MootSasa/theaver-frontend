@@ -332,6 +332,7 @@ class TheavInlineTextField extends StatelessWidget {
   final VoidCallback? onTap;
   final EdgeInsetsGeometry padding;
   final TextStyle? style;
+  final EdgeInsets scrollPadding;
 
   const TheavInlineTextField({
     super.key,
@@ -357,6 +358,7 @@ class TheavInlineTextField extends StatelessWidget {
     this.onTap,
     this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     this.style,
+    this.scrollPadding = const EdgeInsets.fromLTRB(20, 80, 20, 108),
   });
 
   @override
@@ -401,6 +403,7 @@ class TheavInlineTextField extends StatelessWidget {
                   maxLength: maxLength,
                   maxLines: maxLines,
                   minLines: minLines,
+                  scrollPadding: scrollPadding,
                   onChanged: onChanged,
                   onSubmitted: onSubmitted,
                   onTap: onTap,

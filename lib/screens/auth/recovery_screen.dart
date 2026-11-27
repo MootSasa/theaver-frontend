@@ -276,20 +276,21 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                 onTap: null,
               ),
             ],
-            body: Stack(
-              fit: StackFit.expand,
-              children: [
-                Align(
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 520),
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        0,
-                        topClearance + 14,
-                        0,
-                        112 + MediaQuery.paddingOf(context).bottom,
-                      ),
+            body: Builder(
+              builder: (bodyCtx) => Stack(
+                fit: StackFit.expand,
+                children: [
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 520),
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                          0,
+                          topClearance + 14,
+                          0,
+                          104 + MediaQuery.paddingOf(bodyCtx).bottom,
+                        ),
                       child: TheavStepViewport(
                         stepIndex: _step,
                         forward: _stepForward,
@@ -511,6 +512,7 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                   ),
                 ),
               ],
+            ),
             ),
           ),
         ],
